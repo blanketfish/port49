@@ -289,3 +289,79 @@ func recordedWitness(t *testing.T, rev uint64) *witnessRecord {
 	w.save()
 	return openWitness(path, "/port49/", io.Discard)
 }
+
+// The follower's read says nothing of when the witness it read was written, so
+// a replica with no record that has only read still owes its purge; a write it
+// sees on the watch is a runner's, made after that runner's own purge, and
+// gives the record. A record that owes a purge for a store found below it
+// takes neither.
+func TestAReplicaWithNoRecordTakesALiveWitnessButNotTheRead(t *testing.T) {
+	w := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
+	at := func(rev uint64) func(context.Context) (etcdstore.WitnessRead, error) {
+		return func(context.Context) (etcdstore.WitnessRead, error) {
+			return etcdstore.WitnessRead{ModRevision: rev, Header: rev + 1}, nil
+		}
+	}
+	w.followed(500, false) // the follower's first read
+	if _, have := w.Recorded(); have {
+		t.Fatal("the initial read gave a record")
+	}
+	if _, gone, _, _ := readWitness(context.Background(), w, at(500)); !gone {
+		t.Fatal("a replica that only read the witness did not owe its purge")
+	}
+	w.followed(510, true) // a runner's write, seen on the watch
+	if got, have := w.Recorded(); !have || got != 510 {
+		t.Fatalf("a live write gave %d %v", got, have)
+	}
+	if _, gone, why, _ := readWitness(context.Background(), w, at(510)); gone {
+		t.Fatalf("a replica that followed a live write still owes a purge: %q", why)
+	}
+	// A record found above the store: a live write does not clear it.
+	r := recordedWitness(t, 1000)
+	if _, gone, _, _ := readWitness(context.Background(), r, at(400)); !gone {
+		t.Fatal("a store below the record was not found restored")
+	}
+	r.followed(410, true)
+	if _, gone, _, _ := readWitness(context.Background(), r, at(1500)); !gone {
+		t.Fatal("a live write cleared the owing of a store found restored")
+	}
+}
+
+// A purge that fails keeps the mint gate closed while it is still owed; the
+// pass that completes it opens the gate. A runner that stops opens it too, so
+// a standby is not held for a purge it will not make.
+func TestAFailedPurgeKeepsTheMintGateClosedUntilItIsDone(t *testing.T) {
+	g := newPurgeRig(t)
+	gate := newStartGate(nil)
+	pol := policy.NewLive(buildPolicy(t, brokerConfig(t, minimalPolicy), minimalPolicy)).Load()
+	gate.flag(pol.Bundle)
+	gate.open("test", io.Discard)
+	r := g.runner("runner-a", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard),
+		&failsPurgeOnce{Store: g.bs.st})
+	r.holdMints = gate.purge
+	if err := r.witnessPass(g.ctx); err == nil {
+		t.Fatal("the cut-short purge reported nothing")
+	}
+	if err := gate.allow(pol); err == nil {
+		t.Fatal("the gate opened though the purge is still owed")
+	}
+	if err := r.witnessPass(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.allow(pol); err != nil {
+		t.Fatalf("the gate stayed closed after the purge was done: %v", err)
+	}
+	// A runner whose ctx ends mid-purge lets the gate go.
+	gate2 := newStartGate(nil)
+	gate2.flag(pol.Bundle)
+	gate2.open("test", io.Discard)
+	cctx, cancel := context.WithCancel(g.ctx)
+	r2 := g.runner("runner-b", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard),
+		&failsPurgeOnce{Store: g.bs.st})
+	r2.holdMints = gate2.purge
+	cancel()
+	_ = r2.witnessPass(cctx)
+	if err := gate2.allow(pol); err != nil {
+		t.Fatalf("a stopped runner left the gate closed: %v", err)
+	}
+}

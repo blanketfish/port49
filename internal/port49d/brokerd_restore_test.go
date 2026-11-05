@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/blanketfish/port49/internal/config"
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/store"
 	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
@@ -114,25 +115,59 @@ func TestARestoredTokenIsRefusedOrPurgedWhateverStartsFirst(t *testing.T) {
 			t.Fatalf("control: a token minted after the purge: %d", st)
 		}
 	})
-	t.Run("a broker first while the new timeline climbs past the old high", func(t *testing.T) {
-		x := restoreAfterARedemption(t, nil)
-		padPast(t, x.root, x.top) // writes on the restored timeline, past the revision the old one reached
-		before := len(x.out.String())
-		startBroker(t, x.f.broker, x.out, 3)
-		waitWithinFrom(t, x.out, before, "this replica saw: the store was restored from a snapshot; every unspent "+
-			"token is purged", 30*time.Second)
-		x.notServed(t, startSplitDaemon(t, x.f.daemon, x.out, 3))
-	})
-	t.Run("port49d first, then the broker", func(t *testing.T) {
+	t.Run("a broker first on an empty state_dir, and a port49d that has no restore record", func(t *testing.T) {
 		x := restoreAfterARedemption(t, nil)
 		padPast(t, x.root, x.recorded)
-		tacacs := startSplitDaemon(t, x.f.daemon, x.out, 3)
-		x.notServed(t, tacacs)
+		if err := os.Remove(filepath.Join(x.f.stateDir(t), stateWitnessFile)); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(x.f.daemon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(filepath.Dir(cfg.Accounting.SpoolPath), "restore.json")); err != nil {
+			t.Fatal(err)
+		}
 		before := len(x.out.String())
 		startBroker(t, x.f.broker, x.out, 3)
 		waitWithinFrom(t, x.out, before, "every unspent token is purged", 30*time.Second)
-		x.notServed(t, tacacs)
+		x.notServed(t, startSplitDaemon(t, x.f.daemon, x.out, 3))
 	})
+	for _, empty := range []bool{false, true} {
+		suffix := ""
+		if empty {
+			suffix = ", on an empty state_dir"
+		}
+		// emptied is the broker's state_dir after the runbook: kept, or a replaced pod's.
+		emptied := func(t *testing.T, x *restoredFleet) {
+			if !empty {
+				return
+			}
+			if err := os.Remove(filepath.Join(x.f.stateDir(t), stateWitnessFile)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Run("a broker first while the new timeline climbs past the old high"+suffix, func(t *testing.T) {
+			x := restoreAfterARedemption(t, nil)
+			padPast(t, x.root, x.top) // writes on the restored timeline, past the revision the old one reached
+			emptied(t, x)
+			before := len(x.out.String())
+			startBroker(t, x.f.broker, x.out, 3)
+			waitWithinFrom(t, x.out, before, "every unspent token is purged", 30*time.Second)
+			x.notServed(t, startSplitDaemon(t, x.f.daemon, x.out, 3))
+		})
+		t.Run("port49d first, then the broker"+suffix, func(t *testing.T) {
+			x := restoreAfterARedemption(t, nil)
+			padPast(t, x.root, x.recorded)
+			emptied(t, x)
+			tacacs := startSplitDaemon(t, x.f.daemon, x.out, 3)
+			x.notServed(t, tacacs)
+			before := len(x.out.String())
+			startBroker(t, x.f.broker, x.out, 3)
+			waitWithinFrom(t, x.out, before, "every unspent token is purged", 30*time.Second)
+			x.notServed(t, tacacs)
+		})
+	}
 }
 
 // port49d restarted after the restore, on the same spool directory, still

@@ -104,10 +104,30 @@ func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 // test process may run several daemons.
 var witnessFollowed = func(rec *witnessRecord, rev uint64) {}
 
-// followed is what the broker's FollowWitness calls: Saw, then the hook.
-func (w *witnessRecord) followed(rev uint64) {
-	w.Saw(rev)
+// followed is what the broker's FollowWitnessLive calls: sawLive, then the
+// hook.
+func (w *witnessRecord) followed(rev uint64, live bool) {
+	w.sawLive(rev, live)
 	witnessFollowed(w, rev)
+}
+
+// sawLive is Saw for a revision the follower says whether it saw live. A
+// record that has none and owes a purge for that takes a live write as the
+// record: only a runner writes meta/witness, and only once its own purge is
+// done, so a runner that was safe to serve has run since this replica
+// started. The read that began the follow never does, or a restored store's
+// witness would stand for a store nobody purged. A record that owes a purge
+// for a store found below it stays owing: it saw a restore.
+func (w *witnessRecord) sawLive(rev uint64, live bool) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if live && w.owed && !w.have {
+		w.owed = false
+	}
+	w.mu.Unlock()
+	w.Saw(rev)
 }
 
 // Saw raises the record to rev and never lowers it: a lower witness is a

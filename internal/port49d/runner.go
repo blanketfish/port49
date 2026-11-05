@@ -746,9 +746,17 @@ func (r *runner) witnessPassOnce(ctx context.Context) error {
 // meta/witness and saves no witness.json, so a purge cut short is made by
 // the next runner.
 func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.WitnessRead) error {
+	// The hold ends with a purge that is done, or with the runner (its ctx):
+	// a purge that failed is still owed, and a token minted now would be
+	// deleted by the next try.
+	done := false
 	if r.holdMints != nil {
 		r.holdMints(true)
-		defer r.holdMints(false)
+		defer func() {
+			if done || ctx.Err() != nil {
+				r.holdMints(false)
+			}
+		}()
 	}
 	at := r.brk.Now()
 	if err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) }); err != nil {
@@ -761,9 +769,11 @@ func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.W
 	if err := retryCtx(ctx, func() (e error) { once, e = r.st.PurgeOnceRecords(ctx); return }); err != nil {
 		return err
 	}
-	if _, err := r.confirmPurged(ctx, read.ModRevision); err != nil {
+	took, err := r.confirmPurged(ctx, read.ModRevision)
+	if err != nil {
 		return err
 	}
+	done = took
 	fmt.Fprintf(stderr, "port49-broker: runner: %s; every unspent token is purged and must be minted again "+
 		"(port49 token): %d purged; %d once-only records (sign-in challenges, proofs, nonces) deleted\n", why, n, once)
 	return nil

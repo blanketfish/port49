@@ -547,11 +547,20 @@ func (s *Store) RestoreRead(ctx context.Context) (RestoreRead, error) {
 // ends (a compaction, or etcd gone). A lower revision than before, a
 // restore's, is told too: saw keeps the highest.
 func (s *Store) FollowWitness(ctx context.Context, saw func(uint64)) {
+	s.FollowWitnessLive(ctx, func(rev uint64, _ bool) { saw(rev) })
+}
+
+// FollowWitnessLive is FollowWitness telling saw whether the revision came
+// from the watch (live: a write made after the read that began it) or from a
+// read. A replica that owes a purge takes a live write as a runner's, which
+// writes meta/witness only once its own purge is done; the read says nothing
+// of when its witness was written (decision 56 ruling 2).
+func (s *Store) FollowWitnessLive(ctx context.Context, saw func(rev uint64, live bool)) {
 	key := s.k.meta("witness")
 	for {
 		if resp, err := s.ctxKV.Get(ctx, key); err == nil {
 			if len(resp.Kvs) > 0 {
-				saw(uint64(resp.Kvs[0].ModRevision))
+				saw(uint64(resp.Kvs[0].ModRevision), false)
 			}
 			wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
 			for wr := range s.ctx.Watch(wctx, key, clientv3.WithRev(resp.Header.Revision+1)) {
@@ -560,7 +569,7 @@ func (s *Store) FollowWitness(ctx context.Context, saw func(uint64)) {
 				}
 				for _, ev := range wr.Events {
 					if ev.Type == clientv3.EventTypePut {
-						saw(uint64(ev.Kv.ModRevision))
+						saw(uint64(ev.Kv.ModRevision), true)
 					}
 				}
 			}

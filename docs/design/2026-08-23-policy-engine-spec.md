@@ -11833,8 +11833,13 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
      another prefix's file) purges the tokens and the once-only records, as it does for a record
      above the store's witness. The floor sees a restore only if port49d reads between the
      restore and the next rewrite of the witness, and a broker starting on an empty
-     `state_dir` would otherwise rewrite it without purging. The cost is one re-login after
-     a first start on a new `state_dir`.
+     `state_dir` would otherwise rewrite it without purging. A replica with no record takes one
+     from a `meta/witness` write it sees live after its own start (not from the follower's
+     first read): only a runner writes it, and only once its own purge is done, so a failover
+     to a standby that has followed a runner purges nothing. The re-login happens only when no
+     runner has written a witness since this replica started, for example a cold start of the
+     whole fleet on new `state_dir`s. A purge that is still owed keeps the replica's mint gate
+     closed.
    - **Order.** A takeover or pass that owes a purge saves no `witness.json` and writes no
      `meta/witness` until the purge is done, and the owing stays with the record until then: a
      purge cut short is made again by the next runner on this `state_dir` or by another

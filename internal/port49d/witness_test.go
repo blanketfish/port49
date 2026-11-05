@@ -522,7 +522,7 @@ func TestTheWitnessHookSeesWhatTheFollowerSaw(t *testing.T) {
 	rec := recordedWitness(t, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); s.FollowWitness(ctx, rec.followed) }()
+	go func() { defer close(done); s.FollowWitnessLive(ctx, rec.followed) }()
 	t.Cleanup(func() { cancel(); <-done })
 	rev, err := s.PutWitness(ctx, "port49-broker on test", 0)
 	if err != nil || rev == 0 {

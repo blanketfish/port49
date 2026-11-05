@@ -2137,13 +2137,12 @@ func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
 	}
 }
 
-// A replica that never ran has no witness record, and following the
-// witness gives it none: a record taken from the store's own witness could
-// be a restored store's. Its first takeover therefore purges, restore or not,
-// and says why (decision 56 ruling 2). The backup is taken before B starts
-// and while A is stopped: Backup restarts the member, and B could take a
-// hold A lost across it.
-func TestAReplicaThatNeverRanPurgesAtItsFirstTakeover(t *testing.T) {
+// A replica that never ran, and only followed the witness, catches the
+// restore at its takeover as the runner would have: the record is every
+// replica's, not the runner's alone (Ruling 18; re-check R6). The backup
+// is taken before B starts and while A is stopped: Backup restarts the
+// member, and B could take a hold A lost across it.
+func TestAWitnessRecordFromAnotherReplicaCatchesTheRestore(t *testing.T) {
 	var out syncBuffer
 	e := stderr
 	t.Cleanup(func() { stderr = e })
@@ -2164,13 +2163,12 @@ func TestAReplicaThatNeverRanPurgesAtItsFirstTakeover(t *testing.T) {
 	_, stopB := startBroker(t, cfgB, &out, 3)
 	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
 	mintOn(t, apiA, f.pki, "leaf1") // brings a witness
-	waitUntil(t, "the witness to rise", func() bool { return witnessAt(t, root) > w0 })
-	time.Sleep(2 * time.Second) // B's follower has told its record by now, if it ever will
-	if got := witnessIn(t, f.stateDirOf(t, cfgB)); got != 0 {
-		t.Fatalf("B, which never ran, saved a witness record of %d from following", got)
-	}
+	waitUntil(t, "B's copy of the witness to rise", func() bool { return witnessIn(t, f.stateDirOf(t, cfgB)) > w0 })
+	// The follower path, proved: A held throughout, so B's record came only
+	// from following. Had A's hold lapsed, B would have run and recorded its
+	// own writes (final check, Minor 3).
 	if n := strings.Count(out.String(), "runner: took keyspace /port49/"); n != 2 {
-		t.Fatalf("the hold changed hands: %d takes; B ran", n)
+		t.Fatalf("the hold changed hands: %d takes; the follower path is not what was tested", n)
 	}
 	if err := stopB(); err != nil { // B first, so it never takes the hold
 		t.Fatal(err)
@@ -2178,11 +2176,42 @@ func TestAReplicaThatNeverRanPurgesAtItsFirstTakeover(t *testing.T) {
 	if err := stopA(); err != nil {
 		t.Fatal(err)
 	}
+	recorded := witnessIn(t, f.stateDirOf(t, cfgB))
 	f.srv.Restore(t, snapshot)
-	before := len(out.String())
 	startBroker(t, cfgB, &out, 4)
-	waitWithinFrom(t, &out, before, "no witness record in broker.state_dir; the store may have been restored, which only a "+
-		"witness record can tell; every unspent token is purged", 30*time.Second)
+	waitWithin(t, &out, fmt.Sprintf("the store's meta/witness is at revision %d, below the %d this replica saw: "+
+		"the store was restored from a snapshot", w0, recorded), 30*time.Second)
+}
+
+// A standby on an empty state_dir takes the runner's live witness write as
+// its record, so a failover to it purges nothing: only a runner that had
+// purged what it owed writes meta/witness (decision 56 ruling 2).
+func TestAStandbyOnAnEmptyStateDirTakesOverWithoutPurgingAfterALiveWitness(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	apiA, stopA := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	waitUntil(t, "a witness", func() bool { return witnessAt(t, root) > 0 })
+	cfgB := f.copyBroker(t) // an empty broker.state_dir of its own
+	_, stopB := startBroker(t, cfgB, &out, 2)
+	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
+	w0 := witnessAt(t, root)
+	mintOn(t, apiA, f.pki, "leaf1") // the runner brings a witness
+	waitUntil(t, "B's record to rise from a live write", func() bool { return witnessIn(t, f.stateDirOf(t, cfgB)) > w0 })
+	defer stopB()
+	before := len(out.String())
+	if err := stopA(); err != nil {
+		t.Fatal(err)
+	}
+	waitWithinFrom(t, &out, before, "runner: took keyspace /port49/", 30*time.Second)
+	waitWithinFrom(t, &out, before, "live context(s) carried onto the policy in force", 30*time.Second)
+	if got := out.String()[before:]; strings.Contains(got, "every unspent token is purged") {
+		t.Fatalf("a failover to a standby that followed the runner's witness purged:\n%s", got)
+	}
 }
 
 // An etcd restore with port49d running across it and the runbook's token
