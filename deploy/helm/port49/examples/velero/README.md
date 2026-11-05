@@ -49,9 +49,13 @@ digest you reviewed, or mirror the plugin by tag into a registry you control.
 requirements, "A restore rolls the marks back too"). It loses every revocation and lift made since the
 backup, so a revoked principal or certificate is admitted again until it is re-issued, and it brings back
 every token redeemed since, redeemable again while it has not expired. The backup also restores port49d's
-`restore.json` and the brokers' `witness.json` with the store, so neither can tell the restore: the token
-delete (design §13 step 3) is required, and it must land before port49d or a broker reaches the restored
-store. So the restore is made in this order, with nothing reaching the store until the end.
+`restore.json` and the brokers' `witness.json` with the store. port49d can then tell the restore only if
+`restore.json` is newer than the etcd copy, which is usual on a store with writes in the backup window and
+not so on an idle one, and a broker cannot tell it at all: the token delete (design §13 step 3) is
+required, and it must land before port49d or a broker reaches the restored store. A Velero restore cannot
+use `--bump-revision`, so when port49d does tell the restore it also arms the 5-minute band: see "What
+you see after step 9" below. So the restore is made in this order, with nothing reaching the store until
+the end.
 
 Run step 2 in this directory (`deploy/helm/port49/examples/velero/`), which holds `restore-unspent.yaml`;
 step 8 from the repository root. `<release>` is your Helm release name, `<backup>` the Velero backup,
@@ -68,7 +72,13 @@ every pod volume restore at `New` and its pod absent. It does not finish. If you
 
 So the pods run for the restore, and etcd is held down while they do, so none of them reaches the store.
 
-**First, if a GitOps controller manages the release, suspend it for both namespaces.** These follow Argo
+**First, silence the alerts for the restore's window.** This order keeps port49d away from the store for
+longer than 5 minutes, so `port49_target_absent` (page, 5m) fires, and `port49_target_down` (page, 2m) fires
+if step 4's pods crash-loop while etcd is held down. Silence both, and the etcd rules, in Alertmanager for
+the length you expect the restore to take, and remove the silence after step 11. Expect
+`port49_store_restore_detected` (ticket) afterwards; step 9 says why.
+
+**Then, if a GitOps controller manages the release, suspend it for both namespaces.** These follow Argo
 CD's and Flux's documented commands and are not measured in port49's lab (L89 runs no GitOps controller).
 Argo CD with
 auto-sync or self-heal, or Flux, puts back what this order takes away: it re-creates the
@@ -209,6 +219,15 @@ kubectl -n port49 scale statefulset/<release>-port49d --replicas=<port49d>
 kubectl -n port49 rollout status statefulset/<release>-port49d --timeout=10m
 ```
 <!-- l89:scaleup:end -->
+
+   **What you see after step 9.** port49d usually logs `the session store was restored from a snapshot`
+   (its `restore.json` is newer than the etcd copy) and `port49_store_restore_detected` fires. This
+   restore did not use `--bump-revision`, so for the 5 minutes after port49d's read **every token a user
+   mints is refused `token_spent` (FAIL)**: the new timeline's revisions sit below the old `high_header`.
+   Users see a failed login, and so does every retry until the window ends. The log line names the
+   time (`a token minted until <time> (5 minutes after this read)`). Tell users to retry after it; no
+   restored token is accepted at any point. Break-glass is unaffected. The band itself lasts 20 minutes,
+   but only tokens minted in its first 5 are refused.
 
 10. Lift again what was lifted since (design §13 step 6).
 11. Bring back what step 4 left out, and resume what you suspended first. With a GitOps controller,
