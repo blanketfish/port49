@@ -1105,3 +1105,50 @@ func TestAPurgeUnderAMovedWitnessKeepsTheRecord(t *testing.T) {
 		t.Fatalf("a purge read at the store's witness left the record at %d, want %d", rec, w)
 	}
 }
+
+// A logout the runner's queue had no room for owes a pass over the whole
+// logout set, so no logout's reach is dropped (Task 9, identity I3): five
+// followed into a queue of two while the duties are blocked are all reached
+// once they run, the counter says three were turned away, and one line says
+// so.
+func TestAFullLogoutQueueOwesARescanThatReachesEverySession(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	m := metrics.New(prometheus.NewRegistry())
+	var mu sync.Mutex
+	reached := map[string]bool{}
+	r := &runner{brk: &broker.Broker{}, m: m, followed: make(chan store.Revocation, 1),
+		followedLogouts: make(chan store.LogoutEntry, 2), logouts: store.NewLogoutSet(time.Now),
+		wakeLogouts: make(chan struct{}, 1)}
+	r.taking.Store(true)
+	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		reached[l.Key] = true
+		return broker.RevokeReport{TokenKeys: 1}, nil
+	}
+	keys := []string{"k1", "k2", "k3", "k4", "k5"}
+	for _, k := range keys {
+		e := store.LogoutEntry{Logout: store.Logout{Key: k, At: time.Now(), Origin: "origin-" + k},
+			Until: time.Now().Add(time.Hour)}
+		r.logouts.Put(e)
+		r.followLogout(e)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.reachFollowed(ctx) }()
+	defer func() { cancel(); <-done }()
+	waitUntil(t, "every logout reached", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(reached) == len(keys)
+	})
+	if got := testutil.ToFloat64(m.BrokerLogoutsQueueFull); got != 3 {
+		t.Fatalf("port49_broker_logouts_queue_full_total is %v, want 3", got)
+	}
+	if got := strings.Count(out.String(), "the logout queue is full"); got != 1 {
+		t.Fatalf("the full queue was said on %d lines, want 1:\n%s", got, out.String())
+	}
+}

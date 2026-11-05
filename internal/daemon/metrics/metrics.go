@@ -487,6 +487,10 @@ type Metrics struct {
 	// replica's bundle. Readiness never shows it (design §12): it is an
 	// alarm.
 	BrokerMintGateClosed prometheus.Gauge
+	// port49_broker_logouts_queue_full_total: logouts from another region
+	// that found the runner's queue full; each owes a pass over the whole
+	// logout set.
+	BrokerLogoutsQueueFull prometheus.Counter
 	// port49_redemption_restore_unjudged: 1 while this port49d refuses every
 	// token redemption store_unavailable because its last read of
 	// meta/witness failed (or none has answered in this run), so it cannot
@@ -951,6 +955,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		RedemptionRestoreUnjudged: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_unjudged",
 			Help: "1 while this port49d refuses every token redemption store_unavailable because its last read of " +
 				"meta/witness failed, so it cannot tell whether its store was restored; 0 otherwise."}),
+		BrokerLogoutsQueueFull: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_broker_logouts_queue_full_total",
+			Help: "Logouts from another region that found this runner's queue full; each one owes a pass over the " +
+				"whole logout set, which follows."}),
 		RedemptionRestoredRefused: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_redemption_restored_refused_total",
 			Help: "Token redemptions refused token_spent because the token's store revision is at or below this " +
 				"port49d's restore floor: an etcd restore brought it back."}),
@@ -1070,7 +1077,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
-		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreUnjudged, m.RedemptionRestoredRefused, m.StoreRestoreDetected,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.BrokerLogoutsQueueFull, m.RedemptionRestoreUnjudged, m.RedemptionRestoredRefused, m.StoreRestoreDetected,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,

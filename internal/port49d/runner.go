@@ -86,6 +86,11 @@ type runner struct {
 	// followedLogouts is told each logout the logouts feed brings, in a
 	// split (R26): the duties reach it in this region's session store.
 	followedLogouts chan store.LogoutEntry
+	// logoutRescanOwed is set when a logout found followedLogouts full: the
+	// duties then reach every entry of logouts, which holds what the queue
+	// dropped. wakeLogouts (capacity 1) wakes reachFollowed to do it.
+	logoutRescanOwed atomic.Bool
+	wakeLogouts      chan struct{}
 	// reach reaches a logout here: Broker.ReachLogout, or a test's (nil is
 	// the broker's).
 	reach func(ctx context.Context, l store.Logout) (broker.RevokeReport, error)
@@ -1112,8 +1117,10 @@ func (r *runner) follow(c store.MarkChange) {
 }
 
 // followLogout queues a logout the feed brought for the running duties,
-// as follow queues a mark; a full queue drops it, said: the logout set
-// refuses its mints and refreshes regardless.
+// as follow queues a mark. A full queue does not drop its reach: the
+// logout is in the followed set, so it owes a pass over the whole set
+// (logoutRescanOwed), which reachFollowed makes; the counter counts each
+// and one line says a run of them.
 func (r *runner) followLogout(e store.LogoutEntry) {
 	if r.followedLogouts == nil || !r.queuing() {
 		return
@@ -1121,8 +1128,17 @@ func (r *runner) followLogout(e store.LogoutEntry) {
 	select {
 	case r.followedLogouts <- e:
 	default:
-		fmt.Fprintln(stderr, "port49-broker: runner: a logout made elsewhere was not queued to reach this region's "+
-			"sessions (the queue is full); its mints and refreshes are refused regardless")
+		if r.m != nil {
+			r.m.BrokerLogoutsQueueFull.Inc()
+		}
+		if r.logoutRescanOwed.CompareAndSwap(false, true) {
+			fmt.Fprintln(stderr, "port49-broker: runner: the logout queue is full; a pass over the whole logout set "+
+				"follows")
+		}
+		select {
+		case r.wakeLogouts <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -1147,6 +1163,48 @@ var reachFailuresSeen func(n int)
 // takeover reaches every standing logout once more.
 func (r *runner) reachFollowed(ctx context.Context) {
 	failed := map[string]failedReach{}
+	// reachOne reaches one logout; false once the duties have ended.
+	reachOne := func(l store.LogoutEntry) bool {
+		now := time.Now()
+		for k, f := range failed {
+			if !f.until.IsZero() && now.After(f.until) {
+				delete(failed, k) // the logout lapsed: nothing is left to reach
+			}
+		}
+		rep, err := r.reachLogout(ctx, l.Logout)
+		if err != nil && ctx.Err() != nil {
+			return false // the duties ended mid-reach: the next takeover reaches it
+		}
+		line := fmt.Sprintf("port49-broker: runner: a logout made elsewhere (%s) reached %d token key(s) and "+
+			"%d context(s) here", printsafe.Line(l.Origin, 160), rep.TokenKeys, len(rep.Contexts))
+		switch {
+		case err == nil:
+			delete(failed, l.Key)
+		case errors.Is(err, broker.ErrLogoutUnreachable):
+			line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
+		default:
+			f := failed[l.Key]
+			f.n++
+			f.until = l.Until
+			failed[l.Key] = f
+			wait := logoutRetryFirst << min(f.n-1, 6)
+			if f.n == 1 {
+				line += fmt.Sprintf("; not every step finished (%s): it is tried again in %v while this replica "+
+					"runs the keyspace, and its mints and refreshes are refused meanwhile; to end its live "+
+					"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
+					r.brk.FollowedLogoutByHand(l.Logout, rep))
+			} else {
+				line += fmt.Sprintf("; still not reached after %d tries (%s); tried again in %v (the remedy was said with the first failure)", f.n,
+					printsafe.Line(err.Error(), 300), wait)
+			}
+			r.retryLogout(ctx, l, wait)
+		}
+		fmt.Fprintln(stderr, line)
+		if reachFailuresSeen != nil {
+			reachFailuresSeen(len(failed))
+		}
+		return true
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1161,43 +1219,19 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			}
 			fmt.Fprintln(stderr, line)
 		case l := <-r.followedLogouts:
-			now := time.Now()
-			for k, f := range failed {
-				if !f.until.IsZero() && now.After(f.until) {
-					delete(failed, k) // the logout lapsed: nothing is left to reach
+			if !reachOne(l) {
+				return
+			}
+		case <-r.wakeLogouts:
+			// A logout found the queue full: reach every entry of the set, which
+			// holds what the queue dropped (each reach is safe to run twice).
+			if !r.logoutRescanOwed.CompareAndSwap(true, false) || r.logouts == nil {
+				continue
+			}
+			for _, e := range r.logouts.All() {
+				if !reachOne(e) {
+					return
 				}
-			}
-			rep, err := r.reachLogout(ctx, l.Logout)
-			if err != nil && ctx.Err() != nil {
-				return // the duties ended mid-reach: the next takeover reaches it
-			}
-			line := fmt.Sprintf("port49-broker: runner: a logout made elsewhere (%s) reached %d token key(s) and "+
-				"%d context(s) here", printsafe.Line(l.Origin, 160), rep.TokenKeys, len(rep.Contexts))
-			switch {
-			case err == nil:
-				delete(failed, l.Key)
-			case errors.Is(err, broker.ErrLogoutUnreachable):
-				line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
-			default:
-				f := failed[l.Key]
-				f.n++
-				f.until = l.Until
-				failed[l.Key] = f
-				wait := logoutRetryFirst << min(f.n-1, 6)
-				if f.n == 1 {
-					line += fmt.Sprintf("; not every step finished (%s): it is tried again in %v while this replica "+
-						"runs the keyspace, and its mints and refreshes are refused meanwhile; to end its live "+
-						"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
-						r.brk.FollowedLogoutByHand(l.Logout, rep))
-				} else {
-					line += fmt.Sprintf("; still not reached after %d tries (%s); tried again in %v (the remedy was said with the first failure)", f.n,
-						printsafe.Line(err.Error(), 300), wait)
-				}
-				r.retryLogout(ctx, l, wait)
-			}
-			fmt.Fprintln(stderr, line)
-			if reachFailuresSeen != nil {
-				reachFailuresSeen(len(failed))
 			}
 		}
 	}
@@ -1212,6 +1246,9 @@ func (r *runner) madeBy(mark store.Revocation) string {
 	}
 	return "made elsewhere"
 }
+
+// logoutQueueSize is followedLogouts' capacity.
+var logoutQueueSize = 1024
 
 // logoutRetryFirst is the wait before a failed logout reach is tried again;
 // each failure in a row doubles it, up to 64 times it.

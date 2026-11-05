@@ -67,6 +67,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		t.Fatalf("port49_policy_bundle_matches_runner starts at %v; nothing is known to differ", v)
 	}
 	m.BrokerMintGateClosed.Set(0)
+	m.BrokerLogoutsQueueFull.Add(0)
 	m.RedemptionRestoreUnjudged.Set(0)
 	m.RedemptionRestoredRefused.Add(0)
 	m.StoreRestoreDetected.Set(0)
