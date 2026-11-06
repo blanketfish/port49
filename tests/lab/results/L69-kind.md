@@ -1,7 +1,7 @@
 # L69 — kind
 
-- **Date measured:** 2026-10-16
-- **Run:** commit `d7b55571045bd6d17a19f4d1eea800eb1dee5500`, `make lab-k8s` (`-run TestL69`) (the measured commit, what ran; rebased as `e5ff120d` with no change to plan 10's code: `git diff d7b55571 e5ff120d` touches only main's files)
+- **Date measured:** 2026-11-06
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2`, `make lab-k8s` (`-run TestL69`)
 - **Platform:** kind
 - **Image version:** kind v0.29.0, node image `kindest/node:v1.33.1` (kindest/node@sha256:050072256b9a903bd914c0b2866828150cb229cea0efe5892e2b644d5dd3b34f), Kubernetes v1.33.1
 - **Capture:** `tests/lab/evidence/L69-kind.json`
@@ -15,7 +15,7 @@ A Kubernetes cluster's service account tokens as port49's `k8s` verifier meets t
 
 ### (a) claims
 
-**PASS.** iss https://l69-a.port49.lab, aud [port49-lab], exp-iat 600s, sub system:serviceaccount:netops:oxidized, header alg RS256 kid true, typ ""; kubernetes.io {namespace, node, pod, serviceaccount}; recorded nbf 1792169911, jti true, node true, warnafter absent
+**PASS.** iss https://l69-a.port49.lab, aud [port49-lab], exp-iat 600s, sub system:serviceaccount:netops:oxidized, header alg RS256 kid true, typ ""; kubernetes.io {namespace, node, pod, serviceaccount}; recorded nbf 1793952042, jti true, node true, warnafter absent
 
 ### (c) discovery
 
@@ -27,15 +27,15 @@ A Kubernetes cluster's service account tokens as port49's `k8s` verifier meets t
 
 ### (b) rotation
 
-**PASS.** the file changed at 0.87 of expirationSeconds (measured from the old token's iat; inside [0.75, 0.97], so the docs' "about 80%" stands); the new token minted exit 0
+**PASS.** the file changed at 0.81 of expirationSeconds (measured from the old token's iat; inside [0.75, 0.97], so the docs' "about 80%" stands); the new token minted exit 0
 
 ### (d) key rotation
 
-**PASS.** JWKS keys 1 then 2; kid "nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg" then "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y" (differs true); the new key's token minted on the running broker after 0s (first attempt exit 0, 1 attempts), last exit 0
+**PASS.** JWKS keys 1 then 2; kid "SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M" then "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8" (differs true); the new key's token minted on the running broker after 0s (first attempt exit 0, 1 attempts), last exit 0
 
 ### (e) deletion
 
-**PASS.** after the pod was deleted TokenReview answered authenticated=false ("[invalid bearer token, service account token has been invalidated]") and port49 minted exit 0; after the service account was deleted authenticated=false ("[invalid bearer token, serviceaccounts \"oxidized\" not found]"), port49 exit 0; after port49 revoke system:serviceaccount:netops:oxidized (ran true) the same token exited 77: port49 workload token: 401 credential_revoked: this principal was revoked at 2026-10-16T17:09:25Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift): 1 of 1 devices were not minted
+**PASS.** after the pod was deleted TokenReview answered authenticated=false ("[invalid bearer token, service account token has been invalidated]") and port49 minted exit 0; after the service account was deleted authenticated=false ("[invalid bearer token, serviceaccounts \"oxidized\" not found]"), port49 exit 0; after port49 revoke system:serviceaccount:netops:oxidized (ran true) the same token exited 77: port49 workload token: 401 credential_revoked: this principal was revoked at 2026-11-06T08:11:00Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift): 1 of 1 devices were not minted
 
 ### (f) another cluster
 
@@ -47,6 +47,6 @@ A Kubernetes cluster's service account tokens as port49's `k8s` verifier meets t
 
 ### (h) the default token
 
-**PASS.** the default token's aud is [https://l69-a.port49.lab], exp-iat 31536000s, warnafter 1792173518; port49 exit 77: port49 workload token: 401 trust_domain_unresolved: its aud is not exactly [port49-lab]: a token another audience accepts could be replayed here (decision 49 ruling 5): 1 of 1 devices were not minted
+**PASS.** the default token's aud is [https://l69-a.port49.lab], exp-iat 31536000s, warnafter 1793955649; port49 exit 77: port49 workload token: 401 trust_domain_unresolved: its aud is not exactly [port49-lab]: a token another audience accepts could be replayed here (decision 49 ruling 5): 1 of 1 devices were not minted
 
 

@@ -1,12 +1,12 @@
 # L12-netconf — juniper_vjunos-router
 
-- **Date measured:** 2026-10-20
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L12-netconf-juniper_vjunos-router.pcap` — 1506 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L12-netconf-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L12-netconf-juniper_vjunos-router.pcap` — 1614 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L12-netconf-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `2c680dbfad8fed41de8176383c9e67e2f871d2eb`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL12JunosNetconf$`
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL12JunosNetconf$`
 
 ## Claim
 
@@ -40,7 +40,7 @@ set system login user p49-nc-none class p49-nc-none
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1792455039" junos:changed-localtime="2026-10-20 00:10:39 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793916938" junos:changed-localtime="2026-11-05 22:15:38 UTC">
     <version>23.4R2-S2.1</version>
     <system>
         <host-name>srx1</host-name>
@@ -76,7 +76,7 @@ set system login user p49-nc-none class p49-nc-none
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="2">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1792455039" junos:changed-localtime="2026-10-20 00:10:39 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793916938" junos:changed-localtime="2026-11-05 22:15:38 UTC">
     <system>
         <host-name>srx1</host-name>
         <root-authentication>
@@ -114,7 +114,7 @@ set system login user p49-nc-none class p49-nc-none
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="3">
 <configuration-information>
 <configuration-output>
-## Last commit: 2026-10-20 00:10:39 UTC by breakglass
+## Last commit: 2026-11-05 22:15:38 UTC by breakglass
 version 23.4R2-S2.1;
 system {
     host-name srx1;
@@ -186,7 +186,7 @@ system {
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1792455039" junos:changed-localtime="2026-10-20 00:10:39 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793916938" junos:changed-localtime="2026-11-05 22:15:38 UTC">
     <version>23.4R2-S2.1</version>
     <system>
         <host-name>srx1</host-name>
@@ -222,7 +222,7 @@ system {
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="2">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1792455039" junos:changed-localtime="2026-10-20 00:10:39 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793916938" junos:changed-localtime="2026-11-05 22:15:38 UTC">
     <system>
         <host-name>srx1</host-name>
         <root-authentication>
@@ -311,7 +311,7 @@ system {
 Every RPC:
 
 ```
-no session: alice04: the device sent no NETCONF hello (sent "error: unknown command: xml-mode\n\nerror: permission denied: netconf"): the NETCONF channel closed: EOF (); port49d recorded [redeem permit token_redeemed authorize_session permit context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
+no session: alice04: the device sent no NETCONF hello (sent "error: unknown command: xml-mode\n\nerror: permission denied: netconf"): the NETCONF channel closed: EOF (); port49d recorded [redeem permit token_redeemed authorize_session permit context_matched account   account   account   account   account   account   account   account   account   account   account   account  ]
 paired control before (`[]`): hello (1543 bytes)
 paired control after (`[]`): hello (1543 bytes)
 ```

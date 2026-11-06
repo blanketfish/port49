@@ -1,12 +1,12 @@
 # L10 — juniper_vjunos-router
 
-- **Date measured:** 2026-10-19
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
 - **Capture:** `tests/lab/evidence/L10-juniper_vjunos-router.pcap` — 44 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L10-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `2c680dbfad8fed41de8176383c9e67e2f871d2eb`, `PORT49_LAB_PLATFORMS=eos,vjunos,vsrx,nxos,iosxe`, `-run ^TestL10ServiceAndAttributeSpellings$`
+- **Run:** commit `5ed06f5ff587893a8740a7fd30042d3c53eb0bb0-dirty`, `PORT49_LAB_PLATFORMS=eos,vjunos,vsrx,nxos,iosxe`, `-run ^TestL10ServiceAndAttributeSpellings$`
 
 ## Claim
 

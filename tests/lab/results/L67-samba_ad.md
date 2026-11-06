@@ -1,9 +1,9 @@
 # L67 — samba_ad
 
-- **Date measured:** 2026-10-15
+- **Date measured:** 2026-11-06
 - **Platform:** samba_ad, as a container on `tests/lab/directory/compose.yaml` (no network device)
-- **Image version:** Samba Version 4.17.12-Debian; image `port49lab/samba:bookworm` (port49lab/samba@sha256:52845341f3ea887a0635a9e5a04d4d03798b4ea740e91eb2e00aaa8124228c4a), built on debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
-- **Run:** commit `b6b75d1475e53a4b68d4c98d4d64378c6b256cf7`, `go test -tags lab ./tests/lab/ -run '^TestL67$'`
+- **Image version:** Samba Version 4.17.12-Debian; image `port49lab/samba:bookworm` (port49lab/samba@sha256:286e7ab9ff5e36d14a007252184fae0bcc7cbcf1cf7677313b4bb2d93746338d), built on debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2`, `go test -tags lab ./tests/lab/ -run '^TestL67$'`
 - **Capture:** `tests/lab/evidence/L67-samba_ad.json`: one JSON line per check, sign-in, count and CLI run: the check's kind (`l67_ok`, `l67_refused`, `l67_ldap`, ...), the LDAP result code, the diagnostic data (AD's code, or ppolicy's error), and the directory's failed-password or connection count. There are no search lines, and the wire is LDAPS, so a pcap would be encrypted.
 - **Credentials:** none appear here or in the evidence. The people's password is generated for each run from `crypto/rand`, held in memory and written to the evidence as `<alice's password>`; no TOTP secret or code, token or key is printed or kept.
 
@@ -54,10 +54,11 @@ The people's password is generated for each run (24 characters from `crypto/rand
 | d. control, the tenth | `failed 10, locked true, expired false, disabled false, must_change false` |
 | e. control | `right password, right code: 200` |
 | e. a wrong code | `401 sign_in_refused; the directory's failed count 0 -> 0` |
-| f. control | `the directory's own creation time of alice is 2026-10-15T03:34:25Z; SignInEntry read 2026-10-15T03:34:25Z` |
-| f. CreatedAt | `2026-10-15T03:34:25Z, 7s before the fixture was logged loaded` |
+| f. control | `the directory's own creation time of alice is 2026-11-06T07:53:11Z; SignInEntry read 2026-11-06T07:53:11Z` |
+| f. CreatedAt | `2026-11-06T07:53:11Z, 6s before the fixture was logged loaded` |
 | g. memory, control | `a sign-in before init-enrollments: 503 enrollment_store_lost; enrollments.json exists: false` |
-| g. memory, login --directory | `exit 0; enrolled true; password: / code from your authenticator (empty if you have none yet): / Enroll your second factor: scan this with your authenticator app, or type the key / confirm by 2026-10-15T03:49:01.804Z / first code from your authenticator: / port49: signed in with your directory password as user:alice@corp.example.com; your certificate from https://127.0.0.1:35675 is valid until 2026-10-15T15:39:02Z / port...` |
+| g. memory, offline init | `the running broker took the new store 30s after init-enrollments (its recheck is every 30s)` |
+| g. memory, login --directory | `exit 0; enrolled true; password: / code from your authenticator (empty if you have none yet): / Enroll your second factor: scan this with your authenticator app, or type the key / confirm by 2026-11-06T08:08:02.093Z / first code from your authenticator: / port49: signed in with your directory password as user:alice@corp.example.com; your certificate from https://127.0.0.1:40203 is valid until 2026-11-06T19:58:02Z / port...` |
 | g. memory, token leaf1 | `exit 0; minted true` |
 | g. memory, token with the directory stopped | `exit 0; minted true` |
 | g. memory, login --directory --sign-in with the directory stopped | `exit 1; password: / code from your authenticator (empty if you have none yet): / port49 login: the broker did not sign you in: the directory did not answer, so no one can sign in with a password now; anyone already signed in keeps working until their certificate ends (directory_unavailable)` |

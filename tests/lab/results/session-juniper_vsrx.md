@@ -1,14 +1,12 @@
 # session — juniper_vsrx
 
-- **Date measured:** 2026-10-01
+- **Date measured:** 2026-11-06
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
-- **Image ID:** `sha256:364bfb536e21ff22db5ed863f022cbc6dda60773b4462692633e91f7ce97799c`
-- **Run:** at commit ec50053, from a detached worktree pinned to it (`make build` there), on beehive: `PORT49_LAB_PLATFORMS=vsrx go test -tags lab ./tests/lab/ -run 'TestSessionLifetime|TestL2Truncation' -count=1 -timeout 90m -v` (under `sg docker -c`)
-- **Credentials:** no token, password or key appears in this note; tokens are named only by the decision log's `credential_sha256`, and the capture's credential fields are redacted
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/session-juniper_vsrx.pcap` — 166 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/session-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/session-juniper_vsrx.pcap` — 444 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/session-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=eos,vjunos,vsrx,nxos,iosxe`, `-run ^TestSessionLifetime$`
 
 ## Claim
 
@@ -16,36 +14,36 @@ Spec §13 decision 33, its session clauses. **The warning** rides on permits wit
 
 ## Observation
 
-Run at a 6m `max_session_age` (`tests/lab/slice/session-policy.yaml`), `session.ceiling_warning: 2m`, `session.grace_window: 2m`. `port49 login` at 22:23:32.812Z; the token's ceiling ran from the held connection's handshake.
+Run at a 6m `max_session_age` (`tests/lab/slice/session-policy.yaml`), `session.ceiling_warning: 2m`, `session.grace_window: 2m`. `port49 login` at 02:25:14.186Z; the token's ceiling ran from the held connection's handshake.
 
 | Step | The device | The record |
 |---|---|---|
 | 3. login inside the warning | reached a prompt; **the warning was not observed** before it (the text before the prompt: `--- JUNOS 21.4R3.15 Kernel 64-bit XEN JNPR-12.1-20220817.43c4e23_buil slice01@`) | permit context_matched, server_msg `port49: session ends in 2m - run 'port49 refresh'` |
 | 4. `show version` inside the warning | its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
-| 5. `port49 refresh`, then `show version` | refresh: `refreshed at 2026-10-01T22:27:43Z; this login lasts until 2026-10-02T10:27:43Z vsrx1 (slice01) extended to 2026-10-01T22:33:43Z, not reached: the device keeps i…`; `show version`: its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
-| 6. `show version` at the ceiling + 10 s (22:33:53.000Z) | its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
-| 7. `port49 refresh` inside the grace window, then `show version` | refresh: `refreshed at 2026-10-01T22:33:53Z; this login lasts until 2026-10-02T10:33:53Z vsrx1 (slice01) extended to 2026-10-01T22:39:53Z, not reached: the device keeps i…`; `show version`: its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
-| 8. `show version` at the new ceiling + the grace window + 10 s (22:42:03.000Z) | its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
-| 8. `port49 refresh` after it | `refreshed at 2026-10-01T22:42:03Z; this login lasts until 2026-10-02T10:42:03Z vsrx1 (slice01) past the grace window, not resumed: log in again there, not reach…`; 1 refresh record(s) |
+| 5. `port49 refresh`, then `show version` | refresh: `refreshed at 2026-11-06T02:29:24Z; this login lasts until 2026-11-06T14:29:24Z vsrx1 (slice01) extended to 2026-11-06T02:35:24Z, not reached: the device keeps i…`; `show version`: its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
+| 6. `show version` at the ceiling + 10 s (02:35:34.000Z) | its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
+| 7. `port49 refresh` inside the grace window, then `show version` | refresh: `refreshed at 2026-11-06T02:35:34Z; this login lasts until 2026-11-06T14:35:34Z vsrx1 (slice01) extended to 2026-11-06T02:41:34Z, not reached: the device keeps i…`; `show version`: its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
+| 8. `show version` at the new ceiling + the grace window + 10 s (02:43:44.000Z) | its output appeared in 100ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
+| 8. `port49 refresh` after it | `refreshed at 2026-11-06T02:43:44Z; this login lasts until 2026-11-06T14:43:44Z vsrx1 (slice01) past the grace window, not resumed: log in again there, not reach…`; 1 refresh record(s) |
 
-`port49 refresh`'s output in full, at step 5:
-
-```
-refreshed at 2026-10-01T22:27:43Z; this login lasts until 2026-10-02T10:27:43Z
-  vsrx1 (slice01)  extended to 2026-10-01T22:33:43Z, not reached: the device keeps its own session
-```
-
-At step 7 (reconstructed: the table cell as recorded, plus printRefresh's fixed suffix; the raw output was not retained):
+`port49 refresh`'s output in full (raw: `tests/lab/evidence/session-refresh-juniper_vsrx.txt`), at step 5:
 
 ```
-refreshed at 2026-10-01T22:33:53Z; this login lasts until 2026-10-02T10:33:53Z
-  vsrx1 (slice01)  extended to 2026-10-01T22:39:53Z, not reached: the device keeps its own session
+refreshed at 2026-11-06T02:29:24Z; this login lasts until 2026-11-06T14:29:24Z
+  vsrx1 (slice01)  extended to 2026-11-06T02:35:24Z, not reached: the device keeps its own session
 ```
 
-At step 8 (reconstructed: the table cell as recorded, plus printRefresh's fixed suffix; the raw output was not retained):
+At step 7:
 
 ```
-refreshed at 2026-10-01T22:42:03Z; this login lasts until 2026-10-02T10:42:03Z
+refreshed at 2026-11-06T02:35:34Z; this login lasts until 2026-11-06T14:35:34Z
+  vsrx1 (slice01)  extended to 2026-11-06T02:41:34Z, not reached: the device keeps its own session
+```
+
+At step 8:
+
+```
+refreshed at 2026-11-06T02:43:44Z; this login lasts until 2026-11-06T14:43:44Z
   vsrx1 (slice01)  past the grace window, not resumed: log in again there, not reached: the device keeps its own session
 ```
 
@@ -55,5 +53,5 @@ Records from `port49 login` on: `event=account` ×6; `event=authorize_session re
 
 On Junos the session reply at login is the one `server_msg` the device is ever sent (decision 21): Junos authorizes no command with port49, so the command rows say only whether `show version` ran, and the ceiling and the grace window are read off the refresh's answer and the records.
 
-port49d, port49 and port49-inventory built from `ec50053` (`make build`).
+port49d, port49 and port49-inventory built from `a158aaf8` (`make build`).
 

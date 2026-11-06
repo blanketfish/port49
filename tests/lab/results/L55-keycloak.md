@@ -1,10 +1,10 @@
 # L55 — keycloak
 
-- **Date measured:** 2026-10-11
-- **Run:** commit `56cf4388e5bc54c16b2608a7a7d14761f700321f`, `PORT49_LAB_PLATFORMS=`, `-run TestL55`
+- **Date measured:** 2026-11-06
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=`, `-run ^TestL55PublicClient$`
 - **Platform:** Keycloak, as a container on `tests/lab/oidc/compose.yaml` (no network device)
-- **Image version:** Keycloak 26.4.7 JVM: 21.0.9 (Red Hat, Inc. OpenJDK 64-Bit Server VM 21.0.9+10-LTS) OS: Linux 7.0.0-31-generic amd64; image quay.io/keycloak/keycloak@sha256:9409c59bdfb65dbffa20b11e6f18b8abb9281d480c7ca402f51ed3d5977e6007
-- **Capture:** `tests/lab/evidence/L55-keycloak.json`: one JSON line per observed step, {step, value}, each value the observation's text as the table below has it; no token is in it (the wire is TLS, so a pcap would be encrypted).
+- **Image version:** Keycloak 26.4.7 JVM: 21.0.9 (Red Hat, Inc. OpenJDK 64-Bit Server VM 21.0.9+10-LTS) OS: Linux 7.0.0-38-generic amd64; image quay.io/keycloak/keycloak@sha256:9409c59bdfb65dbffa20b11e6f18b8abb9281d480c7ca402f51ed3d5977e6007
+- **Capture:** `tests/lab/evidence/L55-keycloak.json`: one JSON line per observed step, {step, value}: a token's value is its JWS header and claims decoded with the signature dropped, any other value is the observation's text (the wire is TLS, so a pcap would be encrypted).
 - **Credentials:** none here or in the evidence: the admin password is generated per run and never printed; the lab user's password and the service secret are the realm file's published lab values.
 
 ## Claim
@@ -21,10 +21,10 @@ port49-cli's `pkce.code.challenge.method` attribute is "S256" (`tests/lab/oidc/k
 | 1b. discovery authorization_response_iss_parameter_supported | `true` |
 | 1c. the authorization response's iss | `present true, the issuer true` |
 | 2. control: the realm's own redirect, and http://evil.example/callback | `accepted; refused` |
-| 2. registration http://127.0.0.1:18749/callback | `port 18749 accepted; port 41587 refused` |
-| 2. registration http://127.0.0.1/callback | `port 18749 accepted; port 41587 accepted` |
-| 2. registration http://127.0.0.1/* | `port 18749 accepted; port 41587 accepted` |
-| 2. registration http://127.0.0.1:*/callback | `port 18749 refused; port 41587 refused` |
+| 2. registration http://127.0.0.1:18749/callback | `port 18749 accepted; port 45087 refused` |
+| 2. registration http://127.0.0.1/callback | `port 18749 accepted; port 45087 accepted` |
+| 2. registration http://127.0.0.1/* | `port 18749 accepted; port 45087 accepted` |
+| 2. registration http://127.0.0.1:*/callback | `port 18749 refused; port 45087 refused` |
 | 3. port49-cli's pkce.code.challenge.method attribute | `S256` |
 | 3. the exchange with the right verifier | `200 with id_token, refresh_token` |
 | 3. the exchange with a wrong verifier | `400 invalid_grant` |

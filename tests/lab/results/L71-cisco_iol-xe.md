@@ -59,3 +59,51 @@ aaa                         Authentication, Authorization and Accounting.
 tacacs-server               Modify TACACS query parameters
 ```
 
+## Addendum: TestL73 probe
+
+Measured 2026-11-05 on IOL-XE 17.18.02 (`vrnetlab/cisco_iol:17.18.02`). Probed by TestL73 (commit `5ed06f5ff587893a8740a7fd30042d3c53eb0bb0-dirty`, `PORT49_LAB_PLATFORMS=iolxe1718`, `-run ^TestL73$`); the exchange is `tests/lab/evidence/L73-cisco_iol-xe/l71-probe.txt`.
+
+Measured: IOL-XE 17.18.02 offers no RFC 9887 client in its configuration help: config mode lists `aaa`, `tacacs-server` among the words beginning aaa or tacacs and no `tacacs` object; `tacacs-server host <addr>` lists `<cr>` only.
+
+Sent:
+
+```
+tacacs-server host 192.0.2.71 ?
+```
+
+The device replied:
+
+```
+tacacs-server host 192.0.2.71 ?
+  <cr>  <cr>
+
+iol1(config)#tacacs-server host 192.0.2.71 
+```
+
+The asks, in the order the dialect lists them (the L71 ask first; the evidence-only asks next, recorded and graded on nothing; the `tls` level only if the first ask listed `tls`). The first ask is above.
+
+2. typed `tacacs-server ?`, kept the whole help:
+
+```
+  administration      Start tacacs+ deamon handling administrative messages
+  attribute           Customize selected tacacs attributes
+  cache               AAA auth cache default server group
+  directed-request    Allow user to specify tacacs server to use with `@server'
+  dns-alias-lookup    Enable IP Domain Name System Alias lookup for TACACS servers
+  domain-stripping    Strip the domain from the username
+  extended            Enable extended TACACS
+  host                Specify a TACACS server
+  key                 Set TACACS+ encryption key.
+  last-resort         Define TACACS action if no server responds
+  optional-passwords  The first TACACS request can be made without password verification
+  packet              Modify TACACS+ packet options
+  retransmit          Search iterations of the TACACS server list
+  timeout             Time to wait for a TACACS server to reply
+```
+
+3. typed `?`, kept the lines beginning aaa or tacacs:
+
+```
+aaa                         Authentication, Authorization and Accounting.
+tacacs-server               Modify TACACS query parameters
+```

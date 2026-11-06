@@ -1,11 +1,12 @@
 # L22-carried — cisco_iosxe
 
-- **Date measured:** 2026-09-24
+- **Date measured:** 2026-11-06
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/evidence/L22-carried-cisco_iosxe.pcap` — 934 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L22-carried-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L22-carried-cisco_iosxe.pcap` — 966 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L22-carried-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=eos,nxos,iosxe`, `-run ^(TestAdapterReplies|TestAdapterCarried)$`
 
 ## Claim
 
@@ -15,7 +16,7 @@ The measurements carried into Task 17 beside the adapters' replies: `port49 devi
 
 ### check-config against the device's own running configuration
 
-`show running-config` (lab), 289 lines, redacted copy `tests/lab/evidence/L22-config-cisco_iosxe-lab-1.txt`:
+`show running-config` (lab), 255 lines, redacted copy `tests/lab/evidence/L22-config-cisco_iosxe-lab-1.txt`:
 
 check-config on the raw capture, exit 1:
 
@@ -37,7 +38,8 @@ check-config on the raw capture, exit 1:
 
 ```
 CONFIG: <capture>:8: aaa authentication «redacted» «redacted» «redacted» «redacted» «redacted»: enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)
-MISSING: <capture>: privilege exec level 7 clear counters: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 platform show cisco_iosxe)
+MISSING: <capture>: privilege exec level 7 clear counters: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; the platform set's line: port49 platform show --set 1.0.0 cisco_iosxe)
+note: the configuration has no hostname line, so it may be a partial capture (| section ...): a MISSING line may be in the part left out; check-config reads the whole show running-config
 0 local accounts, 1 usernames served on xe1 (cisco_iosxe), 2 findings
 ```
 
@@ -45,7 +47,8 @@ check-config on the redacted copy, exit 1:
 
 ```
 CONFIG: <capture>:8: aaa authentication «redacted» «redacted» «redacted» «redacted» «redacted»: enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)
-MISSING: <capture>: privilege exec level 7 clear counters: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 platform show cisco_iosxe)
+MISSING: <capture>: privilege exec level 7 clear counters: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; the platform set's line: port49 platform show --set 1.0.0 cisco_iosxe)
+note: the configuration has no hostname line, so it may be a partial capture (| section ...): a MISSING line may be in the part left out; check-config reads the whole show running-config
 0 local accounts, 1 usernames served on xe1 (cisco_iosxe), 2 findings
 ```
 
@@ -56,7 +59,7 @@ Each command's verbatim reply, from the line typed to the next prompt. The devic
 
 #### operator: `priv-lvl=7`
 
-Session `alice10`, before port49d stopped:
+Session `alice01`, before port49d stopped:
 
 ```
 show privilege
@@ -74,7 +77,7 @@ xe1#
 
 #### admin: `priv-lvl=15`
 
-Session `alice11`, before port49d stopped:
+Session `alice02`, before port49d stopped:
 
 ```
 show privilege
@@ -99,7 +102,7 @@ check-config on the raw capture, exit 1:
 
 ```
 CONFIG: <capture>:40: aaa authentication «redacted» «redacted» «redacted» «redacted» «redacted»: enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)
-MISSING: <capture>: aaa authorization commands 7 default group port49 local: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 platform show cisco_iosxe)
+MISSING: <capture>: aaa authorization commands 7 default group port49 local: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; the platform set's line: port49 platform show --set 1.0.0 cisco_iosxe)
 2 local accounts, 1 usernames served on xe1 (cisco_iosxe), 2 findings
 ```
 
@@ -107,7 +110,7 @@ check-config on the redacted copy, exit 1:
 
 ```
 CONFIG: <capture>:40: aaa authentication «redacted» «redacted» «redacted» «redacted» «redacted»: enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)
-MISSING: <capture>: aaa authorization commands 7 default group port49 local: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 platform show cisco_iosxe)
+MISSING: <capture>: aaa authorization commands 7 default group port49 local: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; the platform set's line: port49 platform show --set 1.0.0 cisco_iosxe)
 2 local accounts, 1 usernames served on xe1 (cisco_iosxe), 2 findings
 ```
 
@@ -117,8 +120,9 @@ check-config on the raw capture, exit 1:
 
 ```
 CONFIG: <capture>:8: aaa authentication «redacted» «redacted» «redacted» «redacted» «redacted»: enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)
-MISSING: <capture>: aaa authorization commands 7 default group port49 local: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 platform show cisco_iosxe)
-MISSING: <capture>: privilege exec level 7 clear counters: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 platform show cisco_iosxe)
+MISSING: <capture>: aaa authorization commands 7 default group port49 local: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; the platform set's line: port49 platform show --set 1.0.0 cisco_iosxe)
+MISSING: <capture>: privilege exec level 7 clear counters: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; the platform set's line: port49 platform show --set 1.0.0 cisco_iosxe)
+note: the configuration has no hostname line, so it may be a partial capture (| section ...): a MISSING line may be in the part left out; check-config reads the whole show running-config
 0 local accounts, 1 usernames served on xe1 (cisco_iosxe), 3 findings
 ```
 
@@ -126,12 +130,13 @@ check-config on the redacted copy, exit 1:
 
 ```
 CONFIG: <capture>:8: aaa authentication «redacted» «redacted» «redacted» «redacted» «redacted»: enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)
-MISSING: <capture>: aaa authorization commands 7 default group port49 local: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 platform show cisco_iosxe)
-MISSING: <capture>: privilege exec level 7 clear counters: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 platform show cisco_iosxe)
+MISSING: <capture>: aaa authorization commands 7 default group port49 local: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; the platform set's line: port49 platform show --set 1.0.0 cisco_iosxe)
+MISSING: <capture>: privilege exec level 7 clear counters: the configuration does not carry this line, and the cisco_iosxe adapter's renderings depend on it: without it a level is not what the adapter says it is (spec §6; the platform set's line: port49 platform show --set 1.0.0 cisco_iosxe)
+note: the configuration has no hostname line, so it may be a partial capture (| section ...): a MISSING line may be in the part left out; check-config reads the whole show running-config
 0 local accounts, 1 usernames served on xe1 (cisco_iosxe), 3 findings
 ```
 
-Operator's reply `priv-lvl=7`, session `alice12`, the commands typed in one pty session (IOS-XE runs one exec channel per connection):
+Operator's reply `priv-lvl=7`, session `alice03`, the commands typed in one pty session (IOS-XE runs one exec channel per connection):
 
 `show privilege`:
 

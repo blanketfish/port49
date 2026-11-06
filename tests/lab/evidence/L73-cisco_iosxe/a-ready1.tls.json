@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:6049",
-    "device_port": 55478,
-    "syn_at": "2026-10-18T07:46:25.885466Z",
+    "device_port": 41290,
+    "syn_at": "2026-11-05T18:35:44.943032Z",
     "answer": "rst",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -10,6 +10,6 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-18T07:46:25.885479Z"
+    "end_at": "2026-11-05T18:35:44.943045Z"
   }
 ]

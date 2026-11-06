@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:300",
-    "device_port": 53046,
-    "syn_at": "2026-10-18T07:53:17.243033Z",
+    "device_port": 44720,
+    "syn_at": "2026-11-05T18:42:50.79214Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -52,6 +52,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        25
       ]
     },
     "server_hello": {
@@ -62,18 +65,18 @@
     },
     "device_tls_records": 8,
     "server_tls_records": 10,
-    "device_payload_bytes": 1489,
-    "server_payload_bytes": 1136,
-    "server_flight_at": "2026-10-18T07:53:17.260498Z",
-    "device_reply_at": "2026-10-18T07:53:17.272271Z",
+    "device_payload_bytes": 1487,
+    "server_payload_bytes": 1135,
+    "server_flight_at": "2026-11-05T18:42:50.809874Z",
+    "device_reply_at": "2026-11-05T18:42:50.822206Z",
     "incomplete": false,
     "end": "server-fin",
-    "end_at": "2026-10-18T07:53:17.774404Z"
+    "end_at": "2026-11-05T18:42:51.32412Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 53062,
-    "syn_at": "2026-10-18T07:53:19.776907Z",
+    "device_port": 44724,
+    "syn_at": "2026-11-05T18:42:53.326449Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -123,6 +126,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        25
       ]
     },
     "server_hello": {
@@ -133,12 +139,12 @@
     },
     "device_tls_records": 8,
     "server_tls_records": 10,
-    "device_payload_bytes": 1489,
-    "server_payload_bytes": 1136,
-    "server_flight_at": "2026-10-18T07:53:19.788532Z",
-    "device_reply_at": "2026-10-18T07:53:19.800776Z",
+    "device_payload_bytes": 1487,
+    "server_payload_bytes": 1135,
+    "server_flight_at": "2026-11-05T18:42:53.337508Z",
+    "device_reply_at": "2026-11-05T18:42:53.349696Z",
     "incomplete": false,
     "end": "server-fin",
-    "end_at": "2026-10-18T07:53:20.803325Z"
+    "end_at": "2026-11-05T18:42:54.352618Z"
   }
 ]

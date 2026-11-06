@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:300",
-    "device_port": 46366,
-    "syn_at": "2026-10-21T06:01:03.425954Z",
+    "device_port": 45781,
+    "syn_at": "2026-11-05T19:37:30.612589Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -90,6 +90,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        29
       ]
     },
     "server_hello": {
@@ -100,19 +103,19 @@
     },
     "device_tls_records": 8,
     "server_tls_records": 10,
-    "device_payload_bytes": 2112,
+    "device_payload_bytes": 2114,
     "server_payload_bytes": 1035,
-    "device_fin_at": "2026-10-21T06:01:04.210402Z",
-    "server_flight_at": "2026-10-21T06:01:03.439286Z",
-    "device_reply_at": "2026-10-21T06:01:03.704783Z",
+    "device_fin_at": "2026-11-05T19:37:31.403633Z",
+    "server_flight_at": "2026-11-05T19:37:30.627408Z",
+    "device_reply_at": "2026-11-05T19:37:30.898502Z",
     "incomplete": false,
     "end": "server-fin",
-    "end_at": "2026-10-21T06:01:04.208448Z"
+    "end_at": "2026-11-05T19:37:31.40203Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 27114,
-    "syn_at": "2026-10-21T06:01:04.811599Z",
+    "device_port": 20695,
+    "syn_at": "2026-11-05T19:37:32.239681Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -200,6 +203,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        29
       ]
     },
     "server_hello": {
@@ -210,13 +216,13 @@
     },
     "device_tls_records": 8,
     "server_tls_records": 10,
-    "device_payload_bytes": 2112,
-    "server_payload_bytes": 1035,
-    "device_fin_at": "2026-10-21T06:01:06.107063Z",
-    "server_flight_at": "2026-10-21T06:01:04.826985Z",
-    "device_reply_at": "2026-10-21T06:01:05.0969Z",
+    "device_payload_bytes": 2114,
+    "server_payload_bytes": 1034,
+    "device_fin_at": "2026-11-05T19:37:33.600124Z",
+    "server_flight_at": "2026-11-05T19:37:32.254691Z",
+    "device_reply_at": "2026-11-05T19:37:32.524508Z",
     "incomplete": false,
     "end": "server-fin",
-    "end_at": "2026-10-21T06:01:06.104293Z"
+    "end_at": "2026-11-05T19:37:33.597803Z"
   }
 ]

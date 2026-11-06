@@ -1,0 +1,13 @@
+# port49 refresh, as printed, in TestSessionLifetime on juniper_vjunos-router
+
+## step 5
+refreshed at 2026-11-06T02:09:38Z; this login lasts until 2026-11-06T14:09:38Z
+  srx1 (slice01)  extended to 2026-11-06T02:15:38Z, not reached: the device keeps its own session
+
+## step 7
+refreshed at 2026-11-06T02:15:48Z; this login lasts until 2026-11-06T14:15:48Z
+  srx1 (slice01)  extended to 2026-11-06T02:21:48Z, not reached: the device keeps its own session
+
+## step 8
+refreshed at 2026-11-06T02:23:58Z; this login lasts until 2026-11-06T14:23:58Z
+  srx1 (slice01)  past the grace window, not resumed: log in again there, not reached: the device keeps its own session

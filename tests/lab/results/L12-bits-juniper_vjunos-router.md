@@ -1,11 +1,12 @@
 # L12-bits — juniper_vjunos-router
 
-- **Date measured:** 2026-09-25
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L12-bits-juniper_vjunos-router.pcap` — 2234 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L12-bits-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L12-bits-juniper_vjunos-router.pcap` — 2630 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L12-bits-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL12JunosBits$`
 
 ## Claim
 
@@ -26,13 +27,15 @@ Each row is a session whose template's class holds one bit and nothing else; `no
 
 A top-level word is held whole (`request **`, `set **`), not word by word under it: `?` does not list Junos's hidden commands, so a per-word reach could under-report what the device runs. A per-word reach is a possible later refinement, and needs proof, not measured here, that no hidden command sits under each word.
 
-| hierarchy probe | `all` shows it | `view` alone: observed | `view` alone shows it | `view-configuration` alone shows it | `view view-configuration` shows it | isolated |
+Words `view view-configuration` is offered that `view`, `view-configuration` and `none` are not (a carve-out candidate for view-configuration, by completion only): show firewall, show log, show policer.
+
+| hierarchy probe | `all` shows it | `view` alone: observed and refused | `view` alone shows it | `view-configuration` alone shows it | `view view-configuration` shows it | isolated |
 |---|---|---|---|---|---|---|
 | `show configuration system host-name` | true | true | false | false | true | yes |
 | `show configuration routing-instances` | true | true | false | false | true | yes |
 | `show configuration interfaces` | true | true | false | false | true | yes |
 
-The adapter's carve-out `view-configuration: [show configuration **]` holds only if `view` alone shows none of them; it was measured on 3 hierarchies the `all` control shows.
+The adapter's carve-out `view-configuration: [show configuration **]` holds only if `view` alone shows none of them; it was measured on 3 hierarchies the `all` control shows. Bare `show configuration` under `view` alone: not probed.
 
 | probe | none | all | clear | network | trace | view | view-configuration | view+view-configuration |
 |---|---|---|---|---|---|---|---|---|
@@ -54,7 +57,7 @@ The adapter's carve-out `view-configuration: [show configuration **]` holds only
 | `configure` | refused | ran | refused | refused | refused | refused | refused | refused |
 | `exit configuration-mode` | refused | ran | refused | refused | refused | refused | refused | refused |
 
-Classes other than `all` that entered configuration mode (`configure` ran): none.
+Classes other than `all` that entered configuration mode (`configure` ran): no class.
 
 | baseline command | none | none + deny .* |
 |---|---|---|
@@ -99,6 +102,70 @@ alice01@srx1>
 ```
 
 Completion: file, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, op, op invoke-debugger, op url, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request dhcp, request dhcpv6, request interface, request ipsec, request jdaf, request lacp, request network-access, request protection-group, request services, request session, save, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, start, test, test aaa, test dhcp-security, test dhcp-service, test l2-learning, test rt-proxy, test unified-edge
+
+Raw `?`:
+
+```
+?
+Possible completions:
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  op                   Invoke an operation script
+  quit                 Exit the management session
+  request              Make system-level requests
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  start                Start shell
+  test                 Perform diagnostic debugging
+alice01@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice01@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  lacp                 Request LACP actions
+  network-access       Request network-access related information
+  protection-group     Request protection group related operations
+  services             Request service options
+  session              Connect to line card
+alice01@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice01@srx1>         test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  l2-learning          Layer 2 forwarding commands
+  rt-proxy             Test RT Proxy
+  unified-edge         Unified-edge commands
+alice01@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice01@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+alice01@srx1> set    
+```
 
 `show version`:
 
@@ -209,7 +276,7 @@ No valid completions
 `request system reboot`:
 
 ```
-alice01@srx1>          request system
+request system
                       ^
 syntax error, expecting <command>.
 alice01@srx1> request system   ?
@@ -220,7 +287,7 @@ No valid completions
 `restart routing`:
 
 ```
-alice01@srx1>                 restart
+restart
               ^
 unknown command.
 alice01@srx1> restart   ?
@@ -231,7 +298,7 @@ No valid completions
 `show configuration system host-name`:
 
 ```
-alice01@srx1>          show
+show
               ^
 unknown command.
 alice01@srx1> show   configuration
@@ -284,7 +351,8 @@ alice01@srx1>
 ```
  
 JUNOS tip:
-Use the annotate command to add comments to your configuration.
+Use re0: and re1: to save output to the other routing engine. For
+example, 'show route summary | save re1:filename'.
 
 alice01@srx1> 
 ```
@@ -419,6 +487,106 @@ alice02@srx1>
 
 Completion: clear, clear amt, clear ancp, clear arp, clear auto-bandwidth, clear auto-configuration, clear bfd, clear bgp, clear bridge, clear captive-portal, clear chassis, clear cli, clear database-replication, clear ddos-protection, clear dhcp, clear dhcp-security, clear dhcpv6, clear diameter, clear dot1x, clear dynamic-tunnels, clear error, clear esis, clear evpn, clear express-segments, clear extensible-subscriber-services, clear extension-service, clear firewall, clear forwarding-options, clear helper, clear igmp, clear ike, clear ilmi, clear interfaces, clear ipsec, clear ipv6, clear isis, clear l2-learning, clear l2circuit, clear lacp, clear ldp, clear lldp, clear log, clear loop-detect, clear mac-vrf, clear mld, clear mpls, clear msdp, clear multicast, clear mvrp, clear network-access, clear oam, clear ospf, clear ospf3, clear passive-monitoring, clear path-computation-client, clear performance-monitoring, clear pfe, clear pim, clear poe, clear ppp, clear pppoe, clear protection-group, clear ptp, clear remote-device-management, clear rip, clear ripng, clear rsvp, clear security, clear services, clear sflow, clear shmlog, clear snmp, clear spanning-tree, clear synchronous-ethernet, clear system, clear tcp-forwarding, clear unified-edge, clear user-plane, clear validation, clear virtual-chassis, clear vpls, clear vrrp, configure, configure batch, configure dynamic, configure exclusive, configure private, file, file archive, file change-owner, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, load dhcp-security-snoop, load ssl-certificate, monitor, monitor ethernet, monitor interface, monitor label-switched-path, monitor list, monitor mpls, monitor start, monitor static-lsp, monitor stop, monitor traffic, mtrace, mtrace from-source, mtrace logical-system, mtrace monitor, mtrace routing-instance, mtrace to-gateway, op, op invoke-debugger, op url, ping, ping atm, ping bypass-routing, ping ce-ip, ping clns, ping count, ping detail, ping do-not-fragment, ping ethernet, ping gateway, ping inet, ping inet6, ping interface, ping interval, ping logical-system, ping mac-address, ping mpls, ping no-resolve, ping overlay, ping pattern, ping rapid, ping record-route, ping routing-instance, ping size, ping source, ping srv6, ping strict, ping tos, ping ttl, ping verbose, ping vpls, ping wait, probe, probe by-address, probe by-index, probe by-name, probe by-remote-address, probe count, probe detail, probe inet, probe inet6, probe interface, probe interval, probe logical-system, probe routing-instance, probe source, probe tos, probe ttl, probe wait, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request debug, request dhcp, request dhcpv6, request extension-service, request flight-recorder, request interface, request ipsec, request jdaf, request jnu, request l2circuit-switchover, request lacp, request message, request mpls, request network-access, request path-computation-client, request pim, request protection-group, request routing-engine, request security, request services, request session, request snmp, request support, request system, request unified-edge, request validation, request virtual-chassis, request vpls-switchover, restart, restart gracefully, restart immediately, restart kernel-replication, restart routing, restart soft, save, save dhcp-security-snoop, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, set date, show, show access-cac, show access-security, show accounting, show agent, show amt, show ancp, show aps, show arp, show as-path, show authentication-whitelist, show auto-bandwidth, show auto-configuration, show backup-selection, show bfd, show bgp, show bier, show bridge, show captive-portal, show chassis, show class-of-service, show cli, show configuration, show congestion-protection, show connections, show database-replication, show ddos-protection, show dhcp, show dhcp-security, show dhcpv6, show diameter, show dot1x, show dual-phase-bootup-status, show dynamic-profile, show dynamic-tunnels, show ephemeral-configuration, show esis, show event-options, show evpn, show express-segments, show extensible-subscriber-services, show extension-provider, show extension-service, show fib-streaming, show firewall, show flexible-tunnels, show flight-recorder, show forwarding-options, show helper, show hfrr, show host, show iccp, show igmp, show igp-compute, show ike, show ilmi, show ingress-replication, show interfaces, show ipsec, show ipv6, show isis, show jdaf, show l2-learning, show l2circuit, show l2cpd, show l2pt, show l2vpn, show lacp, show layer2-control, show ldp, show link-management, show lldp, show log, show loop-detect, show mac-rewrite, show mac-vrf, show mld, show mpls, show msdp, show multi-chassis, show multicast, show mvpn, show mvrp, show network-access, show network-agent, show nonstop-routing, show ntp, show oam, show ospf, show ospf3, show path-computation-client, show performance-monitoring, show pfe, show pim, show poe, show policer, show policy, show ppp, show pppoe, show programmable-rpd, show protection-group, show remote-device-management, show rip, show ripng, show route, show rsvp, show sap, show security, show services, show sflow, show shmlog, show snmp, show spanning-tree, show spring-traffic-engineering, show srv6, show ssl-certificates, show static-subscribers, show subscribers, show system, show task, show tcp-forwarding, show ted, show unified-edge, show user-plane, show v4ov6-tunnels, show validation, show version, show virtual-chassis, show vpls, show vrrp, ssh, ssh bypass-routing, ssh commands-to-execute, ssh extensive, ssh inet, ssh inet6, ssh interface, ssh logical-system, ssh routing-instance, ssh source, ssh v2, ssh verbose, start, start shell, telnet, telnet bypass-routing, telnet inet, telnet inet6, telnet interface, telnet logical-system, telnet no-resolve, telnet port, telnet routing-instance, telnet source, test, test aaa, test configuration, test dhcp-security, test dhcp-service, test interface, test l2-learning, test msdp, test policy, test rib-sharding, test rt-proxy, test services, test unified-edge, traceroute, traceroute as-number-lookup, traceroute bypass-routing, traceroute ce-ip, traceroute clns, traceroute ethernet, traceroute extension, traceroute gateway, traceroute inet, traceroute inet6, traceroute interface, traceroute logical-system, traceroute monitor, traceroute mpls, traceroute next-hop, traceroute no-resolve, traceroute overlay, traceroute port, traceroute propagate-ttl, traceroute routing-instance, traceroute source, traceroute srv6, traceroute tos, traceroute ttl, traceroute wait
 
+Raw `?`:
+
+```
+?
+Possible completions:
+  clear                Clear PPM related statistics information
+  configure            Manipulate software configuration information
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  monitor              Show real-time debugging information
+  mtrace               Trace multicast path from source to receiver
+  op                   Invoke an operation script
+  ping                 Ping remote target
+  probe                Probe interfaces on remote target
+  quit                 Exit the management session
+  request              Make system-level requests
+  restart              Restart software process
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  show                 Show system information
+  ssh                  Start secure shell on another host
+  start                Start shell
+  telnet               Telnet to another host
+  test                 Perform diagnostic debugging
+  traceroute           Trace route to remote host
+alice02@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice02@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  debug                Manageability Debugging
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  extension-service    Jet application
+  flight-recorder      Flight recorder commands
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  jnu                  Perform JNU operations
+  l2circuit-switchover  Perform l2circuit switchover
+  lacp                 Request LACP actions
+  message              Send text message to other users
+  mpls                 Perform Multiprotocol Label Switching operations
+  network-access       Request network-access related information
+  path-computation-client  Perform path-computation-client operations
+  pim                  Perform PIM operations
+  protection-group     Request protection group related operations
+  routing-engine       Routing Engine
+  security             Perform security-level operations
+  services             Request service options
+  session              Connect to line card
+  snmp                 Request actions from the Simple Network Management Protocol daemon
+  support              Perform JUNOS support tasks
+  system               Perform system-level operations
+  unified-edge         Unified-edge commands
+  validation           Request route validation actions
+  virtual-chassis      Perform virtual-chassis specific operations
+  vpls-switchover      Perform LDP VPLS pseudowire switchover
+alice02@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice02@srx1>          test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  configuration        Check correctness of configuration file
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  interface            Perform test on interface
+  l2-learning          Layer 2 forwarding commands
+  msdp                 Perform Multicast Source Discovery Protocol peer debugging
+  policy               Import and export policy evaluation
+  rib-sharding         Test sharding
+  rt-proxy             Test RT Proxy
+  services             Test service options
+  unified-edge         Unified-edge commands
+alice02@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice02@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+  date                 Set system date and time
+alice02@srx1> set    
+```
+
 `show version`:
 
 ```
@@ -522,12 +690,12 @@ alice02@srx1>
 
 ```
  
-Current time: 2026-09-25 04:08:06 UTC
+Current time: 2026-11-05 21:49:37 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 04:05:46 UTC (00:02:20 ago)
-Protocols started: 2026-09-25 04:06:41 UTC (00:01:25 ago)
-Last configured: 2026-09-25 04:07:01 UTC (00:01:05 ago) by breakglass
- 4:08AM  up 2 mins, 1 users, load averages: 0.83, 0.63, 0.28
+System booted: 2026-11-05 21:46:59 UTC (00:02:38 ago)
+Protocols started: 2026-11-05 21:47:56 UTC (00:01:41 ago)
+Last configured: 2026-11-05 21:48:14 UTC (00:01:23 ago) by breakglass
+ 9:49PM  up 3 mins, 1 users, load averages: 0.73, 0.70, 0.32
 
 alice02@srx1> 
 ```
@@ -589,7 +757,7 @@ Possible completions:
 `request system reboot`:
 
 ```
-alice02@srx1>           request system ?
+request system ?
 Possible completions:
   certificate          Manage X509 certificates
   commit               Perform commit related operations
@@ -619,7 +787,7 @@ Possible completions:
 `restart routing`:
 
 ```
-alice02@srx1>                  restart ?
+restart ?
 Possible completions:
 > SDN-Telemetry        agent for all the telemetry sensors
 > aaad                 AAAD process - Authentication, authorization and accounting
@@ -815,8 +983,9 @@ alice02@srx1>
 ```
  
 JUNOS tip:
-Use 'request system snapshot' to make a snapshot of the running system
-on the hard disk drive.
+Use M-. to insert last word of the previous command. Repeat M-. to scroll
+through last word of each command in the history. To do the same for Nth
+word, precede M-. with M-n.
 
 alice02@srx1> 
 ```
@@ -910,6 +1079,72 @@ alice03@srx1>
 ```
 
 Completion: clear, clear amt, clear ancp, clear arp, clear auto-bandwidth, clear auto-configuration, clear bfd, clear bgp, clear bridge, clear captive-portal, clear cli, clear database-replication, clear ddos-protection, clear dhcp, clear dhcp-security, clear dhcpv6, clear diameter, clear dot1x, clear dynamic-tunnels, clear error, clear esis, clear evpn, clear express-segments, clear extensible-subscriber-services, clear firewall, clear forwarding-options, clear helper, clear igmp, clear ike, clear ilmi, clear interfaces, clear ipsec, clear ipv6, clear isis, clear l2-learning, clear l2circuit, clear ldp, clear lldp, clear loop-detect, clear mac-vrf, clear mld, clear mpls, clear msdp, clear multicast, clear mvrp, clear network-access, clear oam, clear ospf, clear ospf3, clear performance-monitoring, clear pfe, clear pim, clear poe, clear ppp, clear pppoe, clear protection-group, clear ptp, clear remote-device-management, clear rip, clear ripng, clear rsvp, clear sflow, clear shmlog, clear snmp, clear spanning-tree, clear synchronous-ethernet, clear system, clear tcp-forwarding, clear user-plane, clear validation, clear virtual-chassis, clear vpls, clear vrrp, file, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, op, op invoke-debugger, op url, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request dhcp, request dhcpv6, request interface, request ipsec, request jdaf, request lacp, request mpls, request network-access, request protection-group, request services, request session, save, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, start, test, test aaa, test dhcp-security, test dhcp-service, test l2-learning, test rt-proxy, test unified-edge
+
+Raw `?`:
+
+```
+?
+Possible completions:
+  clear                Clear PPM related statistics information
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  op                   Invoke an operation script
+  quit                 Exit the management session
+  request              Make system-level requests
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  start                Start shell
+  test                 Perform diagnostic debugging
+alice03@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice03@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  lacp                 Request LACP actions
+  mpls                 Perform Multiprotocol Label Switching operations
+  network-access       Request network-access related information
+  protection-group     Request protection group related operations
+  services             Request service options
+  session              Connect to line card
+alice03@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice03@srx1>         test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  l2-learning          Layer 2 forwarding commands
+  rt-proxy             Test RT Proxy
+  unified-edge         Unified-edge commands
+alice03@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice03@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+alice03@srx1> set    
+```
 
 `show version`:
 
@@ -1009,7 +1244,7 @@ No valid completions
 `request system reboot`:
 
 ```
-alice03@srx1>          request system
+request system
                       ^
 syntax error, expecting <command>.
 alice03@srx1> request system   ?
@@ -1020,7 +1255,7 @@ No valid completions
 `restart routing`:
 
 ```
-alice03@srx1>                 restart
+restart
               ^
 unknown command.
 alice03@srx1> restart   ?
@@ -1031,7 +1266,7 @@ No valid completions
 `show configuration system host-name`:
 
 ```
-alice03@srx1>          show
+show
               ^
 unknown command.
 alice03@srx1> show   configuration
@@ -1084,8 +1319,7 @@ alice03@srx1>
 ```
  
 JUNOS tip:
-Use re0: and re1: to save output to the other routing engine. For
-example, 'show route summary | save re1:filename'.
+Use the TAB key to autocomplete CLI commands.
 
 alice03@srx1> 
 ```
@@ -1174,6 +1408,77 @@ alice04@srx1>
 ```
 
 Completion: file, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, mtrace, mtrace from-source, mtrace logical-system, mtrace monitor, mtrace routing-instance, mtrace to-gateway, op, op invoke-debugger, op url, ping, ping atm, ping bypass-routing, ping ce-ip, ping clns, ping count, ping detail, ping do-not-fragment, ping ethernet, ping gateway, ping inet, ping inet6, ping interface, ping interval, ping logical-system, ping mac-address, ping mpls, ping no-resolve, ping overlay, ping pattern, ping rapid, ping record-route, ping routing-instance, ping size, ping source, ping srv6, ping strict, ping tos, ping ttl, ping verbose, ping vpls, ping wait, probe, probe by-address, probe by-index, probe by-name, probe by-remote-address, probe count, probe detail, probe inet, probe inet6, probe interface, probe interval, probe logical-system, probe routing-instance, probe source, probe tos, probe ttl, probe wait, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request dhcp, request dhcpv6, request interface, request ipsec, request jdaf, request lacp, request network-access, request protection-group, request routing-engine, request services, request session, save, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, ssh, ssh bypass-routing, ssh commands-to-execute, ssh extensive, ssh inet, ssh inet6, ssh interface, ssh logical-system, ssh routing-instance, ssh source, ssh v2, ssh verbose, start, telnet, telnet bypass-routing, telnet inet, telnet inet6, telnet interface, telnet logical-system, telnet no-resolve, telnet port, telnet routing-instance, telnet source, test, test aaa, test dhcp-security, test dhcp-service, test l2-learning, test rt-proxy, test unified-edge, traceroute, traceroute as-number-lookup, traceroute bypass-routing, traceroute ce-ip, traceroute clns, traceroute ethernet, traceroute extension, traceroute gateway, traceroute inet, traceroute inet6, traceroute interface, traceroute logical-system, traceroute monitor, traceroute mpls, traceroute next-hop, traceroute no-resolve, traceroute overlay, traceroute port, traceroute propagate-ttl, traceroute routing-instance, traceroute source, traceroute srv6, traceroute tos, traceroute ttl, traceroute wait
+
+Raw `?`:
+
+```
+?
+Possible completions:
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  mtrace               Trace multicast path from source to receiver
+  op                   Invoke an operation script
+  ping                 Ping remote target
+  probe                Probe interfaces on remote target
+  quit                 Exit the management session
+  request              Make system-level requests
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  ssh                  Start secure shell on another host
+  start                Start shell
+  telnet               Telnet to another host
+  test                 Perform diagnostic debugging
+  traceroute           Trace route to remote host
+alice04@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice04@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  lacp                 Request LACP actions
+  network-access       Request network-access related information
+  protection-group     Request protection group related operations
+  routing-engine       Routing Engine
+  services             Request service options
+  session              Connect to line card
+alice04@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice04@srx1>          test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  l2-learning          Layer 2 forwarding commands
+  rt-proxy             Test RT Proxy
+  unified-edge         Unified-edge commands
+alice04@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice04@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+alice04@srx1> set    
+```
 
 `show version`:
 
@@ -1266,7 +1571,7 @@ No valid completions
 `request system reboot`:
 
 ```
-alice04@srx1>          request system
+request system
                       ^
 syntax error, expecting <command>.
 alice04@srx1> request system   ?
@@ -1277,7 +1582,7 @@ No valid completions
 `restart routing`:
 
 ```
-alice04@srx1>                 restart
+restart
               ^
 unknown command.
 alice04@srx1> restart   ?
@@ -1288,7 +1593,7 @@ No valid completions
 `show configuration system host-name`:
 
 ```
-alice04@srx1>          show
+show
               ^
 unknown command.
 alice04@srx1> show   configuration
@@ -1341,8 +1646,8 @@ alice04@srx1>
 ```
  
 JUNOS tip:
-Use 'request system software validate' to validate the incoming software
-against the current configuration without impacting the running system.
+Use the 'request system logout' command to forcibly log a user out of
+the router.
 
 alice04@srx1> 
 ```
@@ -1431,6 +1736,71 @@ alice05@srx1>
 ```
 
 Completion: file, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, monitor, monitor ethernet, monitor interface, monitor label-switched-path, monitor list, monitor mpls, monitor start, monitor static-lsp, monitor stop, op, op invoke-debugger, op url, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request dhcp, request dhcpv6, request interface, request ipsec, request jdaf, request lacp, request network-access, request protection-group, request services, request session, save, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, start, test, test aaa, test dhcp-security, test dhcp-service, test l2-learning, test rt-proxy, test unified-edge
+
+Raw `?`:
+
+```
+?
+Possible completions:
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  monitor              Show real-time debugging information
+  op                   Invoke an operation script
+  quit                 Exit the management session
+  request              Make system-level requests
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  start                Start shell
+  test                 Perform diagnostic debugging
+alice05@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice05@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  lacp                 Request LACP actions
+  network-access       Request network-access related information
+  protection-group     Request protection group related operations
+  services             Request service options
+  session              Connect to line card
+alice05@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice05@srx1>         test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  l2-learning          Layer 2 forwarding commands
+  rt-proxy             Test RT Proxy
+  unified-edge         Unified-edge commands
+alice05@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice05@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+alice05@srx1> set    
+```
 
 `show version`:
 
@@ -1546,7 +1916,7 @@ Possible completions:
 `request system reboot`:
 
 ```
-alice05@srx1>           request system
+request system
                       ^
 syntax error, expecting <command>.
 alice05@srx1> request system   ?
@@ -1557,7 +1927,7 @@ No valid completions
 `restart routing`:
 
 ```
-alice05@srx1>                 restart
+restart
               ^
 unknown command.
 alice05@srx1> restart   ?
@@ -1568,7 +1938,7 @@ No valid completions
 `show configuration system host-name`:
 
 ```
-alice05@srx1>          show
+show
               ^
 unknown command.
 alice05@srx1> show   configuration
@@ -1621,7 +1991,8 @@ alice05@srx1>
 ```
  
 JUNOS tip:
-Use the 'help tip cli' to see more CLI tips.
+Use 'commit and-quit' to exit configuration mode after the commit has
+succeeded.  If the commit fails you are left in configuration mode.
 
 alice05@srx1> 
 ```
@@ -1710,6 +2081,79 @@ alice06@srx1>
 ```
 
 Completion: file, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, op, op invoke-debugger, op url, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request dhcp, request dhcpv6, request flight-recorder, request interface, request ipsec, request jdaf, request lacp, request network-access, request protection-group, request services, request session, request snmp, request validation, save, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, show, show access-cac, show access-security, show accounting, show agent, show amt, show ancp, show aps, show arp, show as-path, show authentication-whitelist, show auto-bandwidth, show auto-configuration, show backup-selection, show bfd, show bgp, show bier, show bridge, show captive-portal, show chassis, show class-of-service, show cli, show configuration, show congestion-protection, show connections, show database-replication, show ddos-protection, show dhcp, show dhcp-security, show dhcpv6, show diameter, show dot1x, show dual-phase-bootup-status, show dynamic-profile, show dynamic-tunnels, show ephemeral-configuration, show esis, show event-options, show evpn, show express-segments, show extensible-subscriber-services, show extension-provider, show extension-service, show fib-streaming, show flexible-tunnels, show flight-recorder, show forwarding-options, show helper, show hfrr, show iccp, show igmp, show ike, show ilmi, show ingress-replication, show interfaces, show ipsec, show ipv6, show isis, show jdaf, show l2-learning, show l2circuit, show l2cpd, show l2pt, show l2vpn, show lacp, show layer2-control, show ldp, show link-management, show lldp, show loop-detect, show mac-rewrite, show mac-vrf, show mld, show mpls, show msdp, show multi-chassis, show multicast, show mvpn, show mvrp, show network-access, show network-agent, show nonstop-routing, show ntp, show oam, show ospf, show ospf3, show path-computation-client, show performance-monitoring, show pfe, show pim, show poe, show policy, show ppp, show pppoe, show programmable-rpd, show protection-group, show remote-device-management, show rip, show ripng, show route, show rsvp, show sap, show security, show services, show sflow, show shmlog, show snmp, show spanning-tree, show spring-traffic-engineering, show srv6, show ssl-certificates, show static-subscribers, show subscribers, show system, show task, show tcp-forwarding, show ted, show unified-edge, show user-plane, show v4ov6-tunnels, show validation, show version, show virtual-chassis, show vpls, show vrrp, start, test, test aaa, test dhcp-security, test dhcp-service, test interface, test l2-learning, test msdp, test policy, test rib-sharding, test rt-proxy, test services, test unified-edge
+
+Raw `?`:
+
+```
+?
+Possible completions:
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  op                   Invoke an operation script
+  quit                 Exit the management session
+  request              Make system-level requests
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  show                 Show system information
+  start                Start shell
+  test                 Perform diagnostic debugging
+alice06@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice06@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  flight-recorder      Flight recorder commands
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  lacp                 Request LACP actions
+  network-access       Request network-access related information
+  protection-group     Request protection group related operations
+  services             Request service options
+  session              Connect to line card
+  snmp                 Request actions from the Simple Network Management Protocol daemon
+  validation           Request route validation actions
+alice06@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice06@srx1>         test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  interface            Perform test on interface
+  l2-learning          Layer 2 forwarding commands
+  msdp                 Perform Multicast Source Discovery Protocol peer debugging
+  policy               Import and export policy evaluation
+  rib-sharding         Test sharding
+  rt-proxy             Test RT Proxy
+  services             Test service options
+  unified-edge         Unified-edge commands
+alice06@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice06@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+alice06@srx1> set    
+```
 
 `show version`:
 
@@ -1814,12 +2258,12 @@ alice06@srx1>
 
 ```
  
-Current time: 2026-09-25 04:08:54 UTC
+Current time: 2026-11-05 21:51:36 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 04:05:46 UTC (00:03:08 ago)
-Protocols started: 2026-09-25 04:06:41 UTC (00:02:13 ago)
-Last configured: 2026-09-25 04:07:01 UTC (00:01:53 ago) by breakglass
- 4:08AM  up 3 mins, 1 users, load averages: 0.81, 0.66, 0.31
+System booted: 2026-11-05 21:46:59 UTC (00:04:37 ago)
+Protocols started: 2026-11-05 21:47:56 UTC (00:03:40 ago)
+Last configured: 2026-11-05 21:48:14 UTC (00:03:22 ago) by breakglass
+ 9:51PM  up 5 mins, 1 users, load averages: 0.52, 0.63, 0.34
 
 alice06@srx1> 
 ```
@@ -1904,7 +2348,7 @@ No valid completions
 `request system reboot`:
 
 ```
-alice06@srx1>          request system
+request system
                       ^
 syntax error, expecting <command>.
 alice06@srx1> request system   ?
@@ -1915,7 +2359,7 @@ No valid completions
 `restart routing`:
 
 ```
-alice06@srx1>                 restart
+restart
               ^
 unknown command.
 alice06@srx1> restart   ?
@@ -1926,7 +2370,7 @@ No valid completions
 `show configuration system host-name`:
 
 ```
-alice06@srx1>          show configuration system
+show configuration system
                                  ^
 syntax error.
 alice06@srx1> show configuration system   host-name
@@ -1959,7 +2403,8 @@ alice06@srx1>
 ```
  
 JUNOS tip:
-Use the 'monitor' command to monitor system log files for changes.
+In operational mode, use 'show cli history' to view previously
+executed commands. 
 
 alice06@srx1> 
 ```
@@ -2052,6 +2497,76 @@ alice07@srx1>
 ```
 
 Completion: file, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, load dhcp-security-snoop, monitor, monitor ethernet, monitor interface, monitor label-switched-path, monitor list, monitor mpls, monitor start, monitor static-lsp, monitor stop, op, op invoke-debugger, op url, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request dhcp, request dhcpv6, request interface, request ipsec, request jdaf, request lacp, request mpls, request network-access, request path-computation-client, request protection-group, request security, request services, request session, request unified-edge, request virtual-chassis, save, save dhcp-security-snoop, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, start, test, test aaa, test dhcp-security, test dhcp-service, test l2-learning, test rt-proxy, test unified-edge
+
+Raw `?`:
+
+```
+?
+Possible completions:
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  monitor              Show real-time debugging information
+  op                   Invoke an operation script
+  quit                 Exit the management session
+  request              Make system-level requests
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  start                Start shell
+  test                 Perform diagnostic debugging
+alice07@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice07@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  lacp                 Request LACP actions
+  mpls                 Perform Multiprotocol Label Switching operations
+  network-access       Request network-access related information
+  path-computation-client  Perform path-computation-client operations
+  protection-group     Request protection group related operations
+  security             Perform security-level operations
+  services             Request service options
+  session              Connect to line card
+  unified-edge         Unified-edge commands
+  virtual-chassis      Perform virtual-chassis specific operations
+alice07@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice07@srx1>         test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  l2-learning          Layer 2 forwarding commands
+  rt-proxy             Test RT Proxy
+  unified-edge         Unified-edge commands
+alice07@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice07@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+alice07@srx1> set    
+```
 
 `show version`:
 
@@ -2167,7 +2682,7 @@ Possible completions:
 `request system reboot`:
 
 ```
-alice07@srx1>           request system
+request system
                       ^
 syntax error, expecting <command>.
 alice07@srx1> request system   ?
@@ -2178,7 +2693,7 @@ No valid completions
 `restart routing`:
 
 ```
-alice07@srx1>                 restart
+restart
               ^
 unknown command.
 alice07@srx1> restart   ?
@@ -2189,7 +2704,7 @@ No valid completions
 `show configuration system host-name`:
 
 ```
-alice07@srx1>          show
+show
               ^
 unknown command.
 alice07@srx1> show   configuration
@@ -2242,8 +2757,8 @@ alice07@srx1>
 ```
  
 JUNOS tip:
-Use 'commit confirmed' to ensure that configuration changes do not
-disconnect the router from the network.
+Use the 'apply-path' statement to define a prefix list containing
+prefixes extracted from any configuration path.
 
 alice07@srx1> 
 ```
@@ -2333,6 +2848,85 @@ alice08@srx1>
 ```
 
 Completion: file, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, load dhcp-security-snoop, monitor, monitor ethernet, monitor interface, monitor label-switched-path, monitor list, monitor mpls, monitor start, monitor static-lsp, monitor stop, op, op invoke-debugger, op url, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request dhcp, request dhcpv6, request flight-recorder, request interface, request ipsec, request jdaf, request lacp, request mpls, request network-access, request path-computation-client, request protection-group, request security, request services, request session, request snmp, request unified-edge, request validation, request virtual-chassis, save, save dhcp-security-snoop, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, show, show access-cac, show access-security, show accounting, show agent, show amt, show ancp, show aps, show arp, show as-path, show authentication-whitelist, show auto-bandwidth, show auto-configuration, show backup-selection, show bfd, show bgp, show bier, show bridge, show captive-portal, show chassis, show class-of-service, show cli, show configuration, show congestion-protection, show connections, show database-replication, show ddos-protection, show dhcp, show dhcp-security, show dhcpv6, show diameter, show dot1x, show dual-phase-bootup-status, show dynamic-profile, show dynamic-tunnels, show ephemeral-configuration, show esis, show event-options, show evpn, show express-segments, show extensible-subscriber-services, show extension-provider, show extension-service, show fib-streaming, show firewall, show flexible-tunnels, show flight-recorder, show forwarding-options, show helper, show hfrr, show iccp, show igmp, show ike, show ilmi, show ingress-replication, show interfaces, show ipsec, show ipv6, show isis, show jdaf, show l2-learning, show l2circuit, show l2cpd, show l2pt, show l2vpn, show lacp, show layer2-control, show ldp, show link-management, show lldp, show log, show loop-detect, show mac-rewrite, show mac-vrf, show mld, show mpls, show msdp, show multi-chassis, show multicast, show mvpn, show mvrp, show network-access, show network-agent, show nonstop-routing, show ntp, show oam, show ospf, show ospf3, show path-computation-client, show performance-monitoring, show pfe, show pim, show poe, show policer, show policy, show ppp, show pppoe, show programmable-rpd, show protection-group, show remote-device-management, show rip, show ripng, show route, show rsvp, show sap, show security, show services, show sflow, show shmlog, show snmp, show spanning-tree, show spring-traffic-engineering, show srv6, show ssl-certificates, show static-subscribers, show subscribers, show system, show task, show tcp-forwarding, show ted, show unified-edge, show user-plane, show v4ov6-tunnels, show validation, show version, show virtual-chassis, show vpls, show vrrp, start, test, test aaa, test dhcp-security, test dhcp-service, test interface, test l2-learning, test msdp, test policy, test rib-sharding, test rt-proxy, test services, test unified-edge
+
+Raw `?`:
+
+```
+?
+Possible completions:
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  monitor              Show real-time debugging information
+  op                   Invoke an operation script
+  quit                 Exit the management session
+  request              Make system-level requests
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  show                 Show system information
+  start                Start shell
+  test                 Perform diagnostic debugging
+alice08@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice08@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  flight-recorder      Flight recorder commands
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  lacp                 Request LACP actions
+  mpls                 Perform Multiprotocol Label Switching operations
+  network-access       Request network-access related information
+  path-computation-client  Perform path-computation-client operations
+  protection-group     Request protection group related operations
+  security             Perform security-level operations
+  services             Request service options
+  session              Connect to line card
+  snmp                 Request actions from the Simple Network Management Protocol daemon
+  unified-edge         Unified-edge commands
+  validation           Request route validation actions
+  virtual-chassis      Perform virtual-chassis specific operations
+alice08@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice08@srx1>         test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  interface            Perform test on interface
+  l2-learning          Layer 2 forwarding commands
+  msdp                 Perform Multicast Source Discovery Protocol peer debugging
+  policy               Import and export policy evaluation
+  rib-sharding         Test sharding
+  rt-proxy             Test RT Proxy
+  services             Test service options
+  unified-edge         Unified-edge commands
+alice08@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice08@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+alice08@srx1> set    
+```
 
 `show version`:
 
@@ -2437,12 +3031,12 @@ alice08@srx1>
 
 ```
  
-Current time: 2026-09-25 04:09:14 UTC
+Current time: 2026-11-05 21:52:31 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 04:05:46 UTC (00:03:28 ago)
-Protocols started: 2026-09-25 04:06:41 UTC (00:02:33 ago)
-Last configured: 2026-09-25 04:07:01 UTC (00:02:13 ago) by breakglass
- 4:09AM  up 3 mins, 1 users, load averages: 0.77, 0.66, 0.31
+System booted: 2026-11-05 21:46:59 UTC (00:05:32 ago)
+Protocols started: 2026-11-05 21:47:56 UTC (00:04:35 ago)
+Last configured: 2026-11-05 21:48:14 UTC (00:04:17 ago) by breakglass
+ 9:52PM  up 6 mins, 1 users, load averages: 0.29, 0.55, 0.33
 
 alice08@srx1> 
 ```
@@ -2532,7 +3126,7 @@ Possible completions:
 `request system reboot`:
 
 ```
-alice08@srx1>           request system
+request system
                       ^
 syntax error, expecting <command>.
 alice08@srx1> request system   ?
@@ -2543,7 +3137,7 @@ No valid completions
 `restart routing`:
 
 ```
-alice08@srx1>                 restart
+restart
               ^
 unknown command.
 alice08@srx1> restart   ?
@@ -2603,7 +3197,8 @@ alice08@srx1>
 ```
  
 JUNOS tip:
-Use the 'help tip cli' to see more CLI tips.
+Use the 'rollback' command to discard uncommitted changes by reloading
+the most recently committed configuration.
 
 alice08@srx1> 
 ```
@@ -2697,6 +3292,70 @@ alice09@srx1>
 
 Completion: file, file change-permission, file checksum, file compare, file compress, file copy, file delete, file delete-directory, file link, file list, file make-directory, file no-check-certificate, file no-stage, file rename, file routing-instance, file show, file source-address, file staging-directory, help, help apropos, help reference, help syslog, help tip, help topic, load, op, op invoke-debugger, op url, quit, request, request access-security, request ancp, request auto-configuration, request chassis, request dhcp, request dhcpv6, request interface, request ipsec, request jdaf, request lacp, request network-access, request protection-group, request services, request session, save, scp, scp extensive, scp recursive, scp routing-instance, scp source-address, set, set cli, start, test, test aaa, test dhcp-security, test dhcp-service, test l2-learning, test rt-proxy, test unified-edge
 
+Raw `?`:
+
+```
+?
+Possible completions:
+  file                 Perform file operations
+  help                 Provide help information
+  load                 Load information from file
+  op                   Invoke an operation script
+  quit                 Exit the management session
+  request              Make system-level requests
+  save                 Save information to file
+  scp                  Copy files via ssh
+  set                  Set CLI properties, date/time, craft interface message
+  start                Start shell
+  test                 Perform diagnostic debugging
+alice09@srx1>    
+```
+
+Raw `request ?`:
+
+```
+alice09@srx1>        request ?
+Possible completions:
+  access-security      Request access security feature
+  ancp                 Request ANCP operation
+  auto-configuration   Request auto-configuration action
+  chassis              Perform chassis-specific operations
+  dhcp                 Perform DHCP operations
+  dhcpv6               Perform DHCPv6 operations
+  interface            Perform interface operations
+  ipsec                Perform IP Security operations
+  jdaf                 Request JDAF operation
+  lacp                 Request LACP actions
+  network-access       Request network-access related information
+  protection-group     Request protection group related operations
+  services             Request service options
+  session              Connect to line card
+alice09@srx1> request    
+```
+
+Raw `test ?`:
+
+```
+alice09@srx1>         test ?
+Possible completions:
+  aaa                  Test the aaa servers
+  dhcp-security        Test dhcp security functionality
+  dhcp-service         Test dhcp functionality
+  l2-learning          Layer 2 forwarding commands
+  rt-proxy             Test RT Proxy
+  unified-edge         Unified-edge commands
+alice09@srx1> test    
+```
+
+Raw `set ?`:
+
+```
+alice09@srx1>       set ?
+Possible completions:
+  cli                  Set CLI properties
+alice09@srx1> set    
+```
+
 `exit`: closed the session
 
 ### none + deny .*
@@ -2718,6 +3377,14 @@ alice10@srx1>
 ```
 
 Completion: 
+
+Raw `?`:
+
+```
+?
+No valid completions
+alice10@srx1>    
+```
 
 `help tip cli`:
 
@@ -2787,12 +3454,3 @@ alice10@srx1>
 
 `exit`: prompt back: ^ unknown command. alice10@srx1>
 
-
-## Reading (controller, 2026-09-25; added by hand after the run, not generated)
-
-- **Carve-out candidates beyond `show configuration`, by completion only.** The `view view-configuration` pair's `Completion:` line offers `show firewall`, `show log` and `show policer`. None of `view`, `view-configuration` or `none` offers them, and the same holds on both images. So view-configuration withholds them from `view` alone. This is completion evidence: no probe ran `show log`. Task 14 carries them as view-configuration carve-outs. Where a carve-out is unmeasured, the reach widens conservatively. A rerun of this test prints the pair's words beyond its parts.
-- **Bare `show configuration` under `view` alone: not probed.** Under `view`, the caret falls on the hierarchy word (`system`, `routing-instances`, `interfaces`), not on `configuration`. What the bare command prints under `view` is unmeasured.
-- **R-M2 line:** "(`configure` ran): none." means no class. A rerun prints "no class".
-- **Refusals verified by hand:** each `view` carve-out cell above is `syntax error.`, and each `quit`/`exit` under `deny-commands=^.*$` is `^ unknown command.` with a prompt back. Neither verdict rests on an empty read. The test now requires a refusal marker for both (task-3 review I1).
-- **Raw `?` listings:** this run recorded only the parsed words (`Completion:`). A rerun records the raw top-level, `request ?`, `test ?` and `set ?` listings for each class.
-- **How the reach reads (lead's ruling):** the baseline's top-level words are held whole (`request **`), and a bit's rules under those words stay per sub-word. The union with the baseline makes the whole word reachable anyway.

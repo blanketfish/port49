@@ -2,10 +2,10 @@
 {"step":"1b. discovery authorization_response_iss_parameter_supported","value":"true"}
 {"step":"1c. the authorization response's iss","value":"present true, the issuer true"}
 {"step":"2. control: the realm's own redirect, and http://evil.example/callback","value":"accepted; refused"}
-{"step":"2. registration http://127.0.0.1:18749/callback","value":"port 18749 accepted; port 41587 refused"}
-{"step":"2. registration http://127.0.0.1/callback","value":"port 18749 accepted; port 41587 accepted"}
-{"step":"2. registration http://127.0.0.1/*","value":"port 18749 accepted; port 41587 accepted"}
-{"step":"2. registration http://127.0.0.1:*/callback","value":"port 18749 refused; port 41587 refused"}
+{"step":"2. registration http://127.0.0.1:18749/callback","value":"port 18749 accepted; port 45087 refused"}
+{"step":"2. registration http://127.0.0.1/callback","value":"port 18749 accepted; port 45087 accepted"}
+{"step":"2. registration http://127.0.0.1/*","value":"port 18749 accepted; port 45087 accepted"}
+{"step":"2. registration http://127.0.0.1:*/callback","value":"port 18749 refused; port 45087 refused"}
 {"step":"3. port49-cli's pkce.code.challenge.method attribute","value":"S256"}
 {"step":"3. the exchange with the right verifier","value":"200 with id_token, refresh_token"}
 {"step":"3. the exchange with a wrong verifier","value":"400 invalid_grant"}

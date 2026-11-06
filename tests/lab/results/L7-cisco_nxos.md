@@ -1,10 +1,10 @@
 # L7 — cisco_nxos
 
-- **Date measured:** 2026-09-20
+- **Date measured:** 2026-11-06
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)
 - **Topology:** `tests/lab/topologies/nxos.clab.yml`
-- **Capture:** `tests/lab/evidence/L7-nxapi-cisco_nxos.pcap` — 340 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L7-nxapi-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L7-nxapi-cisco_nxos.pcap` — 320 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L7-nxapi-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** NX-API over HTTPS `ins_api`
 
 ## Claim
@@ -17,15 +17,15 @@ Transport measured: **NX-API (HTTPS `ins_api`, `cli_show` and `cli_conf`)**. Eac
 
 | step | user | device answered | authentications | session authz | command authz | accounting | elapsed |
 |---|---|---|---|---|---|---|---|
-| cli_show `show version` | `nxapi01` | yes | 1 | 1 | 2 | start=1 | 6.66s |
-| cli_show again, same token | `nxapi01` | yes | 1 | 1 | 2 | start=1 | 6.65s |
+| cli_show `show version` | `nxapi01` | yes | 1 | 1 | 2 | start=1 | 6.73s |
+| cli_show again, same token | `nxapi01` | yes | 1 | 1 | 2 | none | 1.02s |
 | cli_conf `snmp-server location` | `nxapi02` | yes | 1 | 1 | 3 | start=1, stop=1 | 5.88s |
 
 ### Does a second request with the same token re-authenticate?
 
-**Yes.** The first request as `nxapi01` cost 1 authentication exchange(s) and the second, with the same token, cost 1 more. Every request is a fresh authentication over this transport.
+**Yes, for a client shaped like this one.** The first request as `nxapi01` cost 1 authentication exchange(s) and the second, with the same token, cost 1 more. **This client sends HTTP Basic credentials on a fresh TCP connection every call** (`DisableKeepAlives`, no cookie jar), so what is measured here is that the device runs AAA for each such request — not that the transport cannot do better. The `/login` session-cookie flow and HTTP keep-alive are the obvious ways a real client avoids this, and both are separately measured (L7).
 
-**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, username, kind, credential_sha256)` rather than out of the store — the same credential hashes to the same key, so a repeat finds its own receipt. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **how long that receipt lives**: `receipt_idle_ttl` slides forward on every call the receipt answers, and `receipt_max_age` caps it from the first redemption and never slides. Past either, the next call in the same script is the first denial — `token_spent` — and nothing about the credential has changed (spec §13, decision 15).
+**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, username, credential_sha256)` rather than out of the store — the same credential hashes to the same key, so a repeat finds its own receipt. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **the receipt's two bounds**: the sliding `receipt_idle_ttl`, which every answered call pushes out, and `receipt_max_age`, which is measured from the first redemption and never moves. Past either, the next call in the same script is the first denial, and nothing about the credential has changed.
 
 ### `port` and `rem_addr` over this transport
 
@@ -37,7 +37,7 @@ These are the values this transport produced. Compare them with the SSH figures 
 
 ### How many TCP connections the device opened to port49d
 
-**34** TCP connection(s) were opened toward port49d during this test, from source port(s) 34756, 34766, 34776, 38908, 38924, 38936, 38942, 38952, 38962, 38970, 41380, 41388, ....
+**32** TCP connection(s) were opened toward port49d during this test, from source port(s) 33700, 33712, 33716, 33726, 47276, 47288, 48120, 48128, 48134, 51788, 51800, 51814, ....
 
 Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/evidence/L7-nxapi-cisco_nxos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
 
@@ -46,23 +46,23 @@ Read this against the step table above. One connection per authentication exchan
 **cli_show `show version`** (as `nxapi01`)
 
 ```
-2026-09-20T18:24:55.957Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T18:24:55.976Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-11-06T09:24:06.606Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-11-06T09:24:06.624Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
     request AV: shell:roles*
-2026-09-20T18:24:56.123Z event=account verdict= reason= flags=start port="0" rem_addr=""
+2026-11-06T09:24:06.781Z event=account verdict= reason= flags=start port="0" rem_addr=""
     accounting AV: task_id=nginx
-    accounting AV: start_time=1789928692
+    accounting AV: start_time=1793957045
     accounting AV: timezone=UTC
     accounting AV: service=none
-2026-09-20T18:25:01.744Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
+2026-11-06T09:24:12.393Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=show
     request AV: cmd-arg=version
     request AV: cmd-arg=<cr>
-2026-09-20T18:25:02.592Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
+2026-11-06T09:24:13.317Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=end
     request AV: cmd-arg=<cr>
@@ -93,15 +93,15 @@ HTTP 200 OK
 					"nxos_tmstmp":	"12/14/2023 05:25:50",
 					"chassis_id":	"cisco Nexus9000 C9300v Chassis",
 					"cpu_name":	"",
-					"memory":	10187700,
+					"memory":	10187692,
 					"mem_type":	"kB",
-					"proc_board_id":	"907TICGDP48",
+					"proc_board_id":	"95MH2CAI14U",
 					"host_name":	"nx1",
 					"bootflash_size":	4495360,
 					"kern_uptm_days":	0,
 					"kern_uptm_hrs":	0,
-					"kern_uptm_mins":	9,
-					"kern_uptm_secs":	54,
+					"kern_uptm_mins":	3,
+					"kern_uptm_secs":	0,
 					"rr_reason":	"Unknown",
 					"rr_sys_ver":	"",
 					"rr_service":	"",
@@ -122,23 +122,18 @@ HTTP 200 OK
 **cli_show again, same token** (as `nxapi01`)
 
 ```
-2026-09-20T18:25:12.629Z event=redeem verdict=permit reason=receipt_replayed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T18:25:12.647Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-11-06T09:24:23.367Z event=redeem verdict=permit reason=receipt_replayed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-11-06T09:24:23.386Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
     request AV: shell:roles*
-2026-09-20T18:25:12.764Z event=account verdict= reason= flags=start port="0" rem_addr=""
-    accounting AV: task_id=nginx
-    accounting AV: start_time=1789928709
-    accounting AV: timezone=UTC
-    accounting AV: service=none
-2026-09-20T18:25:18.382Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
+2026-11-06T09:24:23.423Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=show
     request AV: cmd-arg=version
     request AV: cmd-arg=<cr>
-2026-09-20T18:25:19.258Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
+2026-11-06T09:24:24.370Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=end
     request AV: cmd-arg=<cr>
@@ -169,14 +164,14 @@ HTTP 200 OK
 					"nxos_tmstmp":	"12/14/2023 05:25:50",
 					"chassis_id":	"cisco Nexus9000 C9300v Chassis",
 					"cpu_name":	"",
-					"memory":	10187700,
+					"memory":	10187692,
 					"mem_type":	"kB",
-					"proc_board_id":	"907TICGDP48",
+					"proc_board_id":	"95MH2CAI14U",
 					"host_name":	"nx1",
 					"bootflash_size":	4495360,
 					"kern_uptm_days":	0,
 					"kern_uptm_hrs":	0,
-					"kern_uptm_mins":	10,
+					"kern_uptm_mins":	3,
 					"kern_uptm_secs":	11,
 					"rr_reason":	"Unknown",
 					"rr_sys_ver":	"",
@@ -198,38 +193,38 @@ HTTP 200 OK
 **cli_conf `snmp-server location`** (as `nxapi02`)
 
 ```
-2026-09-20T18:25:29.296Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T18:25:29.315Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-11-06T09:24:34.422Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-11-06T09:24:34.440Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
     request AV: shell:roles*
-2026-09-20T18:25:29.453Z event=account verdict= reason= flags=start port="0" rem_addr=""
+2026-11-06T09:24:34.595Z event=account verdict= reason= flags=start port="0" rem_addr=""
     accounting AV: task_id=nginx
-    accounting AV: start_time=1789928726
+    accounting AV: start_time=1793957073
     accounting AV: timezone=UTC
     accounting AV: service=none
-2026-09-20T18:25:35.075Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
+2026-11-06T09:24:40.205Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=configure
     request AV: cmd-arg=terminal
     request AV: cmd-arg=<cr>
-2026-09-20T18:25:35.090Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
+2026-11-06T09:24:40.220Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=snmp-server
     request AV: cmd-arg=location
     request AV: cmd-arg=port49-lab-nxapi
     request AV: cmd-arg=<cr>
-2026-09-20T18:25:35.151Z event=account verdict= reason= flags=stop port="0" rem_addr=""
-    accounting AV: task_id=nginx
-    accounting AV: start_time=1789928731
-    accounting AV: timezone=UTC
-    accounting AV: cmd=configure terminal ; snmp-server location port49-lab-nxapi (SUCCESS)
-    accounting AV: service=none
-2026-09-20T18:25:35.152Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
+2026-11-06T09:24:40.282Z event=authorize_command verdict=permit reason=permit_dominates port="" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=end
     request AV: cmd-arg=<cr>
+2026-11-06T09:24:40.282Z event=account verdict= reason= flags=stop port="0" rem_addr=""
+    accounting AV: task_id=nginx
+    accounting AV: start_time=1793957079
+    accounting AV: timezone=UTC
+    accounting AV: cmd=configure terminal ; snmp-server location port49-lab-nxapi (SUCCESS)
+    accounting AV: service=none
 ```
 
 What the device answered:

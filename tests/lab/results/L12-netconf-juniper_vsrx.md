@@ -1,11 +1,12 @@
 # L12-netconf — juniper_vsrx
 
-- **Date measured:** 2026-09-25
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L12-netconf-juniper_vsrx.pcap` — 1544 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L12-netconf-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L12-netconf-juniper_vsrx.pcap` — 1710 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L12-netconf-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL12JunosNetconf$`
 
 ## Claim
 
@@ -39,7 +40,7 @@ set system login user p49-nc-none class p49-nc-none
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790313128" junos:changed-localtime="2026-09-25 05:12:08 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793917039" junos:changed-localtime="2026-11-05 22:17:19 UTC">
     <version>21.4R3.15</version>
     <system>
         <host-name>srx1</host-name>
@@ -68,14 +69,14 @@ set system login user p49-nc-none class p49-nc-none
                 <authentication>
                     <plain-text-password-value>/* SECRET-DATA */</plain-text-password-value>
                 </authentication>
-… (174 more lines)
+… (193 more lines)
 ```
 
 `<get-configuration><configuration><system/></configuration></get-configuration>`:
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="2">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790313128" junos:changed-localtime="2026-09-25 05:12:08 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793917039" junos:changed-localtime="2026-11-05 22:17:19 UTC">
     <system>
         <host-name>srx1</host-name>
         <root-authentication>
@@ -104,7 +105,7 @@ set system login user p49-nc-none class p49-nc-none
                     <plain-text-password-value>/* SECRET-DATA */</plain-text-password-value>
                 </authentication>
             </user>
-… (131 more lines)
+… (150 more lines)
 ```
 
 `<command>show configuration</command>`:
@@ -113,7 +114,7 @@ set system login user p49-nc-none class p49-nc-none
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="3">
 <configuration-information>
 <configuration-output>
-## Last commit: 2026-09-25 05:12:08 UTC by breakglass
+## Last commit: 2026-11-05 22:17:19 UTC by breakglass
 version 21.4R3.15;
 system {
     host-name srx1;
@@ -140,7 +141,7 @@ system {
         }
         user breakglass {
             uid 2002;
-… (152 more lines)
+… (164 more lines)
 ```
 
 `<get-software-information/>`:
@@ -185,7 +186,7 @@ system {
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790313128" junos:changed-localtime="2026-09-25 05:12:08 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793917039" junos:changed-localtime="2026-11-05 22:17:19 UTC">
     <version>21.4R3.15</version>
     <system>
         <host-name>srx1</host-name>
@@ -214,14 +215,14 @@ system {
                 <authentication>
                     <plain-text-password-value>/* SECRET-DATA */</plain-text-password-value>
                 </authentication>
-… (174 more lines)
+… (193 more lines)
 ```
 
 `<get-configuration><configuration><system/></configuration></get-configuration>`:
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="2">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790313128" junos:changed-localtime="2026-09-25 05:12:08 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793917039" junos:changed-localtime="2026-11-05 22:17:19 UTC">
     <system>
         <host-name>srx1</host-name>
         <root-authentication>
@@ -250,7 +251,7 @@ system {
                     <plain-text-password-value>/* SECRET-DATA */</plain-text-password-value>
                 </authentication>
             </user>
-… (131 more lines)
+… (150 more lines)
 ```
 
 `<command>show configuration</command>`:
@@ -307,117 +308,21 @@ system {
 
 ### fail-closed, local_user_name
 
-`<get-configuration/>`:
+Every RPC:
 
 ```
-no session: alice06: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
+no session: alice04: the device sent no NETCONF hello (sent "error: unknown command: xml-mode\n\nerror: permission denied: netconf"): the NETCONF channel closed: EOF (); port49d recorded [redeem permit token_redeemed authorize_session permit context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
 paired control before (`[]`): hello (1293 bytes)
 paired control after (`[]`): hello (1293 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-error: could not resolve file: messages
----(more 100%)---                                        
-breakglass@srx1> 
-```
-
-`<get-configuration><configuration><system/></configuration></get-configuration>`:
-
-```
-no session: alice06: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
-paired control before (`[]`): hello (1293 bytes)
-paired control after (`[]`): hello (1293 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-error: could not resolve file: messages
----(more 100%)---                                        
-breakglass@srx1> 
-```
-
-`<command>show configuration</command>`:
-
-```
-no session: alice06: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
-paired control before (`[]`): hello (1293 bytes)
-paired control after (`[]`): hello (1293 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-error: could not resolve file: messages
----(more 100%)---                                        
-breakglass@srx1> 
-```
-
-`<get-software-information/>`:
-
-```
-no session: alice06: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
-paired control before (`[]`): hello (1293 bytes)
-paired control after (`[]`): hello (1293 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-error: could not resolve file: messages
----(more 100%)---                                        
-breakglass@srx1> 
 ```
 
 ### fail-closed, user_permissions
 
-`<get-configuration/>`:
+Every RPC:
 
 ```
-no session: alice09: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account  ]
+no session: alice07: the device sent no NETCONF hello (sent "error: unknown command: xml-mode\n\nerror: permission denied: netconf"): the NETCONF channel closed: EOF (); port49d recorded [redeem permit token_redeemed authorize_session permit context_matched account   account   account   account   account   account   account   account   account   account   account   account   account  ]
 paired control before (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1297 bytes)
 paired control after (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1297 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-error: could not resolve file: messages
----(more 100%)---                                        
-breakglass@srx1> 
-```
-
-`<get-configuration><configuration><system/></configuration></get-configuration>`:
-
-```
-no session: alice09: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account  ]
-paired control before (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1297 bytes)
-paired control after (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1297 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-error: could not resolve file: messages
----(more 100%)---                                        
-breakglass@srx1> 
-```
-
-`<command>show configuration</command>`:
-
-```
-no session: alice09: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account  ]
-paired control before (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1297 bytes)
-paired control after (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1297 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-error: could not resolve file: messages
----(more 100%)---                                        
-breakglass@srx1> 
-```
-
-`<get-software-information/>`:
-
-```
-no session: alice09: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account  ]
-paired control before (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1297 bytes)
-paired control after (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1297 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-error: could not resolve file: messages
----(more 100%)---                                        
-breakglass@srx1> 
 ```
 

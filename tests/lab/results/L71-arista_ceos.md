@@ -35,3 +35,27 @@ tacacs-server host 192.0.2.71 ?
 leaf1(config)#tacacs-server host 192.0.2.71 
 ```
 
+## Addendum: TestL73 probe
+
+Measured 2026-11-05 on cEOS-lab 4.36.3M (`ceos:4.36.3M`). Probed by TestL73 (commit `5ed06f5ff587893a8740a7fd30042d3c53eb0bb0-dirty`, `PORT49_LAB_PLATFORMS=ceos436`, `-run ^TestL73$`); the exchange is `tests/lab/evidence/L73-arista_ceos/l71-probe.txt`.
+
+**Has a client.** Typed `tacacs-server host 192.0.2.71 ?`; the help lists:
+
+```
+tls                Enable TLS for TACACS+ server
+```
+
+Full help:
+
+```
+tacacs-server host 192.0.2.71 ?
+  key                Encryption key for this TACACS+ server (overrides default)
+  port               TCP port of TACACS+ server ( default is 49 )
+  single-connection  Use one TCP connection for multiple sessions
+  timeout            Time to wait for this TACACS+ server to respond ( overrides default)
+  tls                Enable TLS for TACACS+ server
+  vrf                VRF for this TACACS+ server
+  <cr>               
+
+leaf1(config)#tacacs-server host 192.0.2.71 
+```
