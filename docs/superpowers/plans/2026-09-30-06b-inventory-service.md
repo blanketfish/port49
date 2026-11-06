@@ -379,7 +379,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Running the lab (Tasks 2, 19 and 20)
@@ -806,8 +805,7 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
 git add docs/design
 git commit -m "docs(spec): the inventory service, its signed bundle and port49d's pull (plan 6b)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1197,8 +1195,7 @@ tests/lab/sot/run.sh nautobot-3 l30      # also records every L27 file: the L27 
 git add tests/lab/cmd/sot-record tests/lab/sot tests/lab/l30_unit_test.go tests/lab/results/L30-*.md
 git commit -m "test(lab): L30, how NetBox and Nautobot page and what Nautobot 3.x returns
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
   The row stays open until Task 21 closes it (lab register rule 3); the commit says what was
@@ -1531,8 +1528,7 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 git add internal/keyfile cmd/port49
 git commit -m "feat(keyfile): the inventory service's ed25519 signing key, and port49 inventory keygen
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1728,8 +1724,7 @@ policy. A /32 group is tier 3 and is not a pin. TestKeyGroupLoadErrors'
 "no match" and "both terms" cases now expect the wording that names the
 name term; both are still refused.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2228,8 +2223,7 @@ func TextOK(s string) bool {
 git add internal/bundle
 git commit -m "feat(bundle): the signed bundle document, which assigns no key
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2585,8 +2579,7 @@ func (c Config) Bounds() map[string]int {
 git add internal/inventory
 git commit -m "feat(inventory): port49-inventory.yaml
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2752,8 +2745,7 @@ git commit -m "refactor: the write fence moves to internal/fence, unchanged
 port49-inventory's file source and port49d's persisted bundle read through it
 too (plan 6b). Tests moved with the code: <names>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2954,8 +2946,7 @@ func deviceLabel(i int, name string) string {
 git add internal/inventory
 git commit -m "feat(inventory): the file source, read behind the fence, assigning no key
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3289,8 +3280,7 @@ func WriteAtomic(dir, name string, body []byte, mode os.FileMode) error {
 git add internal/inventory
 git commit -m "feat(inventory): the state directory, its history, and the mirror
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4317,8 +4307,7 @@ func oneLine(err error) string {
 git add internal/inventory internal/bundle cmd/port49
 git commit -m "feat(inventory): the syncer, bounded per source, publishing once and saying once
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4854,8 +4843,7 @@ func Server(addr string, cert tls.Certificate, anchor *x509.CertPool, h http.Han
 git add internal/inventory internal/testpki
 git commit -m "feat(inventory): the API, mutual TLS on every path, with read and sync rights
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5277,8 +5265,7 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 git add cmd/port49-inventory Makefile
 git commit -m "feat: port49-inventory, the inventory service binary
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5794,8 +5781,7 @@ func printResult(w io.Writer, res inventory.Result) int {
 git add internal/inventory cmd/port49
 git commit -m "feat: the inventory client, port49 inventory sync and inventory diff --service
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6066,8 +6052,7 @@ func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
 git add internal/config
 git commit -m "feat(config): inventory.service, in place of inventory_file
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6771,8 +6756,7 @@ func (r *reloader) startDocument(p *inventory.Published, from string) {
 git add cmd/port49d internal/daemon/metrics
 git commit -m "feat(port49d): cold start from the newer copy, or no TACACS+ until the service answers
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7523,8 +7507,7 @@ func TestAShutdownMidAskSaysNothing(t *testing.T) {
 git add cmd/port49d internal/bundle internal/daemon/metrics
 git commit -m "feat(port49d): pull the service's bundle, verify it, and reload it as a file is reloaded
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7641,8 +7624,7 @@ func (r *reloader) sayPolicyMatch() {
 git add cmd/port49d internal/daemon/metrics
 git commit -m "feat(port49d): a policy-hash mismatch with the service is said and alarmed, never applied
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7901,8 +7883,7 @@ Plan 6a final review m7: a whole-fleet re-address with its key group, where
 each file alone admits none, loads as one swap, and no bundle between the two
 revokes a context the final one keeps.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8256,8 +8237,7 @@ func TestAFreshPort49dWithNothingWaitsForTheService(t *testing.T) {
 git add cmd/port49d
 git commit -m "test(port49d): the inventory service and port49d end to end
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8980,8 +8960,7 @@ git add tests/lab/inventory_test.go tests/lab/l29_test.go tests/lab/l29_phases_t
   tests/lab/cmd/slice-pki tests/lab/results/L29-reload-*.md tests/lab/results/quarantine-sync-*.md tests/lab/evidence
 git commit -m "test(lab): L29's reload case and spec §14's quarantine, through the inventory service's syncs
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9282,8 +9261,7 @@ func TestL29Midnight(t *testing.T) {
 git add tests/lab/l29_shell_test.go tests/lab/l29_midnight_test.go tests/lab/harness_test.go
 git commit -m "test(lab): L29's midnight case, and the shell helpers it shares with the reload case
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
   Code never goes to `main` directly, so the test is on the branch before the first night. Note this
@@ -9324,8 +9302,7 @@ echo $! > tests/lab/logs/l29-midnight-eos.pid
 git add tests/lab/results/L29-midnight-<platform>.md tests/lab/evidence
 git commit -m "test(lab): L29's midnight case on <platform>
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
   This task does not gate the merge; Task 19 does. L29 stays open, with the platforms measured so far,
@@ -9381,8 +9358,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 git add docs
 git commit -m "docs: close lab register entries L29 and L30 as measured; plan 6b as built
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
   (Name only the rows actually closed in the subject line.)

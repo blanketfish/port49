@@ -136,11 +136,11 @@ func TestAnEmptySweepPageAsksTheMintGateFirst(t *testing.T) {
 	}
 }
 
-// A name the inventory admits at 255 bytes can end a page and be the next
-// after: the sweep continues past it (decision 42 ruling 1). A device named
-// that long is still refused in a devices list, which keeps its 253.
-func TestASweepContinuesPastA255ByteName(t *testing.T) {
-	long := "dc-d" + strings.Repeat("x", 251)
+// A name of the longest length the bundle admits (253) can end a page and be the next
+// after: the sweep continues past it (decision 42 ruling 1). One byte more is refused in a
+// devices list, as the bundle refuses it.
+func TestASweepContinuesPastA253ByteName(t *testing.T) {
+	long := "dc-d" + strings.Repeat("x", 249)
 	dev := func(name, addr string) admission.Device {
 		return admission.Device{Name: name, Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr(addr)},
 			Attributes: map[string]string{"site": "dc1"}}
@@ -149,15 +149,15 @@ func TestASweepContinuesPastA255ByteName(t *testing.T) {
 		dev(long, "10.1.0.4"), dev("dc-e", "10.1.0.5"))
 	ctx := context.Background()
 	first := decodeMint(t, f.post(ctx, f.state(f.alice), `{"scope":"dc"}`, ""))
-	if len(long) != 255 || len(first.Results) != 4 || first.Next != long {
+	if len(long) != 253 || len(first.Results) != 4 || first.Next != long {
 		t.Fatalf("page 1: %d results, next %q", len(first.Results), first.Next)
 	}
 	last := decodeMint(t, f.post(ctx, f.state(f.alice), `{"scope":"dc","after":"`+first.Next+`"}`, ""))
 	if len(last.Results) != 1 || last.Results[0].Device != "dc-e" || last.Next != "" {
 		t.Fatalf("page 2: %+v next %q", last.Results, last.Next)
 	}
-	if w := f.post(ctx, f.state(f.alice), `{"devices":["`+long+`"]}`, ""); w.Code != 400 {
-		t.Fatalf("a devices list keeps its 253: %s", answer(w))
+	if w := f.post(ctx, f.state(f.alice), `{"devices":["`+long+`x"]}`, ""); w.Code != 400 {
+		t.Fatalf("a devices list refuses 254: %s", answer(w))
 	}
 }
 

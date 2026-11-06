@@ -469,7 +469,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Review Focus
@@ -929,8 +928,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   plan 7c's rulings; spec §5.7 gains the identity and explain events and the
   api_right_missing reason.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1712,8 +1710,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   file that loads; and refuses over a lost file (spec §13 decision 32, amended
   2026-10-02). A start still writes the marker beside a file that loads.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1933,8 +1930,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   Spec §5.7 and §2 as Task 1 wrote them. A revoke record's saved is now present
   only where it was set.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2398,8 +2394,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   Identity answers the caller alone, with connection_ends_at. A test pins that
   no right widens a mint or a refresh (decision 34).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2586,8 +2581,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   Design §12: a store fault must not take every replica's endpoint out. /readyz
   is serving or not; neither probe needs a certificate or writes a record.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2754,8 +2748,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   A principal ending its own sessions must not delete another principal's tokens
   under a shared (device, username); DeleteTokens has no finer cut.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -3462,8 +3455,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   text says the owner's next login on a device re-admits what is still open
   there (decision 15's join).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -4071,8 +4063,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   one record with no auth. A busy slot is 503 revocation_busy. port49d's start
   line says an HTTP mark cannot be lifted without admin_socket (decision 34).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -4691,8 +4682,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   and never the command. Each role's permits are compiled once per platform per
   policy (decision 34).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5083,8 +5073,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   disk and a restart would load it unguarded. L31's lab harness turns the bound
   off for the quarantine it measures.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5470,8 +5459,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   comes back to the CLI as an APIError. An agent older than the CLI is named
   as such, with the fix (port49 login), not reported as a broker refusal.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5940,8 +5928,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   Lift, list and certificates stay the admin socket's; --list points at the log
   for revocations that leave no mark.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -6376,8 +6363,7 @@ it as claimed.
   revocation, on the four images 7a measured; results to
   tests/lab/results/api-revoke-<platform>.md.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 - [ ] **Step 7: Run it on beehive** ("Running the lab", above). Pin the worktree to Step 6's
@@ -6411,8 +6397,7 @@ it as claimed.
   vEOS 4.31.2F: PASS. N9Kv 10.4(2)F: PASS. C8000V 17.13.01a: PASS.
   vJunos-router 23.4R2-S2.1: PASS (the open session kept what it had; named not reached).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
   Write what the run found, not this example: a platform that did not pass says what differed.
@@ -6466,8 +6451,7 @@ it as claimed.
   # plus the spec and design, by path, if Step 1 changed them
   git commit -m "docs: plan 7c as built
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---

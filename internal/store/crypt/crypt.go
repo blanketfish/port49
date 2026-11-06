@@ -436,7 +436,7 @@ func (w *wrapped) openToken(k store.TokenKey, t store.Token) (store.Token, error
 	if !ts.ExpiresAt.Equal(t.ExpiresAt) {
 		return store.Token{}, errExpiryMoved
 	}
-	return store.Token{ID: t.ID, Secret: ts.Secret, Kind: ts.Kind, ExpiresAt: ts.ExpiresAt, Principal: ts.Principal,
+	return store.Token{ID: t.ID, Revision: t.Revision, Secret: ts.Secret, Kind: ts.Kind, ExpiresAt: ts.ExpiresAt, Principal: ts.Principal,
 		Username: ts.Username, BlobHash: ts.BlobHash, MaxSessionAge: ts.MaxSessionAge, Enable: ts.Enable,
 		MaxPrivilege: ts.MaxPrivilege, Credential: ts.Credential, AuthTime: ts.AuthTime, MintedAt: ts.MintedAt,
 		VerifiedAt: ts.VerifiedAt}, nil
@@ -510,6 +510,11 @@ func (w *wrapped) DeleteToken(ctx context.Context, k store.TokenKey, id string) 
 
 // PurgeTokens reads nothing sealed: the backend deletes by key.
 func (w *wrapped) PurgeTokens(ctx context.Context) (int, error) { return w.inner.PurgeTokens(ctx) }
+
+// PurgeOnceRecords reads nothing sealed either: the backend deletes by key.
+func (w *wrapped) PurgeOnceRecords(ctx context.Context) (int, error) {
+	return w.inner.PurgeOnceRecords(ctx)
+}
 
 // GetReceipt opens the receipt bound to rk, and takes the cap's anchor
 // from the sealed copy, whatever the plaintext one says (re-check CA1).

@@ -23,16 +23,60 @@ var (
 	versionTag = regexp.MustCompile(`@[0-9a-f]{40} # v\d+(\.\d+)*\s*$`)
 )
 
+// minutes is a job's timeout-minutes: a number, or the one expression a matrix job may use to give one
+// cell a longer timeout, `${{ matrix.cell == '<cell>' && <n> || <default> }}` (lab-kind.yml gives l89 more
+// than the others). Any other expression is refused, so a timeout cannot be hidden in one.
+type minutes struct {
+	Default int            // every cell's, or the number's
+	Cell    map[string]int // a cell's own, from the expression
+}
+
+var cellTimeout = regexp.MustCompile(`^\$\{\{ matrix\.cell == '([a-z0-9]+)' && ([0-9]+) \|\| ([0-9]+) \}\}$`)
+
+func (m *minutes) UnmarshalYAML(n *yaml.Node) error {
+	if n.Tag == "!!int" {
+		return n.Decode(&m.Default)
+	}
+	g := cellTimeout.FindStringSubmatch(n.Value)
+	if g == nil {
+		return fmt.Errorf("timeout-minutes %q: a number, or %s", n.Value, cellTimeout)
+	}
+	var c, d int
+	fmt.Sscan(g[2], &c)
+	fmt.Sscan(g[3], &d)
+	m.Default, m.Cell = d, map[string]int{g[1]: c}
+	return nil
+}
+
+// Min is the shortest timeout any cell gets.
+func (m minutes) Min() int {
+	low := m.Default
+	for _, v := range m.Cell {
+		if v < low {
+			low = v
+		}
+	}
+	return low
+}
+
+// For is cell's timeout.
+func (m minutes) For(cell string) int {
+	if v, ok := m.Cell[cell]; ok {
+		return v
+	}
+	return m.Default
+}
+
 // allowedTriggers are the events a workflow may run on. pull_request_target and workflow_run
 // run with a write token and secrets on a fork's code.
-var allowedTriggers = map[string]bool{"push": true, "pull_request": true, "workflow_dispatch": true}
+var allowedTriggers = map[string]bool{"push": true, "pull_request": true, "workflow_dispatch": true, "schedule": true}
 
 type workflow struct {
 	On          yaml.Node `yaml:"on"`
 	Permissions any       `yaml:"permissions"`
 	Jobs        map[string]struct {
-		Permissions    any `yaml:"permissions"`
-		TimeoutMinutes int `yaml:"timeout-minutes"`
+		Permissions    any     `yaml:"permissions"`
+		TimeoutMinutes minutes `yaml:"timeout-minutes"`
 		Strategy       struct {
 			Matrix struct {
 				Shard []string `yaml:"shard"`
@@ -115,7 +159,7 @@ func workflowProblems(name string, raw []byte) []string {
 	add := func(format string, a ...any) { p = append(p, name+": "+fmt.Sprintf(format, a...)) }
 	for _, t := range triggers(w.On) {
 		if !allowedTriggers[t] {
-			add("trigger %q is not one of push, pull_request, workflow_dispatch", t)
+			add("trigger %q is not one of push, pull_request, workflow_dispatch, schedule", t)
 		}
 	}
 	if !readOnly(w.Permissions) {
@@ -128,7 +172,7 @@ func workflowProblems(name string, raw []byte) []string {
 		if !jobPermsOK(name, id, j.Permissions) {
 			add("job %s: permissions are %v, want exactly contents: read set on the job (release.yml: its table)", id, j.Permissions)
 		}
-		if j.TimeoutMinutes == 0 {
+		if j.TimeoutMinutes.Min() == 0 {
 			add("job %s: no timeout-minutes", id)
 		}
 		for _, s := range j.Steps {
@@ -236,8 +280,8 @@ func TestTheTestWorkflowShape(t *testing.T) {
 	}
 	for id, j := range w.Jobs {
 		// go test's -timeout is 30m: a job that is cancelled first leaves no goroutine dump
-		if j.TimeoutMinutes < 40 {
-			t.Errorf("job %s: timeout-minutes %d, want at least 40, above go test's 30m", id, j.TimeoutMinutes)
+		if j.TimeoutMinutes.Min() < 40 {
+			t.Errorf("job %s: timeout-minutes %d, want at least 40, above go test's 30m", id, j.TimeoutMinutes.Min())
 		}
 	}
 }

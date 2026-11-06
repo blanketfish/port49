@@ -509,6 +509,39 @@ func TestPrometheusRuleIsOffByDefault(t *testing.T) {
 	}
 }
 
+// The rules key on up{job="port49d"} and up{job="port49-broker"}, so the chart that renders them also
+// renders the PodMonitors that set those job names. Nothing renders by default (pre-beta fixes, Task 14).
+func TestPodMonitorRendersWithTheRulesAndSetsTheJobs(t *testing.T) {
+	for _, d := range render(t, goRender, "") {
+		if kindOf(d) == "PodMonitor" {
+			t.Fatalf("a PodMonitor renders by default: %v", nameOf(d))
+		}
+	}
+	docs := render(t, goRender, "prometheusRule: {enabled: true, labels: {release: kube-prometheus}}\n")
+	for component, job := range map[string]string{"port49d": "port49d", "broker": "port49-broker"} {
+		m := one(t, docs, "PodMonitor", "t-"+component)
+		if str(at(m, "metadata", "labels", "release")) != "kube-prometheus" {
+			t.Errorf("%s: the monitor's labels: %v", component, at(m, "metadata", "labels"))
+		}
+		if str(at(m, "spec", "selector", "matchLabels", "app.kubernetes.io/component")) != component {
+			t.Errorf("%s: selector %v", component, at(m, "spec", "selector"))
+		}
+		eps := list(at(m, "spec", "podMetricsEndpoints"))
+		if len(eps) != 1 || str(at(eps[0], "port")) != "metrics" {
+			t.Fatalf("%s: endpoints %v, want one on the metrics port", component, eps)
+		}
+		found := false
+		for _, r := range list(at(eps[0], "relabelings")) {
+			if str(at(r, "targetLabel")) == "job" && str(at(r, "replacement")) == job {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: no relabeling sets job to %s: %v", component, job, at(eps[0], "relabelings"))
+		}
+	}
+}
+
 // autoscaling.averageConnections is half the peak port49_connections per replica
 // at target, to the nearest 50 (plan 12c decision 7): beehive's real-disk cell b
 // peaked at 62 with one replica; the GCE pd-ssd target cells peaked at 7 and 11, which round to 0,
@@ -518,4 +551,39 @@ func TestHPAAverageConnections(t *testing.T) {
 	if got := str(at(at(v, "autoscaling"), "averageConnections")); got != "50" {
 		t.Fatalf("autoscaling.averageConnections is %s, want 50", got)
 	}
+}
+
+// The restore's delete Job fetches no package when it runs: a restore at 3am cannot depend on a mirror
+// or on egress. etcd-init still installs etcdctl from the Alpine mirror (it runs once, at install, and
+// needs a shell etcd's image lacks), and its header says so, and that the kind stack runs it in every
+// kind run. No shipped etcd Job uses a YAML anchor: an operator editing one container must see each.
+func TestTheEtcdJobsFetchNothingAtRunTime(t *testing.T) {
+	del := read(t, "deploy/helm/port49/examples/velero/restore-unspent.yaml")
+	if strings.Contains(del, "apk ") || strings.Contains(del, "image: alpine") {
+		t.Error("the restore's delete Job installs a package at run time")
+	}
+	init := read(t, "deploy/helm/port49/examples/etcd/etcd-init-job.yaml")
+	if strings.Contains(init, "UNVERIFIED") || !strings.Contains(init, "tests/kind/stack.go:244") ||
+		!strings.Contains(init, "every kind run") || !strings.Contains(init, "at install time") {
+		t.Error("etcd-init's header does not say the kind stack runs it and that it fetches etcdctl at install time")
+	}
+	for name, body := range map[string]string{"restore-unspent.yaml": del, "etcd-init-job.yaml": init} {
+		if regexp.MustCompile(`[&*][a-z][a-z0-9-]*\b`).MatchString(strings.Join(yamlValues(body), "\n")) {
+			t.Errorf("%s uses a YAML anchor or alias", name)
+		}
+	}
+}
+
+// yamlValues is each line of a YAML file outside its comments and its block scalars' shell text, enough
+// to find an anchor (&name) or an alias (*name) in a mapping value.
+func yamlValues(body string) []string {
+	var out []string
+	for _, ln := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "#") || !strings.Contains(t, ":") || strings.Contains(t, "$") {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }

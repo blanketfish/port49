@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:300",
-    "device_port": 33396,
-    "syn_at": "2026-10-18T07:51:34.124914Z",
+    "device_port": 40310,
+    "syn_at": "2026-11-05T18:41:04.866388Z",
     "answer": "syn-ack",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -10,12 +10,12 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-18T07:51:34.12512Z"
+    "end_at": "2026-11-05T18:41:04.866631Z"
   },
   {
     "server": "172.100.100.2:300",
-    "device_port": 55664,
-    "syn_at": "2026-10-18T07:51:34.126113Z",
+    "device_port": 52718,
+    "syn_at": "2026-11-05T18:41:04.867709Z",
     "answer": "rst",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -23,6 +23,6 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-18T07:51:34.126124Z"
+    "end_at": "2026-11-05T18:41:04.86772Z"
   }
 ]

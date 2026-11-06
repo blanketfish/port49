@@ -1,11 +1,12 @@
 # L12-configuration — juniper_vsrx
 
-- **Date measured:** 2026-09-25
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L12-configuration-juniper_vsrx.pcap` — 831 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L12-configuration-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L12-configuration-juniper_vsrx.pcap` — 844 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L12-configuration-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL12JunosConfiguration$`
 
 ## Claim
 
@@ -91,12 +92,12 @@ alice01@srx1#
 
 ```
  
-Current time: 2026-09-25 03:22:53 UTC
+Current time: 2026-11-05 22:12:52 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 03:21:56 UTC (00:00:57 ago)
-Protocols started: 2026-09-25 03:22:39 UTC (00:00:14 ago)
-Last configured: 2026-09-25 03:22:51 UTC (00:00:02 ago) by breakglass
- 3:22AM  up 57 secs, 1 users, load averages: 2.74, 0.84, 0.32
+System booted: 2026-11-05 22:11:47 UTC (00:01:05 ago)
+Protocols started: 2026-11-05 22:12:33 UTC (00:00:19 ago)
+Last configured: 2026-11-05 22:12:47 UTC (00:00:05 ago) by breakglass
+10:12PM  up 1 min, 1 users, load averages: 5.70, 1.65, 0.61
 
 [edit]
 alice01@srx1# 
@@ -165,12 +166,12 @@ alice02@srx1#
 
 ```
  
-Current time: 2026-09-25 03:23:06 UTC
+Current time: 2026-11-05 22:13:09 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 03:21:56 UTC (00:01:10 ago)
-Protocols started: 2026-09-25 03:22:39 UTC (00:00:27 ago)
-Last configured: 2026-09-25 03:22:51 UTC (00:00:15 ago) by breakglass
- 3:23AM  up 1 min, 1 users, load averages: 2.40, 0.83, 0.32
+System booted: 2026-11-05 22:11:47 UTC (00:01:22 ago)
+Protocols started: 2026-11-05 22:12:33 UTC (00:00:36 ago)
+Last configured: 2026-11-05 22:12:47 UTC (00:00:22 ago) by breakglass
+10:13PM  up 1 min, 1 users, load averages: 4.24, 1.57, 0.61
 
 [edit]
 alice02@srx1# 

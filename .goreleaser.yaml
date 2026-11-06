@@ -96,6 +96,10 @@ nfpms:
       - src: deploy/systemd/tmpfiles.d/port49.conf
         dst: /usr/lib/tmpfiles.d/port49.conf
         file_info: {mode: 0644, owner: root, group: root}
+      # The license, where Debian policy and rpm's %license look for it.
+      - src: packaging/copyright
+        dst: /usr/share/doc/port49-server/copyright
+        file_info: {mode: 0644, owner: root, group: root}
       # What the systemd README sends the operator to: its text, the example configs to copy
       # into /etc/port49, the etcd, snapshot and export units, and the store blocks.
       - src: deploy/systemd/README.md
@@ -159,6 +163,9 @@ nfpms:
     conflicts: [port49-server]
     recommends: [python3]
     contents:
+      - src: packaging/copyright
+        dst: /usr/share/doc/port49/copyright
+        file_info: {mode: 0644, owner: root, group: root}
       - src: packaging/client/config.yaml
         dst: /etc/port49/config.yaml
         type: config|noreplace
@@ -170,6 +177,9 @@ nfpms:
         file_info: {mode: 0644, owner: root, group: root}
       - src: clients/ansible/ansible_collections/port49/client/README.md
         dst: /usr/share/ansible/collections/ansible_collections/port49/client/README.md
+        file_info: {mode: 0644, owner: root, group: root}
+      - src: clients/ansible/ansible_collections/port49/client/LICENSE
+        dst: /usr/share/ansible/collections/ansible_collections/port49/client/LICENSE
         file_info: {mode: 0644, owner: root, group: root}
       - src: clients/ansible/ansible_collections/port49/client/meta/*
         dst: /usr/share/ansible/collections/ansible_collections/port49/client/meta/

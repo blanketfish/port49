@@ -259,7 +259,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ---
@@ -858,8 +857,7 @@ refuses the session on shell:roles=, and applies the bare roles= under
 either flag (tests/lab/results/L16-arista_eos.md, 2026-09-22). The
 paragraph said shell:roles for EOS; it is corrected.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1896,8 +1894,7 @@ Expected: every package `ok`; `gofmt -l .` prints nothing.
 git add platforms internal/platform
 git commit -m "refactor: the built-in adapters are files, platforms/1.0.0
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2273,8 +2270,7 @@ Expected: every package `ok`.
 git add platforms internal cmd
 git commit -m "feat: EOS is told the role beside the level (decision 25)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2828,8 +2824,7 @@ Expected: every package `ok`.
 git add platforms internal
 git commit -m "feat: NX-OS is told its role, IOS-XE its level, operator at 7 (decision 25)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3211,8 +3206,7 @@ prints nothing (the harness refuses a non-ASCII startup config).
 git add platforms internal tests/lab/configs/iosxe-startup.cfg
 git commit -m "feat: IOS-XE takes priv-lvl alone; adapters carry their device configuration
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3533,8 +3527,7 @@ Expected: every package `ok`.
 git add internal cmd
 git commit -m "feat: a policy pins its platform set; unpinned is 1.0.0, forever
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4179,8 +4172,7 @@ Expected: every package `ok`.
 git add internal
 git commit -m "feat: the policy file's platforms: block overrides and adds adapters
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4801,8 +4793,7 @@ sets it).
 git add internal cmd
 git commit -m "fix: the enable username is an adapter fact the offline tools read (N5)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5402,8 +5393,7 @@ Expected: every package `ok`.
 git add internal cmd
 git commit -m "feat: policy diff gates an adapter edit, reading privilege under the stricter adapter
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6070,8 +6060,7 @@ Expected: every package `ok`.
 git add platforms internal/platform
 git commit -m "feat: redaction patterns, built in and unpinned (spec §5.8)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6576,8 +6565,7 @@ Expected: every package `ok`.
 git add internal cmd
 git commit -m "feat: no record is written with a typed secret in it (spec §5.7, §5.8)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7208,8 +7196,7 @@ with its `device_config` and the redaction lines.
 git add internal cmd
 git commit -m "feat: port49 platform list, show and export
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7662,8 +7649,7 @@ Expected: every package `ok`.
 git add internal cmd
 git commit -m "feat: port49 platform upgrade moves the pin and says what it changes
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8250,8 +8236,7 @@ Expected: every package `ok`.
 git add platforms internal
 git commit -m "feat: dead-rule and fallback-exposure reports (spec §12)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8983,8 +8968,7 @@ Expected: every package `ok`.
 git add platforms internal cmd
 git commit -m "feat: port49 devices check-config finds a local account colliding with a served username
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9417,8 +9401,7 @@ Expected: every package `ok`.
 git add cmd
 git commit -m "feat: port49 grants remove --pr opens the offboarding review
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -10042,8 +10025,7 @@ git add tests/lab/adapters_test.go tests/lab/slice_test.go tests/lab/slice/polic
   tests/lab/evidence/slice-*.pcap
 git commit -m "test: the per-command adapters' replies, measured in the lab (L22)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -10232,13 +10214,11 @@ Expected: every package `ok`.
 git add docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: close lab register entry L22; decision 25 no longer provisional
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git add platforms internal cmd docs/superpowers/plans/README.md
 git commit -m "feat: the per-command adapters are verified in containerlab
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

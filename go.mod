@@ -2,6 +2,8 @@ module github.com/blanketfish/port49
 
 go 1.26
 
+toolchain go1.26.10
+
 require (
 	github.com/boombuler/barcode v1.1.0
 	github.com/ebitengine/purego v0.11.1

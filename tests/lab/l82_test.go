@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,8 +92,21 @@ func l82Verdict(c l82.Cell) string {
 	return c.Verdict
 }
 
+// cellsMu guards every cell's rows and verdict: L89's guard reads them from its kill goroutine
+// (l89.Stopped) while the test's goroutine may still be writing one.
+var cellsMu sync.Mutex
+
 func l82Row(c *l82.Cell, what, observation string) {
+	cellsMu.Lock()
+	defer cellsMu.Unlock()
 	c.Rows = append(c.Rows, l82.Row{Case: what, Observation: observation})
+}
+
+// l82SetVerdict sets a cell's verdict under cellsMu.
+func l82SetVerdict(c *l82.Cell, v string) {
+	cellsMu.Lock()
+	defer cellsMu.Unlock()
+	c.Verdict = v
 }
 
 // l82Run is a command's first line of output, "unavailable" if it fails.

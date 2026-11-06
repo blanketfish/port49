@@ -203,11 +203,17 @@ func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "revocation_unconfirmed") ||
 		strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" ||
-		!strings.Contains(w.Body.String(), "check `port49 revoke --list` once the store answers, before trying again") ||
+		!strings.Contains(w.Body.String(), "check `port49 revoke --list` here before running it again") ||
 		!strings.Contains(w.Body.String(), "remove the principal's grants from broker.policy_file") ||
 		strings.Contains(w.Body.String(), "socket") {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
+}
+
+type tokensByPrincipalFails struct{ store.Store }
+
+func (tokensByPrincipalFails) TokensByPrincipal(context.Context, string) ([]store.TokenKey, error) {
+	return nil, errors.New("index unreadable")
 }
 
 type putRevocationFails struct{ store.Store }
@@ -329,7 +335,7 @@ func TestTheRevokeNotesNameTheCommand(t *testing.T) {
 func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
 	for _, c := range []struct{ proc, stop, wrong string }{
 		{"", "or stop port49d", "stop every port49d"},
-		{"port49-broker", "or stop every port49d (port49-broker serves no device)", "this port49d"},
+		{"port49-broker", "or stop every port49d in this region (port49-broker serves no device)", "this port49d"},
 	} {
 		f := newFixtureWithPolicy(t, 8, sharedPolicy)
 		f.b.Proc = c.proc
@@ -345,7 +351,15 @@ func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
 			strings.Contains(err.Error(), c.wrong) {
 			t.Errorf("proc %q busy: %v", c.proc, err)
 		}
+		// The reach finished: the policy edit is the only cut left to offer (stores I1).
 		f.b.Store = putRevocationFails{f.st}
+		_, err = f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal})
+		if err == nil || !strings.HasSuffix(err.Error(), "(live within two watch intervals)") ||
+			strings.Contains(err.Error(), "stop ") {
+			t.Errorf("proc %q unrecorded, reached: %v", c.proc, err)
+		}
+		// The reach itself failed: the process stop is offered too.
+		f.b.Store = putRevocationFails{tokensByPrincipalFails{f.st}}
 		_, err = f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal})
 		if err == nil || !strings.HasSuffix(err.Error(), c.stop) || strings.Contains(err.Error(), c.wrong) ||
 			!strings.Contains(err.Error(), "this "+f.b.proc()+" denies what it names, until a lift on this "+f.b.proc()) {

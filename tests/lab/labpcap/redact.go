@@ -56,6 +56,7 @@ type Stats struct {
 	Packets        int
 	FieldsRedacted int
 	BytesRedacted  int
+	TailBytes      int // bytes after a stream's last whole packet, overwritten with Fill
 	RecordsPatched int
 
 	// ChecksumsRecomputed counts patched records whose TCP checksum was
@@ -78,9 +79,9 @@ func (s Stats) String() string {
 		d = strings.Join(drops, " ")
 	}
 	return fmt.Sprintf("%d/%d records kept (dropped: %s), %d streams, %d TACACS+ packets, "+
-		"%d credential fields (%d bytes) overwritten across %d records, %d checksums recomputed, %d left stale",
+		"%d credential fields (%d bytes) overwritten across %d records, %d unframed stream-tail bytes filled, %d checksums recomputed, %d left stale",
 		s.RecordsKept, s.RecordsIn, d, s.Streams, s.Packets,
-		s.FieldsRedacted, s.BytesRedacted, s.RecordsPatched, s.ChecksumsRecomputed, s.ChecksumsLeftStale)
+		s.FieldsRedacted, s.BytesRedacted, s.RecordsPatched, s.TailBytes, s.ChecksumsRecomputed, s.ChecksumsLeftStale)
 }
 
 // patch is one byte of one record, rewritten.
@@ -158,6 +159,19 @@ func Redact(raw []byte, opt Options) ([]byte, Stats, error) {
 		}
 		st.FieldsRedacted++
 		st.BytesRedacted += fd.Len
+	}
+
+	// A stream's bytes after its last whole packet are framed by nothing, so no field list could
+	// name a credential in them: they are overwritten with Fill, as a credential is. The Fill is
+	// written as it is, because nothing obfuscated them.
+	for _, tl := range d.Tails() {
+		if perStream[tl.Stream] == nil {
+			perStream[tl.Stream] = map[int]byte{}
+		}
+		for k := 0; k < tl.Len; k++ {
+			perStream[tl.Stream][tl.Off+k] = byte(Fill)
+		}
+		st.TailBytes += tl.Len
 	}
 
 	// Stream coordinates back to file coordinates. Every segment that claims a
@@ -324,6 +338,17 @@ func Verify(raw, out []byte, opt Options) error {
 		return fmt.Errorf("output holds %d TACACS+ packets, the input holds %d", len(outD.Packets), len(inD.Packets))
 	}
 
+	inTails, outTails := inD.Tails(), outD.Tails()
+	if len(outTails) != len(inTails) {
+		return fmt.Errorf("output has %d unframed stream tail(s), the input has %d", len(outTails), len(inTails))
+	}
+	for _, tl := range outTails {
+		if !labcreds.Redacted(outD.Streams[tl.Stream].Payload[tl.Off:]) {
+			return fmt.Errorf("stream %s: %d byte(s) after its last whole packet survived redaction, not all %q",
+				outD.Streams[tl.Stream].Key, tl.Len, string(rune(Fill)))
+		}
+	}
+
 	inFields, err := inD.Fields()
 	if err != nil {
 		return fmt.Errorf("input: %w", err)
@@ -430,6 +455,21 @@ func verifyBytes(inF, outF *File, inD *Decode, opt Options) error {
 		}
 	}
 
+	for _, tl := range inD.Tails() {
+		s := inD.Streams[tl.Stream]
+		for _, seg := range s.Segments {
+			for off := tl.Off; off < tl.Off+tl.Len; off++ {
+				if off < seg.StreamOff || off >= seg.StreamOff+seg.Length {
+					continue
+				}
+				if allowed[seg.Record] == nil {
+					allowed[seg.Record] = map[int]bool{}
+				}
+				allowed[seg.Record][seg.PayloadOff+(off-seg.StreamOff)] = true
+			}
+		}
+	}
+
 	var kept []Record
 	for _, r := range inF.Records {
 		fl, ok := FlowOf(inF.Link, inF.Bytes(r))
@@ -489,30 +529,65 @@ func verifyBytes(inF, outF *File, inD *Decode, opt Options) error {
 // checkTLSOpens refuses a capture in which a connection to or from TLSPort carries data that does
 // not open with a TLS handshake record in some direction. It names the connection, never bytes.
 func checkTLSOpens(f *File) error {
-	seen := map[string]bool{}
-	for _, r := range f.Records {
+	streams := map[string]*Stream{}
+	var order []*Stream
+	for i, r := range f.Records {
 		pkt := f.Bytes(r)
 		fl, ok := FlowOf(f.Link, pkt)
 		if !ok || (fl.SrcPort != TLSPort && fl.DstPort != TLSPort) {
 			continue
 		}
 		k := fmt.Sprintf("%s:%d>%s:%d", fl.Src, fl.SrcPort, fl.Dst, fl.DstPort)
-		if fl.SYN() { // a new connection on a reused 4-tuple is checked from its start
-			delete(seen, k)
-			delete(seen, fmt.Sprintf("%s:%d>%s:%d", fl.Dst, fl.DstPort, fl.Src, fl.SrcPort))
+		if fl.SYN() {
+			// A new connection on a reused 4-tuple: its predecessor stays in order, and is walked
+			// with the rest, so every connection on the tuple is checked.
+			delete(streams, k)
+			delete(streams, fmt.Sprintf("%s:%d>%s:%d", fl.Dst, fl.DstPort, fl.Src, fl.SrcPort))
 			continue
 		}
 		if fl.PayloadLen == 0 {
 			continue
 		}
-		if seen[k] {
-			continue
+		s := streams[k]
+		if s == nil {
+			s = &Stream{Key: k}
+			streams[k] = s
+			order = append(order, s)
 		}
-		seen[k] = true
-		if fl.PayloadLen < 2 || pkt[fl.PayloadOff] != 0x16 || pkt[fl.PayloadOff+1] != 0x03 {
-			return fmt.Errorf("the connection %s carries data on port %d that does not open with a TLS handshake record; "+
-				"it may be plain TACACS+, which this tool would not redact there", k, TLSPort)
+		s.add(fl.Seq, i, fl.PayloadOff, f.Payload(r, fl))
+	}
+	for _, s := range order {
+		if err := walkTLS(s); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// maxTLSRecord is the longest ciphertext a TLS 1.3 record may carry: 2^14 bytes of plaintext plus
+// 256 of expansion (RFC 8446 section 5.2).
+const maxTLSRecord = 16640
+
+// walkTLS checks one direction of a port-300 connection: reassembled, it is a run of TLS records
+// (a known content type, version 3.x, a length within maxTLSRecord that leads to the next record),
+// the first a handshake. A stream that only stops short (a capture cut mid-record) is fine; one with
+// a sequence gap, or that leaves the framing, is not. It names the connection, never bytes.
+func walkTLS(s *Stream) error {
+	if s.Gap {
+		return fmt.Errorf("the connection %s has a sequence gap on port %d, so part of it was never checked as TLS", s.Key, TLSPort)
+	}
+	p := s.Payload
+	if len(p) < 2 || p[0] != 0x16 || p[1] != 0x03 {
+		return fmt.Errorf("the connection %s carries data on port %d that does not open with a TLS handshake record; "+
+			"it may be plain TACACS+, which this tool would not redact there", s.Key, TLSPort)
+	}
+	for i := 0; len(p)-i >= 5; {
+		n := int(p[i+3])<<8 | int(p[i+4])
+		if p[i] < 0x14 || p[i] > 0x17 || p[i+1] != 0x03 || n > maxTLSRecord {
+			return fmt.Errorf("the connection %s carries data on port %d that leaves the TLS record framing at stream offset %d; "+
+				"it may be plain TACACS+, which this tool would not redact there", s.Key, TLSPort, i)
+		}
+		i += 5 + n
 	}
 	return nil
 }

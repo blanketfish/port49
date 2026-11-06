@@ -770,3 +770,23 @@ func TestAVariantsLogoutIsAnExecRecord(t *testing.T) {
 		t.Fatalf("the variant's logout did not close the session: %+v", c)
 	}
 }
+
+const synthTokenAsName = "SyntheticTokenShapedNameXY1234"
+
+func TestAnAccountingRecordNamingATokenLogsNoUsername(t *testing.T) {
+	h, _, out, stop := setup(t)
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, synthTokenAsName, "vty0", "task_id=9", "service=shell", "cmd="))
+	stop()
+	s := out.String()
+	if strings.Contains(s, synthTokenAsName) || strings.Contains(s, strings.ToLower(synthTokenAsName)) {
+		t.Fatal("a token-shaped username reached the log")
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(s)), &m); err != nil {
+		t.Fatal(err)
+	}
+	sess := m["session"].(map[string]any)
+	if sess["username"] != nil || sess["username_redacted"] != true {
+		t.Fatalf("session: %v", sess)
+	}
+}

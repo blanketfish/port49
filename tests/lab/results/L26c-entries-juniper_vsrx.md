@@ -1,12 +1,12 @@
 # L26c-entries — juniper_vsrx
 
-- **Date measured:** 2026-10-11
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L26c-entries-juniper_vsrx.pcap` — 1888 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-entries-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26c-entries-juniper_vsrx.pcap` — 2055 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-entries-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `3cb39d236d76844923195c5b8a110e554ae95974`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestL26cEntryNetconf$`
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL26cEntryNetconf$`
 
 ## Claim
 
@@ -147,7 +147,7 @@ xml-mode netconf need-trailer
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29119</session-id>
+  <session-id>29117</session-id>
 … (3 more lines)
 ```
 
@@ -184,7 +184,7 @@ xml-mode netconf need-trailer
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1791748055" junos:changed-localtime="2026-10-11 19:47:35 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793920045" junos:changed-localtime="2026-11-05 23:07:25 UTC">
     <system>
         <host-name>srx1</host-name>
     </system>
@@ -207,7 +207,7 @@ xml-mode netconf need-trailer
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1791748055" junos:changed-localtime="2026-10-11 19:47:35 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793920045" junos:changed-localtime="2026-11-05 23:07:25 UTC">
     <system>
         <host-name>srx1</host-name>
     </system>
@@ -248,7 +248,7 @@ syntax error, expecting <command>.
 
 ```
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1791748055" junos:changed-localtime="2026-10-11 19:47:35 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793920045" junos:changed-localtime="2026-11-05 23:07:25 UTC">
     <system>
         <host-name>srx1</host-name>
     </system>
@@ -282,7 +282,7 @@ xml-mode netconf need-trailer
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29146</session-id>
+  <session-id>29144</session-id>
 … (3 more lines)
 ```
 
@@ -319,7 +319,7 @@ xml-mode netconf need-trailer
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1791748055" junos:changed-localtime="2026-10-11 19:47:35 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793920045" junos:changed-localtime="2026-11-05 23:07:25 UTC">
     <system>
         <host-name>srx1</host-name>
     </system>
@@ -342,7 +342,7 @@ xml-mode netconf need-trailer
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1791748055" junos:changed-localtime="2026-10-11 19:47:35 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793920045" junos:changed-localtime="2026-11-05 23:07:25 UTC">
     <system>
         <host-name>srx1</host-name>
     </system>
@@ -380,7 +380,7 @@ alice09@srx1>
 
 ```
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1791748055" junos:changed-localtime="2026-10-11 19:47:35 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793920045" junos:changed-localtime="2026-11-05 23:07:25 UTC">
     <system>
         <host-name>srx1</host-name>
     </system>

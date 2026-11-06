@@ -6,6 +6,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// peerCredsReported is whether the platform reports a peer's credentials, so a dial that gets none is
+// refused.
+const peerCredsReported = true
+
 func peerOf(c net.Conn) (peerCred, bool) {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {

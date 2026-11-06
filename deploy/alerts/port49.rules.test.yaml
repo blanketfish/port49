@@ -3,6 +3,78 @@
 rule_files: [port49.rules.yaml]
 evaluation_interval: 1m
 tests:
+  # port49_target_down
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49-broker\",instance=\"b\"}", values: "0+0x10"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_target_down
+        exp_alerts:
+          - exp_labels: {job: "port49-broker", instance: "b", severity: "page"}
+            exp_annotations:
+              summary: "A port49d or broker target is not answering its scrape: up is 0 for it."
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49d\",instance=\"a\"}", values: "1+0x10"}
+      - {series: "up{job=\"node\",instance=\"n\"}", values: "0+0x10"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_target_down
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49d\",instance=\"a\"}", values: "0+0x10"}
+      - {series: "up{job=\"port49-broker\",instance=\"b\"}", values: "1+0x10"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_target_down
+        exp_alerts:
+          - exp_labels: {job: "port49d", instance: "a", severity: "page"}
+            exp_annotations:
+              summary: "A port49d or broker target is not answering its scrape: up is 0 for it."
+  # port49_target_absent: port49d only, a page
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49-broker\",instance=\"b\"}", values: "1+0x20"}
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: port49_target_absent
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: port49_target_absent
+        exp_alerts:
+          - exp_labels: {job: "port49d", severity: "page"}
+            exp_annotations:
+              summary: "Prometheus has no up series for port49d: no port49d target exists at all, so every device has lost port49 and falls to local authentication, and no other port49d rule can fire."
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49d\",instance=\"a\"}", values: "1+0x20"}
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: port49_target_absent
+        exp_alerts: []
+  # port49_broker_target_absent: the broker only, a ticket
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49d\",instance=\"a\"}", values: "1+0x20"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_broker_target_absent
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: port49_broker_target_absent
+        exp_alerts:
+          - exp_labels: {job: "port49-broker", severity: "ticket"}
+            exp_annotations:
+              summary: "Prometheus has no up series for the broker: no broker target exists at all, so no token can be minted and no other broker rule can fire."
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49-broker\",instance=\"b\"}", values: "1+0x20"}
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: port49_broker_target_absent
+        exp_alerts: []
   # port49_global_cap_shedding
   - interval: 1m
     input_series:
@@ -141,36 +213,6 @@ tests:
       - eval_time: 5m
         alertname: port49_key_retirement_within_1d
         exp_alerts: []
-  # port49_redemption_restore_guarded
-  - interval: 1m
-    input_series:
-      - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "1+0x40"}
-      - {series: "port49_redemption_restore_guard_until_timestamp_seconds{instance=\"a\"}", values: "0+0x40"}
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: port49_redemption_restore_guarded
-        exp_alerts:
-          - exp_labels: {instance: "a", severity: "page"}
-            exp_annotations:
-              summary: "port49d refuses every token redemption: it found its store restored from a snapshot. Its bound is unknown: only the runner's purge lifts it. To restore service sooner, stop port49d: devices then find the connection refused and fall to local authentication."
-  - interval: 1m
-    input_series:
-      - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "1+0x40"}
-      - {series: "port49_redemption_restore_guard_until_timestamp_seconds{instance=\"a\"}", values: "5000+0x40"}
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: port49_redemption_restore_guarded
-        exp_alerts:
-          - exp_labels: {instance: "a", severity: "page"}
-            exp_annotations:
-              summary: "port49d refuses every token redemption: it found its store restored from a snapshot. The guard lifts on its own at 1970-01-01 01:23:20 +0000 UTC unless new tokens are minted, or at the runner's purge. To restore service sooner, stop port49d: devices then find the connection refused and fall to local authentication."
-  - interval: 1m
-    input_series:
-      - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "0+0x40"}
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: port49_redemption_restore_guarded
-        exp_alerts: []
   # port49_admin_touch_refused
   - interval: 1m
     input_series:
@@ -278,6 +320,60 @@ tests:
     alert_rule_test:
       - eval_time: 6m
         alertname: port49_broker_mint_gate_closed
+        exp_alerts: []
+  # port49_redemption_restore_unjudged
+  - interval: 1m
+    input_series:
+      - {series: "port49_redemption_restore_unjudged{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: port49_redemption_restore_unjudged
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: port49_redemption_restore_unjudged
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "page"}
+            exp_annotations:
+              summary: "port49d cannot read meta/witness, so it cannot tell whether its store was restored, and refuses every token login (store_unavailable) until it can; check the store and the daemon role's read of meta/witness; stopping port49d lets devices fall to break-glass"
+  - interval: 1m
+    input_series:
+      - {series: "port49_redemption_restore_unjudged{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: port49_redemption_restore_unjudged
+        exp_alerts: []
+  # port49_store_restore_detected
+  - interval: 1m
+    input_series:
+      - {series: "port49_store_restore_detected_timestamp_seconds{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_store_restore_detected
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "ticket"}
+            exp_annotations:
+              summary: "port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook"
+  - interval: 1m
+    input_series:
+      - {series: "port49_store_restore_detected_timestamp_seconds{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_store_restore_detected
+        exp_alerts: []
+  - interval: 1h
+    input_series:
+      - {series: "port49_store_restore_detected_timestamp_seconds{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: port49_store_restore_detected
+        exp_alerts: []
+  # the guard's alerts are gone
+  - interval: 1m
+    input_series:
+      - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: port49_redemption_restore_guarded
         exp_alerts: []
   # port49_store_directory_unreachable
   - interval: 1m
@@ -715,7 +811,7 @@ tests:
         exp_alerts:
           - exp_labels: {instance: "a", severity: "ticket"}
             exp_annotations:
-              summary: "A device certificate is past two thirds of its own lifetime: its renewal is late."
+              summary: "A device certificate is past two thirds of its own lifetime: its renewal is late. The ratio is the least over certificates verified in the last 24h, so it clears up to a day after the device renews."
   - interval: 1m
     input_series:
       - {series: "port49_tls_device_certificate_lifetime_left_ratio{instance=\"a\"}", values: "1+0x30"}
@@ -823,7 +919,7 @@ tests:
         exp_alerts:
           - exp_labels: {instance: "a", issuer: "i", severity: "ticket"}
             exp_annotations:
-              summary: "An OIDC issuer's keys were last fetched over 12 hours ago, half of jwks_max_age at its default; tokens are refused once they are 24."
+              summary: "An OIDC issuer's keys were never fetched since this process started, or last fetched over 12h ago, half of jwks_max_age at its default; tokens are refused once they are 24."
   - interval: 1m
     input_series:
       - {series: "port49_oidc_keys_last_success_timestamp_seconds{instance=\"a\",issuer=\"i\"}", values: "0+60x800"}
@@ -1328,7 +1424,26 @@ tests:
         exp_alerts:
           - exp_labels: {instance: "a", kind: "key_ref_changed", severity: "ticket"}
             exp_annotations:
-              summary: "A source-of-truth edit moved privilege: a device changed key, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+              summary: "A source-of-truth edit moved privilege: a device changed key or platform, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"platform_changed\"}", values: "0+1x80"}
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: port49_inventory_privilege_changes
+        exp_alerts:
+          - exp_labels: {instance: "a", kind: "platform_changed", severity: "ticket"}
+            exp_annotations:
+              summary: "A source-of-truth edit moved privilege: a device changed key or platform, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+  # transport_changed has its own alert (port49_inventory_transport_changed); the privilege-changes
+  # alert does not also fire on it.
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"transport_changed\"}", values: "0+1x80"}
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: port49_inventory_privilege_changes
+        exp_alerts: []
   - interval: 1m
     input_series:
       - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"key_ref_changed\"}", values: "2+0x80"}

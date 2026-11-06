@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,7 +31,10 @@ const (
 	l89Bucket  = "velero"
 	l89Backup  = "l89-backup"
 	l89Restore = "l89-restore"
-	l89Region  = "us-east-1"
+	// the README's named restores (its <restore>) in cells (c) and (d)
+	l89RestoreC = "l89-restore-c"
+	l89RestoreD = "l89-restore-d"
+	l89Region   = "us-east-1"
 )
 
 // l89Fence is what the fence's refusals say: the broker's and port49d's data directory writable by a
@@ -42,10 +48,19 @@ var l89Fence = regexp.MustCompile(`data-dir(-owner)?: |writable by its group or 
 // The Velero Schedule is the chart's own example (deploy/helm/port49/examples/velero), applied as it is
 // and run by `velero backup create --from-schedule`.
 //
-//	(a) back up, delete the namespace, restore: both StatefulSets ready with no fence refusal, the
+//	(a) first a revocation (so each broker's marks.json exists and holds a mark), a sentinel in each spool
+//	    and the hashes cells (c) and (d) compare (l89.BeforeBackup); then
+//	    back up, delete the namespace, restore: both StatefulSets ready with no fence refusal, the
 //	    issuing CA's fingerprint unchanged; the owner, group and mode of state/, issuing-ca.key and the
 //	    spool directory are recorded before and after
 //	(b) after the restore, a mint and a login
+//	(c) the README's warning that a restore with both StatefulSets at 0 replicas (a resource modifier,
+//	    the order the README once gave) hangs: PASS when the hang is measured (the restore InProgress past
+//	    its bound, its pod volume restores New, their pods absent), FAIL when the restore ends
+//	(d) the volume, CA, marks and spool checks after the README's restore order, run from its own text: the
+//	    README's recovery from (c)'s restore first if it is there, then the pods run for the volume restore and are scaled
+//	    to 0 before the token delete (the lab's etcd shares the namespace, so it cannot be held down
+//	    apart; see the rows)
 //
 // The backup holds issuing-ca.key. The store's credentials and the repository key are generated per
 // run, written 0600 in the test's temp directory and handed over by file; they are never printed, never
@@ -60,24 +75,39 @@ func TestL89(t *testing.T) {
 	if out == "" {
 		out = t.TempDir()
 	}
-	cells := []l82.Cell{{ID: "a"}, {ID: "b"}}
+	cells := []l82.Cell{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
 	env := l89Env(t)
+	// write is the results, once: from the deferred call when the test ends, or from the guard's kill when
+	// the test's deadline is 45s away (the testing package then runs no defer and no t.Cleanup), with the
+	// cell it stopped NOT RUN. In the kill the test's goroutine is still running, so the write is guarded
+	// against a cell changed under it.
+	var once sync.Once
+	write := func(cells []l82.Cell, logf func(string, ...any)) {
+		once.Do(func() {
+			defer func() {
+				if p := recover(); p != nil {
+					logf("INVALID: writing the results: %v", p)
+				}
+			}()
+			text, err := l89.Results(*env, cells)
+			if err != nil {
+				logf("INVALID: %v", err)
+				return
+			}
+			if err := os.MkdirAll(out, 0o755); err != nil {
+				logf("INVALID: %v", err)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(out, "l89-results.md"), []byte(text), 0o644); err != nil {
+				logf("INVALID: %v", err)
+			}
+			if err := l82.Save(filepath.Join(out, "l89-cells.json"), cells); err != nil {
+				logf("INVALID: %v", err)
+			}
+		})
+	}
 	defer func() {
-		text, err := l89.Results(*env, cells)
-		if err != nil {
-			t.Errorf("INVALID: %v", err)
-			return
-		}
-		if err := os.MkdirAll(out, 0o755); err != nil {
-			t.Errorf("INVALID: %v", err)
-			return
-		}
-		if err := os.WriteFile(filepath.Join(out, "l89-results.md"), []byte(text), 0o644); err != nil {
-			t.Errorf("INVALID: %v", err)
-		}
-		if err := l82.Save(filepath.Join(out, "l89-cells.json"), cells); err != nil {
-			t.Errorf("INVALID: %v", err)
-		}
+		write(cells, t.Errorf)
 		for _, c := range cells {
 			t.Logf("L89 cell %s: %s", c.ID, l82Verdict(c))
 			if c.Verdict == "" {
@@ -87,11 +117,112 @@ func TestL89(t *testing.T) {
 	}()
 
 	stack := kindstack.BringUpWith(t, "port49l89", kindstack.Options{EtcdOnLocalVolumes: true})
-	r := &l89Run{t: t, env: env, stack: stack, dir: t.TempDir(), out: out}
+	deadline, _ := t.Deadline()
+	r := &l89Run{t: t, env: env, stack: stack, dir: t.TempDir(), out: out,
+		budget: l89.Budget{TestEnd: deadline, Reserve: l89.ReserveAtEnd}}
+	r.running.Store("")
+	// registered after the cluster's deletion, so the guard runs it first
+	stack.Cluster().Guard.OnKill(func() {
+		cellsMu.Lock() // the copy, taken while no row or verdict is half written
+		stopped := l89.Stopped(cells, r.running.Load().(string), "the test's deadline was "+shapetest.KillGrace.String()+" away, and the guard stopped the run")
+		cellsMu.Unlock()
+		write(stopped, func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) })
+	})
 	r.installStoreAndVelero()
 	r.first = &cells[0]
-	stack.Run(t, "a_backup_delete_restore", func(t *testing.T) { r.cellA(t, &cells[0]) })
-	stack.Run(t, "b_mint_and_login", func(t *testing.T) { r.cellB(t, &cells[1]) })
+	r.cell(t, "a_backup_delete_restore", &cells[0], func(t *testing.T) { r.cellA(t, &cells[0]) })
+	r.cell(t, "b_mint_and_login", &cells[1], func(t *testing.T) { r.cellB(t, &cells[1]) })
+	r.cell(t, "c_zero_replica_restore", &cells[2], func(t *testing.T) { r.cellOrder(t, &cells[2], false) })
+	r.cell(t, "d_readme_restore_order", &cells[3], func(t *testing.T) { r.cellOrder(t, &cells[3], true) })
+}
+
+// cell runs one cell as a subtest inside its budget (l89.CellCap, l89.Budget): it is NOT RUN, saying so,
+// when too little time is left before the test's deadline to start it, and every bounded step in it
+// ends by the cell's end (r.bound).
+func (r *l89Run) cell(t *testing.T, name string, cell *l82.Cell, f func(*testing.T)) {
+	cap, need := l89.CellCap(cell.ID)
+	end, ok := r.budget.Cell(time.Now(), cap, need)
+	if !ok {
+		l82Row(cell, "not started: too little time left before the test's deadline", fmt.Sprintf("%v left, the cell needs %v", time.Until(end).Round(time.Second), need))
+		t.Errorf("L89 cell %s not started: %v left", cell.ID, time.Until(end).Round(time.Second))
+		return
+	}
+	r.end = end
+	r.running.Store(cell.ID)
+	defer func() { r.running.Store(""); r.end = time.Time{} }()
+	r.stack.Run(t, name, f)
+}
+
+// l89SetupRow is the row a cell stopped by the harness's own setup carries: NOT RUN, with the reason.
+const l89SetupRow = "the harness's own setup failed: not a measurement"
+
+// setupFail stops the cell NOT RUN for a failure of the harness's own setup. The reason goes through
+// l89.ReasonWith with the run's own generated values, so the row and the log line both keep it past the
+// job log's filter (only the harness's own names are masked) and no value of the run's is written.
+func (r *l89Run) setupFail(t *testing.T, cell *l82.Cell, format string, args ...any) {
+	t.Helper()
+	why := l89.ReasonWith(fmt.Sprintf(format, args...), r.own...)
+	l82Row(cell, l89SetupRow, why)
+	t.Fatal(l89SetupRow + ": " + why)
+}
+
+// l89SetupRowed says the cell already holds a row saying why it was not measured: setupFail's, a step
+// stopped by its bound or the cell's end, a wait of the harness's own, so the deferred row does not
+// relabel a timeout as a setup failure.
+func l89SetupRowed(cell *l82.Cell) bool {
+	cellsMu.Lock()
+	defer cellsMu.Unlock()
+	return l89.NotMeasuredRowed(cell.Rows)
+}
+
+// kubectl is the cluster's Kubectl for a cell: its failure is a setupFail on the cell's own test (the
+// cluster's Kubectl fails the test it was made for), with kubectl's own stderr masked line by line
+// (l89.KubectlFailure), since the job filter would drop the line that says why.
+func (r *l89Run) kubectl(t *testing.T, cell *l82.Cell, args ...string) string {
+	t.Helper()
+	out, stderr, err := r.stack.Cluster().KubectlUnfiltered(args...)
+	if err != nil {
+		r.setupFail(t, cell, "%s", l89.KubectlFailure("kubectl "+kindtest.Redact(args), err, stderr, r.own...))
+	}
+	return out
+}
+
+// bound is a step's bound inside the running cell (its own outside one), and whether the cell's end
+// cut it short.
+func (r *l89Run) bound(own time.Duration) (time.Duration, bool) {
+	if r.end.IsZero() {
+		return own, false
+	}
+	return l89.Bound(time.Now(), r.end, own)
+}
+
+// waitFor is shapetest.WaitFor inside the cell's budget: a wait that does not end is a row (the
+// harness's own wait, so the cell is NOT RUN) and ends the cell.
+func (r *l89Run) waitFor(t *testing.T, cell *l82.Cell, what string, own time.Duration, ok func() bool) {
+	t.Helper()
+	within, capped := r.bound(own)
+	for deadline := time.Now().Add(within); ; time.Sleep(time.Second) {
+		if ok() {
+			return
+		}
+		if time.Now().After(deadline) {
+			why := "did not end within " + within.Round(time.Second).String()
+			if capped {
+				why += ", the cell's time"
+			}
+			l82Row(cell, "the harness's wait for "+what, why+": not a measurement")
+			t.Fatalf("%s %s", what, why)
+		}
+	}
+}
+
+// kubectlTimeout is a kubectl --timeout inside the cell's budget.
+func (r *l89Run) kubectlTimeout(own time.Duration) string {
+	d, _ := r.bound(own)
+	if d < time.Second {
+		d = time.Second
+	}
+	return "--timeout=" + d.Round(time.Second).String()
 }
 
 type l89Run struct {
@@ -104,6 +235,13 @@ type l89Run struct {
 	bucketLog string   // the last curl attempt at the bucket
 	own       []string // the store credentials, which a diagnosis line must not hold
 	key       string   // the generated repository key, compared with the cluster's and never printed
+	// the sha256 of each file of l89.Hashed and each broker's marks when the backup was taken (cells c
+	// and d compare against them)
+	before   l89.Before
+	budget   l89.Budget
+	end      time.Time    // the running cell's end; zero outside a cell
+	fpBefore []string     // both brokers' CA fingerprints before the backup, which cells (c) and (d) compare
+	running  atomic.Value // the running cell's ID, "" between cells: what the guard's kill marks NOT RUN
 }
 
 func l89Env(t *testing.T) *l89.Env {
@@ -124,13 +262,22 @@ func (r *l89Run) file(name, body string) string {
 	return p
 }
 
-// velero runs the pinned client against the cluster. Its output is filtered and shown only on failure.
-func (r *l89Run) velero(args ...string) string {
+// velero runs the pinned client against the cluster, bounded by own (and the running cell's end): its
+// --wait has no timeout of its own. Its output is filtered and shown only on failure.
+func (r *l89Run) velero(own time.Duration, args ...string) string {
 	t := r.t
 	t.Helper()
 	c := r.stack.Cluster()
+	within, _ := r.bound(own)
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	defer cancel()
 	full := append([]string{"--kubeconfig", c.Kubeconfig, "--kubecontext", c.Context(), "-n", "velero"}, args...)
-	out, err := exec.Command(kindtest.Bin(t, "VELERO_BIN"), full...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, kindtest.Bin(t, "VELERO_BIN"), full...)
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("velero %s did not end within %v", args[0], within.Round(time.Second))
+	}
 	if err != nil {
 		t.Fatalf("velero %s: %v\n%s", args[0], err, kindtest.Filter(string(out)))
 	}
@@ -262,7 +409,7 @@ spec:
 	c.Kubectl("-n", "velero", "create", "secret", "generic", "velero-repo-credentials", "--from-file=repository-password="+r.file("repository-password", key))
 
 	// no --default-volumes-to-fs-backup: the example Schedule's own setting is what is tested
-	r.velero("install", "--provider", "aws", "--plugins", os.Getenv("VELERO_AWS_PLUGIN_IMAGE"), "--image", os.Getenv("VELERO_IMAGE"),
+	r.velero(5*time.Minute, "install", "--provider", "aws", "--plugins", os.Getenv("VELERO_AWS_PLUGIN_IMAGE"), "--image", os.Getenv("VELERO_IMAGE"),
 		"--bucket", l89Bucket, "--secret-file", r.file("velero-credentials", creds),
 		"--backup-location-config", "region="+l89Region+",s3ForcePathStyle=true,s3Url=http://seaweed."+l89Store+".svc:8333,publicUrl=http://"+addr,
 		"--use-node-agent", "--use-volume-snapshots=false", "--wait")
@@ -335,9 +482,17 @@ func (r *l89Run) runREADMEChecks(t *testing.T, cell *l82.Cell) {
 		t.Fatal(err)
 	}
 	run := func(script string) string {
-		cmd := exec.Command("bash", "-c", script)
+		within, _ := r.bound(2 * time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), within)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", "-c", script)
 		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KUBECONFIG="+c.Kubeconfig)
+		cmd.WaitDelay = 5 * time.Second
 		out, err := cmd.CombinedOutput()
+		if ctx.Err() == context.DeadlineExceeded {
+			l82Row(cell, "the harness's run of a README check", "did not end within "+within.Round(time.Second).String()+": not a measurement")
+			t.Fatalf("a README check did not end within %v", within)
+		}
 		if err != nil {
 			t.Fatalf("a README command failed: %v\n%s", err, kindtest.Filter(string(out)))
 		}
@@ -390,9 +545,23 @@ func (r *l89Run) diagnose() {
 		out, _ := c.KubectlTry("", args...)
 		add(strings.Join(args[2:], " "), out)
 	}
+	// the velero calls share 2 minutes, 30s each at most: a diagnosis runs in a failed cell's defer, and
+	// must not spend the time the later cells and the results need
+	velEnd := time.Now().Add(2 * time.Minute)
 	vel := func(args ...string) string {
+		within, _ := l89.Bound(time.Now(), velEnd, 30*time.Second)
+		if within <= 0 {
+			return "skipped: the diagnosis's 2m for velero is spent"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), within)
+		defer cancel()
 		full := append([]string{"--kubeconfig", c.Kubeconfig, "--kubecontext", c.Context(), "-n", "velero"}, args...)
-		out, _ := exec.Command(os.Getenv("VELERO_BIN"), full...).CombinedOutput()
+		cmd := exec.CommandContext(ctx, os.Getenv("VELERO_BIN"), full...)
+		cmd.WaitDelay = 5 * time.Second
+		out, _ := cmd.CombinedOutput()
+		if ctx.Err() == context.DeadlineExceeded {
+			return string(out) + "\n(stopped after " + within.Round(time.Second).String() + ")"
+		}
 		return string(out)
 	}
 	// the release's own namespace: why a pod is not ready (no Secret is read)
@@ -411,8 +580,10 @@ func (r *l89Run) diagnose() {
 	}
 	add("velero backup describe --details", vel("backup", "describe", l89Backup, "--details"))
 	add("velero backup logs", vel("backup", "logs", l89Backup))
-	add("velero restore describe --details", vel("restore", "describe", l89Restore, "--details"))
-	add("velero restore logs", vel("restore", "logs", l89Restore))
+	for _, name := range []string{l89Restore, l89RestoreC, l89RestoreD} {
+		add("velero restore describe --details "+name, vel("restore", "describe", name, "--details"))
+		add("velero restore logs "+name, vel("restore", "logs", name))
+	}
 	for _, kind := range []string{"podvolumebackups", "podvolumerestores"} {
 		out, _ := c.KubectlTry("", "-n", "velero", "get", kind, "-o",
 			`jsonpath={range .items[*]}{.metadata.name} {.status.phase} {.spec.pod.name} {.spec.volume}: {.status.message}{"\n"}{end}`)
@@ -468,50 +639,66 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	}()
 	r.checkRepositoryKey()
 	l82Row(cell, "the repository key in the cluster is the one generated for this run", "yes")
+	// What cells (c) and (d) compare with the restored volumes, first, since the revocation restarts the
+	// brokers: a revocation (a broker writes marks.json only when its marks change, and the lab revokes
+	// nothing else), a sentinel in each spool, and the sha256 of each broker's marks.json and CA certificate
+	// and of each sentinel. A setup that fails here stops the cell NOT RUN: nothing was measured.
+	before0, err := l89.BeforeBackup(l89Lab{r}, l89Revoked)
+	if err != nil {
+		why := err.Error()
+		if l89.Leak(why) != "" {
+			why = "see the test log"
+		}
+		l82Row(cell, "the harness's step before the backup failed: not a measurement", why)
+		r.setupFail(t, cell, "%v", err)
+	}
+	r.before = before0
+	l82Row(cell, "a revocation before the backup (revoke-offline.sh), held in each broker's marks.json", l89MarksText(r.before.Marks))
+	l82Row(cell, "files hashed before the backup (each spool's sentinel, each broker's marks.json and CA certificate)", l89HashText(r.before.Hashes))
 	before, fpBefore := r.snapshot()
-	logBefore := l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
+	logBefore := l89.LogFingerprint(r.kubectl(t, cell, "-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
 	if fpBefore[0] == "" || fpBefore[0] != fpBefore[1] {
-		t.Fatalf("the brokers do not hold one CA before the backup")
+		r.setupFail(t, cell, "the brokers do not hold one CA before the backup")
 	}
 
 	// the chart's example, as shipped
 	// but for etcd's namespace: the kind stack runs etcd in the release's (l89.LabSchedule)
 	shipped, err := os.ReadFile(filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "examples", "velero", "schedule.yaml"))
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	sched, err := l89.LabSchedule(string(shipped))
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	if _, err := c.KubectlTry(sched, "apply", "-f", "-"); err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	// skipImmediately must have been honoured. The CRD drops a field it does not know (the read-back would
 	// be empty), and Velero's schedule controller resets the field to false once it has skipped the first
 	// run, recording status.lastSkipped: so the proof is a known field plus lastSkipped, and no backup.
 	var spec, skipped string
-	shapetest.WaitFor(t, "the schedule controller to skip the immediate run", 90*time.Second, func() bool {
-		spec = strings.TrimSpace(c.Kubectl("-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.spec.skipImmediately}"))
-		skipped = strings.TrimSpace(c.Kubectl("-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.status.lastSkipped}"))
+	r.waitFor(t, cell, "the schedule controller to skip the immediate run", 90*time.Second, func() bool {
+		spec = strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.spec.skipImmediately}"))
+		skipped = strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.status.lastSkipped}"))
 		return skipped != ""
 	})
 	if spec != "true" && spec != "false" {
-		t.Fatalf("the Schedule's skipImmediately reads %q: the field was dropped or renamed", spec)
+		r.setupFail(t, cell, "the Schedule's skipImmediately reads %q: the field was dropped or renamed", spec)
 	}
-	if n := strings.Fields(c.Kubectl("-n", "velero", "get", "backups", "-l", "velero.io/schedule-name=port49-daily", "-o", "name")); len(n) != 0 {
-		t.Fatalf("the Schedule started %d backup(s) before the test asked for one: skipImmediately was not honoured", len(n))
+	if n := strings.Fields(r.kubectl(t, cell, "-n", "velero", "get", "backups", "-l", "velero.io/schedule-name=port49-daily", "-o", "name")); len(n) != 0 {
+		r.setupFail(t, cell, "the Schedule started %d backup(s) before the test asked for one: skipImmediately was not honoured", len(n))
 	}
 	l82Row(cell, "applying the example Schedule started no backup (skipImmediately skipped the first run)", "yes")
 	l82Row(cell, "the lab's etcd shares the release's namespace", "yes: the Schedule names both namespaces, the lab applies it with the one")
-	r.velero("backup", "create", l89Backup, "--from-schedule", "port49-daily", "--wait")
-	phase := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "backup", l89Backup, "-o", "jsonpath={.status.phase}"))
+	r.velero(6*time.Minute, "backup", "create", l89Backup, "--from-schedule", "port49-daily", "--wait")
+	phase := strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "backup", l89Backup, "-o", "jsonpath={.status.phase}"))
 	l82Row(cell, "the backup's phase", phase)
 	if phase != "Completed" {
-		t.Fatalf("the backup ended %s: nothing to restore", phase)
+		r.setupFail(t, cell, "the backup ended %s: nothing to restore", phase)
 	}
 	// which volumes the node agent backed up, by pod and volume name, and how
-	pvb := c.Kubectl("-n", "velero", "get", "podvolumebackups", "-l", "velero.io/backup-name="+l89Backup, "-o",
+	pvb := r.kubectl(t, cell, "-n", "velero", "get", "podvolumebackups", "-l", "velero.io/backup-name="+l89Backup, "-o",
 		`jsonpath={range .items[*]}{.status.phase} {.spec.pod.name} {.spec.volume}{"\n"}{end}`)
 	data, all := 0, 0
 	for _, ln := range strings.Split(strings.TrimSpace(pvb), "\n") {
@@ -528,33 +715,35 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	l82Row(cell, "pod volume backups completed", r.env.VolumeBackups)
 	// every volume claim in the namespace must be in the backup, etcd's too: Velero skips a hostPath volume
 	// with a warning and the restore then holds an empty store
-	pvcs := len(strings.Fields(c.Kubectl("-n", ns, "get", "pvc", "-o", "name")))
+	pvcs := len(strings.Fields(r.kubectl(t, cell, "-n", ns, "get", "pvc", "-o", "name")))
 	if all != pvcs {
-		t.Fatalf("the node agent backed up %d of the namespace's %d volume claims (see the backup's warnings in the diagnosis)", all, pvcs)
+		r.setupFail(t, cell, "the node agent backed up %d of the namespace's %d volume claims (see the backup's warnings in the diagnosis)", all, pvcs)
 	}
 	if data == 0 || data != len(l89Volumes) {
-		t.Fatalf("the node agent backed up %d of the chart's %d data volumes in backup %s", data, len(l89Volumes), l89Backup)
+		r.setupFail(t, cell, "the node agent backed up %d of the chart's %d data volumes in backup %s", data, len(l89Volumes), l89Backup)
 	}
 
 	r.runREADMEChecks(t, cell)
 
 	// delete the namespace, and wait for its volumes to go before restoring over the names
-	c.Kubectl("delete", "namespace", ns, "--wait=true", "--timeout=5m")
-	shapetest.WaitFor(t, "the namespace's volumes to be deleted", 5*time.Minute, func() bool {
+	r.kubectl(t, cell, "delete", "namespace", ns, "--wait=true", r.kubectlTimeout(5*time.Minute))
+	r.waitFor(t, cell, "the namespace's volumes to be deleted", 5*time.Minute, func() bool {
 		out, err := c.KubectlTry("", "get", "pv", "-o", `jsonpath={range .items[*]}{.spec.claimRef.namespace}{"\n"}{end}`)
 		return err == nil && !strings.Contains(out, ns)
 	})
 	l82Row(cell, "the namespace was deleted", "yes, and its volumes")
 
-	r.velero("restore", "create", l89Restore, "--from-backup", l89Backup, "--wait")
-	rphase := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "restore", l89Restore, "-o", "jsonpath={.status.phase}"))
+	r.velero(6*time.Minute, "restore", "create", l89Restore, "--from-backup", l89Backup, "--wait")
+	rphase := strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "restore", l89Restore, "-o", "jsonpath={.status.phase}"))
 	l82Row(cell, "the restore's phase", rphase)
 
 	// ready: both StatefulSets, with the time the restore of the volumes takes inside it
+	r.fpBefore = fpBefore
 	a := l89.A{FingerprintBefore: l89.Short(fpBefore[0])}
 	ready := true
 	for _, sts := range []string{"statefulset/t-broker", "statefulset/t-port49d"} {
-		if _, err := c.KubectlTry("", "-n", ns, "rollout", "status", sts, "--timeout=8m"); err != nil {
+		// readiness is cell (a)'s measurement: a rollout that does not end in its time is "no", not a hang
+		if _, err := c.KubectlTry("", "-n", ns, "rollout", "status", sts, r.kubectlTimeout(4*time.Minute)); err != nil {
 			ready = false
 			l82Row(cell, sts+" became ready", "no")
 		}
@@ -584,7 +773,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 		after, fpAfter := r.snapshot()
 		a.FingerprintAfter = l89.Short(fpAfter[0])
 		a.LogBefore = logBefore
-		a.LogAfter = l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
+		a.LogAfter = l89.LogFingerprint(r.kubectl(t, cell, "-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
 		l82Row(cell, "the fingerprint the broker's \"issuing as\" line prints (first 12), before and after",
 			fmt.Sprintf("%s, %s", l89.FingerprintText(a.LogBefore), l89.FingerprintText(a.LogAfter)))
 		same := fpAfter[0] == fpBefore[0] && fpAfter[1] == fpBefore[1]
@@ -606,7 +795,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 			l82Row(cell, v.pvc+": after the restore", obs)
 		}
 	}
-	cell.Verdict = l89.JudgeA(a)
+	l82SetVerdict(cell, l89.JudgeA(a))
 }
 
 func (r *l89Run) cellB(t *testing.T, cell *l82.Cell) {
@@ -622,7 +811,7 @@ func (r *l89Run) cellB(t *testing.T, cell *l82.Cell) {
 		return
 	}
 	// FAIL stands until both succeed: a refused mint ends the subtest in shapetest.Mint
-	cell.Verdict = l82.Fail
+	l82SetVerdict(cell, l82.Fail)
 	broker := r.stack.Forward("svc/"+r.stack.Release()+"-broker", 8443)
 	minted := false
 	token := r.stack.Mint(broker)()
@@ -631,5 +820,5 @@ func (r *l89Run) cellB(t *testing.T, cell *l82.Cell) {
 	st, err := r.stack.Device("t-port49d-0").TryLogin("alice", token)
 	login := err == nil && st == wire.AuthenStatusPass
 	l82Row(cell, "a login after the restore", map[bool]string{true: "succeeded", false: fmt.Sprintf("failed, status %d", st)}[login])
-	cell.Verdict = l89.JudgeB(minted, login)
+	l82SetVerdict(cell, l89.JudgeB(minted, login))
 }

@@ -48,6 +48,11 @@ type marksCopy struct {
 	out  io.Writer
 	mu   sync.Mutex
 	m    map[[2]string]store.Revocation
+	// fresh is set when marks.json did not exist at open (a first start, or a
+	// state_dir that was lost or is new): the copy then holds only what the
+	// marks feed brought from the store, so it cannot put back a mark a
+	// restore took from the store. takeFresh reads and clears it.
+	fresh bool
 	// failing is set while writes fail, so a run of them is said once.
 	failing bool
 	// lastErr is the last write's error, nil when it landed.
@@ -111,6 +116,7 @@ func openMarksCopy(path string, out io.Writer) *marksCopy {
 	c := &marksCopy{path: path, out: out, m: map[[2]string]store.Revocation{}}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
+		c.fresh = true
 		fmt.Fprintf(out, "port49-broker: store: broker.state_dir/%s is absent: this replica's copy starts from the "+
 			"store (a first start; otherwise broker.state_dir is not kept across restarts, and a mark an etcd "+
 			"restore lost cannot be put back from it)\n", stateMarksFile)
@@ -313,6 +319,18 @@ func (c *marksCopy) sorted() []store.Revocation {
 		return out[i].Key < out[j].Key
 	})
 	return out
+}
+
+// takeFresh says whether the copy started without a marks.json, once.
+func (c *marksCopy) takeFresh() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	f := c.fresh
+	c.fresh = false
+	return f
 }
 
 // Missing is every mark the copy holds that stored lacks, sorted by kind

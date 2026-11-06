@@ -3,11 +3,15 @@
 package lab
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,13 +72,10 @@ func l75BrokerYAML(o l75Opts) string {
         ca_file: %s
 `, o.issuer, o.issuerCA)
 	}
-	// A broker with an issuer takes a person's ID token only at
-	// /v1/certificate, never as a mint bearer (decision 43, ruling 13); (g)
-	// mints with the ID token, as decision 39 has it for a broker with none.
+	// A person's ID token is never a mint bearer (decision 56 ruling 4): the
+	// brokers issue, and (g) mints with the certificate a sign-in is
+	// exchanged for at /v1/certificate.
 	issuance := "    issuance: {}\n"
-	if o.provider {
-		issuance = ""
-	}
 	stores := regionStoresYAML(o.pki, "broker", o.session)
 	if o.directory != nil {
 		var members []string
@@ -431,6 +432,52 @@ func l75Client(pki *regionPKI, cert *tls.Certificate) *http.Client {
 		tc.Certificates = []tls.Certificate{*cert}
 	}
 	return &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil, TLSClientConfig: tc}}
+}
+
+// l75Issue exchanges a sign-in of carol's at session sid for a certificate at
+// addr's /v1/certificate (a person's ID token is taken nowhere else), and
+// returns a client presenting it. Two certificates for one sid are two
+// holders of one session: a logout of the sid refuses both.
+func l75Issue(t *testing.T, w *regionWorld, iss *oidctest.Issuer, addr, sid string) *http.Client {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	nonce, err := api.IssuanceNonce(key.Public())
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	body, _ := json.Marshal(api.IssueRequest{CSR: base64.RawURLEncoding.EncodeToString(der)})
+	tok := iss.IDToken(t, "k1", "port49-cli", "sub-carol", time.Now(), map[string]any{
+		"email": "carol@corp.example.com", "email_verified": true, "sid": sid, "nonce": nonce,
+		"amr": []string{"pwd", "otp"}, "acr": "1"})
+	w.hold(tok)
+	req, err := http.NewRequest(http.MethodPost, "https://"+addr+"/v1/certificate", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := l75Client(w.pki, nil).Do(req)
+	if err != nil {
+		t.Fatalf("INVALID: the certificate request at %s: %v", addr, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var out api.IssueResponse
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(raw, &out) != nil {
+		t.Fatalf("INVALID: the certificate request at %s answered %d", addr, resp.StatusCode)
+	}
+	block, _ := pem.Decode([]byte(out.Certificate))
+	if block == nil {
+		t.Fatalf("INVALID: the certificate at %s is not PEM", addr)
+	}
+	return l75Client(w.pki, &tls.Certificate{Certificate: [][]byte{block.Bytes}, PrivateKey: key})
 }
 
 // l75Mint is one mint at addr for l75Device, by the client's certificate or
@@ -928,22 +975,16 @@ func l75(t *testing.T, w *regionWorld) []string {
 		}
 	}
 	plain := l75Client(w.pki, nil)
-	idToken := func(sid string) string {
-		tok := iss.IDToken(t, "k1", "port49-cli", "sub-carol", time.Now(),
-			map[string]any{"email": "carol@corp.example.com", "email_verified": true, "sid": sid})
-		w.hold(tok)
-		return tok
-	}
 	logoutToken := func(sid string) string {
 		tok := iss.TokenWith(t, "k1", map[string]any{"kid": "k1", "typ": "logout+jwt"},
 			l75LogoutClaims(iss.URL, "port49-cli", sid, l75Random(t), time.Now()))
 		w.hold(tok)
 		return tok
 	}
-	refusedWithin := func(b *l75Broker, tok string, d time.Duration) (time.Duration, string) {
+	refusedWithin := func(b *l75Broker, holder *http.Client, d time.Duration) (time.Duration, string) {
 		start := time.Now()
 		for time.Since(start) < d {
-			if st, e := l75Mint(w, plain, b.addr(), tok); st == http.StatusUnauthorized {
+			if st, e := l75Mint(w, holder, b.addr(), ""); st == http.StatusUnauthorized {
 				return time.Since(start), e
 			}
 			time.Sleep(200 * time.Millisecond)
@@ -951,11 +992,11 @@ func l75(t *testing.T, w *regionWorld) []string {
 		return d, "not refused"
 	}
 	s1 := "l75-g-" + l75Random(t)
-	tok1 := idToken(s1)
-	g1, _ := l75Mint(w, plain, bs[2].addr(), tok1)
+	carol1 := l75Issue(t, w, iss, bs[2].addr(), s1)
+	g1, _ := l75Mint(w, carol1, bs[2].addr(), "")
 	bs[2].proc.mark()
 	lo1 := l75Logout(plain, bs[1].addr(), logoutToken(s1))
-	took, why := refusedWithin(bs[2], tok1, 30*time.Second)
+	took, why := refusedWithin(bs[2], carol1, 30*time.Second)
 	line, via, lerr := l75RunnerLine(bs[2].proc, 30*time.Second)
 	row("g", "a logout received at broker 1 refuses broker 2's mint for that session",
 		fmt.Sprintf("mint at b2 %d; logout at b1 %d; b2 refused after %v (%s); b2's runner line after %v (%v): %s",
@@ -964,8 +1005,9 @@ func l75(t *testing.T, w *regionWorld) []string {
 
 	w.guard()
 	s2 := "l75-g-" + l75Random(t)
-	tok2 := idToken(s2)
-	g2, _ := l75Mint(w, plain, bs[1].addr(), tok2)
+	carol2b1 := l75Issue(t, w, iss, bs[1].addr(), s2)
+	carol2b3 := l75Issue(t, w, iss, bs[3].addr(), s2) // the session's holder at broker 3
+	g2, _ := l75Mint(w, carol2b1, bs[1].addr(), "")
 	bs[3].proc.mark()
 	if !bs[3].hang(w, true) {
 		t.Fatal("INVALID: b3's store status never said the directory was cut")
@@ -974,7 +1016,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 		t.Fatalf("INVALID: %v", err)
 	}
 	lo3 := l75Logout(plain, bs[3].addr(), logoutToken(s2))
-	r3, why3 := l75Mint(w, plain, bs[3].addr(), tok2)
+	r3, why3 := l75Mint(w, carol2b3, bs[3].addr(), "")
 	// The pending count behind store status is refreshed every 5s, so a status
 	// read at once can lag the logout it just took: poll for up to 10s.
 	var scode int
@@ -983,14 +1025,14 @@ func l75(t *testing.T, w *regionWorld) []string {
 		scode = code
 		return out
 	}, l75OnePending, 10*time.Second, time.Second)
-	b1st, _ := l75Mint(w, plain, bs[1].addr(), tok2)
+	b1st, _ := l75Mint(w, carol2b1, bs[1].addr(), "")
 	bs[3].proc.mark()
 	healedAt := time.Now()
 	if !bs[3].hang(w, false) {
 		t.Fatal("INVALID: b3 did not reach the directory again within 90s of the heal")
 	}
 	_, ferr := bs[3].proc.wait("pending back-channel logout(s) forwarded", 30*time.Second)
-	_, why2 := refusedWithin(bs[1], tok2, 30*time.Second)
+	_, why2 := refusedWithin(bs[1], carol2b1, 30*time.Second)
 	fromHeal := time.Since(healedAt)
 	row("g2", "with broker 3 cut, a logout there is answered 200, refused there at once and pending; broker 1 "+
 		"mints for it until the heal, then refuses",

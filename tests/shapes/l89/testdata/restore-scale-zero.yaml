@@ -1,0 +1,14 @@
+# L89 cell (c)'s input only, not a shipped example: the Velero resource modifier that restores every
+# StatefulSet in `port49` at 0 replicas. The Velero README's restore order once used it; L89 cell (c), run
+# 42053716808, measured that restore hanging (every pod volume restore New, its pod absent), so the
+# README now restores with the pods running. (c) keeps running it as the measured negative.
+version: v1
+resourceModifierRules:
+  - conditions:
+      groupResource: statefulsets.apps
+      namespaces:
+        - port49
+    patches:
+      - operation: replace
+        path: "/spec/replicas"
+        value: "0"

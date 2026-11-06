@@ -520,56 +520,24 @@ func (s *Store) PutWitness(ctx context.Context, who string, over uint64) (uint64
 	return uint64(resp.Header.Revision), nil
 }
 
-// PutPurged writes meta/purged, as the broker, once a runner's purge of
-// every unspent token is done (Task 15d), if meta/witness is still at the
-// ModRevision over (0: absent), the witness the purge read: a store
-// restored since has another, and the write fails closed. It returns the
-// revision it landed at, 0 when it was refused. A port49d that found the
-// store restored serves redemptions again only on a meta/purged written
-// after it found it. It holds no secret: the runner's name and the time.
-func (s *Store) PutPurged(ctx context.Context, who string, over uint64) (uint64, error) {
-	body, err := json.Marshal(struct {
-		Who string    `json:"who"`
-		At  time.Time `json:"at"`
-	}{who, s.now().UTC()})
-	if err != nil {
-		return 0, err
-	}
-	resp, err := s.ctxKV.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(s.k.meta("witness")), "=", int64(over))).
-		Then(clientv3.OpPut(s.k.meta("purged"), string(body))).Commit()
-	if err != nil {
-		return 0, unavailable(err)
-	}
-	if !resp.Succeeded {
-		return 0, nil
-	}
-	return uint64(resp.Header.Revision), nil
-}
-
-// RestoreRead is meta/witness's and meta/purged's ModRevisions, 0 for one
-// absent, and the revision etcd answered at, read at one revision (Task
-// 15d).
+// RestoreRead is meta/witness's ModRevision, 0 when it is absent, and the
+// revision etcd answered at, read at one revision (Task 15d; the restore
+// floor).
 type RestoreRead struct {
-	Witness, Purged, Header uint64
+	Witness, Header uint64
 }
 
-// RestoreRead reads meta/witness and meta/purged in one transaction, as
-// the daemon or the broker.
+// RestoreRead reads meta/witness and the revision it was read at, as the
+// daemon or the broker.
 func (s *Store) RestoreRead(ctx context.Context) (RestoreRead, error) {
-	resp, err := s.ctxKV.Txn(ctx).Then(clientv3.OpGet(s.k.meta("witness")), clientv3.OpGet(s.k.meta("purged"))).
-		Commit()
+	resp, err := s.ctxKV.Txn(ctx).Then(clientv3.OpGet(s.k.meta("witness"))).Commit()
 	if err != nil {
 		return RestoreRead{}, unavailable(err)
 	}
 	r := RestoreRead{Header: uint64(resp.Header.Revision)}
-	at := func(i int) uint64 {
-		if kvs := resp.Responses[i].GetResponseRange().GetKvs(); len(kvs) > 0 {
-			return uint64(kvs[0].ModRevision)
-		}
-		return 0
+	if kvs := resp.Responses[0].GetResponseRange().GetKvs(); len(kvs) > 0 {
+		r.Witness = uint64(kvs[0].ModRevision)
 	}
-	r.Witness, r.Purged = at(0), at(1)
 	return r, nil
 }
 
@@ -579,11 +547,20 @@ func (s *Store) RestoreRead(ctx context.Context) (RestoreRead, error) {
 // ends (a compaction, or etcd gone). A lower revision than before, a
 // restore's, is told too: saw keeps the highest.
 func (s *Store) FollowWitness(ctx context.Context, saw func(uint64)) {
+	s.FollowWitnessLive(ctx, func(rev uint64, _ bool) { saw(rev) })
+}
+
+// FollowWitnessLive is FollowWitness telling saw whether the revision came
+// from the watch (live: a write made after the read that began it) or from a
+// read. A replica that owes a purge takes a live write as a runner's, which
+// writes meta/witness only once its own purge is done; the read says nothing
+// of when its witness was written (decision 56 ruling 2).
+func (s *Store) FollowWitnessLive(ctx context.Context, saw func(rev uint64, live bool)) {
 	key := s.k.meta("witness")
 	for {
 		if resp, err := s.ctxKV.Get(ctx, key); err == nil {
 			if len(resp.Kvs) > 0 {
-				saw(uint64(resp.Kvs[0].ModRevision))
+				saw(uint64(resp.Kvs[0].ModRevision), false)
 			}
 			wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
 			for wr := range s.ctx.Watch(wctx, key, clientv3.WithRev(resp.Header.Revision+1)) {
@@ -592,7 +569,7 @@ func (s *Store) FollowWitness(ctx context.Context, saw func(uint64)) {
 				}
 				for _, ev := range wr.Events {
 					if ev.Type == clientv3.EventTypePut {
-						saw(uint64(ev.Kv.ModRevision))
+						saw(uint64(ev.Kv.ModRevision), true)
 					}
 				}
 			}

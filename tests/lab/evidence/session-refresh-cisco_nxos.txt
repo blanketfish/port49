@@ -1,0 +1,13 @@
+# port49 refresh, as printed, in TestSessionLifetime on cisco_nxos
+
+## step 5
+refreshed at 2026-11-06T02:51:52Z; this login lasts until 2026-11-06T14:51:52Z
+  nx1 (slice01)  extended to 2026-11-06T02:57:52Z
+
+## step 7
+refreshed at 2026-11-06T02:58:02Z; this login lasts until 2026-11-06T14:58:02Z
+  nx1 (slice01)  extended to 2026-11-06T03:04:02Z
+
+## step 8
+refreshed at 2026-11-06T03:06:12Z; this login lasts until 2026-11-06T15:06:12Z
+  no live device session to extend

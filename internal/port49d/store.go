@@ -369,7 +369,7 @@ func procOf(cfg config.Config) string {
 // at one revision the feeds then follow from; and on a run after a store
 // gone first keeps every mark it enforced that the store lost while it was
 // dark (keepLost; pre-flight 7e-2 P-1). Each read is bounded, and an outage
-// is said and tried again every 5s. The ledger record is the runner's to
+// is said and tried again on the store wait's schedule (storeScheduleText). The ledger record is the runner's to
 // keep, and the sweep is the broker's.
 func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm, authMarks *store.Marks,
@@ -443,15 +443,14 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 		return fail(err)
 	}
-	// The restore guard's two reads (final review 7e-2 M-7): a role without
-	// them leaves the guard silently off on a fresh process, and refuses
-	// every redemption for good once a witness was followed. A refusal is
+	// The restore floor's read (final review 7e-2 M-7): a role without it
+	// leaves the floor unable to judge, and every redemption is held. A refusal is
 	// roles applied by 7e-1's output or by hand, which waiting does not
 	// mend: a store fault.
 	if err := retry(func() error { _, err := d.RestoreRead(ctx); return err }); err != nil {
 		if errors.Is(err, store.ErrRefused) {
-			err = &storeFault{errors.New("store: the daemon's role cannot read meta/witness and meta/purged, " +
-				"which the restore guard reads: apply port49d store-roles (plan 7e) as etcd's root, then start again")}
+			err = &storeFault{errors.New("store: the daemon's role cannot read meta/witness, " +
+				"which the restore floor reads: apply port49d store-roles (plan 7e) as etcd's root, then start again")}
 		}
 		return fail(err)
 	}
@@ -611,6 +610,7 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	fmt.Fprintf(out, "port49d: store: health checked every %v; every listener closes after %d consecutive failed "+
 		"checks and opens again after %d passes (%s.etcd.health)\n", h.Interval, h.CloseAfter, h.OpenAfter,
 		cfg.Stores.SessionPath())
+	closer := gd.(guard.Closer)
 	daemon := crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
 	if !cfg.Stores.Shared {
 		de := cfg.Stores.Directory.Etcd
@@ -641,7 +641,8 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		fresh:      dc.fresh,
 		follow:     follow,
 		health: &health{every: h.Interval, timeout: e.CallTimeout, closeAfter: h.CloseAfter, openAfter: h.OpenAfter,
-			check: storeCheck(fd, d), m: m, state: &healthState{}, out: out},
+			check:  storeCheck(fd, d),
+			passed: func() { closer.CloseCircuits("a store health check passed") }, m: m, state: &healthState{}, out: out},
 		close: func() {
 			d.Close()
 			if !cfg.Stores.Shared {
@@ -665,7 +666,7 @@ type keepServing struct{ error }
 func (k *keepServing) Unwrap() error { return k.error }
 
 // openDirectoryLater opens the directory store once it answers, trying
-// every 5s, on a run that serves from the marks or the snapshot it holds
+// on the store wait's schedule, on a run that serves from the marks or the snapshot it holds
 // (R19). check (nil skips it) is the start checks the cold path runs
 // (R27, R28), run before the handle is set: the configuration may have
 // changed since the start that loaded the marks. A directory that does not
@@ -675,8 +676,8 @@ func (k *keepServing) Unwrap() error { return k.error }
 // returns nil with the handle set, or ctx.Err() when ctx ended first.
 func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, dir *dirHandle,
 	proc string, check func(*etcdstore.Store) error) error {
-	said := ""
-	for {
+	var say outageSayer
+	for failed := 1; ; failed++ {
 		s, err := attempt(ctx, cfg, directoryRef(cfg), m, out, true)
 		if err == nil {
 			if check != nil {
@@ -695,15 +696,19 @@ func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metri
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if why := err.Error(); why != said {
-			fmt.Fprintf(out, "%s: directory store: not followed yet (%v); serving from the marks this "+
-				"process holds; trying again every 5s\n", proc, err)
-			said = why
-		}
-		if !sleepCtx(ctx, 5*time.Second) {
+		if !waitForDirectory(ctx, out, &say, failed, proc, err) {
 			return ctx.Err()
 		}
 	}
+}
+
+// waitForDirectory says why the directory store is not followed yet (once per
+// reason) and waits failed's step of the store wait's schedule. It reports
+// whether the wait passed.
+func waitForDirectory(ctx context.Context, out io.Writer, say *outageSayer, failed int, proc string, err error) bool {
+	say.say(out, fmt.Sprintf("%s: directory store: not followed yet (%v); serving from the marks this "+
+		"process holds; trying again: %s", proc, err, storeScheduleText))
+	return retryWait(ctx, failed, retryRnd)
 }
 
 // guardConfig is component's guard on etcd (Task 8a): the etcd block's, under

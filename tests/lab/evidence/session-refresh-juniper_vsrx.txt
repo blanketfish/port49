@@ -1,0 +1,13 @@
+# port49 refresh, as printed, in TestSessionLifetime on juniper_vsrx
+
+## step 5
+refreshed at 2026-11-06T02:29:24Z; this login lasts until 2026-11-06T14:29:24Z
+  vsrx1 (slice01)  extended to 2026-11-06T02:35:24Z, not reached: the device keeps its own session
+
+## step 7
+refreshed at 2026-11-06T02:35:34Z; this login lasts until 2026-11-06T14:35:34Z
+  vsrx1 (slice01)  extended to 2026-11-06T02:41:34Z, not reached: the device keeps its own session
+
+## step 8
+refreshed at 2026-11-06T02:43:44Z; this login lasts until 2026-11-06T14:43:44Z
+  vsrx1 (slice01)  past the grace window, not resumed: log in again there, not reached: the device keeps its own session

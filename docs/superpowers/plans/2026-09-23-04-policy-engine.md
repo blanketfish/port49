@@ -277,7 +277,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ---
@@ -788,8 +787,7 @@ regex equivalence is decidable but not cheaply (it needs automata Go's
 RE2 does not expose); design §12 names plan 6 for warm-context
 continuation.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1088,8 +1086,7 @@ pipeline stage (spec §5.7), and a record carries the attributes a
 permit returned, as sent. blob_platform_mismatch joins the reason
 constants after its spec row.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1378,8 +1375,7 @@ leaving drainOffset at its first byte, so the next pass offers it
 again: at-least-once now holds across the sink, not only up to it
 (roadmap, plan 4). A refusal never counts toward quarantine.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1745,8 +1741,7 @@ IOS-XE: tests/lab/results/L2-*.md; priv-lvl on vEOS: L16), fail-closed
 where it has not (expands_abbreviations false everywhere, L21; operator
 unmapped).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2453,8 +2448,7 @@ four placeholders, every rule with its role, the pipe allowlist and
 each named class's patterns; canonical encoding so one decision is one
 hash; strict decoding that refuses plan 3's blob by name.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3133,8 +3127,7 @@ abbreviations lets a deny's word match its own prefixes (spec §3 rule
 4). Which rule a record names is decided by tuple, role and rule text,
 so evaluation is order-independent down to the record.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3326,8 +3319,7 @@ Digit runs numeric, letter runs by equality, incomparable reported
 rather than guessed (spec §5.5; decision 7). Semver would sort Junos
 21.4R3-S5 below 21.4R3.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4526,8 +4518,7 @@ max_session_age); all_devices must be declared; a regex that is only a
 costlier * or word is refused (spec §14, rank lint), and so are a class
 no platform defines and a ceiling no platform can number.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4930,8 +4921,7 @@ for the subject's domain, and attach to nothing without a declared
 grant (spec §5.5; decision 18). An incomparable version is a missing
 one, and says so.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5598,8 +5588,7 @@ a ceiling below the landing level, or enable: auto where its enable
 exchange carries no principal would meet a mint is quarantined, with
 every cause; the rest of the fleet loads (spec §10; decision 20).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6385,8 +6374,7 @@ yet, mandatory attributes, attribute shadowing, and devices a scope
 took in because their version could not be compared. A test on a
 quarantined device is a deny, device_quarantined.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7236,8 +7224,7 @@ a store that does not answer store_unavailable, answered FAIL as before
 (spec §5.7). A permit's attributes go on the record as sent. The
 Authorizer interface takes a Request carrying the device.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7941,8 +7928,7 @@ the next mint.
 internal/blob, author.Blob and internal/broker/policy, borrowed ahead
 by plan 3, are removed. all_devices is declared in the slice policy.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8146,8 +8132,7 @@ engine is the authorizer now, and the block is the lab's instrument
 for seeded contexts. Without it Lab is nil, no seeds are minted, and a
 context with no blob is denied.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8754,8 +8739,7 @@ and on a session-only platform any command, revocation or ceiling.
 Explains a quarantined device with its causes. With no command, shows
 the session attributes and where each came from.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8985,8 +8969,7 @@ check a failure), names each quarantined device, prints what CI must
 report, runs the file's tests with the evaluator the daemon runs, and
 exits 1 on any failure.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9541,8 +9524,7 @@ and reports agreement, divergence (verdict, reason, matched rules or a
 session's returned attributes; a blob that does not hash to its name)
 or a record whose blob the log never carried (spec §5.7).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9802,8 +9784,7 @@ git commit -m "feat: port49 access review
 Every grant row a subject appears in, with its scope's size against
 the inventory, its ceiling and its expiry (spec §12).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -10221,8 +10202,7 @@ tree that keeps comments.
 The result must load against the inventory before it is printed or,
 with --write, renamed into place (spec §12).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -10680,8 +10660,7 @@ decision 20). The record is the header-only one with the reason
 device_quarantined and the device named; port49_devices_quarantined
 counts them. buildBroker hands run the policy's quarantine list.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -11242,8 +11221,7 @@ deny-overrides' guarantee. A policy test that exercises the permit over
 the deny acknowledges it; an unacknowledged shadow fails port49 policy
 test, and one two regex or class terms decide is reported as possible.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -12106,8 +12084,7 @@ gained or lost, level and ceiling changes, changed regex or class rules
 a command a deny refused that the new version permits, unless a policy
 test exercises it, and on a newly quarantined device.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -12286,8 +12263,7 @@ the pull request for grants remove (plan 5); quarantine in the bundle
 and warm-context continuation (plan 6); and the group subjects and
 api: rights that wait for plan 7.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

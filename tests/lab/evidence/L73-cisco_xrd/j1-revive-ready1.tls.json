@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:300",
-    "device_port": 32607,
-    "syn_at": "2026-10-21T06:04:21.065458Z",
+    "device_port": 31699,
+    "syn_at": "2026-11-05T19:40:42.766266Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -90,6 +90,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        29
       ]
     },
     "server_hello": {
@@ -100,19 +103,19 @@
     },
     "device_tls_records": 8,
     "server_tls_records": 10,
-    "device_payload_bytes": 2112,
-    "server_payload_bytes": 1036,
-    "device_fin_at": "2026-10-21T06:04:21.8555Z",
-    "server_flight_at": "2026-10-21T06:04:21.08137Z",
-    "device_reply_at": "2026-10-21T06:04:21.349569Z",
+    "device_payload_bytes": 2114,
+    "server_payload_bytes": 1034,
+    "device_fin_at": "2026-11-05T19:40:43.558693Z",
+    "server_flight_at": "2026-11-05T19:40:42.781476Z",
+    "device_reply_at": "2026-11-05T19:40:43.052315Z",
     "incomplete": false,
     "end": "server-fin",
-    "end_at": "2026-10-21T06:04:21.852911Z"
+    "end_at": "2026-11-05T19:40:43.556162Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 30203,
-    "syn_at": "2026-10-21T06:04:22.449572Z",
+    "device_port": 22561,
+    "syn_at": "2026-11-05T19:40:44.395412Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -200,6 +203,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        29
       ]
     },
     "server_hello": {
@@ -210,13 +216,13 @@
     },
     "device_tls_records": 8,
     "server_tls_records": 10,
-    "device_payload_bytes": 2112,
-    "server_payload_bytes": 1034,
-    "device_fin_at": "2026-10-21T06:04:23.74476Z",
-    "server_flight_at": "2026-10-21T06:04:22.46514Z",
-    "device_reply_at": "2026-10-21T06:04:22.729314Z",
+    "device_payload_bytes": 2114,
+    "server_payload_bytes": 1033,
+    "device_fin_at": "2026-11-05T19:40:45.751973Z",
+    "server_flight_at": "2026-11-05T19:40:44.409708Z",
+    "device_reply_at": "2026-11-05T19:40:44.67789Z",
     "incomplete": false,
     "end": "server-fin",
-    "end_at": "2026-10-21T06:04:23.743057Z"
+    "end_at": "2026-11-05T19:40:45.749822Z"
   }
 ]

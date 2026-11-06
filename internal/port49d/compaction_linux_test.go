@@ -2,7 +2,9 @@ package port49d
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,9 +20,9 @@ import (
 // compaction in front of each is read again and the broker starts
 // (pre-flight I11). The logouts are loaded on two stores only.
 func TestTheBrokerStartRetriesACompactionInItsMarksAndLogouts(t *testing.T) {
-	was, wasWait := pagedLoadFault, startRetryWait
-	t.Cleanup(func() { pagedLoadFault, startRetryWait = was, wasWait })
-	startRetryWait = time.Millisecond
+	was := pagedLoadFault
+	t.Cleanup(func() { pagedLoadFault = was })
+	fastRetries(t)
 	var mu sync.Mutex
 	hit := map[string]int{}
 	pagedLoadFault = func(name string) error {
@@ -47,9 +49,9 @@ func TestTheBrokerStartRetriesACompactionInItsMarksAndLogouts(t *testing.T) {
 // directory is compacted after the write, a start's logouts load meets a
 // compaction, reads again, and the logout is in the broker's set.
 func TestALogoutIsNotLostAcrossACompaction(t *testing.T) {
-	was, wasWait := pagedLoadFault, startRetryWait
-	t.Cleanup(func() { pagedLoadFault, startRetryWait = was, wasWait })
-	startRetryWait = time.Millisecond
+	was := pagedLoadFault
+	t.Cleanup(func() { pagedLoadFault = was })
+	fastRetries(t)
 	f := splitFleet(t)
 	f.twoStores(t)
 	ctx := context.Background()
@@ -86,5 +88,54 @@ func TestALogoutIsNotLostAcrossACompaction(t *testing.T) {
 	mu.Unlock()
 	if _, ok := second.logouts.Get(key); !ok || tries != 2 {
 		t.Fatalf("the logout is in the set: %v, after %d tries", ok, tries)
+	}
+}
+
+// A burst of logouts from the directory, larger than the runner's queue, is
+// reached in full through the broker's own wiring (runBroker): the queue and
+// its wake are made where the broker makes them, so a runner built without
+// them fails here (Task 9 review I1).
+func TestABurstOfDirectoryLogoutsPastTheQueueIsAllReachedByTheBroker(t *testing.T) {
+	var out syncBuffer
+	was, e, hook := logoutQueueSize, stderr, reachingLogout
+	logoutQueueSize, stderr = 1, &out
+	// The first reach waits until the burst has found the queue full, so the
+	// overflow does not depend on how fast the consumer is.
+	release := make(chan struct{})
+	var once, closeOnce sync.Once
+	releaseOnce := func() { closeOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseOnce)
+	reachingLogout = func(store.LogoutEntry) { once.Do(func() { <-release }) }
+	t.Cleanup(func() { logoutQueueSize, stderr, reachingLogout = was, e, hook })
+	f := splitFleet(t)
+	f.twoStores(t)
+	f.judged(t)
+	_, stop := startBroker(t, f.broker, &out, 1)
+	defer stop()
+	waitWithin(t, &out, "port49-broker: runner: took keyspace", 30*time.Second)
+	waitWithin(t, &out, "mints open", 30*time.Second)
+	ctx := context.Background()
+	writer, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
+	const n = 40
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l := store.Logout{Key: store.OIDCKey(store.OIDCSub, "https://idp.example", fmt.Sprintf("sub-%d", i)),
+				At: time.Now(), Origin: fmt.Sprintf("origin-burst-%d", i)}
+			if err := writer.dir.get().PutLogout(ctx, l, time.Hour); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	waitWithin(t, &out, "the logout queue is full", 30*time.Second)
+	releaseOnce()
+	for i := 0; i < n; i++ {
+		waitWithin(t, &out, fmt.Sprintf("a logout made elsewhere (origin-burst-%d) reached", i), 30*time.Second)
+	}
+	if !strings.Contains(out.String(), "the logout queue is full") {
+		t.Fatal("the burst never found the queue full, so it proved nothing about the rescan")
 	}
 }

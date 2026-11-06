@@ -107,14 +107,13 @@ type brokerStores struct {
 	issuer *loadedIssuer
 }
 
-// startRetryWait is how long a broker start waits before reading again.
-var startRetryWait = 5 * time.Second
-
 // startRetry runs f until it succeeds, ctx ends, or it fails with an error
-// that is neither an outage nor one of also: each wait is said, since
-// nothing is served meanwhile.
+// that is neither an outage nor one of also: an outage is said once (and again
+// if it changes), since nothing is served meanwhile, and each wait follows the
+// store wait's schedule (retryWait).
 func startRetry(ctx context.Context, out io.Writer, f func() error, also ...error) error {
-	for {
+	var say outageSayer
+	for failed := 1; ; failed++ {
 		err := f()
 		if err == nil || ctx.Err() != nil {
 			return err
@@ -126,8 +125,8 @@ func startRetry(ctx context.Context, out io.Writer, f func() error, also ...erro
 		if !wait {
 			return err
 		}
-		fmt.Fprintf(out, "port49-broker: %v; nothing is served yet; trying again in %v\n", err, startRetryWait)
-		if !sleepCtx(ctx, startRetryWait) {
+		say.say(out, fmt.Sprintf("port49-broker: %v; nothing is served yet; trying again: %s", err, storeScheduleText))
+		if !retryWait(ctx, failed, retryRnd) {
 			return ctx.Err()
 		}
 	}
@@ -157,7 +156,7 @@ func pagedLoad(ctx context.Context, out io.Writer, name string, f func() error) 
 		}
 		// Twice in a row means the load takes longer than etcd keeps
 		// revisions; say once what to change. It keeps trying: nothing is
-		// refused, and the retry line below still names each wait.
+		// refused, and the retry line below says an outage once.
 		if compacted++; compacted == 2 {
 			fmt.Fprintf(out, "port49-broker: the %s load keeps meeting a compaction before it finishes: raise "+
 				"etcd's --auto-compaction-retention\n", name)
@@ -179,7 +178,7 @@ func pagedLoadTry(name string, f func() error) error {
 // openBroker waits for etcd on the broker's identity alone, as port49d's
 // start waits (waitForStore): start_timeout, then a refusal, on a cold
 // start, and nothing served meanwhile. Then, each read bounded and an
-// outage said and tried again every 5s, it loads the ledger (the record's
+// outage said and tried again on the store wait's schedule, it loads the ledger (the record's
 // marks, then every live context at one revision; plan 7e, Rulings 3, 4)
 // and the marks, into marks. Its guard never ends the process
 // (StopAfter 0): a broker never goes dark, and its readiness is never the
@@ -565,7 +564,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	wit := openWitness(filepath.Join(cfg.Broker.StateDir, stateWitnessFile), cfg.Stores.Session.Etcd.Prefix, stderr)
 	wg.Add(2)
 	go func() { defer wg.Done(); wit.keep(ctx) }()
-	go func() { defer wg.Done(); bs.raw.FollowWitness(ctx, wit.followed) }()
+	go func() { defer wg.Done(); bs.raw.FollowWitnessLive(ctx, wit.followed) }()
 
 	minter := token.NewMinter(bs.st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
 	brokerSrv, brk, anchors, err := buildBrokerAnchorWith(cfg, inventoryFrom, bs.st, minter, log, m, bs.issuer)
@@ -576,7 +575,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	wg.Add(1)
 	go func() { defer wg.Done(); <-signInDone }()
 	if startDoc != nil {
-		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
+		persistStart(procOf(cfg), cfg.InventoryService, coldPick{p: startDoc, from: startFrom}, m)
 	}
 	// Every replica runs its pool's health checks and selects for its own
 	// queries; the pool closes its connections when Run returns, which is
@@ -626,13 +625,28 @@ func runBroker(parent context.Context, cfgPath string) error {
 	brk.MintGate = gate.allow
 	// Read once here, after the start's mark and before the API serves: a
 	// rolling restart, meta/judged already naming this bundle, mints at once.
-	if _, named := judgedNames(ctx, bs.raw, startBundle, 4*cfg.Stores.Session.Etcd.CallTimeout); named {
+	// Not when this replica owes a purge (no witness record, or a store below
+	// it): meta/judged then may be a restored one's, and a token minted before
+	// the takeover's purge would be deleted by it. A replica that finds
+	// another running the keyspace (standby) does not wait: that one's
+	// takeover purges, and this replica's own runs only if that one stops.
+	var standby atomic.Bool // another replica runs the keyspace: its takeover purges, not this one's
+	owes := func(ctx context.Context) bool {
+		if standby.Load() {
+			return false
+		}
+		rctx, cancel := context.WithTimeout(ctx, 4*cfg.Stores.Session.Etcd.CallTimeout)
+		defer cancel()
+		_, gone, _, err := readWitness(rctx, wit, bs.raw.Witness)
+		return gone || err != nil
+	}
+	if _, named := judgedNames(ctx, bs.raw, startBundle, 4*cfg.Stores.Session.Etcd.CallTimeout); named && !owes(ctx) {
 		gate.open(fmt.Sprintf("meta/judged names bundle %s, the one this replica serves", startBundle), stderr)
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		openAtJudged(ctx, bs.raw, gate, brk.Policy, 4*cfg.Stores.Session.Etcd.CallTimeout, startGateEvery, stderr)
+		openAtJudged(ctx, bs.raw, gate, brk.Policy, 4*cfg.Stores.Session.Etcd.CallTimeout, startGateEvery, stderr, owes)
 	}()
 	swapped := make(chan struct{}, 1)
 	wg.Add(1)
@@ -643,13 +657,14 @@ func runBroker(parent context.Context, cfgPath string) error {
 	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
 		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who, copy: marksCopy, marks: marks,
 		marksReloaded: make(chan struct{}, 1), witness: wit,
+		holdMints: gate.purge, standby: func() { standby.Store(true) },
 		tookOver: func(carried *policy.Policy) {
 			gate.open(fmt.Sprintf("this replica's takeover is done (bundle %s)", carried.Bundle), stderr)
 		}}
 	if !cfg.Stores.Shared {
 		rn.dir = bs.dir
 		rn.followed = make(chan store.Revocation, 1024)
-		rn.followedLogouts = make(chan store.LogoutEntry, 1024)
+		rn.openLogoutQueue()
 		rn.logouts = bs.logouts
 	}
 	// A replica's start and each of its swaps while it does not run ask the

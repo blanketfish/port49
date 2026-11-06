@@ -156,6 +156,20 @@ func (w *regionWorld) revoke(i int, args ...string) (string, int, time.Duration)
 	return out, code, time.Since(start)
 }
 
+// failureLine is the first line of a command's output fit for a failure message: a line holding
+// "token", "secret" or "eyJ", or a held secret, is dropped, and what is left is cut to 300 bytes.
+func (w *regionWorld) failureLine(out string) string {
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimSpace(l)
+		low := strings.ToLower(l)
+		if l == "" || strings.Contains(low, "token") || strings.Contains(low, "secret") || strings.Contains(l, "eyJ") || w.leaky(l) {
+			continue
+		}
+		return l[:min(len(l), 300)]
+	}
+	return "(no output that is safe to show)"
+}
+
 // storeStatus is `port49 store status` at region i's port49d, or its broker.
 func (w *regionWorld) storeStatus(addr string) (string, int, time.Duration) {
 	return w.port49("store", "status", "--metrics", addr)
@@ -513,6 +527,8 @@ func TestRegions(t *testing.T) {
 		l74CellH(w, row)
 		guard()
 		l74CellI(w, row)
+		guard()
+		l74CellJ(w, row)
 		sortRows(rows)
 		writeRegionNote(t, w, "L74", l74Claim, rows, missed, append(w.brokers[1:], w.daemons[1:]...))
 		// L74's disagreements do not stop L75: both notes are written, then the test fails.
@@ -636,8 +652,8 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	}
 	pre := w.mint(3)
 	// A mark region 3 holds before the cut, for (e)'s lift.
-	if _, code, _ := w.revoke(1, "--principal", "user:carol@example.com"); code != 0 {
-		w.t.Fatal("INVALID: carol's revocation before the cut")
+	if out, code, _ := w.revoke(1, "--principal", "user:carol@example.com"); code != 0 {
+		w.t.Fatalf("INVALID: carol's revocation before the cut: exit %d: %s", code, w.failureLine(out))
 	}
 	if _, err := w.brokers[3].wait("a revocation of user:carol@example.com made elsewhere reached", 30*time.Second); err != nil {
 		w.t.Fatalf("INVALID: %v", err)
@@ -1110,6 +1126,42 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		l74IAgrees(perr == nil, n, said))
 	// Cleanup after the last cell: nothing is measured from it.
 	w.revoke(1, "--principal", "user:alice@example.com", "--lift")
+}
+
+// l74CellJ is stores I1: a revoke made during a cut, which the directory cannot record, still
+// reaches region 3's own session store. alice has a session open at region 3; the cut comes; the
+// revoke at region 3's broker exits 1 and says what it reached; the session's next command is
+// denied credential_revoked at once, with no heal. The cell ends healed and alice's mark cleared.
+func l74CellJ(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
+	var serr error
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+		if serr = w.sessionTry(3); serr == nil {
+			break
+		}
+	}
+	if serr != nil {
+		w.t.Fatalf("INVALID: region 3 would not open a session before cell j: %v", serr)
+	}
+	cut := w.cutRegion3()
+	defer cut.heal()
+	w.daemons[3].mark()
+	out, code, took := w.revoke(3, "--principal", l79Principal)
+	cmd := w.answered("(j) region 3's command")(w.client(3).command("alice", "show", "version"))
+	said := w.daemons[3].said()
+	reach := firstLineWith(out, "this region's session store")
+	if err := cut.healNow(); err != nil {
+		w.t.Fatalf("INVALID: the heal after cell j: %v", err)
+	}
+	// A copy sent during the cut can land after the heal (L79 k): wait out that window before
+	// cleaning, so a late-landing mark cannot leak alice's mark into L79 j.
+	polls := w.l79PollAfterHeal(time.Now())
+	landed := len(polls) > 0 && polls[len(polls)-1]
+	row("j", "during a cut, port49 revoke user:alice on region 3's broker exits 1 and says what it reached in region 3's session store, and region 3's open session's next command is denied credential_revoked within one command, with no heal",
+		fmt.Sprintf("revoke exit %d in %v: %s; the reach line: %s; region 3's next command: %s; port49d 3 names credential_revoked: %v; the sent copy landed in the directory after the heal: %v",
+			code, took.Round(time.Millisecond), w.safeLine(out), w.safeLine(reach), cmd, strings.Contains(said, "credential_revoked"), landed),
+		code == 1 && strings.Contains(out, "this region's session store") && strings.Contains(out, "token keys deleted") &&
+			!strings.Contains(out, "only in part") && cmd == "deny" && strings.Contains(said, "credential_revoked"))
+	w.l79Clean()
 }
 
 // What cell (i)'s agreement needs said (task 2 review I1): the mark broker

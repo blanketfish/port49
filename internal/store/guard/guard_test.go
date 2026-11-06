@@ -402,15 +402,15 @@ func TestACallersDeadlineWaitingForASlotIsSaturated(t *testing.T) {
 	wg.Wait()
 }
 
-// A caller whose deadline has already passed (a packet whose earlier store
-// calls spent packet_deadline) is the store too slow for it, on an
-// idle pool every time: deadline, counted, never saturated, and it never
-// reaches the store (review I1). Enough of them open the circuit.
-func TestACallerAlreadyPastItsDeadlineIsADeadline(t *testing.T) {
+// A call that arrives past its deadline was spent by the caller's earlier
+// calls, not by this one: deadline_on_entry, counted apart, never saturated,
+// never sent, and never a failure of the pool's circuit (decision 56 ruling 8,
+// reversing review I1; stores I3).
+func TestACallArrivingPastItsDeadlineDoesNotOpenTheCircuit(t *testing.T) {
 	var said, gone told
 	inner := &stuck{}
 	c := config(&said, &gone)
-	c.Failures = 1000
+	c.Failures = 5
 	g := Wrap(inner, c)
 	past, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
@@ -421,7 +421,7 @@ func TestACallerAlreadyPastItsDeadlineIsADeadline(t *testing.T) {
 	}
 	for _, o := range outcomes {
 		want := 0.0
-		if o == "deadline" {
+		if o == "deadline_on_entry" {
 			want = 200
 		}
 		if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", o)); n != want {
@@ -431,13 +431,32 @@ func TestACallerAlreadyPastItsDeadlineIsADeadline(t *testing.T) {
 	if inner.count() != 0 {
 		t.Fatalf("%d calls past their deadline reached the store", inner.count())
 	}
-	c = config(&said, &gone)
-	g = Wrap(inner, c)
-	for i := 0; i < 3; i++ {
-		g.GetContext(past, k)
+	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 0 {
+		t.Fatalf("200 calls past their deadline opened the circuit (%v)", v)
+	}
+	if l := said.all(); len(l) != 0 {
+		t.Fatalf("said %q", l)
+	}
+}
+
+// A deadline that strikes inside the store is the store too slow for the
+// caller: it still counts, and opens the circuit.
+func TestADeadlineStruckMidCallStillCounts(t *testing.T) {
+	var said, gone told
+	inner := &stuck{delay: time.Hour}
+	c := config(&said, &gone)
+	c.Failures, c.CallTimeout = 5, time.Hour
+	g := Wrap(inner, c)
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		g.GetContext(ctx, k)
+		cancel()
 	}
 	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 1 {
-		t.Fatalf("three calls past their deadline left the circuit closed (%v)", v)
+		t.Fatalf("five deadlines struck mid-call left the circuit closed (%v)", v)
+	}
+	if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "deadline")); n != 5 {
+		t.Fatalf("deadline outcomes: %v", n)
 	}
 }
 
@@ -862,5 +881,173 @@ func TestAFenceTimeoutDoesNotOpenTheCircuit(t *testing.T) {
 	}
 	if v := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "feed_behind")); v != float64(3*c.Failures) {
 		t.Fatalf("feed_behind outcomes counted %v, want %d", v, 3*c.Failures)
+	}
+}
+
+// A passing health check closes the token and context circuits at once, the
+// close said and gauged as a probe's is, and leaves the bulk pool's alone
+// (stores I2).
+func TestCloseCircuitsClosesTokenAndContextNotBulk(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.OpenFor = time.Hour // only CloseCircuits can let a call through
+	g := Wrap(inner, c)
+	for i := 0; i < 3; i++ {
+		g.GetContext(context.Background(), k)
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+		g.ActivePrincipals(context.Background())
+	}
+	for _, p := range []string{"token", "context", "bulk"} {
+		if testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", p)) != 1 {
+			t.Fatalf("the %s circuit did not open", p)
+		}
+	}
+	g.(Closer).CloseCircuits("a store health check passed")
+	for p, want := range map[string]float64{"token": 0, "context": 0, "bulk": 1} {
+		if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", p)); v != want {
+			t.Fatalf("%s gauge %v, want %v", p, v, want)
+		}
+	}
+	before := inner.count()
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	g.GetContext(context.Background(), k)
+	if inner.count() != before+2 {
+		t.Fatalf("a closed circuit did not send its calls to the store: %d calls", inner.count()-before)
+	}
+	// Closed means fails=0: two more failures do not reopen a threshold of 3.
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	if testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "token")) != 0 {
+		t.Fatal("the failure count survived the close")
+	}
+	if _, err := g.ActivePrincipals(context.Background()); !errors.Is(err, store.ErrNotSent) {
+		t.Fatalf("the bulk pool should still refuse: %v", err)
+	}
+	closed := 0
+	for _, l := range said.all() {
+		if strings.Contains(l, "circuit is closed") && strings.Contains(l, "a store health check passed") {
+			closed++
+		}
+	}
+	if closed != 2 {
+		t.Fatalf("said %q", said.all())
+	}
+}
+
+// A store whose health check passes while its real calls fail must still go
+// dark at StopAfter (decision 35, the hold_ttl backstop): CloseCircuits ends
+// the circuit, not the failing run the backstop measures, and only an
+// answered call ends that (stores I2 review I1).
+func TestAPassingHealthCheckDoesNotRestartTheHoldBackstop(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.StopAfter, c.OpenFor = 300*time.Millisecond, 100*time.Millisecond
+	g := Wrap(inner, c)
+	end := time.Now().Add(1200 * time.Millisecond)
+	for next := time.Now(); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(next) {
+			g.(Closer).CloseCircuits("a store health check passed")
+			next = time.Now().Add(50 * time.Millisecond)
+		}
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	if l := gone.all(); len(l) != 1 || !strings.Contains(l[0], "token pool's circuit has been open") {
+		t.Fatalf("Unhealthy told %d times: %q", len(l), l)
+	}
+}
+
+// A circuit a health check closed, then no token call for longer than
+// StopAfter, then a new blip: the new open is a new run, not an hours-old
+// one, so it must not go dark at once and "open for" must be true.
+func TestAHealthClosedRunIsNotRevivedByALaterBlip(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.StopAfter, c.OpenFor = 300*time.Millisecond, 20*time.Millisecond
+	g := Wrap(inner, c)
+	for i := 0; i < 3; i++ { // the third failure opens it
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	g.(Closer).CloseCircuits("a store health check passed")
+	time.Sleep(400 * time.Millisecond) // no token call, longer than StopAfter
+	for i := 0; i < 4; i++ {           // three failures open it again, one more is refused or a probe
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	if l := gone.all(); len(l) != 0 {
+		t.Fatalf("a blip after a failure-free gap went dark at once: %q", l)
+	}
+}
+
+// An answered call ends the failing run: a later failing run is timed from
+// its own start.
+func TestAnAnsweredCallRestartsTheHoldBackstop(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.StopAfter, c.OpenFor = 300*time.Millisecond, 20*time.Millisecond
+	g := Wrap(inner, c)
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	time.Sleep(350 * time.Millisecond)
+	inner.set(nil, 0)
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{}) // answered: the run ends
+	inner.set(store.ErrUnavailable, 0)
+	for i := 0; i < 3; i++ {
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	if l := gone.all(); len(l) != 0 {
+		t.Fatalf("a new run was timed from the old one: %q", l)
+	}
+}
+
+// A probe already in flight when CloseCircuits runs belongs to the circuit
+// that was closed: its one failure does not open the new one.
+func TestAProbeInFlightAtTheCloseDoesNotReopenOnOneFailure(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.CallTimeout = time.Hour
+	g := Wrap(inner, c)
+	for i := 0; i < 3; i++ {
+		g.GetContext(context.Background(), k)
+	}
+	time.Sleep(110 * time.Millisecond) // OpenFor: the next call probes
+	hold := make(chan struct{})
+	inner.mu.Lock()
+	inner.hold = hold
+	inner.mu.Unlock()
+	done := make(chan struct{})
+	go func() { defer close(done); g.GetContext(context.Background(), k) }()
+	eventually(t, "the probe to reach the store", func() bool { return inner.count() == 4 })
+	g.(Closer).CloseCircuits("a store health check passed")
+	close(hold) // the probe fails, after the close
+	<-done
+	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 0 {
+		t.Fatalf("a probe from before the close reopened the circuit on one failure (%v)", v)
+	}
+}
+
+// The hold_ttl clock starts when the circuit first opens, not at the run's
+// first failure: one stray failure, a long quiet gap and then a blip that
+// opens the circuit must not go dark at once on "open for StopAfter".
+func TestTheHoldBackstopIsTimedFromTheFirstOpen(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.StopAfter, c.OpenFor = 300*time.Millisecond, 20*time.Millisecond
+	g := Wrap(inner, c)
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{}) // a stray failure
+	time.Sleep(400 * time.Millisecond)                                // longer than StopAfter
+	for i := 0; i < 2; i++ {                                          // the third failure opens it
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{}) // refused or a probe, just after the open
+	if l := gone.all(); len(l) != 0 {
+		t.Fatalf("told before the circuit had been open for StopAfter: %q", l)
+	}
+	time.Sleep(350 * time.Millisecond)
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	if l := gone.all(); len(l) != 1 {
+		t.Fatalf("told %d times after StopAfter open: %q", len(l), l)
 	}
 }

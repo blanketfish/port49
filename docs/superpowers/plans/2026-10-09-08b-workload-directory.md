@@ -240,7 +240,6 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 - Implementers never run `git checkout`, `restore`, `reset`, `stash` or `clean`.
 
@@ -785,8 +784,7 @@ decision 38 ruling 3), the 3am case, and L50's claim sharpened. Amends
 decisions 8, 16, 38 (rulings 1, 3, 12, 15, 20) and 40 ruling 5; widens four
 section 5.7 rows; adds no reason code.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 **Operator notes (for plan 13):** none of their own; every later task's notes cite decision 41.
@@ -1458,8 +1456,7 @@ the declared-username check is the broker's. WorkloadMapping.Pinned is the
 weak kind's issuer pin. Under a mapping, the person path refuses an entry
 holding a SPIFFE ID in the workload attribute: one entry, one domain.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 **Operator notes (for plan 13):**
@@ -1785,8 +1782,7 @@ required, weak so allow_weak and issuers required, user_filter defaulting to
 broker.directory's; it needs broker.directory. spiffe_id under
 certificate_mapping is refused.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 **Operator notes (for plan 13):**
@@ -2449,8 +2445,7 @@ declares no username. The diff gates a move between the two keys, and the
 report names the key. Lint's group-subject finding names the key and the
 config it mints under, in place of the stale "plan 7" text.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 **Operator notes (for plan 13):**
@@ -3194,8 +3189,7 @@ the session refresh's. CertCallerOf checks the issuer pin before any search,
 naming the workload in the refusal; forget takes a spiffe:// ID. Without the
 mapping nothing changes.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 **Operator notes (for plan 13):**
@@ -3639,8 +3633,7 @@ attribute's ACL requirement, and machine_group subjects that mint for no one.
 PrewarmAll verifies machine_group members and the listed spiffe:// identities
 as workloads, within their own prewarm.max_principals.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 **Operator notes (for plan 13):**
@@ -3740,8 +3733,7 @@ fails, the failure is a regression in plan 8's client: stop and report it, and d
 git add internal/workload/client_test.go cmd/port49/workload_test.go
 git commit -m "test(workload): a directory outage past grace exits 75 (decision 41 ruling 7)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 **Operator notes (for plan 13):** `port49 workload token` exits 75 in a directory outage past grace,
@@ -4137,8 +4129,7 @@ Without `PORT49_LAB_L50`, `TestL50` skips. Expected: vet clean, PASS or SKIP.
 git add tests/lab/l50_test.go tests/lab/directory/ tests/lab/windows_test.go tests/lab/README.md Makefile
 git commit -m "test(lab): L50, who can write a workload mapping's attribute
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 7: Run it**
@@ -4151,8 +4142,8 @@ feature worktree (pre-flight I-9: the harness's `PORT49_LAB_DIRECTORY_OUT`, read
 `directoryOut()`):
 
 ```bash
-cd /home/rwendt/git/port49/.worktrees/lab-l50
-sg docker -c 'PORT49_LAB_DIRECTORY_OUT=/home/rwendt/git/port49/.worktrees/workload-directory make lab-l50'
+cd $HOME/git/port49/.worktrees/lab-l50
+sg docker -c 'PORT49_LAB_DIRECTORY_OUT=$HOME/git/port49/.worktrees/workload-directory make lab-l50'
 ```
 
 Wait in a foreground loop with a deadline, `pgrep -f "^/tmp/go-build[^ ]*/lab\.test"` every 60s,
@@ -4186,15 +4177,14 @@ never in the detached `.worktrees/lab-l50`, where a commit would be orphaned and
 files (pre-flight I-9).
 
 ```bash
-cd /home/rwendt/git/port49/.worktrees/workload-directory
+cd $HOME/git/port49/.worktrees/workload-directory
 git branch --show-current   # expect feature/workload-directory
 git add tests/lab/results/L50-*.md tests/lab/evidence/L50-*.json docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: close lab register entries L50
 
 <what each platform measured, in two to four lines; any doc corrected and why>
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 (Use `docs: L50 measured on <platform>, still open` when the row stays open.)

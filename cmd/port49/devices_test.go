@@ -547,17 +547,6 @@ key_groups:
 	}
 }
 
-// port49 devices trust is gone (decision 46 ruling 4): one line on stderr, exit 2, and
-// nothing on stdout.
-func TestDevicesTrustIsGone(t *testing.T) {
-	var out, errb bytes.Buffer
-	code := run([]string{"devices", "trust", "--fingerprint", "SHA256:x", "leaf1"}, &out, &errb)
-	if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "removed in plan 9d") ||
-		!strings.Contains(errb.String(), "known_hosts") {
-		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
-	}
-}
-
 // ageFixture is junosFixture with a one-hour ceiling on the role noc holds
 // and an extra, already expired, grant of a 30m role: under set 1.1.0 every
 // Junos session lands in p49-remote, so its class is the least of them.
@@ -689,5 +678,16 @@ func TestCheckConfigComputesClassAgesOnce(t *testing.T) {
 	}
 	if calls["juniper_junos"] != 1 {
 		t.Errorf("ClassAges computed %v times, want once per platform", calls)
+	}
+}
+
+// port49 devices trust is an unknown command like any other: usage and exit 2, with no word of
+// where it went (no deprecation before beta).
+func TestDevicesTrustIsAnUnknownCommand(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := run([]string{"devices", "trust", "--fingerprint", "SHA256:x", "leaf1"}, &out, &errb)
+	if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "usage:") ||
+		strings.Contains(errb.String(), "plan 9d") || strings.Contains(errb.String(), "was removed") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 }

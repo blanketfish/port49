@@ -311,3 +311,43 @@ func OIDCRecordsRefuseWhatCannotBeKept(t *testing.T, b Backend) {
 		t.Fatalf("a refused put wrote a logout: %v", err)
 	}
 }
+
+// OnceRecordsPurge: PurgeOnceRecords deletes every once-only record and
+// every per-login proof, counts them, and leaves the owner and logout
+// records alone (pre-beta Task 2).
+func OnceRecordsPurge(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	for _, k := range []string{"jti a", "jti b"} {
+		if ok, err := s.PutOnce(ctx, k, []byte("v"), time.Hour); err != nil || !ok {
+			t.Fatalf("put %s: %v %v", k, ok, err)
+		}
+	}
+	if err := s.PutMFAProof(ctx, store.MFAProof{Key: "proof a", Method: "hardware_key_touch", At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutOIDCOwner(ctx, "sid a", "user:a", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutLogout(ctx, store.Logout{Key: "sid a", At: t0}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.PurgeOnceRecords(ctx); err != nil || n != 3 {
+		t.Fatalf("PurgeOnceRecords = %d, %v; want 3", n, err)
+	}
+	if _, err := s.TakeOnce(ctx, "jti a"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a once record survived: %v", err)
+	}
+	if _, err := s.GetMFAProof(ctx, "proof a"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a proof survived: %v", err)
+	}
+	if _, err := s.OIDCOwner(ctx, "sid a"); err != nil {
+		t.Fatalf("the purge took an owner record: %v", err)
+	}
+	if _, err := s.GetLogout(ctx, "sid a"); err != nil {
+		t.Fatalf("the purge took a logout record: %v", err)
+	}
+	if n, err := s.PurgeOnceRecords(ctx); err != nil || n != 0 {
+		t.Fatalf("a second purge: %d %v", n, err)
+	}
+}

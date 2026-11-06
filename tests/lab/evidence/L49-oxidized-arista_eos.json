@@ -49,7 +49,7 @@
       "crashfile_written_by_stale_run": true,
       "crashfiles_total": 1,
       "first_status": "success",
-      "oxidized_log_excerpt": "2026-10-08 03:23:15.325982 E [7:Job 'leaf1' node.rb:92] Oxidized::Node -- 172.100.100.11 raised Errno::ENOTTY with msg Inappropriate ioctl for device, creating crashfile\n2026-10-08 03:23:15.326672 E [7:Job 'leaf1' node.rb:108] Oxidized::Node -- 172.100.100.11 raised Errno::ENOTTY with msg \"Inappropriate ioctl for device\", 172.100.100.11 saved",
+      "oxidized_log_excerpt": "2026-11-06 05:56:20.421231 E [7:Job 'leaf1' node.rb:92] Oxidized::Node -- 172.100.100.11 raised Errno::ENOTTY with msg Inappropriate ioctl for device, creating crashfile\n2026-11-06 05:56:20.421650 E [7:Job 'leaf1' node.rb:108] Oxidized::Node -- 172.100.100.11 raised Errno::ENOTTY with msg \"Inappropriate ioctl for device\", 172.100.100.11 saved",
       "process_crash_file": false,
       "receipt_idle_ttl": "2m",
       "stale_redeem_by_verdict_reason": {

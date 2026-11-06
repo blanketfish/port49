@@ -5,7 +5,6 @@ package lab
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +39,7 @@ func TestOIDCE2EConfigAndPolicyLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := oidcE2EFiles(files); err != nil {
+	if err := oidcE2EIssuingFiles(files); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
@@ -88,6 +87,9 @@ func TestOIDCE2EConfigAndPolicyLoad(t *testing.T) {
 	if h.Domain != oidc.Humans || h.Issuer != issuer || h.ClientID != kcClient || h.PrincipalClaim != oidc.ClaimEmail ||
 		len(h.PrincipalDomains) != 1 || h.PrincipalDomains[0] != "corp.example.com" || h.CAFile != filepath.Join(dir, "oidc", "idp-ca.pem") {
 		t.Errorf("the human verifier resolved to %+v", h)
+	}
+	if id.Issuance == nil {
+		t.Error("the end to end's broker does not issue: a person's ID token mints nowhere else")
 	}
 	if m.Domain != oidc.Machines || m.Issuer != issuer || m.Audience != "api://port49-svc" || len(m.Clients) != 1 ||
 		m.Clients[0].ClientID != "port49-svc" || m.Clients[0].Sub != kcServiceAccountID {
@@ -188,13 +190,20 @@ func TestOIDCE2EOverlayNamesWhatTheTestWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := string(raw)
-	for _, want := range []string{"oidc/admin.env", "oidc/pki:/pki:ro", "oidc/idp-ca.pem:/etc/port49-oidc/idp-ca.pem:ro",
+	for _, want := range []string{"oidc/admin.env", "oidc/pki:/pki:ro", "oidc/idp-ca.pem:/src/idp-ca.pem:ro", "idp-pki:/etc/port49-oidc:ro",
+		"install -o 65532 -g 65532 -m 0444 /src/idp-ca.pem /vol/idp-ca.pem",
 		"--https-certificate-file=/pki/keycloak.pem", "--https-certificate-key-file=/pki/keycloak-key.pem",
 		"--truststore-paths=/pki/broker-ca.pem", "--hostname=https://" + kcHost + ":" + kcPort,
 		"aliases: [" + kcHost + "]", `"127.0.0.1:` + kcPort + ":" + kcPort + `"`} {
 		if !strings.Contains(o, want) {
 			t.Errorf("tests/lab/compose/oidc.yaml lacks %q", want)
 		}
+	}
+	// The broker refuses an OIDC ca_file owned by any uid but its own (65532) or root, and a bind mount of the
+	// host user's file keeps the host user's uid (the 2026-11-05 run: the broker restarted until the harness
+	// gave up): the CA reaches the broker through a volume a root one-shot chowns.
+	if strings.Contains(o, "idp-ca.pem:/etc/port49-oidc") {
+		t.Error("oidc.yaml bind-mounts the host user's idp-ca.pem into the broker, which refuses a file that uid owns")
 	}
 	if strings.Contains(o, "KC_BOOTSTRAP_ADMIN_PASSWORD:") {
 		t.Error("oidc.yaml holds the admin password")
@@ -260,39 +269,27 @@ func TestOIDCBrokerSaidIsTheErrorAndNeverABody(t *testing.T) {
 	}
 }
 
-func TestOIDCRefreshSaid(t *testing.T) {
-	resp, said := refreshSaid(200, `{"auth_time":"2026-10-07T01:02:03Z","session_ends_at":"x","sessions":[`+
-		`{"device":"leaf1","username":"alice","outcome":"extended"}]}`, nil)
-	if resp.AuthTime != "2026-10-07T01:02:03Z" || len(resp.Sessions) != 1 || !strings.Contains(said, "leaf1/alice extended") {
-		t.Errorf("%+v %q", resp, said)
-	}
-	_, said = refreshSaid(401, `{"error":"refresh_not_fresh","detail":"your identity provider did not authenticate you again"}`, nil)
-	if !strings.HasPrefix(said, "401 refresh_not_fresh:") {
-		t.Errorf("%q", said)
-	}
-}
-
 // The bearer is in the Authorization header and in no URL, a transport
-// failure says no URL, and a refusal's nonce is a value the run registered.
+// failure says no URL, and a minted token is a value the run registered.
 func TestOIDCBrokerCallPutsTheBearerInTheHeaderAlone(t *testing.T) {
 	bearer := "bearer-0123456789-abcdef"
 	var gotURL, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotURL, gotAuth = r.URL.String(), r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"nonce": "n-0123456789", "expires_at": "x"})
+		_, _ = w.Write([]byte(`{"principal":"app:x","results":[{"device":"leaf1","verdict":"permit","username":"svc","login":"l0gin-0123456789"}]}`))
 	}))
 	defer srv.Close()
 	kc := &keycloak{}
 	br := oidcBroker{c: srv.Client(), kc: kc, base: srv.URL}
-	if n := br.challenge(t, bearer); n != "n-0123456789" {
-		t.Fatalf("nonce %q", n)
+	if tok, _ := br.mint(t, bearer, "leaf1"); tok != "l0gin-0123456789" {
+		t.Fatalf("login %q", tok)
 	}
 	if strings.Contains(gotURL, bearer) || gotAuth != "Bearer "+bearer {
 		t.Errorf("url %q, Authorization %q", gotURL, gotAuth)
 	}
-	if known := kc.known(); len(known) != 1 || known[0] != "n-0123456789" {
-		t.Errorf("the nonce is not registered as a secret: %v", known)
+	if known := kc.known(); len(known) != 1 || known[0] != "l0gin-0123456789" {
+		t.Errorf("the token is not registered as a secret: %v", known)
 	}
 	srv.Close()
 	code, text := br.post("/v1/tokens", bearer, "{}")

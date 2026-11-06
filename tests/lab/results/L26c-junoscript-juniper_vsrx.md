@@ -1,11 +1,12 @@
 # L26c-junoscript — juniper_vsrx
 
-- **Date measured:** 2026-09-30
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L26c-junoscript-juniper_vsrx.pcap` — 2790 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L26c-junoscript-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26c-junoscript-juniper_vsrx.pcap` — 2953 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-junoscript-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL26cJunoscriptDeny$`
 
 ## Claim
 
@@ -64,11 +65,9 @@ Only `<get-software-information/>` was sent in any NETCONF session. A cell is `h
 | port 830 | refused | refused | hello | hello | — |
 | port 830: get-software-information | — | — | result | result | — |
 
-The abbreviation rows (`xml-mod netconf`, `junoscr netconf`) are refused in C and R too, with the same `unknown command.`: hidden commands do not abbreviate on this image, so those rows are not valid forms and **say nothing about the deny**. There is no abbreviation path around it because there is no abbreviation at all.
-
 ### Isolation
 
-A W or L refusal is `deny` only where C, with the same bits and no deny, reached the probe; otherwise `unisolated`, and it says nothing about the deny. A canonical probe (`entry: xml-mode netconf`, `entry: junoscript netconf`, `port 830`) left unisolated fails the test. (Added by hand from the table above after review; the test now computes it, `jsdVerdict`. No rerun.)
+A W or L refusal is `deny` only where C, with the same bits and no deny, reached the probe; otherwise `unisolated`, and it says nothing about the deny. A canonical probe (`entry: xml-mode netconf`, `entry: junoscript netconf`, `port 830`) left unisolated fails the test.
 
 | probe | W | L |
 |---|---|---|
@@ -84,15 +83,6 @@ A W or L refusal is `deny` only where C, with the same bits and no deny, reached
 W:
 
 ```
-breakglass cmd=login
-breakglass cmd=set cli «redacted» «redacted» «redacted»
-breakglass cmd=junoscript netconf <cr>
-breakglass cmd=logout
-breakglass cmd=login
-breakglass cmd=get-software-information<cr>
-breakglass cmd=logout
-breakglass cmd=login
-breakglass cmd=set cli «redacted» «redacted» «redacted»
 breakglass cmd=logout
 alice01 cmd=login
 alice01 cmd=set cli «redacted» «redacted» «redacted»
@@ -177,8 +167,7 @@ alice10 cmd=logout
 junoscr
               ^
 unknown command.
-
-alice01@srx1> junoscr   netconf
+alice01@srx1> junoscr   netconf
               ^
 unknown command.
 
@@ -191,8 +180,7 @@ alice01@srx1>
 junoscript
               ^
 unknown command.
-
-alice01@srx1> junoscript   netconf
+alice01@srx1> junoscript   netconf
               ^
 unknown command.
 
@@ -205,8 +193,7 @@ alice01@srx1>
 xml-mod
               ^
 unknown command.
-
-alice01@srx1> xml-mod   netconf
+alice01@srx1> xml-mod   netconf
               ^
 unknown command.
 
@@ -219,8 +206,7 @@ alice01@srx1>
 xml-mode
               ^
 unknown command.
-
-alice01@srx1> xml-mode   netconf
+alice01@srx1> xml-mode   netconf
               ^
 unknown command.
 
@@ -269,8 +255,7 @@ JUNOS OS libs [20220817.43c4e23_builder_stable_12_214]
 junoscr
               ^
 unknown command.
-
-alice03@srx1> junoscr   netconf
+alice03@srx1> junoscr   netconf
               ^
 unknown command.
 
@@ -283,8 +268,7 @@ alice03@srx1>
 junoscript
               ^
 unknown command.
-
-alice03@srx1> junoscript   netconf
+alice03@srx1> junoscript   netconf
               ^
 unknown command.
 
@@ -297,8 +281,7 @@ alice03@srx1>
 xml-mod
               ^
 unknown command.
-
-alice03@srx1> xml-mod   netconf
+alice03@srx1> xml-mod   netconf
               ^
 unknown command.
 
@@ -311,8 +294,7 @@ alice03@srx1>
 xml-mode
               ^
 unknown command.
-
-alice03@srx1> xml-mode   netconf
+alice03@srx1> xml-mode   netconf
               ^
 unknown command.
 
@@ -377,7 +359,7 @@ xml-mode netconf
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29754</session-id>
+  <session-id>29757</session-id>
 … (2 more lines)
 ```
 
@@ -462,8 +444,7 @@ JUNOS OS libs [20220817.43c4e23_builder_stable_12_214]
 junoscr
                      ^
 syntax error.
-
-alice09@srx1> junoscr   netconf
+alice09@srx1> junoscr   netconf
               ^
 unknown command.
 
@@ -502,8 +483,7 @@ junoscript netconf
 xml-mod
                      ^
 syntax error.
-
-alice08@srx1> xml-mod   netconf
+alice08@srx1> xml-mod   netconf
               ^
 unknown command.
 
@@ -532,7 +512,7 @@ xml-mode netconf
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>30120</session-id>
+  <session-id>30123</session-id>
 … (2 more lines)
 ```
 
@@ -635,8 +615,7 @@ JUNOS OS libs [20220817.43c4e23_builder_stable_12_214]
 junoscr
                         ^
 syntax error.
-
-breakglass@srx1> junoscr   netconf
+breakglass@srx1> junoscr   netconf
                  ^
 unknown command.
 
@@ -665,7 +644,7 @@ junoscript netconf
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29331</session-id>
+  <session-id>29330</session-id>
 … (2 more lines)
 ```
 
@@ -675,8 +654,7 @@ junoscript netconf
 xml-mod
                         ^
 syntax error.
-
-breakglass@srx1> xml-mod   netconf
+breakglass@srx1> xml-mod   netconf
                  ^
 unknown command.
 
@@ -705,7 +683,7 @@ xml-mode netconf
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29194</session-id>
+  <session-id>29195</session-id>
 … (2 more lines)
 ```
 

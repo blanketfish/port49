@@ -493,7 +493,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Running the lab (Task 12)
@@ -788,8 +787,7 @@ behaviour: the warning's display is cited to L34, opened here.
   trust_domain_unresolved and credential_revoked gain meanings; no reason added), §12,
   §13 decision 33, §15 L2 and the new L34; design §7, §12, §17.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -999,8 +997,7 @@ offline tools and the broker compose the same way and no `policy.Env` changes.
   A role declares a duration of at least 1m or never; Resolution.SessionAge composes them and
   Of applies port49d's default to a role that names none. Plan 4's refusal of the key is gone.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1153,8 +1150,7 @@ offline tools and the broker compose the same way and no `policy.Env` changes.
   item says session_expires_at; a device whose ceiling has passed since the connection
   authenticated is refused session_expired per item. A shortened ceiling supersedes tokens.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1454,8 +1450,7 @@ bookkeeping, as `RevokedAt` is.
   past the window (ErrPastGrace); ExpectRev and DeleteContextIf act only on the record read.
   Each is a storetest property every backend must pass.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1581,8 +1576,7 @@ bookkeeping, as `RevokedAt` is.
   lengthened one waits for a fresh authentication. Refresh records carry session_expires when
   it moved, and unreached for a context on a session-only platform (decision 21).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1887,8 +1881,7 @@ bookkeeping, as `RevokedAt` is.
   context is deleted by compare-and-set. A touch bumps the context's blob.
   lab.deny_message_length and lab.deny_session serve L2.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2702,8 +2695,7 @@ bookkeeping, as `RevokedAt` is.
   and extends only contexts the policy in force has just judged and kept, to the ceiling it
   gives, bound to the revision read. A context past its grace window is deleted.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -3008,8 +3000,7 @@ bookkeeping, as `RevokedAt` is.
   never refreshes on its own. port49 login refreshes a held session (and a new one once). port49
   token warns on stderr when the device's session ends within ceiling_warning.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -3721,8 +3712,7 @@ bookkeeping, as `RevokedAt` is.
   delegate with the OCSP-signing usage, for the right serial, fresh within 5m of skew; failures
   are cached 30s and questions shared. Every certificate but the anchor is checked.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -4060,8 +4050,7 @@ bookkeeping, as `RevokedAt` is.
   trust_domain_unresolved), ending no session, unless on_unavailable is allow. A store error
   defers a CRL entry rather than marking it.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -4285,8 +4274,7 @@ bookkeeping, as `RevokedAt` is.
   refuse (default) or allow; disabled: true the explicit choice not to check, said at every
   start. A source that fails at start never stops the daemon.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -4392,8 +4380,7 @@ premise, opened by Task 1. L2's clauses still open are the truncation length, IO
   <what the notes say, per image: whether a permit's server_msg is shown and still permits;
   the truncation length; the warning, the refresh, the ceiling, the grace window>. Run at <sha>.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
   (Write the message from the notes.)
@@ -4445,8 +4432,7 @@ premise, opened by Task 1. L2's clauses still open are the truncation length, IO
   git add docs/design docs/superpowers/plans/README.md
   git commit -m "docs: close L34 (and L2) as measured; plan 7b as built
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---

@@ -132,11 +132,6 @@ func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) compos
 	return p.composeAll([]*Subject{sub}, d, now)
 }
 
-// composeMarkedFor is compose with the device's class marks.
-func (p *Policy) composeMarkedFor(sub *Subject, d admission.Device, now time.Time, marks string) composition {
-	return p.composeMarked([]*Subject{sub}, d, now, marks)
-}
-
 // composeAll is compose for every subject a principal matches (plan 7g,
 // Ruling 5): the grants of any of subs, composed as one. Every subject a human
 // principal matches is in the humans domain, so subs[0]'s domain is the one

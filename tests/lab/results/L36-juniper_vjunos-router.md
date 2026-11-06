@@ -1,11 +1,12 @@
 # L36 — juniper_vjunos-router
 
-- **Date measured:** 2026-10-04
+- **Date measured:** 2026-11-06
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L36-juniper_vjunos-router.pcap` — 382 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L36-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L36-juniper_vjunos-router.pcap` — 282 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L36-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestJunosReauthorizationAfterRestart$`
 
 ## Claim
 
@@ -17,28 +18,11 @@ On Junos with `tacplus-options authorization-time-interval 15`, an open session 
 |---|---|
 | 0. the device's TACACS+ servers, read back after the push | `set system tacplus-server 172.100.100.1 routing-instance mgmt_junos set system tacplus-server 172.100.100.1 secret <removed> set system tacplus-server 172.100.100.2 routing-instance mgmt_junos set system tacplus-server 172.100.100.2 secret <removed> breakglass@srx1> set system accounting events login set system accounting events change-log set system accounting events interactive-commands set system accounting destination tacplus server 172.100.100.1 routing-instance mgmt_junos set system accounting destination tacplus server 172.100.100.1 secret <removed> set system accounting destination tacplus server 172.100.100.2 routing-instance mgmt_junos set system accounting destination tacplus server 172.100.100.2 secret <removed> breakglass@srx1>` |
 | 1. `set system tacplus-options authorization-time-interval 15`, a login through A (B stopped) | `logged in; 'show version': 6010 bytes in 200ms, first line 'Hostname: srx1'` |
-| 2. A restarted; the first re-authorization request | `15m0s after the login, 14m59s after the restart: AUTHOR seq 1 -> PASS_ADD from 172.100.100.1 in 3ms` |
-| 2. port49d A's records since the restart | `authorize_session [permit context_matched]; accounting [<nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil> <nil>]` |
+| 2. A restarted; the first re-authorization request | `15m0s after the login, 14m59s after the restart: AUTHOR seq 1 -> PASS_ADD from 172.100.100.1 in 4ms` |
+| 2. port49d A's records since the restart | `authorize_session [permit context_matched]; accounting [<nil> <nil> <nil> <nil> <nil> <nil>]` |
 | 2. the session after the re-authorization, `show version` | `6010 bytes in 200ms, first line 'Hostname: srx1'` |
-| 3. a second session logged in through A, then `port49 revoke --principal` on the broker's socket (the first closed) | `revoked user:alice@slice.port49.test at 2026-10-04T21:40:40Z: 1 live context(s) marked, the unspent tokens under 0 (device, username) key(s) deleted, 1 held broker connection(s) closed; every mint by user:alice@slice.port49.test is refused until 'port49 revoke --lift --principal user:alice@slice.port49.test'; login 1s before the revocation` |
+| 3. a second session logged in through A, then `port49 revoke --principal` through the broker's API (the first closed) | `target: user:alice@slice.port49.test (subject slice_operator); login 1s before the revocation` |
 | 3. the second session's first re-authorization request | `15m0s after its login, 14m59s after the revocation: AUTHOR seq 1 -> FAIL from 172.100.100.1 in 1ms` |
 | 3. port49d A's records since the revocation | `authorize_session [permit context_matched deny credential_revoked]` |
 | 3. the session after the denial | `still open 60s after the denial; 'show version': 83 bytes in 100ms, first line '^'` |
 
-
-## Earlier run (0cff0d0, same image)
-
-One unrepeated observation from this image's first L36 run on 2026-10-04, at commit 0cff0d0, whose harness
-revoked the same session after its first re-authorization instead of using a second session (replaced in
-20fb9fa, so this note's table above is the final design's, not that run's).
-
-- The device re-authorized the open session 15m0s after login (14m59s after A's restart): `AUTHOR` `PASS_ADD`
-  from 172.100.100.1 in 3ms, `permit context_matched`.
-- The principal was revoked at 20:50:55Z. In the 20 minutes after it (until about 21:11) the device sent no
-  further `AUTHOR` request; the only device traffic after the revocation was an `ACCT` stop at 20:51:00. The
-  session stayed open and its `show version` ran.
-- So that session, past its first re-authorization, was not reached by the revocation within 20 minutes. One
-  interval later would have been 15 minutes after the first request. Whether the device ever re-authorizes
-  a session a second time is open: spec §15 L40.
-- Capture not kept: the run's raw capture was in a pinned worktree that was removed with the run, and it
-  was not committed.

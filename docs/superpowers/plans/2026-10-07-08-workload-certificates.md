@@ -500,8 +500,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
     open.
   - The example's role and the wrapper's REST calls are provisional on L49 until it closes.
 - Conventional Commits; branch `feature/workload-certificates`. Commit messages end with
-  `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>` and
-  `Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc`.
+  `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
 - Implementers never run `git checkout`, `restore`, `reset`, `stash` or `clean`.
 
 ## Review Focus
@@ -1050,8 +1049,7 @@ git commit -m "docs: decision 40, workload certificates; open L48, L49 and L50; 
 Decision 16's workload directory groups deferred to plan 8b, constrained to
 machine-scoped group subjects (the controller's ruling on pre-flight Q1).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1358,8 +1356,7 @@ gofmt -l internal/spiffe internal/policy
 git add internal/spiffe internal/policy
 git commit -m "feat(spiffe): parse a SPIFFE ID once; the policy refuses one outside the form
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1640,8 +1637,7 @@ Expected: PASS.
 git add internal/oidc/config.go internal/config
 git commit -m "feat(config): x509 under broker.identity.machines with spiffe_trust_domains
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2044,8 +2040,7 @@ Expected: PASS. Nothing yet calls `CertCallerOf` but these tests.
 git add internal/broker/workload.go internal/broker/workload_test.go internal/broker/broker.go
 git commit -m "feat(broker): read a certificate's trust domain from the anchor its chain ends at
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2588,8 +2583,7 @@ used through a pointer.
 git add internal/broker internal/daemon/metrics/metrics.go internal/certstatus/chain_test.go
 git commit -m "feat(broker): a workload certificate mints as its SPIFFE ID; a late renewal is said
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2901,8 +2895,7 @@ Expected: PASS, every existing listener test included.
 git add internal/broker/listen.go internal/broker/member.go internal/broker/member_test.go internal/broker/workload_listen_test.go
 git commit -m "feat(broker): the listener binds a workload as its SPIFFE ID and answers an unmapped one
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3201,8 +3194,7 @@ Expected: PASS.
 git add internal/broker/revoke.go internal/broker/workload.go internal/broker/revoke_test.go internal/broker/explain_api_test.go internal/testpki/testpki.go
 git commit -m "feat(broker): revoke and explain a workload by its SPIFFE ID; a certificate mark says renewal escapes it
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3713,8 +3705,7 @@ now run through `brk.Wire`).
 git add internal/broker/server.go internal/port49d
 git commit -m "feat(port49d): run the workload verifier; refuse crossed anchors; say what each covers
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4406,8 +4397,7 @@ Expected: PASS.
 git add internal/workload
 git commit -m "feat(workload): an agentless client that pages, retries under its key, and reads its files each run
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4990,8 +4980,7 @@ Expected: PASS. The `usage` golden test, if there is one, is updated to the new 
 git add cmd/port49
 git commit -m "feat(cli): port49 workload token and identity, with no agent
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5330,8 +5319,7 @@ Expected: PASS.
 git add internal/testpki internal/port49d/workload_e2e_test.go
 git commit -m "test(port49d): a workload mints and logs in end to end; a renewal is the same principal
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5776,8 +5764,7 @@ Expected: every test passes. If one does not, the snippet is wrong; fix the snip
 git add examples/oxidized
 git commit -m "docs(examples): Oxidized driven by port49 workload token (provisional on L49)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6090,8 +6077,7 @@ Expected: PASS. No lab test runs here.
 git add tests/lab Makefile
 git commit -m "test(lab): step-ca and Oxidized harnesses for L48 and L49
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6257,13 +6243,11 @@ L50 is plan 8b's and stays open.
 git add tests/lab/l48_test.go tests/lab/l49_test.go tests/lab/results/L48-step_ca.md tests/lab/results/L49-oxidized-*.md tests/lab/evidence
 git commit -m "test(lab): L48 on step-ca and L49 Oxidized end to end
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git add docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: close lab register entries L48 (and L49 where every platform measured)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6325,8 +6309,7 @@ In the house style of "Plan 7h — As built":
 git add docs/superpowers/plans/README.md docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: plan 8 as built
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

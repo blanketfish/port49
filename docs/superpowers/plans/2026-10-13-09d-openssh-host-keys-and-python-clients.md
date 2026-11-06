@@ -81,7 +81,7 @@ example's strict pins.
 **Tech Stack:** Go 1.26, module `github.com/blanketfish/port49`, `CGO_ENABLED=0`, no new Go module.
 OpenSSH 8.5+ on the operator's host (`ssh`, `ssh-keygen`). Python 3.10+ standard library;
 `netmiko` (with Paramiko) only for `port49.netmiko`; `ansible-core` 2.16+ only for the lookup.
-Lab: the host's `/home/rwendt/lab-venv` (Python 3.14.4, Netmiko 4.7.0, Paramiko 4.0.0,
+Lab: the host's `$HOME/lab-venv` (Python 3.14.4, Netmiko 4.7.0, Paramiko 4.0.0,
 ansible-core 2.21.4, `ansible.netcommon` 8.7.0, `arista.eos` 12.3.0, `cisco.nxos` 13.0.0 as of
 2026-10-13; Task 12 adds `cisco.ios`, `junipernetworks.junos` and `ansible-pylibssh` and records
 every version).
@@ -4312,7 +4312,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `Makefile` (`lab-ssh` runs `-run 'TestL53HostKeyScan|TestL64L65'`), the spec's §15 L64
   and L65 Status, and decision 46 if a reading contradicts it (CLAUDE.md rule 4)
 
-**Interfaces:** Consumes `make build`, the lab venv (`/home/rwendt/lab-venv`, with
+**Interfaces:** Consumes `make build`, the lab venv (`$HOME/lab-venv`, with
 `pip install ./clients/python[netmiko]` into it, versions recorded), Task 4's lab helpers
 (`labScan`), L53's reload steps (`l53Reload`, `l53WaitDown`, `l53Rebooted`), the capture and
 TACACS+ packet counter (`l.capture`, `l29Packets`).

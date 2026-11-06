@@ -444,8 +444,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   in port49d's env file only.
 - The lab register rules (CLAUDE.md 1–4). L39 stays open after Task 2: (b) and (c) are plan 12's.
 - Conventional Commits; commit messages end with
-  `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>` and
-  `Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc`.
+  `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
 
 ## Review Focus
 
@@ -1678,8 +1677,7 @@ git add Dockerfile .dockerignore deploy/compose internal/testpki/compose.go inte
 git update-index --chmod=+x deploy/compose/setup.sh deploy/compose/etcd-init.sh
 git commit -m "feat(deploy): the container image, a compose stack on etcd, and its CI smoke test
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2043,8 +2041,7 @@ git add tests/lab/compose tests/lab/compose_test.go tests/lab/compose_unit_test.
   tests/lab/README.md tests/lab/results/L39-* tests/lab/evidence/L39-* docs/design
 git commit -m "test(lab): the lab on the compose stack, and L39 (a) measured through it
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2245,8 +2242,7 @@ Expected: no line that still says something is plan 7f's future work, except und
 git add docs/design
 git commit -m "docs: decision 37 (go-dark on health checks, the context cache, the container shape), L41 opened
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2491,8 +2487,7 @@ update its expectation, and say which in the commit.
 git add internal/config
 git commit -m "feat(config): store.etcd.health and store.etcd.context_cache, port49d's alone
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3173,8 +3168,7 @@ The longest run of failed checks at 1s: <n> after a killed leader
 (TestAKilledLeaderDoesNotFailFiveChecksInARow), <n> with one member hung
 (TestAHungMinorityMemberDoesNotFailFiveChecksInARow). Both pings require a leader.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3602,8 +3596,7 @@ git commit -m "feat(port49d): go dark on close_after failed health checks and li
 The probe is gone: an idle port49d goes dark within close_after × interval + call_timeout.
 Tests adjusted for the earlier close: <names>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4319,8 +4312,7 @@ Expected: PASS.
 git add internal/store/crypt
 git commit -m "feat(crypt): a per-replica context cache, evicted by every change the feed brings
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4695,8 +4687,7 @@ Run `make compose-smoke` (Task 1's caveat on where), and expect PASS.
 git add internal/port49d internal/daemon/metrics deploy/compose/config/port49d.yaml
 git commit -m "feat(port49d): authorization reads through the context cache, served stale through an outage and said
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5030,8 +5021,7 @@ git add tests/lab/l41_test.go tests/lab/compose_test.go tests/lab/compose_unit_t
   tests/lab/evidence/L41-* docs/design
 git commit -m "docs: close lab register entries L41 (go-dark on health checks, five images, on compose)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 If L41 stays open on any image, the message is `test(lab): L41 measured on <images>; open on
@@ -5063,8 +5053,7 @@ In the roadmap:
 git add docs/superpowers/plans/README.md
 git commit -m "docs: plan 7f as built
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ## Operator-facing notes (for the pull request body)

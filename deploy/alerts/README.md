@@ -11,6 +11,13 @@ names is one port49 registers.
 Two severities. `page` is a fault that is refusing devices or losing records now. `ticket` is one
 that costs nothing yet, or that a person fixes in working hours. Route on the `severity` label.
 
+**The job names are the rules' parameter.** The two target rules read Prometheus's own `up` series for
+`job="port49d"` and `job="port49-broker"`. The chart's PodMonitors (rendered with
+`prometheusRule.enabled`) set those names; if you scrape another way, give the jobs those names or
+edit the rules. Without them `port49_target_absent` and `port49_broker_target_absent` fire, which is the
+point of them. The absent rules are fleet-wide: `absent()` stays quiet while any scrape of that job exists,
+so use one Prometheus per port49 fleet, or add a namespace matcher to the two expressions.
+
 No expression names a device, and none groups by one: the series carry no device identity (design
 §15), and the decision log answers "which devices". The labels used are bounded: `instance`,
 `key_ref`, `version`, `server`, `issuer`, `outcome`, `feed`, `pool`, `component`.
@@ -27,6 +34,9 @@ threshold when you change the setting it follows.
 
 | Statement | Alert | Severity | for | Why this threshold |
 |---|---|---|---|---|
+| pre-beta review, deploy I2: a port49d or broker that is down raises no alarm of its own, because every other rule reads series it no longer exports | `port49_target_down` | page | 2m | `up == 0` for a scrape target of either job; two minutes outlasts a restart's missed scrapes. |
+| pre-beta review, deploy I2: a target Prometheus is not scraping at all has no `up` series, so `== 0` never matches | `port49_target_absent` | page | 5m | `absent()` of port49d's `up`. Prometheus's pod discovery keeps a target only while its pod exists, so a StatefulSet with every pod Pending or deleted leaves no series for `== 0` to match, and every device has lost port49: a page. Five minutes outlasts a rollout. A mislabelled scrape config shows here too. |
+| pre-beta review, deploy I2: the same for the broker | `port49_broker_target_absent` | ticket | 10m | `absent()` of the broker's `up`: no token can be minted, but held tokens still log in. On the memory-store trial, which runs no separate broker, the broker rule fires; drop it there or silence it. |
 | roadmap, plan 12a hand-off: "an alarm on `port49_connections_shed_total{reason="global_cap"}` increasing" | `port49_global_cap_shedding` | page | none | Any shed connection is a device refused, so any increase pages; five minutes smooths one scrape. |
 | roadmap, plan 12a hand-off: "a warning on `port49_connections` near the cap" | `port49_connections_near_cap` | ticket | 10m | Ten minutes at 80% is a trend, not a burst; the page above covers the cap itself. |
 | roadmap, plan 12b hand-off: "an alarm on `port49_key_secret_files_changed > 0` for 10m" | `port49_key_secret_files_changed` | ticket | 10m | A rotated file is expected for minutes while the rollout restarts; ten minutes is a forgotten restart. |
@@ -34,7 +44,6 @@ threshold when you change the setting it follows.
 | roadmap, plan 12b hand-off; metric help: "within 90 days" | `port49_issuing_ca_expiring` | ticket | none | Ninety days is a CA rollover's lead time; a CA already at 0 is the page above, not this ticket. |
 | spec §13 key rotation: "Alarm severity escalates as `retire_after` approaches while devices still present the" | `port49_key_retirement_within_7d` | ticket | none | A week is a change window; the series carry no device identity, the log names the devices. |
 | spec §13 key rotation: "Alarm severity escalates as `retire_after` approaches while devices still present the" | `port49_key_retirement_within_1d` | page | none | A day is the last working shift; a version past retire_after with devices on it is refusing them now. |
-| spec §13 decision 36; design §15: "`port49_redemption_restore_guarded` at 1 on a port49d for longer than starting the brokers takes" | `port49_redemption_restore_guarded` | page | 10m | Ten minutes is longer than starting the brokers takes; every token redemption is refused until it lifts, and a break-glass login on IOS-XE too. |
 | roadmap, plan 12b hand-off: "an alert on `port49_admin_touch_total{outcome="refused"}`" | `port49_admin_touch_refused` | page | none | Someone holds an admin credential without the touch; no benign cause repeats. |
 | roadmap, plan 11b hand-off: "Alarm on `port49_policy_fail_closed_compositions` > 0" | `port49_policy_fail_closed_compositions` | ticket | none | A standing condition of the policy, not an incident; a ticket the author sees. |
 | roadmap, plan 3/6 reload: "`port49_policy_reloads_total{outcome}` ... alarmed" | `port49_policy_file_refused` | ticket | 5m | An edit in progress is refused for seconds; five minutes is a file that stayed wrong. |
@@ -70,6 +79,8 @@ threshold when you change the setting it follows.
 | roadmap, plan 11 TLS alarms: "`increase(port49_inventory_changes_total{kind="transport_changed"}[1h]) > 0`" | `port49_inventory_transport_changed` | ticket | none | A downgrade is silent otherwise. |
 | roadmap, plan 9a, a provider outage: "`time() - port49_oidc_keys_last_success_timestamp_seconds > jwks_max_age / 2 or absent(...)`, with a `for:` of a few minutes" | `port49_oidc_keys_stale` | ticket | 5m | Half of jwks_max_age (24h by default): one more failed cycle and every token for that issuer is refused. Set it to yours. Not `or absent()`: the series exists only for configured issuers, so on a deployment with no OIDC it would fire forever. |
 | roadmap, plan 9a hand-off to plan 12: "logouts `store_error\|partial`" | `port49_oidc_logouts_failing` | ticket | none | Each is a logout the store did not take whole. |
+| design §15: "`port49_redemption_restore_unjudged` at 1 on a port49d" | `port49_redemption_restore_unjudged` | page | 2m | The one refusal state the restore floor keeps: port49d cannot read `meta/witness`, so it refuses every token login with an `ERROR`, which IOS XE and Junos under `tacplus` alone treat as final. A failed read clears in seconds; two minutes is a store or a role that stayed wrong. |
+| design §15: "`port49_store_restore_detected_timestamp_seconds` above 0" | `port49_store_restore_detected` | ticket | none | Fires for a day after port49d finds its store restored (the gauge holds the time); the restore runbook (design §13) is the work, and revocations made after the snapshot are lost until it is followed. The 0 of a port49d that never found one is skipped. |
 | roadmap, plan 9a hand-off to plan 12: "tokens `unavailable`" | `port49_oidc_tokens_unavailable` | ticket | none | The identity provider is unreachable and the held keys have expired. |
 | roadmap, plan 9 hand-off to plan 12: "`increase(port49_workload_certificates_renewal_late_total[1h]) > 0` (summed over replicas)" | `port49_workload_certificates_renewal_late` | ticket | none | Each replica counts a certificate once per 24h, so any increase of the sum is a late renewer. |
 | roadmap, plan 8 directory: "`time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`" | `port49_directory_refresh_stale` | ticket | 15m | 600 is refresh_interval at its default (10m); set 3x yours. The freshest refresh anywhere, so a runner that lost the hold does not alarm on its old value; and only once the newest process with the series is also that old, so a restart does not, but a restart in the middle of an outage does (the gauge reads 0 until a pass completes). 15 minutes covers a failover: the new runner's series sits at 0 until its first pass completes. last_over_time keeps the rule firing for a day after every broker is gone. |

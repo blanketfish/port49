@@ -11,7 +11,7 @@
     "value": {
       "command_verdicts": null,
       "commands": null,
-      "config_bytes": 14544,
+      "config_bytes": 15060,
       "ended": true,
       "hostname_checked": "host-name srx1;",
       "mint_principals": [
@@ -35,7 +35,7 @@
       "crashfile_written_by_stale_run": false,
       "crashfiles_total": 0,
       "first_status": "success",
-      "oxidized_log_excerpt": "2026-10-08 12:15:25.322129 W [7:Job 'srx1'] Oxidized::Node -- 172.100.100.21 raised Net::SSH::AuthenticationFailed with msg \"Authentication failed for user svc-oxidized@172.100.100.21\"",
+      "oxidized_log_excerpt": "2026-11-06 06:03:34.816368 W [7:Job 'srx1'] Oxidized::Node -- 172.100.100.21 raised Net::SSH::AuthenticationFailed with msg \"Authentication failed for user svc-oxidized@172.100.100.21\"",
       "process_crash_file": false,
       "receipt_idle_ttl": "2m",
       "stale_redeem_by_verdict_reason": {

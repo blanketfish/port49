@@ -102,7 +102,6 @@ flooding source is refused at Accept.
 
 ```
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 ```
 
 ## File Structure
@@ -252,8 +251,7 @@ that device is still admitted. Where port49d still serves the device under a new
 git add docs/design
 git commit -m "docs: spec a decline window that refuses a declined device's retries at Accept (L31)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -497,8 +495,7 @@ func (l *Limiter) inWindowLocked(m map[netip.Addr]failure, src netip.Addr) bool 
 git add internal/daemon/limits
 git commit -m "feat(limits): a decline window, on the strike's schedule and not a strike
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -648,8 +645,7 @@ func (s *conn) unadmitted(h wire.Header) {
 git add internal/daemon/server internal/daemon/metrics
 git commit -m "fix(server): close an unadmitted source as a key miss, refusing its retries at Accept (L31)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1095,8 +1091,7 @@ func declining(d Deps, dev admission.Resolved, admitted bool) bool {
 git add internal/daemon/server internal/daemon/metrics
 git commit -m "fix(server): refuse a refused or quarantined device's retries at Accept, strike-free (L31)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1623,8 +1618,7 @@ func l31SingleConnect(path, addr string, since time.Time) (set, unset int, err e
 git add tests/lab/l29_shell_test.go tests/lab/l31_test.go tests/lab/l31_unit_test.go
 git commit -m "test(lab): TestL31BreakGlass, break-glass on a declined device against the rekeyed control
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1702,8 +1696,7 @@ git add tests/lab/results/L31-cisco_nxos.md tests/lab/results/L31-cisco_iosxe.md
   tests/lab/results/L31-arista_eos.md tests/lab/evidence/L31-*.pcap
 git commit -m "test(lab): L31 measured on NX-OS, IOS-XE and vEOS with single-connection on
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1746,8 +1739,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 git add docs/design
 git commit -m "docs: close lab register entry L31 as measured
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
   If L31 did not close, commit instead `docs: record L31's measurement` with the paragraph for what
@@ -1762,8 +1754,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 git add docs/superpowers/plans/README.md
 git commit -m "docs: fix/breakglass-reset as built
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

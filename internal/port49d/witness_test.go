@@ -41,7 +41,7 @@ func TestARestoredWitnessIsCaught(t *testing.T) {
 		"equal":                       {etcdstore.WitnessRead{ModRevision: 1907, Header: 1950}, 1907, true, false, ""},
 		"above, another runner's":     {etcdstore.WitnessRead{ModRevision: 2001, Header: 2001}, 1907, true, false, ""},
 		"absent, with a record":       {etcdstore.WitnessRead{Header: 1_000_000}, 1907, true, true, "is absent, below the 1907 this replica saw"},
-		"no record":                   {etcdstore.WitnessRead{ModRevision: 812, Header: 900}, 0, false, false, "no witness record in broker.state_dir"},
+		"no record":                   {etcdstore.WitnessRead{ModRevision: 812, Header: 900}, 0, false, true, "no witness record in broker.state_dir"},
 	} {
 		got, why := restored(c.read, c.recorded, c.have)
 		if got != c.want || !strings.Contains(why, c.says) || (c.says == "" && why != "") {
@@ -59,7 +59,11 @@ func TestTheWitnessRecordKeepsTheHighest(t *testing.T) {
 	if _, have := w.Recorded(); have {
 		t.Fatal("a record with no file")
 	}
-	w.Saw(1907)
+	w.Saw(500) // a record with no file takes no tell: a purge is owed
+	if _, have := w.Recorded(); have {
+		t.Fatal("a record owing a purge took the follower's tell")
+	}
+	w.Reset(1907)
 	w.Saw(812) // a restore's, followed
 	if got, have := w.Recorded(); got != 1907 || !have {
 		t.Fatalf("%d %v", got, have)
@@ -148,8 +152,7 @@ func TestAWitnessRecordThatCannotBeReadPurgesOnce(t *testing.T) {
 // record before the read answers, is no restore: the record is taken
 // before the read (final check, Minor 1).
 func TestAWitnessWrittenDuringTheReadIsNoRestore(t *testing.T) {
-	w := openWitness(filepath.Join(t.TempDir(), stateWitnessFile), "/port49/", io.Discard)
-	w.Saw(1907)
+	w := recordedWitness(t, 1907)
 	_, gone, why, err := readWitness(context.Background(), w, func(context.Context) (etcdstore.WitnessRead, error) {
 		w.Saw(2001) // another runner's witness, followed while the read was in flight
 		return etcdstore.WitnessRead{ModRevision: 1907, Header: 1950}, nil
@@ -172,8 +175,7 @@ func TestAQuietStoreWritesNoWitness(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	r := &runner{raw: s, who: "port49-broker on test",
-		witness: openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)}
+	r := &runner{raw: s, who: "port49-broker on test", witness: recordedWitness(t, 0)}
 	at := func() uint64 {
 		t.Helper()
 		w, err := s.Witness(ctx)
@@ -248,8 +250,7 @@ func TestARunningRunnerPurgesARestoreAndKeepsTheRecordUntilDone(t *testing.T) {
 	if err != nil || w0 == 0 {
 		t.Fatalf("%d %v", w0, err)
 	}
-	wit := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
-	wit.Saw(w0 + 1000) // a witness the restore lost
+	wit := recordedWitness(t, w0+1000) // a witness the restore lost
 	var out syncBuffer
 	e := stderr
 	t.Cleanup(func() { stderr = e })
@@ -319,11 +320,11 @@ func (m *movesWitness) PurgeTokens(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// A purge whose meta/purged write is refused, because meta/witness
-// changed during it, leaves the record where it is: the next pass judges
-// the store again and purges once more, so port49d's guard is never
-// released over tokens that were not purged (Task 15d re-review M-8).
-func TestARefusedPurgeRecordLeavesTheWitnessRecordForTheNextPass(t *testing.T) {
+// A purge during which meta/witness changed leaves the record where it is:
+// the next pass judges the store again and purges once more, so the record
+// never stands for a store whose tokens were not purged (Task 15d re-review
+// M-8; decision 56 ruling 2).
+func TestAPurgeUnderAMovedWitnessLeavesTheRecordForTheNextPass(t *testing.T) {
 	f := splitFleet(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -342,8 +343,7 @@ func TestARefusedPurgeRecordLeavesTheWitnessRecordForTheNextPass(t *testing.T) {
 	if err != nil || w0 == 0 {
 		t.Fatalf("%d %v", w0, err)
 	}
-	wit := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
-	wit.Saw(w0 + 1000) // a witness the restore lost
+	wit := recordedWitness(t, w0+1000) // a witness the restore lost
 	var out syncBuffer
 	e := stderr
 	t.Cleanup(func() { stderr = e })
@@ -355,9 +355,6 @@ func TestARefusedPurgeRecordLeavesTheWitnessRecordForTheNextPass(t *testing.T) {
 	if err := r.witnessPass(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged != 0 {
-		t.Fatalf("a refused purge record landed: %+v %v", got, err)
-	}
 	if rec, _ := wit.Recorded(); rec != w0+1000 {
 		t.Fatalf("a refused purge record reset the witness record to %d", rec)
 	}
@@ -367,8 +364,8 @@ func TestARefusedPurgeRecordLeavesTheWitnessRecordForTheNextPass(t *testing.T) {
 	if n := strings.Count(out.String(), "every unspent token is purged"); n != 2 {
 		t.Fatalf("%d purges, want a second after the refused one:\n%s", n, out.String())
 	}
-	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged == 0 {
-		t.Fatalf("the second purge wrote no meta/purged: %+v %v", got, err)
+	if rec, _ := wit.Recorded(); rec == w0+1000 {
+		t.Fatal("the second purge left the record above the store's witness")
 	}
 }
 
@@ -431,16 +428,16 @@ func followWitness(t *testing.T) func(t *testing.T, rec *witnessRecord, atLeast 
 	}
 }
 
-// followGuard is followWitness for port49d's restore guard, which a test
+// followGuard is followWitness for port49d's restore floor, which a test
 // cannot name (run makes it): the wait is until guards distinct guards have
 // each followed atLeast, guards being the number of daemons the test runs, so
 // a test with two daemons cannot pass on the first one alone.
 func followGuard(t *testing.T) func(t *testing.T, guards int, atLeast uint64) {
 	t.Helper()
-	var h hookSeen[*restoreGuard]
-	old := guardFollowed
-	guardFollowed = func(g *restoreGuard, rev uint64) { h.add(g, rev, false) }
-	t.Cleanup(func() { guardFollowed = old })
+	var h hookSeen[*restoreFloor]
+	old := floorFollowed
+	floorFollowed = func(g *restoreFloor, rev uint64) { h.add(g, rev, false) }
+	t.Cleanup(func() { floorFollowed = old })
 	return func(t *testing.T, guards int, atLeast uint64) {
 		t.Helper()
 		reached := func() (n int) {
@@ -485,14 +482,14 @@ func passesAfter[P comparable](h *hookSeen[P], what string) func(t *testing.T, d
 	}
 }
 
-// countPasses installs a recording restorePassed, restored in t.Cleanup, and
+// countPasses installs a recording floorPassed, restored in t.Cleanup, and
 // returns a wait for n more completed passes of each of daemons guards.
 func countPasses(t *testing.T) func(t *testing.T, daemons, n int) {
 	t.Helper()
-	var h hookSeen[*restoreGuard]
-	old := restorePassed
-	restorePassed = func(g *restoreGuard) { h.add(g, 0, true) }
-	t.Cleanup(func() { restorePassed = old })
+	var h hookSeen[*restoreFloor]
+	old := floorPassed
+	floorPassed = func(g *restoreFloor) { h.add(g, 0, true) }
+	t.Cleanup(func() { floorPassed = old })
 	return passesAfter(&h, "restore guards")
 }
 
@@ -522,10 +519,10 @@ func openFollowStore(t *testing.T) (*etcdtest.Server, *etcdstore.Store) {
 func TestTheWitnessHookSeesWhatTheFollowerSaw(t *testing.T) {
 	waitFollowed := followWitness(t)
 	_, s := openFollowStore(t)
-	rec := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
+	rec := recordedWitness(t, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); s.FollowWitness(ctx, rec.followed) }()
+	go func() { defer close(done); s.FollowWitnessLive(ctx, rec.followed) }()
 	t.Cleanup(func() { cancel(); <-done })
 	rev, err := s.PutWitness(ctx, "port49-broker on test", 0)
 	if err != nil || rev == 0 {
@@ -537,26 +534,26 @@ func TestTheWitnessHookSeesWhatTheFollowerSaw(t *testing.T) {
 	}
 }
 
-// Passes are counted per guard: a second guard's are not the first's.
-func TestRestorePassedCountsPasses(t *testing.T) {
-	var h hookSeen[*restoreGuard]
-	old := restorePassed
-	restorePassed = func(g *restoreGuard) { h.add(g, 0, true) }
-	t.Cleanup(func() { restorePassed = old })
+// Passes are counted per floor: a second floor's are not the first's.
+func TestFloorPassedCountsPasses(t *testing.T) {
+	var h hookSeen[*restoreFloor]
+	old := floorPassed
+	floorPassed = func(f *restoreFloor) { h.add(f, 0, true) }
+	t.Cleanup(func() { floorPassed = old })
 	_, s := openFollowStore(t)
-	a, b := newRestoreGuard(io.Discard), newRestoreGuard(io.Discard)
+	a, b := newRestoreFloor(io.Discard, time.Now), newRestoreFloor(io.Discard, time.Now)
 	ctx := context.Background()
-	pass := func(g *restoreGuard) {
+	pass := func(f *restoreFloor) {
 		t.Helper()
-		if !g.pass(ctx, time.Second, s.RestoreRead, nil) {
+		if !f.pass(ctx, time.Second, s.RestoreRead) {
 			t.Fatal("a pass was cut short")
 		}
 	}
-	waitA := passesFrom(&h, "restore guards")
+	waitA := passesFrom(&h, "restore floors")
 	pass(a)
 	pass(a)
 	waitA(t, 1, 2) // returns: a completed two since the counts were taken
-	waitAB := passesFrom(&h, "restore guards")
+	waitAB := passesFrom(&h, "restore floors")
 	pass(a)
 	pass(a)
 	if base := h.snapshot(); base[a] != 4 || base[b] != 0 {
@@ -577,36 +574,31 @@ func TestRestorePassedCountsPasses(t *testing.T) {
 // follow hook fires after Saw has raised the witness followed, and the pass
 // hook after judge has judged the read. A hook moved before either would take
 // the waits back to timing, and these go red.
-func TestTheGuardHooksFireAfterTheirWork(t *testing.T) {
+func TestTheFloorHooksFireAfterTheirWork(t *testing.T) {
 	var atFollow, atPass []string
-	oldF, oldP := guardFollowed, restorePassed
-	guardFollowed = func(g *restoreGuard, rev uint64) {
-		if high, _, _ := g.recorded(); high < rev {
-			atFollow = append(atFollow, fmt.Sprintf("followed %d, recorded %d", rev, high))
+	oldF, oldP := floorFollowed, floorPassed
+	floorFollowed = func(f *restoreFloor, rev uint64) {
+		if s := f.record(); s.witness < rev {
+			atFollow = append(atFollow, fmt.Sprintf("followed %d, recorded %d", rev, s.witness))
 		}
 	}
-	restorePassed = func(g *restoreGuard) {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		if !g.checked {
+	floorPassed = func(f *restoreFloor) {
+		if f.Held() {
 			atPass = append(atPass, "the read was not judged")
 		}
 	}
-	t.Cleanup(func() { guardFollowed, restorePassed = oldF, oldP })
+	t.Cleanup(func() { floorFollowed, floorPassed = oldF, oldP })
 	_, s := openFollowStore(t)
-	g := newRestoreGuard(io.Discard)
-	g.followed(7)
-	// A guard waiting for a read that answers: judge lifts it.
-	g.mu.Lock()
-	g.checked = false
-	g.mu.Unlock()
-	if !g.pass(context.Background(), time.Second, s.RestoreRead, nil) {
+	f := newRestoreFloor(io.Discard, time.Now)
+	f.begin(metrics.New(prometheus.NewRegistry())) // held until a read answers
+	f.followed(7)
+	if !f.pass(context.Background(), time.Second, s.RestoreRead) {
 		t.Fatal("a pass was cut short")
 	}
 	if len(atFollow) > 0 {
-		t.Errorf("guardFollowed fired before Saw: %v", atFollow)
+		t.Errorf("floorFollowed fired before Saw: %v", atFollow)
 	}
 	if len(atPass) > 0 {
-		t.Errorf("restorePassed fired before judge: %v", atPass)
+		t.Errorf("floorPassed fired before judge: %v", atPass)
 	}
 }

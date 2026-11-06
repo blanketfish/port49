@@ -1,11 +1,12 @@
 # L3-nxos — cisco_nxos
 
-- **Date measured:** 2026-09-21
+- **Date measured:** 2026-11-06
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)
 - **Topology:** `tests/lab/topologies/nxos.clab.yml`
-- **Capture:** `tests/lab/evidence/L3-nxos-cisco_nxos.pcap` — 200 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L3-nxos-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L3-nxos-cisco_nxos.pcap` — 184 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L3-nxos-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=nxos`, `-run ^TestL3NXOSEnable$`
 
 ## Claim
 
@@ -33,41 +34,6 @@ user:breakglass
         this user account has no expiry date
         roles:network-admin 
 user:alice01
-        roles:network-admin 
-account created through REMOTE authentication
-Credentials such as ssh server key will be cached temporarily only for this user account
-Local login not possible
-user:alice02
-        roles:network-operator 
-account created through REMOTE authentication
-Credentials such as ssh server key will be cached temporarily only for this user account
-Local login not possible
-user:alice03
-        roles:network-operator 
-account created through REMOTE authentication
-Credentials such as ssh server key will be cached temporarily only for this user account
-Local login not possible
-user:alice04
-        roles:network-operator 
-account created through REMOTE authentication
-Credentials such as ssh server key will be cached temporarily only for this user account
-Local login not possible
-user:alice05
-        roles:network-operator 
-account created through REMOTE authentication
-Credentials such as ssh server key will be cached temporarily only for this user account
-Local login not possible
-user:alice06
-        roles:network-operator 
-account created through REMOTE authentication
-Credentials such as ssh server key will be cached temporarily only for this user account
-Local login not possible
-user:alice07
-        roles:vdc-operator 
-account created through REMOTE authentication
-Credentials such as ssh server key will be cached temporarily only for this user account
-Local login not possible
-user:alice08
         roles:network-admin 
 account created through REMOTE authentication
 Credentials such as ssh server key will be cached temporarily only for this user account

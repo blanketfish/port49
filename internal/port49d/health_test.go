@@ -3,6 +3,7 @@ package port49d
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -14,8 +15,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/store"
 	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/store/guard"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // scripted is a check that answers from a script, one entry per call,
@@ -285,4 +289,47 @@ func TestAHungMinorityMemberDoesNotFailFiveChecksInARow(t *testing.T) {
 		t.Fatalf("%d failed checks in a row with one member hung and quorum healthy: the default close_after (5) "+
 			"would take every replica dark with etcd up; report to Ryan (OR-1), do not raise the default", worst)
 	}
+}
+
+// watch calls passed after each passing check and not after a failing one
+// (stores I2).
+func TestWatchCallsPassedAfterEachPassingCheckOnly(t *testing.T) {
+	s := &scripted{steps: []error{nil, errCheck, nil, errCheck, errCheck, errCheck}}
+	h := testHealth(s.check)
+	var passed atomic.Int32
+	h.passed = func() { passed.Add(1) }
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	h.watch(ctx, func(error) {})
+	if passed.Load() != 2 {
+		t.Fatalf("passed called %d times for 2 passing checks", passed.Load())
+	}
+}
+
+// With the real guard: an open token pool, then one passing check, then a
+// Candidates call is not refused circuit_open.
+func TestAPassingHealthCheckClosesTheGuardsOpenTokenPool(t *testing.T) {
+	inner := memory.New(time.Now)
+	var gd store.Store = guard.Wrap(&failingTokens{Store: inner}, guard.Config{Proc: "port49d", Component: "daemon",
+		CallTimeout: time.Second, BulkTimeout: time.Second, Failures: 2, OpenFor: time.Hour, Now: time.Now})
+	for i := 0; i < 2; i++ {
+		gd.Candidates(context.Background(), store.TokenKey{})
+	}
+	if _, err := gd.Candidates(context.Background(), store.TokenKey{}); !strings.Contains(fmt.Sprint(err), "circuit is open") {
+		t.Fatalf("the pool did not open: %v", err)
+	}
+	h := testHealth(func(context.Context) error { return nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	h.passed = func() { gd.(guard.Closer).CloseCircuits("a store health check passed"); cancel() }
+	h.watch(ctx, func(error) {})
+	if _, err := gd.Candidates(context.Background(), store.TokenKey{}); err != nil && strings.Contains(err.Error(), "circuit is open") {
+		t.Fatalf("still refused after a passing check: %v", err)
+	}
+}
+
+type failingTokens struct{ store.Store }
+
+func (failingTokens) Candidates(context.Context, store.TokenKey) ([]store.Token, error) {
+	return nil, store.ErrUnavailable
 }

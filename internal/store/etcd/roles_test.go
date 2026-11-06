@@ -390,7 +390,7 @@ func TestTheRolesAreTheGoldenCeiling(t *testing.T) {
 		"port49_daemon readwrite /port49/v1/b/",
 		"port49_daemon read /port49/v1/rv/", "port49_daemon read /port49/v1/lw/",
 		"port49_daemon read /port49/v1/meta/seal_keys", "port49_daemon read /port49/v1/meta/witness",
-		"port49_daemon read /port49/v1/meta/purged", "port49_daemon read /port49/v1/meta/judged_bundle",
+		"port49_daemon read /port49/v1/meta/judged_bundle",
 		"port49_daemon read /port49/v1/meta/ping",
 		"port49_broker readwrite /port49/v1/",
 	}
@@ -399,11 +399,10 @@ func TestTheRolesAreTheGoldenCeiling(t *testing.T) {
 	}
 }
 
-// Under the roles etcd enforces, the broker writes meta/judged,
-// meta/witness and meta/purged, and the daemon reads the restore pair and
-// follows meta/witness but writes none of the three: a stolen daemon key
-// cannot forge a witness a restore is detected by, nor the purge that lets
-// redemptions resume (Task 15d, Ruling 19).
+// Under the roles etcd enforces, the broker writes meta/judged and
+// meta/witness, and the daemon reads the restore read and follows
+// meta/witness but writes neither: a stolen daemon key cannot forge a
+// witness a restore is detected by (Task 15d, Ruling 19).
 func TestTheDaemonReadsExactlyItsMetaKeys(t *testing.T) {
 	const prefix = "/port49/"
 	srv := provisioned(t, prefix)
@@ -417,13 +416,9 @@ func TestTheDaemonReadsExactlyItsMetaKeys(t *testing.T) {
 	if err != nil || w == 0 {
 		t.Fatalf("the broker writes meta/witness: %d, %v", w, err)
 	}
-	p, err := b.PutPurged(ctx, "broker-a", w)
-	if err != nil || p == 0 {
-		t.Fatalf("the broker writes meta/purged: %d, %v", p, err)
-	}
 	r, err := d.RestoreRead(ctx)
-	if err != nil || r.Witness != w || r.Purged != p {
-		t.Fatalf("the daemon reads the restore pair: %+v, %v (witness %d, purged %d)", r, err, w, p)
+	if err != nil || r.Witness != w {
+		t.Fatalf("the daemon reads the restore read: %+v, %v (witness %d)", r, err, w)
 	}
 	if wr, err := d.Witness(ctx); err != nil || wr.ModRevision != w {
 		t.Fatalf("the daemon reads meta/witness: %+v, %v", wr, err)
@@ -455,9 +450,6 @@ func TestTheDaemonReadsExactlyItsMetaKeys(t *testing.T) {
 	}
 	if _, err := d.PutWitness(ctx, "daemon", w); !errors.Is(err, ErrRefused) {
 		t.Errorf("the daemon wrote meta/witness: %v", err)
-	}
-	if _, err := d.PutPurged(ctx, "daemon", w); !errors.Is(err, ErrRefused) {
-		t.Errorf("the daemon wrote meta/purged: %v", err)
 	}
 	if err := d.PutJudged(ctx, "bundle-2", []byte("policy")); !errors.Is(err, ErrRefused) {
 		t.Errorf("the daemon wrote meta/judged: %v", err)
@@ -666,5 +658,22 @@ func TestTheDirectoryCheckJudgesItsOwnKeyspace(t *testing.T) {
 	}
 	if why := k.beyondDirectoryDaemon("/port49-e", "\x00", false); why != "" {
 		t.Fatalf("an open-ended read from past the keyspace: %s", why)
+	}
+}
+
+// meta/purged is gone (the restore floor refuses by revision, and the purge
+// waits on nothing): the daemon role grants no read of it.
+func TestTheDaemonRoleReadsNoPurgeRecord(t *testing.T) {
+	const prefix = "/port49/"
+	srv := provisioned(t, prefix)
+	ctx := context.Background()
+	if _, err := srv.Client(t, "root").Put(ctx, prefix+"v1/meta/purged", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Client(t, "port49-daemon").Get(ctx, prefix+"v1/meta/purged"); err == nil {
+		t.Fatal("the daemon role reads meta/purged")
+	}
+	if _, err := srv.Client(t, "port49-daemon").Get(ctx, prefix+"v1/meta/witness"); err != nil {
+		t.Fatalf("the daemon role cannot read meta/witness: %v", err)
 	}
 }

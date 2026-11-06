@@ -9,6 +9,8 @@
 #   - dc_fabric declares `on_missing: exclude`. Its grant carries
 #     interface_tech's deny, and a keyed scope that delivers a deny must say
 #     which way a device with no data goes (spec §5.5).
+#   - security_ir's grant is on srx_unpatched_known, an exclude scope: a grant on
+#     an include scope is a load error (spec §5.5).
 
 privilege_levels:
   - {name: readonly}
@@ -30,6 +32,11 @@ scopes:
     attached_roles:
       humans:   [cve_2026_xxxx]
       machines: [cve_2026_xxxx]
+
+  # IR's grant is earned by data: a grant that admits a session on an include scope is a load error (§5.5).
+  - name: srx_unpatched_known
+    match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
+    on_missing: exclude
 
 roles:
   - name: read_only
@@ -106,7 +113,7 @@ grants:
   - {subject: noc_tier1,     scope: all_devices,   roles: [read_only, no_disruptive]}
   - {subject: noc_tier1,     scope: dc_fabric,     roles: [interface_tech], expires: 2026-12-01}
   - {subject: svc_oxidized,  scope: all_devices,   roles: [read_only, elevated_session]}
-  - {subject: security_ir,   scope: srx_unpatched, roles: [cve_2026_xxxx_assess]}
+  - {subject: security_ir,   scope: srx_unpatched_known, roles: [cve_2026_xxxx_assess]}
 
 tests:
   - {subject: noc_tier1,    device: leaf-01, command: "show version",   expect: permit}

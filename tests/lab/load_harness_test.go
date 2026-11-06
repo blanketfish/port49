@@ -161,7 +161,7 @@ func loadPolicy() string {
 	var b strings.Builder
 	b.WriteString(`scopes:
   - {name: all_devices, match: {}}
-  - {name: arista, match: {platform: arista_eos}, on_missing: include}
+  - {name: arista, match: {platform: arista_eos}, on_missing: exclude}
 roles:
   - {name: load_admin, privilege: admin, permit: ["**"]}
   - {name: load_read, privilege: readonly, permit: ["show **"]}

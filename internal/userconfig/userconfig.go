@@ -71,8 +71,7 @@ var SystemOwner uint32
 
 // legacyDir is plan 9a's directory, $XDG_CONFIG_HOME/port49, else
 // ~/.config/port49. Nothing in it is read: a config.yaml there is refused by
-// Lstat, naming the move (LoadAll), and the pins file is only named
-// (LegacyPinsPath; decision 46 ruling 5).
+// Lstat, naming the move (LoadAll).
 func legacyDir() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "port49")
@@ -82,10 +81,6 @@ func legacyDir() string {
 	}
 	return filepath.Join(".config", "port49")
 }
-
-// LegacyPinsPath is plan 9a's pins file. Nothing reads it since plan 9d
-// (decision 46 ruling 5); port49 ssh names it while it exists.
-func LegacyPinsPath() string { return filepath.Join(legacyDir(), "known_hosts") }
 
 // IssuedPathsIn is where, under dir, `port49 login` keeps the certificate a
 // broker issued it and its key (spec §13 decision 43 ruling 7):

@@ -757,10 +757,10 @@ func run(parent context.Context, cfgPath string) error {
 	// And the directory store's marks are held across a store gone too, and
 	// how fresh they are (plan 11a, R19).
 	dc := &directoryCache{fresh: store.NewFreshness(time.Now), fatal: make(chan error, 1)}
-	// The restore guard is the process's too: a restore that outlasts
+	// The restore floor is the process's too: a restore that outlasts
 	// hold_ttl ends a run, and the next must still know what was followed
-	// (plan 7e, Task 15d).
-	restored := newRestoreGuard(stderr)
+	// (spec decision 56).
+	restored := newRestoreFloor(stderr, time.Now)
 	// The failed-check count is the process's too: the registry is per run, so
 	// a gauge set only by the run that ended reads 0 in the next one's, and the
 	// alert "above 0 for three intervals" would resolve at the close while the
@@ -823,7 +823,7 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 // package comment gives. again says a store gone ended the run before.
 // authMarks and restored are the process's (run).
 func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger,
-	alarm *keyAlarm, authMarks *store.Marks, dc *directoryCache, restored *restoreGuard, hs *healthState) (err error) {
+	alarm *keyAlarm, authMarks *store.Marks, dc *directoryCache, restored *restoreFloor, hs *healthState) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -1030,10 +1030,13 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		defer func() { stopFollow(); <-followDone }()
 	}
 	if sts.etcd != nil {
-		// The restore guard reads the store at once and every second, and
-		// redemptions wait for that first read once a witness was followed
-		// (Task 15d); joined before sts.close too.
-		restored.begin(m.RedemptionRestoreGuarded, m.RedemptionRestoreGuardUntil, m.StoreOps)
+		// The restore floor reads the store once before any listener opens,
+		// so a drop found there is in force before the first redemption, and
+		// then every second; joined before sts.close too.
+		restored.attach(restoreRecordPath(cfg.Accounting.SpoolPath),
+			cfg.Stores.Session.Etcd.Prefix)
+		restored.begin(m)
+		restored.pass(ctx, cfg.Stores.Session.Etcd.CallTimeout, sts.etcd.RestoreRead)
 		gctx, stopGuard := context.WithCancel(ctx)
 		guardDone := make(chan struct{})
 		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd, cfg.Stores.Session.Etcd.CallTimeout) }()
@@ -1135,7 +1138,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 	}
 	if startDoc != nil {
-		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
+		persistStart(procOf(cfg), cfg.InventoryService, coldPick{p: startDoc, from: startFrom}, m)
 	}
 	if sts.judged != nil && live != nil {
 		// Whether this port49d's policy is the bundle the runner last judged
@@ -1321,12 +1324,11 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 		return out
 	}, time.Now)
-	// On etcd, a redemption asks the restore guard first (Task 15d); on
-	// memory nothing is restored.
-	var redeemGuard func() bool
-	var redeemFloor func() time.Time
+	// On etcd, a redemption asks the restore floor; on memory nothing is
+	// restored.
+	var floor authen.RestoreFloor
 	if sts.etcd != nil {
-		redeemGuard, redeemFloor = restored.Allows, restored.RedeemFloor
+		floor = restored
 	}
 	if cfg.StalenessOff {
 		fmt.Fprintln(stderr, procOf(cfg)+": session.staleness_ceiling is 0s: no context ever goes context_stale, so a "+
@@ -1354,7 +1356,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// The context cache is authorization's alone (plan 7f, Ruling 5): a
 		// login's join reads the store.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
-			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRedeemGuard(redeemGuard).WithRedeemFloor(redeemFloor),
+			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRestoreFloor(floor),
 		// `session.staleness_ceiling` defaults to 4h (plan 7g; OR-1): the
 		// broker's scheduled refresh stamps `refreshed_at` every
 		// `broker.refresh_interval`. An explicit 0s turns the check off, which

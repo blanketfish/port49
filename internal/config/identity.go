@@ -291,6 +291,22 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 			}
 		}
 	}
+	// A person's ID token is taken to issue a certificate or as an idp_mfa
+	// proof and nowhere else (decision 56 ruling 4). An idp_mfa proof is a
+	// second factor for a person who arrived by x509, so it counts only beside
+	// an x509 people verifier: a human oidc verifier with neither issuance nor
+	// that could sign no one in.
+	idpMFA := y.PerLoginMFA != nil && y.PerLoginMFA.IdPMFA != nil && out.X509AnchorFile != ""
+	if out.Issuance == nil && !idpMFA {
+		for i, h := range y.Humans {
+			if h.Type == "oidc" {
+				return nil, fmt.Errorf("config: broker.identity.humans[%d] (oidc): a person's ID token is taken only "+
+					"to issue a certificate or, beside an x509 humans verifier, as a per_login_mfa.idp_mfa proof; set "+
+					"issuance (`issuance: {}` takes its defaults), add an x509 humans verifier with idp_mfa, or remove "+
+					"this verifier (decision 56 ruling 4)", i)
+			}
+		}
+	}
 	return out, nil
 }
 

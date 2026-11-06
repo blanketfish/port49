@@ -357,21 +357,6 @@ func knownHostsCannotKeep(userFiles string) string {
 	return ""
 }
 
-// legacyPinsHint says, while plan 9a's pins file exists, that port49 no
-// longer reads it, and how to keep the keys in it (decision 46 ruling 5). It
-// is found by Lstat alone and never opened, so a pins file or a ~/.config
-// others can write stops nothing.
-func legacyPinsHint(stderr io.Writer) {
-	p := userconfig.LegacyPinsPath()
-	if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
-		return
-	}
-	fmt.Fprintf(stderr, "port49 ssh: %s holds keys `port49 devices trust` pinned (plan 9a); port49 no longer reads it, "+
-		"and uses your OpenSSH known_hosts. Its lines are filed under the device names port49 ssh uses, so to keep "+
-		"keys you verified: check they are yours, then `cat %s >> ~/.ssh/known_hosts`, and remove it\n",
-		p, shellWord(p))
-}
-
 // ownPrompt reports whether prompt is ssh asking for the device's own
 // password: "<user>@<device>'s password: " for the password method,
 // "(<user>@<device>) <the device's text>" for keyboard-interactive, where
@@ -883,7 +868,6 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	port := fs.Int("port", 0, "the device's SSH port (default: ssh's, 22 unless your ssh_config says otherwise)")
 	bin := fs.String("ssh", "ssh", "the OpenSSH client to run, 8.5 or later")
 	sshConfig := fs.String("ssh-config", "", "an ssh_config to read in place of ~/.ssh/config (ssh -F)")
-	knownHosts := fs.String("known-hosts", "", "removed in plan 9d: port49 ssh uses your OpenSSH known_hosts")
 	verbose := fs.Bool("v", false, "ssh -v: say each step of the connection and its authentication")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -901,12 +885,6 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			"(decision 42 ruling 8); use `port49 token` and your own ssh for it\n", cmd, device)
 		return 2
 	}
-	if *knownHosts != "" {
-		fmt.Fprintf(stderr, "%s: --known-hosts named port49's own pins file, which plan 9d removed: port49 ssh uses "+
-			"your OpenSSH known_hosts. Name another with UserKnownHostsFile in an ssh_config (--ssh-config FILE)\n", cmd)
-		return 2
-	}
-	legacyPinsHint(stderr)
 	path, err := exec.LookPath(*bin)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)

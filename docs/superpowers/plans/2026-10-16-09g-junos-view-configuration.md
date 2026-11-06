@@ -1304,7 +1304,7 @@ The lab has one occupant at a time. Check it and the floor first:
 
 ```bash
 pgrep -f "^/tmp/go-build[^ ]*/lab\.test" && { echo "a lab run is live: wait"; exit 1; }
-ls -d /home/rwendt/git/port49/.worktrees/*-run 2>/dev/null && { echo "another run worktree exists: wait"; exit 1; }
+ls -d $HOME/git/port49/.worktrees/*-run 2>/dev/null && { echo "another run worktree exists: wait"; exit 1; }
 [ -e /tmp/port49-STOP-LAB ] && { echo "the STOP sentinel is set"; exit 1; }
 [ "$(df -BM --output=avail / | tail -1 | tr -dc 0-9)" -ge 67584 ] || { echo "below the 67584M floor"; exit 1; }
 ```
@@ -1312,16 +1312,16 @@ ls -d /home/rwendt/git/port49/.worktrees/*-run 2>/dev/null && { echo "another ru
 Then pin the run worktree:
 
 ```bash
-sha=$(git -C /home/rwendt/git/port49/.worktrees/junos-view-configuration rev-parse HEAD)
-git -C /home/rwendt/git/port49 worktree add --detach /home/rwendt/git/port49/.worktrees/l68-run "$sha"
-cd /home/rwendt/git/port49/.worktrees/l68-run && make build
+sha=$(git -C $HOME/git/port49/.worktrees/junos-view-configuration rev-parse HEAD)
+git -C $HOME/git/port49 worktree add --detach $HOME/git/port49/.worktrees/l68-run "$sha"
+cd $HOME/git/port49/.worktrees/l68-run && make build
 ```
 
 Start the run loop detached, with its pid recorded. Each test runs in its own invocation per
 platform:
 
 ```bash
-cd /home/rwendt/git/port49/.worktrees/l68-run
+cd $HOME/git/port49/.worktrees/l68-run
 nohup bash -c 'for t in TestL68ViewConfigurationCLI TestL68ViewConfigurationNetconf TestL68ViewConfigurationNetconfOperator; do
   for p in vjunos vsrx; do
     PORT49_LAB_PLATFORMS=$p go test -tags lab ./tests/lab/ -run "^$t\$" -count=1 -v -timeout 90m || exit 1
@@ -1338,7 +1338,7 @@ I7):
 loop=$(cat /tmp/l68-loop.pid)
 while kill -0 "$loop" 2>/dev/null; do
   sleep 120
-  [ -z "$(find /home/rwendt/git/port49/.worktrees/l68-run/tests/lab/captures /tmp/port49-lab-tokens.jsonl \
+  [ -z "$(find $HOME/git/port49/.worktrees/l68-run/tests/lab/captures /tmp/port49-lab-tokens.jsonl \
     /tmp/l68-run.log -newermt '-10 minutes' 2>/dev/null | head -1)" ] && { echo "STALL: no progress in 10 minutes"; break; }
 done; echo "the run loop ended"
 ```
@@ -1376,12 +1376,12 @@ Other outcomes:
 - [ ] **Step 8: Copy the outputs out and remove the run worktree**
 
 ```bash
-run=/home/rwendt/git/port49/.worktrees/l68-run
-feat=/home/rwendt/git/port49/.worktrees/junos-view-configuration
+run=$HOME/git/port49/.worktrees/l68-run
+feat=$HOME/git/port49/.worktrees/junos-view-configuration
 cp "$run"/tests/lab/results/L68-*.md "$feat"/tests/lab/results/
 cp "$run"/tests/lab/evidence/L68-*.pcap "$feat"/tests/lab/evidence/
-mkdir -p /home/rwendt/git/port49/tests/lab/captures && cp "$run"/tests/lab/captures/L68* /home/rwendt/git/port49/tests/lab/captures/
-git -C /home/rwendt/git/port49 worktree remove "$run"
+mkdir -p $HOME/git/port49/tests/lab/captures && cp "$run"/tests/lab/captures/L68* $HOME/git/port49/tests/lab/captures/
+git -C $HOME/git/port49 worktree remove "$run"
 ```
 
 On a G1 STOP, commit the notes and evidence and leave the L68 row open. Add to its Status:
@@ -2912,7 +2912,7 @@ The rules are Task 1 Step 7's, with the run worktree `l68p-run` at this commit:
 The loop:
 
 ```bash
-cd /home/rwendt/git/port49/.worktrees/l68p-run
+cd $HOME/git/port49/.worktrees/l68p-run
 nohup bash -c 'for p in vjunos vsrx; do
   PORT49_LAB_PROJECTION_SETS=1.3.0 PORT49_LAB_PLATFORMS=$p go test -tags lab ./tests/lab/ \
     -run "^TestProjectionDifferential\$" -count=1 -v -timeout 120m || exit 1

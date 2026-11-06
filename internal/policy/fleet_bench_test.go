@@ -24,7 +24,7 @@ func benchPolicyText(permit string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `scopes:
   - {name: all_devices, match: {}}
-  - {name: arista, match: {platform: arista_eos}, on_missing: include}
+  - {name: arista, match: {platform: arista_eos}, on_missing: exclude}
 roles:
   - {name: load_admin, privilege: admin, permit: [%q]}
   - {name: load_read, privilege: readonly, permit: ["show **"]}
@@ -193,10 +193,10 @@ func variedFleet(n int, mfaScope bool) (string, []admission.Device) {
 		if mfaScope && s == "dc1" {
 			mfa = ", security_log: true, per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}"
 		}
-		fmt.Fprintf(&b, "  - {name: site_%s, match: {site: [%s]}, on_missing: include%s}\n", s, s, mfa)
+		fmt.Fprintf(&b, "  - {name: site_%s, match: {site: [%s]}, on_missing: exclude%s}\n", s, s, mfa)
 	}
 	fmt.Fprintf(&b, "  - {name: fabric, match: {site: [dc1, dc2], role: [leaf, spine]}, on_missing: exclude}\n"+
-		"  - {name: unpatched, match: {os_version: {lt: \"21.4R3-S5\"}}, on_missing: include}\n"+
+		"  - {name: unpatched, match: {os_version: {lt: \"21.4R3-S5\"}}, on_missing: exclude}\n"+
 		"  - {name: pinned, match: {name: [%s]}, on_missing: exclude}\n", strings.Join(pins, ", "))
 	b.WriteString("roles:\n  - {name: load_admin, privilege: admin, permit: [\"**\"]}\n" +
 		"  - {name: load_read, privilege: readonly, permit: [\"show **\"]}\n" +

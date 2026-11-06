@@ -4,7 +4,10 @@
 name: leaks
 on:
   push: {branches: [main]}
-  pull_request:
+  pull_request: {types: [opened, edited, synchronize, reopened]}
+  # Weekly, over main since the baseline: scheduled runs ignore [skip ci] tokens, which a merge message
+  # edited on GitHub could carry.
+  schedule: [{cron: '17 4 * * 1'}]
 permissions: {contents: read}
 jobs:
   gitleaks:
@@ -15,3 +18,30 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with: {fetch-depth: 0, persist-credentials: false}
       - run: make leaks
+      # The same rule over the tracked files, as a Go test: no session link or trailer in the tree.
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with: {go-version-file: go.mod}
+      - run: go test ./tests/ci/ -run SessionLink -count=1
+      # gitleaks reads patches, not commit messages. The pull request's own commits go through the
+      # same rule (old history keeps its trailers, not rewritten), and so do its title and body:
+      # a squash merge copies them onto main. Event text reaches the script through env only.
+      - if: github.event_name == 'pull_request'
+        run: go run ./tests/ci/cmd/sessionmsg -range "$BASE_SHA..$HEAD_SHA" -env PR_TITLE -env PR_BODY
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+      # The commits a push to main lands (a merge or squash commit is written by GitHub after the
+      # last pull-request run); a new branch has an all-zero before, and its tip is checked alone.
+      - if: github.event_name == 'push'
+        run: go run ./tests/ci/cmd/sessionmsg -before "$BEFORE_SHA" -after "$AFTER_SHA"
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+      # What neither of those can see: a push whose message skipped CI. Everything on main since the
+      # baseline (the last commit before this check merged; older history keeps its trailers).
+      - if: github.event_name == 'schedule'
+        run: go run ./tests/ci/cmd/sessionmsg -range "$BASELINE_SHA..origin/main"
+        env:
+          BASELINE_SHA: be92d427163ae242dd958f6f28a3aa549bba9a57

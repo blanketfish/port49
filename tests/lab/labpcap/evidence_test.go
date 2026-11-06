@@ -148,32 +148,28 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 			alreadyFill += bytes.Count(b, []byte{Fill}) * copies
 		}
 
-		// The shape rules, read off the EVIDENCE rather than the capture. This
-		// is the half that needs no secret list, so it is what audits a file
-		// whose run is long gone.
-		outF, err := Parse(out)
-		if err != nil {
-			t.Errorf("%s: evidence does not parse: %v", base, err)
-			continue
-		}
-		outD, err := outF.Decode(opt.Key, nil)
-		if err != nil {
-			t.Errorf("%s: evidence does not decode: %v", base, err)
-			continue
-		}
-		outFields, err := outD.Fields()
-		if err != nil {
-			t.Errorf("%s: evidence fields do not frame: %v", base, err)
-			continue
-		}
-		for _, fd := range outFields {
-			if !fd.Credential || fd.Len == 0 {
-				continue
+		// A stream's unframed tail is overwritten whole, so it counts the same way.
+		for _, tl := range d.Tails() {
+			s := d.Streams[tl.Stream]
+			for k := 0; k < tl.Len; k++ {
+				off := tl.Off + k
+				for _, seg := range s.Segments {
+					if off >= seg.StreamOff && off < seg.StreamOff+seg.Length {
+						credBytes++
+						if s.Payload[off] == Fill {
+							alreadyFill++
+						}
+					}
+				}
 			}
-			if b := fd.Bytes(outD.Packets[fd.Packet].Body); !labcreds.Redacted(b) {
-				t.Errorf("%s: committed evidence still carries a credential: %s (%d bytes) is not entirely %q",
-					base, fd.Name, fd.Len, string(rune(Fill)))
-			}
+		}
+
+		// The shape rules, read off the EVIDENCE rather than the capture, by the same
+		// function CI runs on the committed files alone (AuditEvidence). This is the half
+		// that needs no secret list, so it is what audits a file whose run is long gone.
+		if _, err := AuditEvidence(out, opt); err != nil {
+			t.Errorf("%s: %v", base, err)
+			continue
 		}
 		// The same scan over the CAPTURE, which is the unredacted original and
 		// therefore must trip it. A rule nobody has seen fire is not known to
@@ -197,22 +193,6 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 			}
 		}
 
-		// Every body, not only the fields marked Credential: a token that
-		// turned up where the protocol does not put passwords — an AV pair, a
-		// server message — is exactly what the field list would miss, and is
-		// the reason to scan by shape at all.
-		for i, p := range outD.Packets {
-			if tok := labcreds.TokenShaped(p.Body); tok != "" {
-				t.Errorf("%s: packet %d (%s) holds a token-shaped %d-character string; if that is a real "+
-					"token the evidence must not be committed, and if it is not, TokenShaped needs to know why",
-					base, i, p.Kind(), len(tok))
-			}
-			if bytes.Contains(p.Body, []byte(labcreds.TokenPrefix)) {
-				t.Errorf("%s: packet %d (%s) holds %q, the prefix every token carried before they were minted; "+
-					"a surviving one means this evidence was redacted against the wrong secrets",
-					base, i, p.Kind(), labcreds.TokenPrefix)
-			}
-		}
 	}
 
 	if diff != credBytes-alreadyFill {

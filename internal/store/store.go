@@ -141,7 +141,11 @@ type Token struct {
 	// sealed Secret inside the inner store. That is also why memory matches it
 	// with `==` rather than crypto/subtle: nothing an attacker can influence
 	// reaches this comparison.
-	ID        string
+	ID string
+	// Revision is the store revision this token's record was created at
+	// (etcd: the key's CreateRevision); 0 on the memory store. Never stored
+	// in the record, never sealed.
+	Revision  uint64
 	Secret    []byte // sealed
 	Kind      string // KindLogin | KindEnable
 	ExpiresAt time.Time
@@ -695,6 +699,10 @@ type Store interface {
 	// store. The token indexes stay; an entry that outlives its token costs
 	// a revocation one DeleteTokens on an empty key (Token.IndexTTL).
 	PurgeTokens(ctx context.Context) (int, error)
+	// PurgeOnceRecords deletes every once-only record (on/) and every
+	// per-login proof (mp/), live or expired, and returns how many. Owner
+	// and logout records are left alone.
+	PurgeOnceRecords(ctx context.Context) (int, error)
 	GetReceipt(ctx context.Context, rk ReceiptKey) (Receipt, error)
 	// ExtendReceipt pushes the sliding bound out. It never moves RetainUntil or
 	// FirstRedeemedAt, so the absolute cap cannot be slid.

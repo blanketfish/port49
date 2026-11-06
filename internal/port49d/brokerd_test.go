@@ -183,6 +183,7 @@ func (f *fleet) policyOf(t *testing.T, cfg string) string {
 func (f *fleet) judged(t *testing.T) {
 	t.Helper()
 	putJudged(t, f, f.bundle(t), false)
+	f.recorded(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	bs, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
@@ -191,6 +192,27 @@ func (f *fleet) judged(t *testing.T) {
 	}
 	judgedFleets.Store(f.pki, true)
 	t.Cleanup(func() { judgedFleets.Delete(f.pki) })
+}
+
+// recorded gives f.broker's state_dir a witness record at the store's own
+// witness, as a broker that has run on this keyspace before has: with none, a
+// start owes a purge of everything (decision 56 ruling 2), which a fleet
+// standing for a rolling restart is not testing.
+func (f *fleet) recorded(t *testing.T) { f.recordedFor(t, f.broker) }
+
+// recordedFor is recorded for the replica whose port49-broker.yaml is cfg.
+func (f *fleet) recordedFor(t *testing.T, cfg string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bs, _ := openBrokerFor(t, ctx, cfg, metrics.New(prometheus.NewRegistry()), io.Discard)
+	w, err := bs.raw.Witness(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := openWitness(filepath.Join(f.stateDirOf(t, cfg), stateWitnessFile), "/port49/", io.Discard)
+	rec.Reset(w.ModRevision)
+	rec.save()
 }
 
 // judgedFleets holds the lab PKI directory of every fleet.judged was called
@@ -541,6 +563,7 @@ func TestATakeoverPurgesOnlyAnUnjudgedBundle(t *testing.T) {
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	f.recorded(t) // a broker that has run here: this test is about the bundle
 	api, stop := startBroker(t, f.broker, &out, 1)
 	waitForCount(t, &out, "runner: recorded bundle ", 1)
 	kept := mintOn(t, api, f.pki, "leaf1")
@@ -1560,9 +1583,11 @@ func TestARunnersSwapMarksTheJudgedBundleInDoubt(t *testing.T) {
 	t.Cleanup(func() { stderr = e })
 	stderr = &out
 	f := splitFleet(t)
+	f.recorded(t)
 	_, stopA := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
 	cfgB := f.copyBroker(t) // still on the judged bundle
+	f.recordedFor(t, cfgB)  // and a replica that has run here, so its takeover goes by the bundle
 	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy)
 	waitFor(t, &out, "port49-broker: policy reloaded")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2158,12 +2183,43 @@ func TestAWitnessRecordFromAnotherReplicaCatchesTheRestore(t *testing.T) {
 		"the store was restored from a snapshot", w0, recorded), 30*time.Second)
 }
 
+// A standby on an empty state_dir takes the runner's live witness write as
+// its record, so a failover to it purges nothing: only a runner that had
+// purged what it owed writes meta/witness (decision 56 ruling 2).
+func TestAStandbyOnAnEmptyStateDirTakesOverWithoutPurgingAfterALiveWitness(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	apiA, stopA := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	waitUntil(t, "a witness", func() bool { return witnessAt(t, root) > 0 })
+	cfgB := f.copyBroker(t) // an empty broker.state_dir of its own
+	_, stopB := startBroker(t, cfgB, &out, 2)
+	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
+	w0 := witnessAt(t, root)
+	mintOn(t, apiA, f.pki, "leaf1") // the runner brings a witness
+	waitUntil(t, "B's record to rise from a live write", func() bool { return witnessIn(t, f.stateDirOf(t, cfgB)) > w0 })
+	defer stopB()
+	before := len(out.String())
+	if err := stopA(); err != nil {
+		t.Fatal(err)
+	}
+	waitWithinFrom(t, &out, before, "runner: took keyspace /port49/", 30*time.Second)
+	waitWithinFrom(t, &out, before, "live context(s) carried onto the policy in force", 30*time.Second)
+	if got := out.String()[before:]; strings.Contains(got, "every unspent token is purged") {
+		t.Fatalf("a failover to a standby that followed the runner's witness purged:\n%s", got)
+	}
+}
+
 // An etcd restore with port49d running across it and the runbook's token
 // delete skipped: port49d finds meta/witness below what it followed and
-// refuses every redemption store_unavailable, so a token spent since the
-// snapshot is not redeemed again, until the first runner's purge; then
-// a token minted after it logs in (Task 15d).
-func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
+// refuses the token spent since the snapshot token_spent, by its revision,
+// before any runner purges; the runner's purge then deletes it, and a token
+// minted after the restore logs in (Task 15d; decision 56 ruling 1).
+func TestPort49dRefusesARestoredTokenAndServesAFreshOne(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -2212,26 +2268,37 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	// refuses a context read below what this port49d saw, is not what
 	// refuses the replay.
 	padPast(t, root, uint64(top.Header.Revision))
-	waitWithin(t, &out, fmt.Sprintf("port49d: store: meta/witness is at revision %d, below the ", w0), 20*time.Second)
-	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 1")
-	// Refused by the guard, before any token is looked up: the ledger's
-	// fence would refuse this one too, at its context read, since alice's
-	// context was written after the snapshot, but not a token whose
-	// context port49d's ledger no longer keeps.
-	looked := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
-	if st := dev.login("alice", spent); st != wire.AuthenStatusError {
-		t.Fatalf("a token spent since the snapshot, presented while guarded: %d", st)
+	waitWithin(t, &out, "port49d: store: the session store was restored from a snapshot: meta/witness is at revision "+
+		fmt.Sprint(w0), 20*time.Second)
+	waitUntil(t, "the restore detected", func() bool {
+		return metricAt(t, metricsD, "port49_store_restore_detected_timestamp_seconds") > 0
+	})
+	// Refused by the floor: the token is at or below the revision the drop was
+	// found at, token_spent.
+	// Just after etcd returns, the token pool's receipt read can still fail
+	// (get_receipt, before the floor is asked), which answers ERROR
+	// store_unavailable: try again for 10s, and only for that reason.
+	lookups := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
+	st = dev.login("alice", spent)
+	for deadline := time.Now().Add(10 * time.Second); st == wire.AuthenStatusError && time.Now().Before(deadline); {
+		if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+			t.Fatalf("an ERROR for a reason other than store_unavailable: %v", r[len(r)-1])
+		}
+		time.Sleep(200 * time.Millisecond)
+		st = dev.login("alice", spent)
 	}
-	if n := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); n != looked {
-		t.Fatalf("a redemption while guarded looked up the tokens: %v after %v", n, looked)
+	if st != wire.AuthenStatusFail {
+		t.Fatalf("a token spent since the snapshot, presented under the floor: %d", st)
 	}
-	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "token_spent" {
 		t.Fatalf("the refusal: %v", r[len(r)-1])
+	}
+	// The floor refused a token the store still holds: the candidates were read.
+	if now := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); now <= lookups {
+		t.Fatalf("the refusal read no candidates (%v, was %v): the token was refused before the store was asked", now, lookups)
 	}
 	api, _ = startBroker(t, f.broker, &out, 3)
 	waitWithin(t, &out, "every unspent token is purged", 30*time.Second)
-	waitWithin(t, &out, "port49d: store: the broker runner's purge after the restore is done", 10*time.Second)
-	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 0")
 	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
 		t.Fatal("a token spent since the snapshot logged in after the purge")
 	}
@@ -2247,7 +2314,7 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 // process's, so the token spent since the snapshot is still refused
 // store_unavailable on that new run until the runner purges, and then
 // allowed (plan 7f, T6-a; the in-run path is the test above's).
-func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T) {
+func TestPort49dRefusesARestoredTokenAcrossAStoreGone(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -2306,26 +2373,37 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 	waitCountWithin(t, &out, "port49d: listening on ", bound+1, 60*time.Second)
 	metricsD = newestMatch(&out, `port49d: metrics on (127\.0\.0\.1:\d+)`) // the new run's
 	dev.addr = newestMatch(&out, `port49d: listening on (127\.0\.0\.1:\d+)`)
-	waitWithin(t, &out, fmt.Sprintf("port49d: store: meta/witness is at revision %d, below the ", w0), 20*time.Second)
-	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 1")
-	// Refused by the guard, before any token is looked up: the ledger's
-	// fence would refuse this one too, at its context read, since alice's
-	// context was written after the snapshot, but not a token whose
-	// context port49d's ledger no longer keeps.
-	looked := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
-	if st := dev.login("alice", spent); st != wire.AuthenStatusError {
-		t.Fatalf("a token spent since the snapshot, presented while guarded: %d", st)
+	waitWithin(t, &out, "port49d: store: the session store was restored from a snapshot: meta/witness is at revision "+
+		fmt.Sprint(w0), 20*time.Second)
+	waitUntil(t, "the restore detected", func() bool {
+		return metricAt(t, metricsD, "port49_store_restore_detected_timestamp_seconds") > 0
+	})
+	// Refused by the floor: the token is at or below the revision the drop was
+	// found at, token_spent.
+	// Just after etcd returns, the token pool's receipt read can still fail
+	// (get_receipt, before the floor is asked), which answers ERROR
+	// store_unavailable: try again for 10s, and only for that reason.
+	lookups := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
+	st = dev.login("alice", spent)
+	for deadline := time.Now().Add(10 * time.Second); st == wire.AuthenStatusError && time.Now().Before(deadline); {
+		if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+			t.Fatalf("an ERROR for a reason other than store_unavailable: %v", r[len(r)-1])
+		}
+		time.Sleep(200 * time.Millisecond)
+		st = dev.login("alice", spent)
 	}
-	if n := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); n != looked {
-		t.Fatalf("a redemption while guarded looked up the tokens: %v after %v", n, looked)
+	if st != wire.AuthenStatusFail {
+		t.Fatalf("a token spent since the snapshot, presented under the floor: %d", st)
 	}
-	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "token_spent" {
 		t.Fatalf("the refusal: %v", r[len(r)-1])
+	}
+	// The floor refused a token the store still holds: the candidates were read.
+	if now := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); now <= lookups {
+		t.Fatalf("the refusal read no candidates (%v, was %v): the token was refused before the store was asked", now, lookups)
 	}
 	api, _ = startBroker(t, f.broker, &out, 3)
 	waitWithin(t, &out, "every unspent token is purged", 30*time.Second)
-	waitWithin(t, &out, "port49d: store: the broker runner's purge after the restore is done", 10*time.Second)
-	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 0")
 	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
 		t.Fatal("a token spent since the snapshot logged in after the purge")
 	}
@@ -2432,9 +2510,7 @@ func padPast(t *testing.T, root *clientv3.Client, rev uint64) {
 // ledger's did; anything but an outage or a compaction ends the start
 // (11a final review N1).
 func TestAPagedLoadRetriesACompaction(t *testing.T) {
-	was := startRetryWait
-	startRetryWait = time.Millisecond
-	t.Cleanup(func() { startRetryWait = was })
+	fastRetries(t)
 	var out bytes.Buffer
 	n := 0
 	err := pagedLoad(context.Background(), &out, "marks", func() error {
@@ -2452,41 +2528,12 @@ func TestAPagedLoadRetriesACompaction(t *testing.T) {
 	}
 }
 
-// A compaction that never clears is read again every startRetryWait, never in
-// a hot loop: counted over a window of several waits.
-func TestACompactionRetryWaitsBetweenTries(t *testing.T) {
-	was := startRetryWait
-	startRetryWait = 50 * time.Millisecond
-	t.Cleanup(func() { startRetryWait = was })
-	ctx, cancel := context.WithTimeout(context.Background(), 330*time.Millisecond)
-	defer cancel()
-	var out syncBuffer
-	n := 0
-	err := pagedLoad(ctx, &out, "ledger", func() error {
-		n++
-		return store.ErrCompacted
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("%v", err)
-	}
-	// One try at once, then one per 50ms: 7 in 330ms. A loop without the
-	// wait makes thousands.
-	if n < 4 || n > 9 {
-		t.Fatalf("%d tries in 330ms with a 50ms wait", n)
-	}
-	if got := strings.Count(out.String(), "trying again in 50ms"); got != n-1 && got != n {
-		t.Fatalf("%d lines for %d tries\n%s", got, n, out.String())
-	}
-}
-
 // A load that meets a compaction again and again says once, in fixed text,
 // what to change, and keeps trying; one compaction says nothing of the sort.
 // The error line names the load without a doubled "store:" prefix (Task 13
 // review m1).
 func TestAPersistentCompactionSaysItsRemedyOnce(t *testing.T) {
-	was := startRetryWait
-	startRetryWait = time.Millisecond
-	t.Cleanup(func() { startRetryWait = was })
+	fastRetries(t)
 	const remedy = "raise etcd's --auto-compaction-retention"
 	var out bytes.Buffer
 	n := 0

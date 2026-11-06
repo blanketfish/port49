@@ -1,11 +1,12 @@
 # L3 — arista_eos
 
-- **Date measured:** 2026-09-22
+- **Date measured:** 2026-11-05
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/evidence/L3-arista_eos.pcap` — 735 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L3-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L3-arista_eos.pcap` — 734 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L3-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=eos,nxos,iosxe`, `-run ^TestL3Enable$`
 
 ## Claim
 
@@ -21,7 +22,7 @@ Two overlapping sessions, each logged in with its own token and each holding at 
 
 ### What the device said
 
-**alice02**:
+**alice01**:
 
 ```
 leaf1>enable
@@ -30,7 +31,7 @@ Password:
 % Error in authentication leaf1>
 ```
 
-**alice03**:
+**alice02**:
 
 ```
 leaf1>enable
@@ -43,8 +44,8 @@ Password:
 
 | wire username | verdict | reason | `port` | `rem_addr` |
 |---|---|---|---|---|
-| `alice03` | deny | `token_not_found` | vty6 | 172.100.100.1 |
-| `alice02` | deny | `token_not_found` | vty4 | 172.100.100.1 |
+| `alice01` | deny | `token_not_found` | vty4 | 172.100.100.1 |
+| `alice02` | deny | `token_not_found` | vty6 | 172.100.100.1 |
 
 **The two concurrent enables arrived under different usernames**, so the device puts the operator's own identity on the enable START and `(nas, username)` keeps them apart.
 
@@ -57,58 +58,58 @@ Decoded from the capture with the daemon's own `internal/tacacs/wire` package an
 
 | device connection | session_id | seq | single-connect | packet |
 |---|---|---|---|---|
-| 172.100.100.11:52766 → | `0xbe79bd59` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="ssh" rem_addr="172.100.100.1" data=0 bytes |
-| 172.100.100.11:52766 → | `0xbe79bd59` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=30 bytes data=0 bytes |
-| 172.100.100.1:49 ← | `0xbe79bd59` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
-| 172.100.100.1:49 ← | `0xbe79bd59` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.11:52774 → | `0xf6fca241` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="ssh" rem_addr="172.100.100.1" args=[task_id=12 service=shell start_time=1790092668 timezone=UTC] |
-| 172.100.100.1:49 ← | `0xf6fca241` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52784 → | `0x23885016` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd*] |
-| 172.100.100.1:49 ← | `0x23885016` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15 shell:roles*network-admin] |
-| 172.100.100.11:52800 → | `0x7da587ed` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0x7da587ed` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
-| 172.100.100.11:52812 → | `0x37a84683` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="vty4" rem_addr="172.100.100.1" args=[task_id=13 service=shell priv-lvl=15 start_time=1790092668 timezone=UTC cmd=terminal length 0 <cr>] |
-| 172.100.100.1:49 ← | `0x37a84683` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52824 → | `0x95ed8c8c` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd=disable cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0x95ed8c8c` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
-| 172.100.100.11:52826 → | `0xab5cc789` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="vty4" rem_addr="172.100.100.1" args=[task_id=14 service=shell priv-lvl=15 start_time=1790092669 timezone=UTC cmd=disable <cr>] |
-| 172.100.100.1:49 ← | `0xab5cc789` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52840 → | `0xa6ad3e02` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd=enable cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0xa6ad3e02` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
-| 172.100.100.11:52854 → | `0x64ff0e11` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="vty4" rem_addr="172.100.100.1" args=[task_id=15 service=shell priv-lvl=1 start_time=1790092669 timezone=UTC cmd=enable <cr>] |
-| 172.100.100.1:49 ← | `0x64ff0e11` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52860 → | `0xdd59a754` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15 user="alice02" port="vty4" rem_addr="172.100.100.1" data=0 bytes |
-| 172.100.100.11:52860 → | `0xdd59a754` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=15 bytes data=0 bytes |
-| 172.100.100.1:49 ← | `0xdd59a754` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
-| 172.100.100.1:49 ← | `0xdd59a754` | 4 | clear | AUTHEN REPLY status=FAIL(2) flags=0x00 server_msg="port49: authentication failed, mint a new token with `port49 token`" data=0 bytes |
-| 172.100.100.11:52874 → | `0xff3041b1` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="ssh" rem_addr="172.100.100.1" data=0 bytes |
-| 172.100.100.11:52874 → | `0xff3041b1` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=30 bytes data=0 bytes |
-| 172.100.100.1:49 ← | `0xff3041b1` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
-| 172.100.100.1:49 ← | `0xff3041b1` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.11:52880 → | `0x5a3ead25` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="ssh" rem_addr="172.100.100.1" args=[task_id=16 service=shell start_time=1790092673 timezone=UTC] |
-| 172.100.100.1:49 ← | `0x5a3ead25` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52882 → | `0xddc1d054` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd*] |
-| 172.100.100.1:49 ← | `0xddc1d054` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15 shell:roles*network-admin] |
-| 172.100.100.11:52884 → | `0xc2a8ba89` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice03" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0xc2a8ba89` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
-| 172.100.100.11:52890 → | `0x6e15deda` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice03" port="vty6" rem_addr="172.100.100.1" args=[task_id=17 service=shell priv-lvl=15 start_time=1790092673 timezone=UTC cmd=terminal length 0 <cr>] |
-| 172.100.100.1:49 ← | `0x6e15deda` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52906 → | `0x219a3dc9` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice03" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd=disable cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0x219a3dc9` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
-| 172.100.100.11:52914 → | `0x5f6c2356` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice03" port="vty6" rem_addr="172.100.100.1" args=[task_id=18 service=shell priv-lvl=15 start_time=1790092674 timezone=UTC cmd=disable <cr>] |
-| 172.100.100.1:49 ← | `0x5f6c2356` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52918 → | `0xc84644a6` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd=enable cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0xc84644a6` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
-| 172.100.100.11:52930 → | `0x9438fcaf` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="vty6" rem_addr="172.100.100.1" args=[task_id=19 service=shell priv-lvl=1 start_time=1790092674 timezone=UTC cmd=enable <cr>] |
-| 172.100.100.1:49 ← | `0x9438fcaf` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52940 → | `0xa885afe7` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15 user="alice03" port="vty6" rem_addr="172.100.100.1" data=0 bytes |
-| 172.100.100.11:52940 → | `0xa885afe7` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=15 bytes data=0 bytes |
-| 172.100.100.1:49 ← | `0xa885afe7` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
-| 172.100.100.1:49 ← | `0xa885afe7` | 4 | clear | AUTHEN REPLY status=FAIL(2) flags=0x00 server_msg="port49: authentication failed, mint a new token with `port49 token`" data=0 bytes |
-| 172.100.100.11:52942 → | `0xaecb9c37` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="vty6" rem_addr="172.100.100.1" args=[task_id=16 service=shell start_time=1790092673 timezone=UTC elapsed_time=2] |
-| 172.100.100.1:49 ← | `0xaecb9c37` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:52944 → | `0x7fcb5efc` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="vty4" rem_addr="172.100.100.1" args=[task_id=12 service=shell start_time=1790092668 timezone=UTC elapsed_time=7] |
-| 172.100.100.1:49 ← | `0x7fcb5efc` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:51300 → | `0x541cdacb` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice01" port="ssh" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.11:51300 → | `0x541cdacb` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=30 bytes data=0 bytes |
+| 172.100.100.1:49 ← | `0x541cdacb` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x541cdacb` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.11:51310 → | `0xa62e49bf` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice01" port="ssh" rem_addr="172.100.100.1" args=[task_id=10 service=shell start_time=1793913625 timezone=UTC] |
+| 172.100.100.1:49 ← | `0xa62e49bf` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:51324 → | `0x8418fd52` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice01" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd*] |
+| 172.100.100.1:49 ← | `0x8418fd52` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15 shell:roles*network-admin] |
+| 172.100.100.11:51340 → | `0x5c1ed2c5` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice01" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0x5c1ed2c5` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
+| 172.100.100.11:51350 → | `0x1c8ac99d` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice01" port="vty4" rem_addr="172.100.100.1" args=[task_id=11 service=shell priv-lvl=15 start_time=1793913625 timezone=UTC cmd=terminal length 0 <cr>] |
+| 172.100.100.1:49 ← | `0x1c8ac99d` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:41608 → | `0xa38ea6b6` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice01" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd=disable cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0xa38ea6b6` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
+| 172.100.100.11:41620 → | `0x9edb3a39` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice01" port="vty4" rem_addr="172.100.100.1" args=[task_id=12 service=shell priv-lvl=15 start_time=1793913626 timezone=UTC cmd=disable <cr>] |
+| 172.100.100.1:49 ← | `0x9edb3a39` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:41626 → | `0x39d76b3d` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice01" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd=enable cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0x39d76b3d` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
+| 172.100.100.11:41636 → | `0x02798960` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15 user="alice01" port="vty4" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.11:41636 → | `0x02798960` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=15 bytes data=0 bytes |
+| 172.100.100.11:41650 → | `0xbe6d8d09` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice01" port="vty4" rem_addr="172.100.100.1" args=[task_id=1 service=shell priv-lvl=1 start_time=1793913626 timezone=UTC cmd=enable <cr>] |
+| 172.100.100.1:49 ← | `0x02798960` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x02798960` | 4 | clear | AUTHEN REPLY status=FAIL(2) flags=0x00 server_msg="port49: authentication failed, mint a new token with `port49 token`" data=0 bytes |
+| 172.100.100.1:49 ← | `0xbe6d8d09` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:41654 → | `0x86ae36e2` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="ssh" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.11:41654 → | `0x86ae36e2` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=30 bytes data=0 bytes |
+| 172.100.100.1:49 ← | `0x86ae36e2` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x86ae36e2` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.11:41656 → | `0xbe2dcf58` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="ssh" rem_addr="172.100.100.1" args=[task_id=2 service=shell start_time=1793913630 timezone=UTC] |
+| 172.100.100.1:49 ← | `0xbe2dcf58` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:41672 → | `0x7bd50ab3` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd*] |
+| 172.100.100.1:49 ← | `0x7bd50ab3` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15 shell:roles*network-admin] |
+| 172.100.100.11:41682 → | `0xac4d136a` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0xac4d136a` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
+| 172.100.100.11:41698 → | `0x15571df2` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="vty6" rem_addr="172.100.100.1" args=[task_id=3 service=shell priv-lvl=15 start_time=1793913631 timezone=UTC cmd=terminal length 0 <cr>] |
+| 172.100.100.1:49 ← | `0x15571df2` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:41700 → | `0x0488c187` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd=disable cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0x0488c187` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
+| 172.100.100.11:41706 → | `0x86834b9c` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="vty6" rem_addr="172.100.100.1" args=[task_id=4 service=shell priv-lvl=15 start_time=1793913631 timezone=UTC cmd=disable <cr>] |
+| 172.100.100.1:49 ← | `0x86834b9c` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:41722 → | `0xe8e78bfb` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd=enable cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0xe8e78bfb` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
+| 172.100.100.11:41738 → | `0xc43cbe86` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15 user="alice02" port="vty6" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.11:41738 → | `0xc43cbe86` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=15 bytes data=0 bytes |
+| 172.100.100.11:41752 → | `0x78f45e15` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="vty6" rem_addr="172.100.100.1" args=[task_id=1 service=shell priv-lvl=1 start_time=1793913631 timezone=UTC cmd=enable <cr>] |
+| 172.100.100.1:49 ← | `0x78f45e15` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.1:49 ← | `0xc43cbe86` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0xc43cbe86` | 4 | clear | AUTHEN REPLY status=FAIL(2) flags=0x00 server_msg="port49: authentication failed, mint a new token with `port49 token`" data=0 bytes |
+| 172.100.100.11:41768 → | `0x8907fd30` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="vty6" rem_addr="172.100.100.1" args=[task_id=2 service=shell start_time=1793913630 timezone=UTC elapsed_time=2] |
+| 172.100.100.1:49 ← | `0x8907fd30` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:41774 → | `0x2b259230` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice01" port="vty4" rem_addr="172.100.100.1" args=[task_id=10 service=shell start_time=1793913625 timezone=UTC elapsed_time=7] |
+| 172.100.100.1:49 ← | `0x2b259230` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
 
 - **TCP connections the device opened:** 22, carrying 22 distinct `session_id`(s). The busiest connection carried **1** `session_id`(s).
   That is **one TCP connection per exchange**: the device tears the connection down and opens another for the next one, so nothing at the transport layer joins two exchanges either.
@@ -120,7 +121,7 @@ Read the `service=` field in that table: a login START is `login(1)` and an enab
 
 ### When the enable is allowed
 
-phase one measured that this device puts **the operator's own username** on the enable START. port49d was therefore restarted on a config seeding one token under `alice04`, and the same keystrokes were repeated as `alice04`. Nothing else changed.
+phase one measured that this device puts **the operator's own username** on the enable START. port49d was therefore restarted on a config seeding one token under `alice03`, and the same keystrokes were repeated as `alice03`. Nothing else changed.
 
 What the device said:
 
@@ -134,60 +135,60 @@ leaf1#show clock
 Every record in that window:
 
 ```
-2026-09-22T15:58:06.070Z event=redeem verdict=permit reason=token_redeemed user="alice04" port="ssh" rem_addr="172.100.100.1"
-2026-09-22T15:58:06.232Z event=account verdict= reason= user="alice04" port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=1
+2026-11-05T21:20:43.429Z event=redeem verdict=permit reason=token_redeemed user="alice03" port="ssh" rem_addr="172.100.100.1"
+2026-11-05T21:20:43.592Z event=account verdict= reason= user="alice03" port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=5
     accounting AV: service=shell
-    accounting AV: start_time=1790092685
+    accounting AV: start_time=1793913642
     accounting AV: timezone=UTC
-2026-09-22T15:58:06.271Z event=authorize_session verdict=permit reason=context_matched user="alice04" port="vty4" rem_addr="172.100.100.1"
+2026-11-05T21:20:43.631Z event=authorize_session verdict=permit reason=context_matched user="alice03" port="vty4" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd*
-2026-09-22T15:58:06.493Z event=authorize_command verdict=permit reason=permit_dominates user="alice04" port="vty4" rem_addr="172.100.100.1"
+2026-11-05T21:20:43.852Z event=authorize_command verdict=permit reason=permit_dominates user="alice03" port="vty4" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=terminal
     request AV: cmd-arg=length
     request AV: cmd-arg=0
     request AV: cmd-arg=<cr>
-2026-09-22T15:58:06.496Z event=account verdict= reason= user="alice04" port="vty4" rem_addr="172.100.100.1"
-    accounting AV: task_id=2
+2026-11-05T21:20:43.855Z event=account verdict= reason= user="alice03" port="vty4" rem_addr="172.100.100.1"
+    accounting AV: task_id=6
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1790092686
+    accounting AV: start_time=1793913643
     accounting AV: timezone=UTC
     accounting AV: cmd=terminal length 0 <cr>
-2026-09-22T15:58:06.741Z event=authorize_command verdict=permit reason=permit_dominates user="alice04" port="vty4" rem_addr="172.100.100.1"
+2026-11-05T21:20:44.101Z event=authorize_command verdict=permit reason=permit_dominates user="alice03" port="vty4" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=disable
     request AV: cmd-arg=<cr>
-2026-09-22T15:58:06.743Z event=account verdict= reason= user="alice04" port="vty4" rem_addr="172.100.100.1"
-    accounting AV: task_id=3
+2026-11-05T21:20:44.104Z event=account verdict= reason= user="alice03" port="vty4" rem_addr="172.100.100.1"
+    accounting AV: task_id=7
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1790092686
+    accounting AV: start_time=1793913643
     accounting AV: timezone=UTC
     accounting AV: cmd=disable <cr>
-2026-09-22T15:58:06.992Z event=authorize_command verdict=permit reason=permit_dominates user="alice04" port="vty4" rem_addr="172.100.100.1"
+2026-11-05T21:20:44.352Z event=authorize_command verdict=permit reason=permit_dominates user="alice03" port="vty4" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=enable
     request AV: cmd-arg=<cr>
-2026-09-22T15:58:06.994Z event=account verdict= reason= user="alice04" port="vty4" rem_addr="172.100.100.1"
-    accounting AV: task_id=4
+2026-11-05T21:20:44.355Z event=account verdict= reason= user="alice03" port="vty4" rem_addr="172.100.100.1"
+    accounting AV: task_id=8
     accounting AV: service=shell
     accounting AV: priv-lvl=1
-    accounting AV: start_time=1790092686
+    accounting AV: start_time=1793913643
     accounting AV: timezone=UTC
     accounting AV: cmd=enable <cr>
-2026-09-22T15:58:07.242Z event=escalate verdict=permit reason=escalation_granted user="alice04" port="vty4" rem_addr="172.100.100.1"
-2026-09-22T15:58:07.494Z event=authorize_command verdict=deny reason=no_permit_dominates_deny user="alice04" port="vty4" rem_addr="172.100.100.1"
+2026-11-05T21:20:44.601Z event=escalate verdict=permit reason=escalation_granted user="alice03" port="vty4" rem_addr="172.100.100.1"
+2026-11-05T21:20:44.855Z event=authorize_command verdict=deny reason=no_permit_dominates_deny user="alice03" port="vty4" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=show
     request AV: cmd-arg=clock
     request AV: cmd-arg=<cr>
-2026-09-22T15:58:07.748Z event=account verdict= reason= user="alice04" port="vty4" rem_addr="172.100.100.1"
-    accounting AV: task_id=1
+2026-11-05T21:20:45.106Z event=account verdict= reason= user="alice03" port="vty4" rem_addr="172.100.100.1"
+    accounting AV: task_id=5
     accounting AV: service=shell
-    accounting AV: start_time=1790092685
+    accounting AV: start_time=1793913642
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=2
 ```

@@ -1,95 +1,287 @@
 port49-broker: metrics on 10.149.0.13:9050
 port49-broker: store: broker.state_dir/marks.json is absent: this replica's copy starts from the store (a first start; otherwise broker.state_dir is not kept across restarts, and a mark an etcd restore lost cannot be put back from it)
-port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-23T14:54:04Z (0 days)
-port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-23T14:54:04Z (0 days)
+port49-broker: store: etcd https://127.0.0.1:2479 3.6.15, at or above the floor (3.4.24, 3.5.8 or 3.6)
+port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-11-07T10:45:19Z (0 days)
+port49-broker: directory store: etcd https://10.149.0.11:2379 3.6.15, https://10.149.0.12:2379 3.6.15, https://10.149.0.13:2379 3.6.15, at or above the floor (3.4.24, 3.5.8 or 3.6)
+port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-11-07T10:45:19Z (0 days)
 port49-broker: ledger: 0 context key(s) known (0 from the ledger record); following the store from revision 1
 port49-broker: store: 0 revocation(s) in force from the directory store
-port49-broker: identity: humans: x509 from broker.client_ca_file (no broker.identity is configured); no OIDC verifier
+port49-broker: store: etcd: the client has one endpoint, so both legs of a watch share one member; they are not moved apart
+port49-broker: identity: humans: x509 (trust anchor /tmp/TestRegions1885960001/002/broker-ca.pem)
+port49-broker: identity: keys refreshed every 1h0m0s; trusted without a refresh until 24h0m0s after the last (broker.identity.jwks_max_age); clock_skew 1m0s; max_token_age 2h0m0s
+port49-broker: broker: per_login_mfa hardware_key_touch verifies attestations against /tmp/p49l743988467105/admin-attestation-roots.pem
 port49-broker: policy: no bundle has been judged on this keyspace; this start is not judged against one
-port49-broker: policy: mints wait for a takeover to judge bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d (meta/judged: none recorded): until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable, which is this start gate and not a store fault: port49 workload retries it, and port49 token (through the agent) exits saying to retry in 5s
+port49-broker: policy: mints wait for a takeover to judge bundle sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58 (meta/judged: none recorded): until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable, which is this start gate and not a store fault: port49 workload retries it, and port49 token (through the agent) exits saying to retry in 5s
 port49-broker: broker: certificate status checking is disabled (broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until `port49 revoke --cert`
-port49-broker: admin socket on /tmp/p49l741891858131/r3-b.sock (port49 revoke, port49 directory forget)
 port49-broker: listening on 10.149.0.13:8443, metrics on 10.149.0.13:9050
-port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1513749, since 2026-10-22T14:54:21Z)"): this replica runs the start, the sweep and the policy refresh
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.3s while the store answers; it is opened again on another member
+port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 3320323, since 2026-11-06T10:45:37Z)"): this replica runs the start, the sweep and the policy refresh
 port49-broker: runner: the put-back of broker.state_dir/marks.json waits for the directory store; this region's duties run meanwhile
-port49-broker: runner: no witness record in broker.state_dir; cannot tell whether the store was restored; going by meta/judged alone
-port49-broker: runner: the bundle in force (sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d) is not the one the last runner judged (none recorded); 0 unspent token(s) purged (run 'port49 token' again)
-port49-broker: runner: 0 live context(s) carried onto the policy in force (bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d)
-port49-broker: runner: recorded bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d as judged (the takeover's carry left nothing owed)
-port49-broker: policy: mints open: this replica's takeover is done (bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d)
-port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: no witness record in broker.state_dir; the store may have been restored, which only a witness record can tell; every unspent token is purged and must be minted again (port49 token): 0 purged; 0 once-only records (sign-in challenges, proofs, nonces) deleted
+port49-broker: runner: 0 live context(s) carried onto the policy in force (bundle sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58)
+port49-broker: runner: recorded bundle sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58 as judged (the takeover's carry left nothing owed)
+port49-broker: policy: mints open: this replica's takeover is done (bundle sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58)
+port49-broker: runner: broker.state_dir had no marks.json at this start; a revocation a store restore lost is put back only if this copy saw it (design §13 step 5)
 port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
 port49-broker: runner: 0 standing revocation(s) applied to the live contexts after a put-back (0 context(s) marked revoked)
-{"ts":"2026-10-22T14:54:30.571Z","event":"blob","blob":{"hash":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92","body":{"version":2,"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":true},"privilege":"admin","attributes":["priv-lvl=15","roles=network-admin"],"rules":[{"verdict":"permit","rule":"**","role":"admin"}],"pipe":["begin **","count","exclude **","include **","json","no-more","section **"],"classes":{}}}}
-{"ts":"2026-10-22T14:54:30.574Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
-{"ts":"2026-10-22T14:54:35.037Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.3s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.2s while the store answers; it is opened again on another member
+{"ts":"2026-11-06T10:45:47.787Z","event":"blob","blob":{"hash":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5","body":{"version":2,"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":true},"privilege":"admin","attributes":["priv-lvl=15","roles=network-admin"],"rules":[{"verdict":"permit","rule":"**","role":"admin"}],"pipe":["begin **","count","exclude **","include **","json","no-more","section **"],"classes":{}}}}
+{"ts":"2026-11-06T10:45:47.790Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5"},"policy":{"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.3s while the store answers; it is opened again on another member
+{"ts":"2026-11-06T10:45:52.259Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5"},"policy":{"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.3s while the store answers; it is opened again on another member
 port49-broker: broker: a revocation of user:alice@example.com made on a broker process closed 2 held connection(s) here
 port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
-{"ts":"2026-10-22T14:54:35.916Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
-{"ts":"2026-10-22T14:54:36.113Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+{"ts":"2026-11-06T10:45:53.181Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5"},"policy":{"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+{"ts":"2026-11-06T10:45:53.377Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5"},"policy":{"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
 port49-broker: runner: a revocation of user:carol@example.com made elsewhere reached 0 token key(s) and 0 context(s) here
 port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+{"ts":"2026-11-06T10:46:50.559Z","event":"admin_touch","verdict":"deny","reason":"admin_touch_required","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"revoke_principal","target":"user:bob@example.com","challenge_sha256":"1c6fc004cbf9d07fa8e0dd989b7a47fe536390c914c09a515c12214a3a9a1a57"}}
+{"ts":"2026-11-06T10:46:50.580Z","event":"admin_touch","verdict":"permit","reason":"admin_touch_proved","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"revoke_principal","target":"user:bob@example.com","challenge_sha256":"1c6fc004cbf9d07fa8e0dd989b7a47fe536390c914c09a515c12214a3a9a1a57"}}
+2026/11/06 10:46:51 broker: a revocation asked by user:oncall@example.com may not have been recorded: broker: the revocation may not have been recorded: a copy already sent can still land when the directory answers again, and then stands everywhere, even over a lift made meanwhile. Until then this port49-broker denies what it names, until a lift on this port49-broker or its restart; after the heal check `port49 revoke --list` (store: unavailable: rpc error: code = Unavailable desc = error reading from server: read tcp 10.149.0.13:44082->10.149.0.12:2379: read: connection timed out); this region's session store: 0 token keys deleted and 0 contexts marked revoked; other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that reaches the directory (the copy sent may land too); cut access another way: remove the principal's grants from broker.policy_file (live within two watch intervals)
+{"ts":"2026-11-06T10:46:51.119Z","event":"admin_touch","verdict":"deny","reason":"admin_touch_required","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:carol@example.com","challenge_sha256":"b7accd5669633e3692982fbd09a1e5bd94aa6c9ed6da97cbaa088d9f0dc1709b"}}
+{"ts":"2026-11-06T10:46:51.139Z","event":"admin_touch","verdict":"permit","reason":"admin_touch_proved","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:carol@example.com","challenge_sha256":"b7accd5669633e3692982fbd09a1e5bd94aa6c9ed6da97cbaa088d9f0dc1709b"}}
+2026/11/06 10:46:51 broker: a lift asked by user:oncall@example.com was not made: broker: the revocation could not be lifted, and stands: the store refused the delete or it never reached the store (store: unavailable: context deadline exceeded (nothing was sent))
+port49-broker: directory store: etcd: both legs of the marks watch are on one member (10.149.0.13:2379): it going dark would stall the feed; one leg is moved when another member is ready
 port49-broker: signal received, draining
 port49-broker: drained, exiting
 port49-broker: metrics on 10.149.0.13:9050
-port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-23T14:54:04Z (0 days)
-port49-broker: directory store: not answering; serving from 2 snapshot(s), the newest port49d@beehive's, confirmed 11.4s ago: 1 revocation(s) in their union; served until it is 4h0m0s old (session.staleness_ceiling), then mints, refreshes and sign-ins are refused; the directory store said: store: unavailable: etcdserver: no leader
-port49-broker: ledger: 1 context key(s) known (1 from the ledger record); following the store from revision 90
+port49-broker: store: etcd https://127.0.0.1:2479 3.6.15, at or above the floor (3.4.24, 3.5.8 or 3.6)
+port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-11-07T10:45:19Z (0 days)
+port49-broker: directory store: not answering; serving from 2 snapshot(s), the newest port49d@beehive's, confirmed 11.6s ago: 1 revocation(s) in their union; served until it is 4h0m0s old (session.staleness_ceiling), then mints, refreshes and sign-ins are refused; the directory store said: store: unavailable: etcdserver: no leader
+port49-broker: ledger: 1 context key(s) known (1 from the ledger record); following the store from revision 76
 port49-broker: store: 1 revocation(s) in force from the region's snapshots
-port49-broker: identity: humans: x509 from broker.client_ca_file (no broker.identity is configured); no OIDC verifier
-port49-broker: policy: mints open: meta/judged names bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d, the one this replica serves
+port49-broker: store: etcd: the client has one endpoint, so both legs of a watch share one member; they are not moved apart
+port49-broker: identity: humans: x509 (trust anchor /tmp/TestRegions1885960001/002/broker-ca.pem)
+port49-broker: identity: keys refreshed every 1h0m0s; trusted without a refresh until 24h0m0s after the last (broker.identity.jwks_max_age); clock_skew 1m0s; max_token_age 2h0m0s
+port49-broker: broker: per_login_mfa hardware_key_touch verifies attestations against /tmp/p49l743988467105/admin-attestation-roots.pem
+port49-broker: policy: mints open: meta/judged names bundle sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58, the one this replica serves
 port49-broker: broker: certificate status checking is disabled (broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until `port49 revoke --cert`
-port49-broker: admin socket on /tmp/p49l741891858131/r3-b.sock (port49 revoke, port49 directory forget)
-port49-broker: directory store: not answering (store: unavailable: the directory store has not answered since this run began): serving from the cache confirmed 11.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+port49-broker: directory store: not answering (store: unavailable: the directory store has not answered since this run began): serving from the cache confirmed 11.6s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
 port49-broker: listening on 10.149.0.13:8443, metrics on 10.149.0.13:9050
-{"ts":"2026-10-22T14:55:40.661Z","event":"blob","blob":{"hash":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92","body":{"version":2,"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":true},"privilege":"admin","attributes":["priv-lvl=15","roles=network-admin"],"rules":[{"verdict":"permit","rule":"**","role":"admin"}],"pipe":["begin **","count","exclude **","include **","json","no-more","section **"],"classes":{}}}}
-{"ts":"2026-10-22T14:55:40.663Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
-port49-broker: directory store: not followed yet (stores.directory.etcd.broker: its identity (CN=port49-broker): writing /port49/v1/rv/: store: unavailable: context deadline exceeded; give the broker an etcd user of its own and apply 'port49d store-roles' output); serving from the marks this process holds; trying again every 5s
-port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1518443, since 2026-10-22T14:55:40Z)"): this replica runs the start, the sweep and the policy refresh
+{"ts":"2026-11-06T10:46:57.762Z","event":"blob","blob":{"hash":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5","body":{"version":2,"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":true},"privilege":"admin","attributes":["priv-lvl=15","roles=network-admin"],"rules":[{"verdict":"permit","rule":"**","role":"admin"}],"pipe":["begin **","count","exclude **","include **","json","no-more","section **"],"classes":{}}}}
+{"ts":"2026-11-06T10:46:57.764Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5"},"policy":{"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: directory store: not followed yet (stores.directory.etcd.broker: its identity (CN=port49-broker): writing /port49/v1/rv/: store: unavailable: context deadline exceeded); serving from the marks this process holds; trying again: an attempt every second at first, backing off to every 10s
+port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 3322572, since 2026-11-06T10:46:57Z)"): this replica runs the start, the sweep and the policy refresh
 port49-broker: runner: the put-back of broker.state_dir/marks.json waits for the directory store; this region's duties run meanwhile
 port49-broker: runner: 1 standing revocation(s) applied to the live contexts the store kept (0 context(s) marked revoked)
-port49-broker: runner: the bundle in force (sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d) is the one the last runner judged; no unspent token purged
-port49-broker: runner: 1 live context(s) carried onto the policy in force (bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d)
-port49-broker: runner: recorded bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d as judged (the takeover's carry left nothing owed)
-port49-broker: runner: putting broker.state_dir/marks.json's marks back into the store: store: unavailable: the directory store has not answered since this run began; trying again in 5s
-port49-broker: runner: putting broker.state_dir/marks.json's marks back into the store: store: unavailable: the directory store has not answered since this run began; trying again in 5s
-port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-23T14:54:04Z (0 days)
+port49-broker: runner: the bundle in force (sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58) is the one the last runner judged; no unspent token purged
+port49-broker: runner: 1 live context(s) carried onto the policy in force (bundle sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58)
+port49-broker: runner: recorded bundle sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58 as judged (the takeover's carry left nothing owed)
+port49-broker: runner: putting broker.state_dir/marks.json's marks back into the store: store: unavailable: the directory store has not answered since this run began; trying again: an attempt every second at first, backing off to every 10s
+port49-broker: directory store: not followed yet (stores.directory.etcd.broker: its identity (CN=port49-broker): writing /port49/v1/ul/: store: unavailable: context deadline exceeded); serving from the marks this process holds; trying again: an attempt every second at first, backing off to every 10s
+port49-broker: directory store: etcd https://10.149.0.11:2379 3.6.15, https://10.149.0.12:2379 3.6.15, https://10.149.0.13:2379 3.6.15, at or above the floor (3.4.24, 3.5.8 or 3.6)
+port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-11-07T10:45:19Z (0 days)
 port49-broker: broker: a revocation of user:alice@example.com made on a broker process closed 1 held connection(s) here
 port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
-port49-broker: directory store: answering again; the cache was 23.6s old
-{"ts":"2026-10-22T14:55:52.885Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: 2 standing revocation(s) applied to the live contexts after a put-back (1 context(s) marked revoked)
+port49-broker: directory store: answering again; the cache was 23.7s old
+{"ts":"2026-11-06T10:47:09.863Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5"},"policy":{"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
 port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
 port49-broker: directory store: the membership pins feed stopped (store: unavailable: etcdserver: no leader); serving the cached pins, trying again every second
-port49-broker: store: the marks feed stopped (store: unavailable: etcdserver: no leader); trying again every second
 port49-broker: store: the logouts feed stopped (store: unavailable: etcdserver: no leader); serving the logouts this process holds, trying again every second
-port49-broker: directory store: answering again; the cache was 23.1s old
-port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
-port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
-port49-broker: runner: 0 standing revocation(s) applied to the live contexts after a put-back (0 context(s) marked revoked)
-{"ts":"2026-10-22T14:56:31.732Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: directory store: etcd: both legs of the marks watch are on one member (10.149.0.13:2379): it going dark would stall the feed; one leg is moved when another member is ready
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: store: the marks feed stopped (store: unavailable: etcdserver: no leader); trying again every second
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: answering again; the cache was 23.0s old
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.5s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+{"ts":"2026-11-06T10:47:48.739Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5"},"policy":{"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
 port49-broker: store: the marks feed follows the store again
 port49-broker: broker: a revocation of user:alice@example.com made on a broker process closed 2 held connection(s) here
 port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
 port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+port49-broker: directory store: etcd: both legs of the marks watch are on one member (10.149.0.13:2379): it going dark would stall the feed; one leg is moved when another member is ready
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
 port49-broker: store: the marks feed stopped (store: unavailable: etcdserver: no leader); trying again every second
+port49-broker: directory store: etcd: both legs of the marks watch are on one member (10.149.0.13:2379): it going dark would stall the feed; one leg is moved when another member is ready
+port49-broker: directory store: answering again; the cache was 10.1s old
 port49-broker: runner: 1 revocation(s) in broker.state_dir/marks.json were missing from the store (an etcd restore, or a lift this replica's watch had not delivered: compacted away, or it stopped first) and are put back: principal user:alice@example.com; lift any that were lifted on purpose with port49 revoke --lift
-port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
 port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
-port49-broker: broker: a revocation of user:alice@example.com made at 2026-10-22T14:56:31Z was put back after the lift at 2026-10-22T14:56:44Z by a port49-broker runner from its broker.state_dir/marks.json: its watch had not delivered the lift, which it cannot tell from a mark an etcd restore lost; it stands everywhere; lift it again with port49 revoke --lift if it was lifted on purpose
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+port49-broker: broker: a revocation of user:alice@example.com made at 2026-11-06T10:47:48Z was put back after the lift at 2026-11-06T10:47:56Z by a port49-broker runner from its broker.state_dir/marks.json: its watch had not delivered the lift, which it cannot tell from a mark an etcd restore lost; it stands everywhere; lift it again with port49 revoke --lift if it was lifted on purpose
 port49-broker: runner: 1 standing revocation(s) applied to the live contexts after a put-back (1 context(s) marked revoked)
-port49-broker: directory store: answering again; the cache was 18.0s old
 port49-broker: store: the marks feed follows the store again
-port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+{"ts":"2026-11-06T10:48:00.159Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:55ab5bee42623e03931a216a28ea252f824331640c0abd9f2b6ecf605ec88fc5"},"policy":{"bundle":"sha256:fd35ee130a9f85c8b95e618723528b59827d94efa2c26f6362ee0b1f05df8a58","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+{"ts":"2026-11-06T10:48:00.397Z","event":"admin_touch","verdict":"deny","reason":"admin_touch_required","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"revoke_principal","target":"user:alice@example.com","challenge_sha256":"5dac0747e23dbd8315e3102afcb0bfb3a61b6449ed2df326d61dbe0f6d88797e"}}
+{"ts":"2026-11-06T10:48:00.418Z","event":"admin_touch","verdict":"permit","reason":"admin_touch_proved","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"revoke_principal","target":"user:alice@example.com","challenge_sha256":"5dac0747e23dbd8315e3102afcb0bfb3a61b6449ed2df326d61dbe0f6d88797e"}}
+2026/11/06 10:48:00 broker: a revocation asked by user:oncall@example.com may not have been recorded: broker: the revocation may not have been recorded: a copy already sent can still land when the directory answers again, and then stands everywhere, even over a lift made meanwhile. Until then this port49-broker denies what it names, until a lift on this port49-broker or its restart; after the heal check `port49 revoke --list` (store: unavailable: context deadline exceeded); this region's session store: 0 token keys deleted and 1 contexts marked revoked; other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that reaches the directory (the copy sent may land too); cut access another way: remove the principal's grants from broker.policy_file (live within two watch intervals)
 port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+port49-broker: broker: a revocation of user:alice@example.com made on this port49-broker, reported unrecorded then, landed when the store answered again; it stands everywhere
+port49-broker: broker: a revocation of user:alice@example.com made on a broker process closed 1 held connection(s) here
+port49-broker: runner: a revocation of user:alice@example.com made on this port49-broker, reported unrecorded then, reached 0 token key(s) and 1 context(s) here
+port49-broker: directory store: answering again; the cache was 2.0s old
+{"ts":"2026-11-06T10:49:00.921Z","event":"admin_touch","verdict":"deny","reason":"admin_touch_required","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:alice@example.com","challenge_sha256":"081c934ebffc9b3b834b7173b82b539c7aef2a4dc5b2d3bac8e09b6291ad1b24"}}
+{"ts":"2026-11-06T10:49:00.942Z","event":"admin_touch","verdict":"permit","reason":"admin_touch_proved","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:alice@example.com","challenge_sha256":"081c934ebffc9b3b834b7173b82b539c7aef2a4dc5b2d3bac8e09b6291ad1b24"}}
+{"ts":"2026-11-06T10:49:01.229Z","event":"revoke","verdict":"permit","reason":"revocation_lifted","principal":"user:alice@example.com","revocation":{"by":"principal","at":"2026-11-06T10:48:00.419Z","origin":"api user:oncall@example.com"}}
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+{"ts":"2026-11-06T10:49:01.827Z","event":"admin_touch","verdict":"deny","reason":"admin_touch_required","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:alice@example.com","challenge_sha256":"e513111a1f18514c51ebb1468f5db53877108eeeb9c35b2c0aaf8d195d5fb043"}}
+{"ts":"2026-11-06T10:49:01.848Z","event":"admin_touch","verdict":"permit","reason":"admin_touch_proved","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:alice@example.com","challenge_sha256":"e513111a1f18514c51ebb1468f5db53877108eeeb9c35b2c0aaf8d195d5fb043"}}
+2026/11/06 10:49:02 broker: a lift asked by user:oncall@example.com was not made: broker: the revocation could not be lifted, and stands: the store refused the delete or it never reached the store (store: unavailable: context deadline exceeded (nothing was sent))
+port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+port49-broker: directory store: etcd: both legs of the marks watch are on one member (10.149.0.13:2379): it going dark would stall the feed; one leg is moved when another member is ready
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
 port49-broker: store: the marks feed stopped (store: unavailable: etcdserver: no leader); trying again every second
-port49-broker: directory store: answering again; the cache was 26.0s old
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: answering again; the cache was 23.0s old
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.5s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.5s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.3s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.3s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.3s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.3s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+{"ts":"2026-11-06T10:50:22.129Z","event":"admin_touch","verdict":"deny","reason":"admin_touch_required","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:alice@example.com","challenge_sha256":"1544fcda556ae72c1979628bdabe54d7fb359face0b739c3e351f62005a4b585"}}
+{"ts":"2026-11-06T10:50:22.150Z","event":"admin_touch","verdict":"permit","reason":"admin_touch_proved","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:alice@example.com","challenge_sha256":"1544fcda556ae72c1979628bdabe54d7fb359face0b739c3e351f62005a4b585"}}
 port49-broker: store: the marks feed follows the store again
-{"ts":"2026-10-22T14:58:10.795Z","event":"revoke","verdict":"permit","reason":"revocation_lifted","principal":"user:alice@example.com","revocation":{"by":"principal","at":"2026-10-22T14:56:49.870Z","origin":"admin_socket uid 1000","saved":false}}
+{"ts":"2026-11-06T10:50:22.495Z","event":"revoke","verdict":"permit","reason":"revocation_lifted","principal":"user:alice@example.com","revocation":{"by":"principal","at":"2026-11-06T10:49:01.571Z","origin":"api user:oncall@example.com"}}
 port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+{"ts":"2026-11-06T10:50:23.028Z","event":"admin_touch","verdict":"deny","reason":"admin_touch_required","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"revoke_principal","target":"user:alice@example.com","challenge_sha256":"6de47b416c2cb373c3b739628d59e61e9365dada9553e036a8caedbb00025e82"}}
+{"ts":"2026-11-06T10:50:23.048Z","event":"admin_touch","verdict":"permit","reason":"admin_touch_proved","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"revoke_principal","target":"user:alice@example.com","challenge_sha256":"6de47b416c2cb373c3b739628d59e61e9365dada9553e036a8caedbb00025e82"}}
+2026/11/06 10:50:23 broker: a revocation asked by user:oncall@example.com may not have been recorded: broker: the revocation may not have been recorded: a copy already sent can still land when the directory answers again, and then stands everywhere, even over a lift made meanwhile. Until then this port49-broker denies what it names, until a lift on this port49-broker or its restart; after the heal check `port49 revoke --list` (store: unavailable: context deadline exceeded); this region's session store: 0 token keys deleted and 1 contexts marked revoked; other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that reaches the directory (the copy sent may land too); cut access another way: remove the principal's grants from broker.policy_file (live within two watch intervals)
 port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+port49-broker: directory store: etcd: both legs of the marks watch are on one member (10.149.0.13:2379): it going dark would stall the feed; one leg is moved when another member is ready
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
 port49-broker: store: the marks feed stopped (store: unavailable: etcdserver: no leader); trying again every second
-port49-broker: directory store: answering again; the cache was 23.1s old
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
 port49-broker: store: the marks feed follows the store again
 port49-broker: runner: a revocation of user:alice@example.com made on this port49-broker, reported unrecorded then, reached 0 token key(s) and 1 context(s) here
-port49-broker: broker: a revocation of user:alice@example.com made at 2026-10-22T14:58:11Z before the lift at 2026-10-22T14:58:12Z landed after it: a copy sent while its writer was cut off; it stands everywhere; made on this port49-broker, reported unrecorded then
-{"ts":"2026-10-22T14:59:32.057Z","event":"revoke","verdict":"permit","reason":"revocation_lifted","principal":"user:alice@example.com","revocation":{"by":"principal","at":"2026-10-22T14:58:11.309Z","origin":"admin_socket uid 1000","saved":false}}
+port49-broker: broker: a revocation of user:alice@example.com made at 2026-11-06T10:50:23Z before the lift at 2026-11-06T10:50:23Z landed after it: a copy sent while its writer was cut off; it stands everywhere; made on this port49-broker, reported unrecorded then
+port49-broker: directory store: answering again; the cache was 23.2s old
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.5s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.5s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch ended (etcdserver: no leader); the other follows, and it is opened again in 1s
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+port49-broker: directory store: etcd: a leg of a watch heard nothing for 2.4s while the store answers; it is opened again on another member
+{"ts":"2026-11-06T10:51:43.441Z","event":"admin_touch","verdict":"deny","reason":"admin_touch_required","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:alice@example.com","challenge_sha256":"00ff3488a4924efcf626edac1dcc1ca6197b0b16f46faa03b43b5dfcb3953871"}}
+{"ts":"2026-11-06T10:51:43.462Z","event":"admin_touch","verdict":"permit","reason":"admin_touch_proved","principal":"user:oncall@example.com","auth":{"method":"cert","fingerprint":"sha256:381987743c13169b487c78d074085d52034633fd37fa1cd9ae6c7605a9d9937d"},"admin":{"operation":"lift","target":"user:alice@example.com","challenge_sha256":"00ff3488a4924efcf626edac1dcc1ca6197b0b16f46faa03b43b5dfcb3953871"}}
+{"ts":"2026-11-06T10:51:43.749Z","event":"revoke","verdict":"permit","reason":"revocation_lifted","principal":"user:alice@example.com","revocation":{"by":"principal","at":"2026-11-06T10:50:23.049Z","origin":"api user:oncall@example.com"}}

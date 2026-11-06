@@ -1150,6 +1150,7 @@ func Run(t *testing.T, b Backend) {
 		{"OncePutsOnceAndTakesOnce", OncePutsOnceAndTakesOnce},
 		{"OnceExpires", OnceExpires},
 		{"OnceRaces", OnceRaces},
+		{"OnceRecordsPurge", OnceRecordsPurge},
 		{"OIDCOwnerKeepsEveryPrincipal", OIDCOwnerKeepsEveryPrincipal},
 		{"OIDCOwnerMergesUnderARace", OIDCOwnerMergesUnderARace},
 		{"LogoutKeepsTheLaterAndExpires", LogoutKeepsTheLaterAndExpires},

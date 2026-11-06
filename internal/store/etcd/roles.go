@@ -47,11 +47,11 @@ var (
 	daemonNever = []string{famIdem, famTokByPrin, famTokByCert, famSuperseded, famMembership, famMembershipK,
 		famOnce, famOIDCOwner, famLogout, famMFAProof, famSecondFactor, famSignInAttempts, famUnlock, famLift}
 	// daemonMetaReads are the keys of meta/ port49d's code reads, each
-	// granted by itself: seal_keys at a start, witness and purged by the
-	// restore guard, judged_bundle by the skew gauge (the bundle's name
+	// granted by itself: seal_keys at a start, witness by the
+	// restore floor, judged_bundle by the skew gauge (the bundle's name
 	// alone, so the policy text in meta/judged stays the broker's), and ping
 	// by the store probe.
-	daemonMetaReads = []string{"seal_keys", "witness", "purged", "judged_bundle", "ping"}
+	daemonMetaReads = []string{"seal_keys", "witness", "judged_bundle", "ping"}
 )
 
 // Scope is which of port49's stores a keyspace holds (plan 11a; spec §13

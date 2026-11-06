@@ -928,7 +928,7 @@ of content, never the content.
 
 `make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
 notes. Each entry's `measured_minutes` is its wall time in a full run (the first, commit `2c680dbf`,
-2026-10-19/20, then the L35, L37, L66, L79, L80 and L90 entries): the manifest sums to 736.8 minutes. A clean
+2026-10-19/20, then the L35, L37, L66, L79, L80 and L90 entries, and XRd's L73): the manifest sums to 745.7 minutes. A clean
 full run is about 12 h plus NX-OS boot hangs (below), so routine use needs a subset:
 `make lab-regress LAB_REGRESS_ARGS=-only=L35,L37`. The slowest are L34 (103 min), L36 (67) and
 L22 (44).
@@ -964,7 +964,7 @@ appears to hang while the launcher applies its startup config. Retry the entry.
 - `PORT49_LAB_ETCD_BIN` names a directory holding `etcd`, `etcdctl` and `etcdutl`, all v3.6.15
   (on beehive, `/mnt/images/etcd-v3.6.15`). L35-restore needs `etcdutl`.
 - L66 needs `tests/lab/l66/.collections`, which is git-ignored, so a fresh worktree lacks it. Create it
-  with `/home/rwendt/lab-venv/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
+  with `$HOME/lab-venv/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
   the L66 preflight prints the exact command with the collection names.
 - Building `vrnetlab/cisco_iol` needs the image file copied into the build directory first (step 3's
   IOL-XE recipe); an `IMAGE=/mnt/images/...` path fails the Makefile's version regex.

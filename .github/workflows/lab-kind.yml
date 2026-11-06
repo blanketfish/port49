@@ -20,7 +20,10 @@ jobs:
     # Adding some other label to a labelled pull request does not start a run.
     if: contains(github.event.pull_request.labels.*.name, 'lab-kind') && (github.event.action == 'synchronize' || github.event.label.name == 'lab-kind')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # l89's go test runs with -timeout 85m (four cells, each a namespace restore; l89.TestTimeout), and
+    # the image builds before it need the rest: its guard must fire before the job is cancelled, or no
+    # results are written
+    timeout-minutes: ${{ matrix.cell == 'l89' && 100 || 60 }}
     env:
       PORT49_SMOKE_ON_KEY_HOST: "1"
     permissions: {contents: read}
