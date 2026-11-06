@@ -1,12 +1,11 @@
 # L26 — juniper_vsrx
 
-- **Date measured:** 2026-11-05
+- **Date measured:** 2026-09-25
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L26-juniper_vsrx.pcap` — 13502 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26-juniper_vsrx.pcap` — 13538 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L26-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL26JunosKeywords$`
 
 ## Claim
 
@@ -14,7 +13,7 @@ The Junos operational CLI keyword tree under `show`, each keyword proven by comp
 
 ## Observation
 
-`| display xml rpc` showed the RPCs of `show system uptime` and `show version` and none of their output, so it runs nothing. The walk then typed only under `show`: 118 nodes, 1162 commands. Stopped at a bound: no.
+`| display xml rpc` showed the RPCs of `show system uptime` and `show version` and none of their output, so it runs nothing. The walk then typed only under `show`: 118 nodes, 1161 commands. Stopped at a bound: no.
 
 Bounds: the prefixes of 17 seed commands first, then every path under `show` of up to 2 words, to 4 words; at most 4000 nodes and 20000 commands.
 
