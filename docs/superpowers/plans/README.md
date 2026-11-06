@@ -8233,7 +8233,7 @@ L84, L87, L88, L89 and L90 are closed (2026-11-04, results notes under `tests/la
   - **L92 is new:** SR Linux over RFC 9887. 26.7.2 loads a `tls-profile` and was seen sending plain TACACS+ to port 300; no SR Linux enrolment dialect exists for L73.
 - **Standing FAILs a later version bump could reopen** (from 12b; re-run at each pin bump through `lab-kind`): L83 (b), the Secrets Store CSI driver, and
   L83 (c), the Vault injector as a reload.
-- **The restore guard, as Ryan ruled it (2026-11-02). Overturned by spec decision 56 in the pre-beta fixes (built in Tasks 3 and 5, below); Ryan to confirm.** The ERROR and its 10m page stay; "stop port49d" stays the escape; the guard lifts on its own
+- **The restore guard, as Ryan ruled it (2026-11-02). Overturned by spec decision 56 in the pre-beta fixes (built in Tasks 3 and 5, below); Ryan confirmed 2026-11-06.** The ERROR and its 10m page stay; "stop port49d" stays the escape; the guard lifts on its own
   at the token records' latest expiry. Closing the listener while guarded is not built.
 - **Pre-beta list** (each is a ledger line marked PRE-BETA or "Carried to final review"). **The outcome of each item is recorded under "Pre-beta fixes — outcome of the pre-beta list" below:**
   - **Security-relevant:** a newer snapshot carrying a restored `meta/purged` above the drop lifts the guard (takeover purges write one, so it is reachable without
@@ -8455,8 +8455,8 @@ runbook: its restore-scale-zero modifier is gone, and a Job (`restore-unspent`) 
 floor still refuses every token login `store_unavailable` (an ERROR, final on those platforms) while port49d cannot read `meta/witness`
 (`port49_redemption_restore_unjudged`, page after 2m). The Velero change has its own measured reason.
 **L89 (c) measured a restore with the StatefulSets at 0 replicas hanging** (Velero's file-system restore copies a volume
-through the pod that mounts it, and there was none; `tests/lab/results/L89-kind.md`, cell (c); run 42053716808), so the runbook restores with the pods running. **Ryan should
-confirm the overturn.** The 12c "restore guard" bullets above are kept as history and marked superseded.
+through the pod that mounts it, and there was none; `tests/lab/results/L89-kind.md`, cell (c); run 42053716808), so the runbook restores with the pods running. **Ryan
+confirmed the overturn (2026-11-06), the Velero restore's 5-minute window included.** The 12c "restore guard" bullets above are kept as history and marked superseded.
 
 #### Pre-beta fixes — As built
 
