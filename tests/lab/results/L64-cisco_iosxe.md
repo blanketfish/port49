@@ -1,12 +1,12 @@
 # L64 — cisco_iosxe
 
-- **Date measured:** 2026-10-20
+- **Date measured:** 2026-11-06
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/evidence/L64L65-cisco_iosxe.pcap` — 1386 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L64L65-cisco_iosxe.pcap` — 630 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `2c680dbfad8fed41de8176383c9e67e2f871d2eb`, `PORT49_LAB_PLATFORMS=iosxe`, `-run ^TestL64L65$`
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=iosxe`, `-run ^TestL64L65$`
 
 ## Claim
 
@@ -14,7 +14,7 @@
 
 ## Observation
 
-Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.1.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit 2c680dbfad8fed41de8176383c9e67e2f871d2eb into the shared lab venv.
+Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.1.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2 into the shared lab venv.
 
 The 10s before the first cell: 1 decision records and 20 TACACS+ packets to or from the device.
 
@@ -37,7 +37,7 @@ Authenticated to 172.100.100.41 ([172.100.100.41]:22) using "keyboard-interactiv
 
 ### L64b: PASS
 
-The device rebooted: true (uptime 1m0s, then 0s after 1m58s). The scan's key is the same after the reload (SHA256:rSl+CQPUUR06JtTnpL7oeaLH6+f0VxuOnWuTkZMMlcM).
+The device rebooted: true (uptime 1m0s, then 0s after 1m58s). The scan's key is the same after the reload (SHA256:Cp2KjUs5/HFvFk4vyDkHXL8cXI/oDaC14aAZltRClNk).
 
 The filed lines (type and key, compared with the host field left out) before the reload: 1; after: 1; added by the login: none; gone after it: none.
 
@@ -52,7 +52,7 @@ reload
 Proceed with reload? [confirm]
 after the answer "", the device said:
 
-The reload command was sent at 12:24:29; the device was seen down (no SSH banner on two connections in a row) at 12:24:41, and was serving SSH authentication again no later than 1m38s after that.
+The reload command was sent at 07:26:47; the device was seen down (no SSH banner on two connections in a row) at 07:26:59, and was serving SSH authentication again no later than 1m38s after that.
 Before the reload, `show version` says: ["xe1 uptime is 1 minute\r" "Uptime for this control processor is 2 minutes\r"]. After: ["xe1 uptime is 0 minutes\r" "Uptime for this control processor is 1 minute\r"].
 ```
 
@@ -72,11 +72,11 @@ Authenticated to 172.100.100.41 ([172.100.100.41]:22) using "keyboard-interactiv
 ```
 @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
 The fingerprint for the RSA key sent by the remote host is
-Offending RSA key in /tmp/p49l64home3797359969/.ssh/known_hosts:1
-  ssh-keygen -f '/tmp/p49l64home3797359969/.ssh/known_hosts' -R 'xe1'
+Offending RSA key in /tmp/p49l64home4192416417/.ssh/known_hosts:1
+  ssh-keygen -f '/tmp/p49l64home4192416417/.ssh/known_hosts' -R 'xe1'
 Host key for xe1 has changed and you have requested strict checking.
 Host key verification failed.
-port49 ssh: ssh stopped before xe1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under xe1 is not the one 172.100.100.41 presents: either the device's key changed, or the address inventory gives for xe1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home3797359969/.ssh/known_hosts -R xe1 and connect again
+port49 ssh: ssh stopped before xe1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under xe1 is not the one 172.100.100.41 presents: either the device's key changed, or the address inventory gives for xe1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home4192416417/.ssh/known_hosts -R xe1 and connect again
 ``` a window of 10s with no decision record and no TACACS+ packet preceded it.
 
 ### L64d: PASS
@@ -86,10 +86,10 @@ port49 ssh: ssh stopped before xe1 asked for the token, so it was never sent (ss
 ```
 @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
 The fingerprint for the RSA key sent by the remote host is
-Offending ED25519 key in /tmp/p49l64home3797359969/.ssh/known_hosts:1
-  ssh-keygen -f '/tmp/p49l64home3797359969/.ssh/known_hosts' -R 'xe1'
+Offending ED25519 key in /tmp/p49l64home4192416417/.ssh/known_hosts:1
+  ssh-keygen -f '/tmp/p49l64home4192416417/.ssh/known_hosts' -R 'xe1'
 Host key for xe1 has changed and you have requested strict checking.
 Host key verification failed.
-port49 ssh: ssh stopped before xe1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under xe1 is not the one 172.100.100.41 presents: either the device's key changed, or the address inventory gives for xe1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home3797359969/.ssh/known_hosts -R xe1 and connect again
+port49 ssh: ssh stopped before xe1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under xe1 is not the one 172.100.100.41 presents: either the device's key changed, or the address inventory gives for xe1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home4192416417/.ssh/known_hosts -R xe1 and connect again
 ``` a window of 10s with no decision record and no TACACS+ packet preceded it.
 

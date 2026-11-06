@@ -1,11 +1,12 @@
 # L26b — juniper_vsrx
 
-- **Date measured:** 2026-09-25
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L26b-juniper_vsrx.pcap` — 2926 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L26b-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26b-juniper_vsrx.pcap` — 2831 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26b-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL26bJunosKeywordDeny$`
 
 ## Claim
 
@@ -92,10 +93,10 @@ Each hierarchy deny session that does not name `system` also typed `show configu
 
 ### The overlay
 
-`tests/lab/results/L26b-keywords-juniper_vsrx.yaml`, in platform.ParseKeywords form: a node's words are those this run proves (and, for the parent chain, `set`, `show` and `configuration`, which L26 proves); its `argument` is the node once the overlay is laid over this image's L26 tree: true where a placeholder is offered there, or a word offered there is proven by neither. It was computed against `tests/lab/results/L26-keywords-juniper_vsrx.yaml`, sha256 `22616fc523baaef1618dc75dff972079485f121543c515f04054141f31300f80`, and holds only against the tree that hashes to that. This run computed it against an earlier L26 run of the image, whose tree hashed to 9a7013ee7595d93571faea0987ee5a36036cb84a8bdccba447761770a455ad76; an L26 rerun changed the tree, and the overlay was re-pinned to it from this run's listings and verdicts, with its nodes, words and arguments unchanged.
+`tests/lab/results/L26b-keywords-juniper_vsrx.yaml`, in platform.ParseKeywords form: a node's words are those this run proves (and, for the parent chain, `set`, `show` and `configuration`, which L26 proves); its `argument` is the node once the overlay is laid over this image's L26 tree: true where a placeholder is offered there, or a word offered there is proven by neither. It was computed against `tests/lab/results/L26-keywords-juniper_vsrx.yaml`, sha256 `c6bc52abecdd92fc8bfcee938dda400ee9c5a9ecc363476a2ebabf043b5f6317`, and holds only against the tree that hashes to that.
 
 ```yaml
-# computed against tests/lab/results/L26-keywords-juniper_vsrx.yaml sha256 22616fc523baaef1618dc75dff972079485f121543c515f04054141f31300f80
+# computed against tests/lab/results/L26-keywords-juniper_vsrx.yaml sha256 c6bc52abecdd92fc8bfcee938dda400ee9c5a9ecc363476a2ebabf043b5f6317
 platform: juniper_junos
 nodes:
   "": {words: ["exit", "set", "show"], argument: false}
@@ -1287,7 +1288,7 @@ control:
 
 ```
  
-Count: 139 lines
+Count: 151 lines
 
 alice01@srx1> 
 ```
@@ -1296,7 +1297,7 @@ deny:
 
 ```
  
-Count: 139 lines
+Count: 151 lines
 
 alice05@srx1> 
 ```
@@ -1387,7 +1388,7 @@ deny:
 
 ```
  
-Count: 139 lines
+Count: 151 lines
 
 alice04@srx1> 
 ```
@@ -1398,7 +1399,7 @@ deny:
 
 ```
  
-Count: 139 lines
+Count: 151 lines
 
 alice06@srx1> 
 ```

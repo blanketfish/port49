@@ -1,12 +1,12 @@
 # L26c-scripts — juniper_vsrx
 
-- **Date measured:** 2026-10-11
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L26c-scripts-juniper_vsrx.pcap` — 1356 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-scripts-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26c-scripts-juniper_vsrx.pcap` — 2356 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-scripts-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `3ec6d64422b4a3c241116baa297dd9269400fdaa`, `PORT49_LAB_PLATFORMS=vsrx`, `-run ^TestL26cEntryScripts$`
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL26cEntryScripts$`
 
 ## Claim
 
@@ -14,7 +14,7 @@ Whether `deny-commands "junoscript"` beside a deny of `show configuration` also 
 
 ## Observation
 
-The classes were committed: commit complete. REST: commit complete.
+The classes were committed: commit complete. REST: commit complete, with the forwarding knob `system services ssh tcp-forwarding`.
 
 The op script, at `/var/tmp/p49-entry-op.slax`:
 

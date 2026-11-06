@@ -1,11 +1,12 @@
 # L9-abbreviations — juniper_vsrx
 
-- **Date measured:** 2026-09-25
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L9-abbreviations-juniper_vsrx.pcap` — 954 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L9-abbreviations-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L9-abbreviations-juniper_vsrx.pcap` — 1332 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L9-abbreviations-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL9JunosAbbreviations$`
 
 ## Claim
 
@@ -22,7 +23,7 @@ set system login user p49-l9-all class p49-l9-all
 
 The deny: `deny-commands=^( *show +version *(\\\|.*)?\| *show +interfaces +terse *(\\\|.*)?\| *show +system +uptime *(\\\|.*)?\| *show +route +summary *(\\\|.*)?\| *show +chassis +hardware *(\\\|.*)?)$`.
 
-A probe ran only where its output holds the denied command's own output; `refused` is the CLI's refusal; `not run` is neither, so the command did not execute, and the deny did not refuse it either.
+A probe ran only where its output holds the denied command's own output (for `| count`, the lines the control's own run of the command held, more than one); `refused` is the CLI's refusal; `not run` is a device error, so the command did not execute, and the deny did not refuse it either; anything else is not observed and fails the test. A `not run` cell marked not isolated as an abbreviation still counts toward the fact (the lead's ruling of 2026-09-25): the denied command did not execute; leaving them out would not change the verdict, since a `not run` cell never makes it false.
 
 | probe | control | under the deny | expanded, control / deny |
 |---|---|---|---|
@@ -37,7 +38,7 @@ A probe ran only where its output holds the denied command's own output; `refuse
 | "sh interfaces te" | ran | not run; not isolated as an abbreviation of `show interfaces terse`: it expanded otherwise under the deny | `show interfaces terse` / `show interfaces te` |
 | "show int terse" | ran | refused | `show interfaces terse` / `show interfaces terse` |
 | "sh int ter \| count" | ran | not run; not isolated as an abbreviation of `show interfaces terse`: it expanded otherwise under the deny | `show interfaces terse \| count` / `show interfaces ter \| count` |
-| "show system uptime" | ran | refused | `Current time: 2026-09-25 05:27:12 UTC` / `^` |
+| "show system uptime" | ran | refused | `Current time: 2026-11-05 21:44:39 UTC` / `^` |
 | "sh sys upt" | ran | refused | `show system uptime` / `show system uptime` |
 | "sh system up" | ran | refused | `show system uptime` / `show system uptime` |
 | "show sy uptime" | ran | refused | `show system uptime` / `show system uptime` |
@@ -49,16 +50,17 @@ A probe ran only where its output holds the denied command's own output; `refuse
 | "sh chas hard" | ran | refused | `show chassis hardware` / `show chassis hardware` |
 | "sh chassis hardw" | ran | refused | `show chassis hardware` / `show chassis hardware` |
 | "sh i terse" | ambiguous | not isolated (ambiguous) | `show i` / `show i` |
-| "ſhow version" | refused | not isolated (refused) | `how` / `how` |
-| "   show version" | ran | refused | `show version` / `show version` |
-| "show version   " | ran | refused | `show version ` / `show version ` |
-| "   sh int ter   " | ran | not run | `show interfaces terse ` / `show interfaces ter ` |
+| "ſhow version" | refused | not isolated (refused) | `how` / `how` |
+| "   show version" | ran | refused | `show version` / `show version` |
+| "show version   " | ran | refused | `show version` / `show version` |
+| "   sh int ter   " | ran | not run; not isolated as an abbreviation of `show interfaces terse`: it expanded otherwise under the deny | `show interfaces terse` / `show interfaces ter` |
 
 ### Read off the table
 
 - the rendered deny shape (` *... *(\|.*)?`) enforced: true: every full form, plain and piped, refused under it and run by the control
 - JunosFacts.DenyMatchesExpanded (keywords) = true: true only where the shape is enforced, no probe ran under the deny (each refused or not run) and the control ran every unambiguous one; set 1.1.0 takes true only where both images say true
 - A keyword the deny hides from completion changes how an abbreviation resolves: under the deny an abbreviation of it may resolve as an argument instead (a probe marked "expanded otherwise").
+- `ſhow version` shows that the CLI refuses a non-ASCII keystroke (it rings the bell, drops `ſ` and reads `how`), not whether `ſ` case-folds to `s` in a deny: the control refuses it too, so its deny cell isolates nothing.
 
 ### control
 
@@ -484,7 +486,7 @@ dsc                     up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b5ff:fead:9800/64
+                                            fe80::e00:37ff:fe7e:9300/64
 gre                     up    up
 ipip                    up    up
 lo0                     up    up
@@ -513,7 +515,7 @@ dsc                     up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b5ff:fead:9800/64
+                                            fe80::e00:37ff:fe7e:9300/64
 gre                     up    up
 ipip                    up    up
 lo0                     up    up
@@ -542,7 +544,7 @@ dsc                     up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b5ff:fead:9800/64
+                                            fe80::e00:37ff:fe7e:9300/64
 gre                     up    up
 ipip                    up    up
 lo0                     up    up
@@ -571,7 +573,7 @@ dsc                     up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b5ff:fead:9800/64
+                                            fe80::e00:37ff:fe7e:9300/64
 gre                     up    up
 ipip                    up    up
 lo0                     up    up
@@ -604,12 +606,12 @@ alice01@srx1>
 
 ```
  
-Current time: 2026-09-25 05:27:12 UTC
+Current time: 2026-11-05 21:44:39 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 05:26:13 UTC (00:00:59 ago)
-Protocols started: 2026-09-25 05:26:57 UTC (00:00:15 ago)
-Last configured: 2026-09-25 05:27:08 UTC (00:00:04 ago) by breakglass
- 5:27AM  up 59 secs, 1 users, load averages: 5.63, 1.51, 0.56
+System booted: 2026-11-05 21:43:31 UTC (00:01:08 ago)
+Protocols started: 2026-11-05 21:44:16 UTC (00:00:23 ago)
+Last configured: 2026-11-05 21:44:24 UTC (00:00:15 ago) by breakglass
+ 9:44PM  up 1 min, 1 users, load averages: 2.23, 0.77, 0.30
 
 alice01@srx1> 
 ```
@@ -618,12 +620,12 @@ alice01@srx1>
 
 ```
 show system uptime 
-Current time: 2026-09-25 05:27:12 UTC
+Current time: 2026-11-05 21:44:41 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 05:26:13 UTC (00:00:59 ago)
-Protocols started: 2026-09-25 05:26:57 UTC (00:00:15 ago)
-Last configured: 2026-09-25 05:27:08 UTC (00:00:04 ago) by breakglass
- 5:27AM  up 59 secs, 1 users, load averages: 5.63, 1.51, 0.56
+System booted: 2026-11-05 21:43:31 UTC (00:01:10 ago)
+Protocols started: 2026-11-05 21:44:16 UTC (00:00:25 ago)
+Last configured: 2026-11-05 21:44:24 UTC (00:00:17 ago) by breakglass
+ 9:44PM  up 1 min, 1 users, load averages: 2.05, 0.76, 0.29
 
 alice01@srx1> 
 ```
@@ -632,12 +634,12 @@ alice01@srx1>
 
 ```
 show system uptime 
-Current time: 2026-09-25 05:27:12 UTC
+Current time: 2026-11-05 21:44:42 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 05:26:13 UTC (00:00:59 ago)
-Protocols started: 2026-09-25 05:26:57 UTC (00:00:15 ago)
-Last configured: 2026-09-25 05:27:08 UTC (00:00:04 ago) by breakglass
- 5:27AM  up 59 secs, 1 users, load averages: 5.18, 1.48, 0.55
+System booted: 2026-11-05 21:43:31 UTC (00:01:11 ago)
+Protocols started: 2026-11-05 21:44:16 UTC (00:00:26 ago)
+Last configured: 2026-11-05 21:44:24 UTC (00:00:18 ago) by breakglass
+ 9:44PM  up 1 min, 1 users, load averages: 2.05, 0.76, 0.29
 
 alice01@srx1> 
 ```
@@ -646,12 +648,12 @@ alice01@srx1>
 
 ```
 show system uptime 
-Current time: 2026-09-25 05:27:13 UTC
+Current time: 2026-11-05 21:44:44 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 05:26:13 UTC (00:01:00 ago)
-Protocols started: 2026-09-25 05:26:57 UTC (00:00:16 ago)
-Last configured: 2026-09-25 05:27:08 UTC (00:00:05 ago) by breakglass
- 5:27AM  up 59 secs, 1 users, load averages: 5.18, 1.48, 0.55
+System booted: 2026-11-05 21:43:31 UTC (00:01:13 ago)
+Protocols started: 2026-11-05 21:44:16 UTC (00:00:28 ago)
+Last configured: 2026-11-05 21:44:24 UTC (00:00:20 ago) by breakglass
+ 9:44PM  up 1 min, 1 users, load averages: 2.05, 0.76, 0.29
 
 alice01@srx1> 
 ```
@@ -662,10 +664,10 @@ alice01@srx1>
  
 
 Highwater Mark (All time / Time averaged watermark)
-    RIB unique destination routes: 14 at 2026-09-25 05:27:09 / 0
-    RIB routes                   : 14 at 2026-09-25 05:27:09 / 0
-    FIB routes                   : 4 at 2026-09-25 05:27:00 / 0
-    VRF type routing instances   : 0 at 2026-09-25 05:26:57
+    RIB unique destination routes: 14 at 2026-11-05 21:44:28 / 0
+    RIB routes                   : 14 at 2026-11-05 21:44:28 / 0
+    FIB routes                   : 4 at 2026-11-05 21:44:19 / 0
+    VRF type routing instances   : 0 at 2026-11-05 21:44:17
 
 mgmt_junos.inet.0: 3 destinations, 3 routes (3 active, 0 holddown, 0 hidden)
               Direct:      1 routes,      1 active
@@ -699,10 +701,10 @@ alice01@srx1>
 show route summary 
 
 Highwater Mark (All time / Time averaged watermark)
-    RIB unique destination routes: 14 at 2026-09-25 05:27:09 / 0
-    RIB routes                   : 14 at 2026-09-25 05:27:09 / 0
-    FIB routes                   : 4 at 2026-09-25 05:27:00 / 0
-    VRF type routing instances   : 0 at 2026-09-25 05:26:57
+    RIB unique destination routes: 14 at 2026-11-05 21:44:28 / 0
+    RIB routes                   : 14 at 2026-11-05 21:44:28 / 0
+    FIB routes                   : 4 at 2026-11-05 21:44:19 / 0
+    VRF type routing instances   : 0 at 2026-11-05 21:44:17
 
 mgmt_junos.inet.0: 3 destinations, 3 routes (3 active, 0 holddown, 0 hidden)
               Direct:      1 routes,      1 active
@@ -726,10 +728,10 @@ alice01@srx1>
 show route summary 
 
 Highwater Mark (All time / Time averaged watermark)
-    RIB unique destination routes: 14 at 2026-09-25 05:27:09 / 0
-    RIB routes                   : 14 at 2026-09-25 05:27:09 / 0
-    FIB routes                   : 4 at 2026-09-25 05:27:00 / 0
-    VRF type routing instances   : 0 at 2026-09-25 05:26:57
+    RIB unique destination routes: 14 at 2026-11-05 21:44:28 / 0
+    RIB routes                   : 14 at 2026-11-05 21:44:28 / 0
+    FIB routes                   : 4 at 2026-11-05 21:44:19 / 0
+    VRF type routing instances   : 0 at 2026-11-05 21:44:17
 
 mgmt_junos.inet.0: 3 destinations, 3 routes (3 active, 0 holddown, 0 hidden)
               Direct:      1 routes,      1 active
@@ -753,7 +755,7 @@ alice01@srx1>
  
 Hardware inventory:
 Item             Version  Part number  Serial number     Description
-Chassis                                d7e0453a986e      VSRX
+Chassis                                a2ceafb60805      VSRX
 Midplane        
 System IO       
 Routing Engine                                           VSRX-2CPU-4G memory
@@ -769,7 +771,7 @@ alice01@srx1>
 show chassis hardware 
 Hardware inventory:
 Item             Version  Part number  Serial number     Description
-Chassis                                d7e0453a986e      VSRX
+Chassis                                a2ceafb60805      VSRX
 Midplane        
 System IO       
 Routing Engine                                           VSRX-2CPU-4G memory
@@ -785,7 +787,7 @@ alice01@srx1>
 show chassis hardware 
 Hardware inventory:
 Item             Version  Part number  Serial number     Description
-Chassis                                d7e0453a986e      VSRX
+Chassis                                a2ceafb60805      VSRX
 Midplane        
 System IO       
 Routing Engine                                           VSRX-2CPU-4G memory
@@ -952,13 +954,21 @@ alice01@srx1>
 ```
 show interfaces terse 
 Interface               Admin Link Proto    Local                 Remote
+gr-0/0/0                up    up
+ip-0/0/0                up    up
+sp-0/0/0                up    up
+sp-0/0/0.0              up    up   inet    
+                                   inet6   
+sp-0/0/0.16383          up    up   inet    
 dsc                     up    up
+fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b5ff:fead:9800/64
+                                            fe80::e00:37ff:fe7e:9300/64
 gre                     up    up
 ipip                    up    up
+irb                     up    up
 lo0                     up    up
 lo0.16384               up    up   inet     127.0.0.1           --> 0/0
 lo0.16385               up    up   inet     10.0.0.1            --> 0/0
@@ -971,7 +981,12 @@ lsi                     up    up
 mtun                    up    up
 pimd                    up    up
 pime                    up    up
+pp0                     up    up
+ppd0                    up    up
+ppe0                    up    up
+st0                     up    up
 tap                     up    up
+vlan                    up    down
 
 alice01@srx1> 
 ```

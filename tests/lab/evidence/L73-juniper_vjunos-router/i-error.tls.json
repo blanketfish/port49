@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:300",
-    "device_port": 59362,
-    "syn_at": "2026-10-18T04:57:53.35301Z",
+    "device_port": 43748,
+    "syn_at": "2026-11-05T18:32:25.194434Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -97,6 +97,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        29
       ]
     },
     "server_hello": {
@@ -107,17 +110,19 @@
     },
     "device_tls_records": 8,
     "server_tls_records": 10,
-    "device_payload_bytes": 1865,
-    "server_payload_bytes": 995,
-    "device_fin_at": "2026-10-18T04:57:53.36121Z",
+    "device_payload_bytes": 1866,
+    "server_payload_bytes": 998,
+    "device_fin_at": "2026-11-05T18:32:25.203035Z",
+    "server_flight_at": "2026-11-05T18:32:25.196993Z",
+    "device_reply_at": "2026-11-05T18:32:25.199398Z",
     "incomplete": false,
     "end": "server-fin",
-    "end_at": "2026-10-18T04:57:53.360835Z"
+    "end_at": "2026-11-05T18:32:25.202711Z"
   },
   {
     "server": "172.100.100.2:300",
-    "device_port": 42930,
-    "syn_at": "2026-10-18T04:57:53.36127Z",
+    "device_port": 60754,
+    "syn_at": "2026-11-05T18:32:25.203095Z",
     "answer": "rst",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -125,12 +130,12 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-18T04:57:53.361285Z"
+    "end_at": "2026-11-05T18:32:25.203106Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 59376,
-    "syn_at": "2026-10-18T04:57:53.361695Z",
+    "device_port": 43758,
+    "syn_at": "2026-11-05T18:32:25.203431Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -225,6 +230,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        29
       ]
     },
     "server_hello": {
@@ -235,10 +243,12 @@
     },
     "device_tls_records": 7,
     "server_tls_records": 7,
-    "device_payload_bytes": 1799,
-    "server_payload_bytes": 856,
+    "device_payload_bytes": 1802,
+    "server_payload_bytes": 857,
+    "server_flight_at": "2026-11-05T18:32:25.204295Z",
+    "device_reply_at": "2026-11-05T18:32:25.206336Z",
     "incomplete": false,
     "end": "server-fin",
-    "end_at": "2026-10-18T04:57:55.368153Z"
+    "end_at": "2026-11-05T18:32:27.20885Z"
   }
 ]

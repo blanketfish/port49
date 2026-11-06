@@ -1,38 +1,41 @@
 show log messages | match "tacplus|TACPLUS|tls|TLS|certif|pki" | last 40 ^M
-Oct 18 04:53:29  srx1 jlaunchd[19936]: Registered PID 20334(pki-service): exec_command^M
-Oct 18 04:53:29  srx1 jlaunchd[19936]: pki-service (PID 20334) started^M
-Oct 18 04:53:29  srx1 jlaunchd[19936]: Registered PID 20334(pki-service): new process^M
-Oct 18 04:53:30  srx1 pkid[20334]: <LONG>: <LONG>: registering 2 rows^M
-Oct 18 04:53:56  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
-Oct 18 04:53:58  srx1 auditd[20324]: AUDITD_TACPLUS_FAIL: TACACS+ failure: TACACS+ server returned status as 'error' in the accounting reply^M
-Oct 18 04:54:03  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
-Oct 18 04:54:07  srx1 pkid[20334]: PKID_PV_KEYPAIR_GEN: A 2048 bit RSA key-Pair has been generated for l73-dev^M
-Oct 18 04:54:10  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
-Oct 18 04:54:11  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
-Oct 18 04:54:11  srx1 pkid[20334]: PKID_PV_CERT_LOAD: Certificate l73-root has been successfully loaded^M
-Oct 18 04:54:11  srx1 pkid[20334]: PKID_PV_CERT_LOAD: Certificate l73-root has been successfully loaded^M
-Oct 18 04:54:13  srx1 pkid[20334]: PKID_PV_CERT_LOAD: Certificate l73-inter has been successfully loaded^M
-Oct 18 04:54:13  srx1 pkid[20334]: PKID_PV_CERT_LOAD: Certificate l73-inter has been successfully loaded^M
-Oct 18 04:54:15  srx1 pkid[20334]: PKID_PV_CERT_LOAD: Certificate l73-dev has been successfully loaded^M
-Oct 18 04:54:21  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
-Oct 18 04:54:22  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
-Oct 18 04:54:27  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
-Oct 18 04:54:33  srx1 auditd[20323]: <LONG>: Tacplus accounting process terminated (signal 13)^M
-Oct 18 04:54:33  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:54:34  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:54:34  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:54:44  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
-Oct 18 04:54:48  srx1 auditd[23035]: AUDITD_TACPLUS_FAIL: TACACS+ failure: TACACS+ server returned status as 'error' in the accounting reply^M
-Oct 18 04:55:07  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:55:07  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:55:22  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:55:22  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:55:37  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:55:37  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:55:51  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:55:51  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:56:06  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:56:06  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
-Oct 18 04:56:11  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:27:46  srx1 jlaunchd[19930]: Registered PID 20028(pki-service): exec_command^M
+Nov  5 18:27:46  srx1 jlaunchd[19930]: pki-service (PID 20028) started^M
+Nov  5 18:27:46  srx1 jlaunchd[19930]: Registered PID 20028(pki-service): new process^M
+Nov  5 18:27:47  srx1 pkid[20028]: <LONG>: <LONG>: registering 2 rows^M
+Nov  5 18:28:24  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:28:28  srx1 auditd[20327]: AUDITD_TACPLUS_FAIL: TACACS+ failure: TACACS+ server returned status as 'error' in the accounting reply^M
+Nov  5 18:28:30  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:28:35  srx1 pkid[20028]: PKID_PV_KEYPAIR_GEN: A 2048 bit RSA key-Pair has been generated for l73-dev^M
+Nov  5 18:28:37  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:28:38  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:28:38  srx1 pkid[20028]: PKID_PV_CERT_LOAD: Certificate l73-root has been successfully loaded^M
+Nov  5 18:28:39  srx1 pkid[20028]: PKID_PV_CERT_LOAD: Certificate l73-root has been successfully loaded^M
+Nov  5 18:28:40  srx1 pkid[20028]: PKID_PV_CERT_LOAD: Certificate l73-inter has been successfully loaded^M
+Nov  5 18:28:40  srx1 pkid[20028]: PKID_PV_CERT_LOAD: Certificate l73-inter has been successfully loaded^M
+Nov  5 18:28:42  srx1 pkid[20028]: PKID_PV_CERT_LOAD: Certificate l73-dev has been successfully loaded^M
+Nov  5 18:28:48  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:28:49  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:28:54  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:28:58  srx1 auditd[20327]: AUDITD_TACPLUS_FAIL: TACACS+ failure: TACACS+ server returned status as 'error' in the accounting reply^M
+Nov  5 18:28:58  srx1 auditd[20326]: <LONG>: Tacplus accounting process terminated (signal 13)^M
+Nov  5 18:28:59  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:29:03  srx1 auditd[23029]: AUDITD_TACPLUS_FAIL: TACACS+ failure: TACACS+ server returned status as 'error' in the accounting reply^M
+Nov  5 18:29:03  srx1 auditd[20326]: <LONG>: Tacplus accounting process terminated (signal 13)^M
+Nov  5 18:29:04  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:29:04  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:29:15  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
+Nov  5 18:29:18  srx1 auditd[23033]: AUDITD_TACPLUS_FAIL: TACACS+ failure: TACACS+ server returned status as 'error' in the accounting reply^M
+Nov  5 18:29:38  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:29:38  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:29:52  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:29:52  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:30:07  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:30:07  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:30:22  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:30:22  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:30:37  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:30:37  srx1 sshd: <LONG>: Failed in sending authentication with error tls setup has failed.^M
+Nov  5 18:30:42  srx1 sshd: <LONG>: Failed in sending authentication with error connect: Connection refused.^M
 ---(more 100%)---^M                                        ^M^M
 breakglass@srx1> 

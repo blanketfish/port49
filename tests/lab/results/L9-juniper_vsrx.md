@@ -1,11 +1,12 @@
 # L9 — juniper_vsrx
 
-- **Date measured:** 2026-09-25
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L12-juniper_vsrx.pcap` — 5370 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L12-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L12-juniper_vsrx.pcap` — 5397 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L12-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL12JunosWire$`
 
 ## Claim
 
@@ -51,7 +52,7 @@ The templates were committed without a uid (commit complete).
 | `request system reboot` | completes | absent | absent | absent | absent | absent | completes | completes | completes | completes | absent | absent | absent | absent |
 | `restart routing` | completes | absent | absent | absent | absent | absent | completes | completes | completes | completes | absent | absent | absent | absent |
 | `configure` | ran | — | — | — | — | — | — | — | — | — | — | ran | — | — |
-| `set system host-name srx1` | ran | — | — | — | — | — | — | — | — | — | — | refused, not isolated: the class lacks system-control (see the Reading section) | — | — |
+| `set system host-name srx1` | ran | — | — | — | — | — | — | — | — | — | — | refused | — | — |
 | `run show version` | ran | — | — | — | — | — | — | — | — | — | — | refused | — | — |
 | `run show system uptime` | ran | — | — | — | — | — | — | — | — | — | — | ran | — | — |
 | `exit configuration-mode` | ran | — | — | — | — | — | — | — | — | — | — | ran | — | — |
@@ -62,12 +63,12 @@ The templates were committed without a uid (commit complete).
 - unanchored: `version` refused `show version` (true); `show ver` refused `show version` (true)
 - JunosFacts.CaseSensitive = false: false only where every other-case spelling was refused by the CLI in the control or by the deny
 - JunosFacts.DenyMatchesExpanded = false: true only where the control ran both abbreviations and each deny refused them
-- a malformed deny `^(show$`: the session opened true (no error); `show version` ran false
+- a malformed deny `^(show$`: the session opened true; the device refused the login false (no error); `show version` ran false
 - narrow shape exact: true: ran `show version` true and `show interfaces terse` true; refused `show system uptime` true, `clear interfaces statistics fxp0` true, `ping` true, the configuration true
 - under deny .*, the commands a class with no bits runs: `set cli screen-width 200` bitless true, narrow false; `file list /var/tmp` bitless true, narrow false
 - user-permissions over a bitless template applied: true; both bits of a two-bit value applied: true (bit_delivery: user_permissions only if both are true, and per session below)
 - user-permissions over remote: `show cli authorization` lists view-configuration: true (true: merged or ignored; false: replaced)
-- a statement typed in configuration mode under a deny-commands naming it: refused, **not isolated** (corrected in the Reading section: isolated, the deny did not reach the statement); `run show version` under a deny naming `show version`: refused
+- a statement typed in configuration mode under a deny-commands naming it: refused; `run show version` under a deny naming `show version`: refused
 - -regexps: `show version` refused with both deny and allow naming it: true
 - allow-commands2 an attribute of its own: `show system uptime` ran: true
 - per session: A before `show cli authorization Current user: 'p49-l12-none' login: 'alice15' class 'p49-l12-none' Permissions: view -- Can view current values and statistics Individual command authorization: Allow regular expression: none Deny regular expression: none Allow configuration regular expression: none Deny configuration regular expression: none alice15@srx1>`, B `show ^ unknown command. alice16@srx1> show cli ^ unknown command. alice16@srx1> showcli authorization ^ unknown command. alice16@srx1>`, A after B `show cli authorization Current user: 'p49-l12-none' login: 'alice15' class 'p49-l12-none' Permissions: view -- Can view current values and statistics Individual command authorization: Allow regular expression: none Deny regular expression: none Allow configuration regular expression: none Deny configuration regular expression: none alice15@srx1>`
@@ -260,12 +261,12 @@ alice01@srx1>
 
 ```
  
-Current time: 2026-09-25 02:46:32 UTC
+Current time: 2026-11-05 22:28:52 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:00:59 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:00:15 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:00:03 ago) by breakglass
- 2:46AM  up 58 secs, 1 users, load averages: 2.20, 0.74, 0.28
+System booted: 2026-11-05 22:27:54 UTC (00:00:58 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:00:13 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:00:04 ago) by breakglass
+10:28PM  up 57 secs, 1 users, load averages: 2.07, 0.69, 0.26
 
 alice01@srx1> 
 ```
@@ -279,7 +280,7 @@ dsc                     up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 lo0                     up    up
@@ -307,7 +308,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice01@srx1> 
 ```
@@ -431,7 +432,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice01@srx1> 
 ```
@@ -698,12 +699,12 @@ alice01@srx1#
 
 ```
  
-Current time: 2026-09-25 02:46:37 UTC
+Current time: 2026-11-05 22:29:13 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:01:04 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:00:20 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:00:08 ago) by breakglass
- 2:46AM  up 1 min, 1 users, load averages: 2.03, 0.73, 0.28
+System booted: 2026-11-05 22:27:54 UTC (00:01:19 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:00:34 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:00:25 ago) by breakglass
+10:29PM  up 1 min, 1 users, load averages: 2.13, 0.79, 0.31
 
 [edit]
 alice01@srx1# 
@@ -1141,12 +1142,12 @@ alice03@srx1>
 
 ```
  
-Current time: 2026-09-25 02:47:04 UTC
+Current time: 2026-11-05 22:29:58 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:01:31 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:00:47 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:00:35 ago) by breakglass
- 2:47AM  up 2 mins, 1 users, load averages: 1.74, 0.76, 0.31
+System booted: 2026-11-05 22:27:54 UTC (00:02:04 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:01:19 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:01:10 ago) by breakglass
+10:29PM  up 2 mins, 1 users, load averages: 1.71, 0.87, 0.36
 
 alice03@srx1> 
 ```
@@ -1158,6 +1159,8 @@ alice03@srx1>
 Interface               Admin Link Proto    Local                 Remote
 gr-0/0/0                up    up
 ip-0/0/0                up    up
+lt-0/0/0                up    up
+mt-0/0/0                up    up
 sp-0/0/0                up    up
 sp-0/0/0.0              up    up   inet    
                                    inet6   
@@ -1167,7 +1170,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -1201,7 +1204,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice03@srx1> 
 ```
@@ -1349,7 +1352,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice03@srx1> 
 ```
@@ -1553,12 +1556,12 @@ alice04@srx1>
 
 ```
  
-Current time: 2026-09-25 02:47:19 UTC
+Current time: 2026-11-05 22:30:27 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:01:46 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:01:02 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:00:50 ago) by breakglass
- 2:47AM  up 2 mins, 1 users, load averages: 1.64, 0.79, 0.32
+System booted: 2026-11-05 22:27:54 UTC (00:02:33 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:01:48 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:01:39 ago) by breakglass
+10:30PM  up 3 mins, 1 users, load averages: 1.61, 0.91, 0.39
 
 alice04@srx1> 
 ```
@@ -1581,7 +1584,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -1615,7 +1618,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice04@srx1> 
 ```
@@ -1752,7 +1755,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice04@srx1> 
 ```
@@ -1956,12 +1959,12 @@ alice05@srx1>
 
 ```
  
-Current time: 2026-09-25 02:47:34 UTC
+Current time: 2026-11-05 22:30:56 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:02:01 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:01:17 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:01:05 ago) by breakglass
- 2:47AM  up 2 mins, 1 users, load averages: 1.58, 0.82, 0.34
+System booted: 2026-11-05 22:27:54 UTC (00:03:02 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:02:17 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:02:08 ago) by breakglass
+10:30PM  up 3 mins, 1 users, load averages: 1.37, 0.92, 0.41
 
 alice05@srx1> 
 ```
@@ -1984,7 +1987,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -2018,7 +2021,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice05@srx1> 
 ```
@@ -2162,7 +2165,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice05@srx1> 
 ```
@@ -2389,7 +2392,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -2423,7 +2426,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice06@srx1> 
 ```
@@ -2574,7 +2577,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice06@srx1> 
 ```
@@ -2729,12 +2732,12 @@ alice07@srx1>
 
 ```
  
-Current time: 2026-09-25 02:48:04 UTC
+Current time: 2026-11-05 22:31:54 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:02:31 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:01:47 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:01:35 ago) by breakglass
- 2:48AM  up 3 mins, 1 users, load averages: 1.47, 0.86, 0.37
+System booted: 2026-11-05 22:27:54 UTC (00:04:00 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:03:15 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:03:06 ago) by breakglass
+10:31PM  up 4 mins, 1 users, load averages: 1.35, 1.00, 0.47
 
 alice07@srx1> 
 ```
@@ -2757,7 +2760,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -2791,7 +2794,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice07@srx1> 
 ```
@@ -2866,7 +2869,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice07@srx1> 
 ```
@@ -3141,12 +3144,12 @@ alice08@srx1>
 
 ```
  
-Current time: 2026-09-25 02:48:20 UTC
+Current time: 2026-11-05 22:32:24 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:02:47 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:02:03 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:01:51 ago) by breakglass
- 2:48AM  up 3 mins, 1 users, load averages: 1.56, 0.92, 0.40
+System booted: 2026-11-05 22:27:54 UTC (00:04:30 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:03:45 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:03:36 ago) by breakglass
+10:32PM  up 4 mins, 1 users, load averages: 1.80, 1.14, 0.54
 
 alice08@srx1> 
 ```
@@ -3169,7 +3172,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -3203,7 +3206,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice08@srx1> 
 ```
@@ -3278,7 +3281,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice08@srx1> 
 ```
@@ -3551,12 +3554,12 @@ alice09@srx1>
 
 ```
  
-Current time: 2026-09-25 02:48:35 UTC
+Current time: 2026-11-05 22:32:53 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:03:02 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:02:18 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:02:06 ago) by breakglass
- 2:48AM  up 3 mins, 1 users, load averages: 1.51, 0.94, 0.42
+System booted: 2026-11-05 22:27:54 UTC (00:04:59 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:04:14 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:04:05 ago) by breakglass
+10:32PM  up 5 mins, 1 users, load averages: 1.56, 1.15, 0.56
 
 alice09@srx1> 
 ```
@@ -3579,7 +3582,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -3613,7 +3616,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice09@srx1> 
 ```
@@ -3688,7 +3691,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice09@srx1> 
 ```
@@ -4056,12 +4059,12 @@ alice10@srx1>
 
 ```
  
-Current time: 2026-09-25 02:48:51 UTC
+Current time: 2026-11-05 22:33:23 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:03:18 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:02:34 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:02:22 ago) by breakglass
- 2:48AM  up 3 mins, 1 users, load averages: 1.54, 0.98, 0.44
+System booted: 2026-11-05 22:27:54 UTC (00:05:29 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:04:44 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:04:35 ago) by breakglass
+10:33PM  up 5 mins, 1 users, load averages: 1.56, 1.18, 0.59
 
 alice10@srx1> 
 ```
@@ -4084,7 +4087,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -4118,7 +4121,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice10@srx1> 
 ```
@@ -4242,7 +4245,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice10@srx1> 
 ```
@@ -4757,12 +4760,12 @@ alice12@srx1>
 
 ```
  
-Current time: 2026-09-25 02:49:21 UTC
+Current time: 2026-11-05 22:34:22 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:03:48 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:03:04 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:02:52 ago) by breakglass
- 2:49AM  up 4 mins, 1 users, load averages: 1.33, 0.98, 0.46
+System booted: 2026-11-05 22:27:54 UTC (00:06:28 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:05:43 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:05:34 ago) by breakglass
+10:34PM  up 6 mins, 1 users, load averages: 1.36, 1.19, 0.63
 
 alice12@srx1> 
 ```
@@ -4785,7 +4788,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -4819,7 +4822,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice12@srx1> 
 ```
@@ -4911,7 +4914,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice12@srx1> 
 ```
@@ -5015,12 +5018,12 @@ alice12@srx1#
 
 ```
  
-Current time: 2026-09-25 02:49:26 UTC
+Current time: 2026-11-05 22:34:41 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:03:53 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:03:09 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:02:57 ago) by breakglass
- 2:49AM  up 4 mins, 1 users, load averages: 1.30, 0.98, 0.46
+System booted: 2026-11-05 22:27:54 UTC (00:06:47 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:06:02 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:05:53 ago) by breakglass
+10:34PM  up 7 mins, 1 users, load averages: 1.42, 1.21, 0.65
 
 [edit]
 alice12@srx1# 
@@ -5082,12 +5085,12 @@ alice13@srx1>
 
 ```
  
-Current time: 2026-09-25 02:49:38 UTC
+Current time: 2026-11-05 22:34:57 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:04:05 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:03:21 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:03:09 ago) by breakglass
- 2:49AM  up 4 mins, 1 users, load averages: 1.26, 0.98, 0.47
+System booted: 2026-11-05 22:27:54 UTC (00:07:03 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:06:18 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:06:09 ago) by breakglass
+10:34PM  up 7 mins, 1 users, load averages: 1.48, 1.23, 0.67
 
 alice13@srx1> 
 ```
@@ -5110,7 +5113,7 @@ fti0                    up    up
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 gre                     up    up
 ipip                    up    up
 irb                     up    up
@@ -5144,7 +5147,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice13@srx1> 
 ```
@@ -5240,7 +5243,7 @@ Interface               Admin Link Proto    Local                 Remote
 fxp0                    up    up
 fxp0.0                  up    up   inet     10.0.0.15/24    
                                    inet6    2001:db8::2/64  
-                                            fe80::e00:b9ff:feb5:b200/64
+                                            fe80::e00:d2ff:fe83:f200/64
 
 alice13@srx1> 
 ```
@@ -5437,12 +5440,12 @@ alice14@srx1>
 
 ```
  
-Current time: 2026-09-25 02:49:53 UTC
+Current time: 2026-11-05 22:35:26 UTC
 Time Source:  LOCAL CLOCK 
-System booted: 2026-09-25 02:45:33 UTC (00:04:20 ago)
-Protocols started: 2026-09-25 02:46:17 UTC (00:03:36 ago)
-Last configured: 2026-09-25 02:46:29 UTC (00:03:24 ago) by breakglass
- 2:49AM  up 4 mins, 1 users, load averages: 1.27, 0.99, 0.48
+System booted: 2026-11-05 22:27:54 UTC (00:07:32 ago)
+Protocols started: 2026-11-05 22:28:39 UTC (00:06:47 ago)
+Last configured: 2026-11-05 22:28:48 UTC (00:06:38 ago) by breakglass
+10:35PM  up 8 mins, 1 users, load averages: 1.55, 1.27, 0.70
 
 alice14@srx1> 
 ```
@@ -5697,47 +5700,3 @@ No valid completions
 alice14@srx1> restart   
 ```
 
-## Reading (controller, 2026-09-25; added by hand after the run, not generated)
-
-This section corrects and interprets the generated observation above, which otherwise stands as
-the run wrote it (Task 2 review, fix round 1).
-
-- **Configuration mode (corrects the `set system host-name srx1` cell and its read-off line).** The
-  `configuration mode` variant's class, `p49-l12-cfg`, holds `configure view view-configuration`
-  and no `system-control`, and the refusal's caret sits under `system`, not under `host-name`:
-  Junos hid a hierarchy the class cannot modify, with or without the deny. The cell was not
-  isolated. Measured isolated, with one class holding `system-control` with and without
-  `deny-commands=^set system host-name( .*)?$`, and a sibling statement under the deny:
-  **the deny did not reach the statement**. The device listed the deny and ran
-  `set system host-name srx1` under it, on this image and on vJunos-router 23.4R2-S2.1 (`tests/lab/results/L12-configuration-juniper_vjunos-router.md`,
-  `L12-configuration-juniper_vsrx.md`). The
-  `run show version` cell stands: `run show system uptime` ran in the same session.
-- **Admin channel.** The class and template changes were made over **SSH as breakglass**, with
-  port49d stopped, by inference: this run did not record its channel, and the isolated run on the
-  same image and startup configuration did (`The admin CLI that configured the class: SSH CLI as
-  breakglass`, `tests/lab/results/L12-configuration-juniper_vsrx.md`). `junosCLI` falls back to the console only when SSH fails.
-- **`remote + user-permissions`: merged or ignored is ambiguous.** `remote`'s class already holds
-  `view`, so `user-permissions=view` over it reads the same whether the device merged the value or
-  ignored it. Only "replaced" is excluded.
-- **Per session.** Session B's own permissions are unreadable: `clear` without `view` refuses
-  `show cli authorization`. The per-session reading rests on session A's permissions being
-  unchanged after B opened, which they were.
-- **A deny that names an argument is not enforced (the L9 finding).**
-  `deny-commands=^show interfaces fxp0( .*)?$` over class `all` was listed by the device under
-  `Deny regular expression:` and did not refuse `show interfaces fxp0 terse` or `sh int fxp0 terse`
-  (the `deny argument` column), on this image and on vJunos-router 23.4R2-S2.1 (`L9-juniper_vjunos-router.md`). Every cell is
-  consistent with Junos matching `deny-commands` against the **command keywords** as typed and
-  expanded, not the arguments: the anchored deny refused `sh ver` (the CLI echoed the expanded
-  `show version`), and a plain `^…$` deny refused the piped `show version | no-more`.
-- **Ruling (Ryan, 2026-09-25).** port49 sends explicit, keyword-only denies. A policy deny that
-  names an argument fails CI, and a daemon that loads one answers that subject with the
-  fail-closed reply. Nothing is widened automatically.
-- **`JunosFacts.DenyMatchesExpanded`, redefined as keyword abbreviations only: true.** The anchored
-  deny `^show version( *\|.*)?$` refused the abbreviation `sh ver`. The generated line reads
-  `false` only because its rule also required the argument deny to refuse `sh int fxp0 terse`,
-  which is the argument finding above, not an abbreviation fact. The measurement rests on one
-  abbreviation, `sh ver`.
-- **`JunosFacts.CaseSensitive`: not measurable, because the CLI refuses upper case.** The control
-  itself refused `SHOW VERSION` (`unknown command`) and `show interfaces FXP0 terse`
-  (`error: device FXP0 not found`), so no deny was ever asked to read another case. The generated
-  `false` is the rule's default, not a fact.

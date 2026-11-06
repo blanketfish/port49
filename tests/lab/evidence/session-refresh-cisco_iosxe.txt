@@ -1,0 +1,13 @@
+# port49 refresh, as printed, in TestSessionLifetime on cisco_iosxe
+
+## step 5
+refreshed at 2026-11-06T03:12:29Z; this login lasts until 2026-11-06T15:12:29Z
+  xe1 (slice01)  extended to 2026-11-06T03:18:29Z
+
+## step 7
+refreshed at 2026-11-06T03:18:39Z; this login lasts until 2026-11-06T15:18:39Z
+  xe1 (slice01)  extended to 2026-11-06T03:24:39Z
+
+## step 8
+refreshed at 2026-11-06T03:26:49Z; this login lasts until 2026-11-06T15:26:49Z
+  no live device session to extend

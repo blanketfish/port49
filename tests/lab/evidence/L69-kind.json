@@ -8,51 +8,51 @@
     {
       "name": "(a) claims",
       "observed": {
-        "recorded_jti": "5b1411b2-d346-40bf-b030-8696b64ca55e",
-        "recorded_nbf": 1792169911,
+        "recorded_jti": "c72c4bc5-2494-45f7-8aa9-0e8012a1ec9c",
+        "recorded_nbf": 1793952042,
         "recorded_node": {
           "name": "port49-l69-a-control-plane",
-          "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+          "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
         },
         "recorded_typ": "",
         "recorded_warnafter": null,
         "token": {
           "header": {
             "alg": "RS256",
-            "kid": "nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg"
+            "kid": "SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792170511,
-            "iat": 1792169911,
+            "exp": 1793952642,
+            "iat": 1793952042,
             "iss": "https://l69-a.port49.lab",
-            "jti": "5b1411b2-d346-40bf-b030-8696b64ca55e",
+            "jti": "c72c4bc5-2494-45f7-8aa9-0e8012a1ec9c",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "oxidized",
-                "uid": "c7001ad8-6b60-4165-ba1b-9ea1d3d228f9"
+                "uid": "55bd4303-1640-449f-b46c-9ea5575ecef1"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "7c758993-c3b1-441e-a3d9-c0de26f91f9f"
+                "uid": "e45db517-fc03-49c8-8ca7-9047e49d2d58"
               }
             },
-            "nbf": 1792169911,
+            "nbf": 1793952042,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 600,
-          "sha256": "676cc5f16894eb4c34e7e199eb20817c82f08bd89fd5ec71ed24b397385e99f8"
+          "sha256": "8788e261f1a9aa458f21951f1b77bac5943176f2182e54bf98d513a2e5d5ffe5"
         }
       },
       "pass": true,
-      "why": "iss https://l69-a.port49.lab, aud [port49-lab], exp-iat 600s, sub system:serviceaccount:netops:oxidized, header alg RS256 kid true, typ \"\"; kubernetes.io {namespace, node, pod, serviceaccount}; recorded nbf 1792169911, jti true, node true, warnafter absent"
+      "why": "iss https://l69-a.port49.lab, aud [port49-lab], exp-iat 600s, sub system:serviceaccount:netops:oxidized, header alg RS256 kid true, typ \"\"; kubernetes.io {namespace, node, pod, serviceaccount}; recorded nbf 1793952042, jti true, node true, warnafter absent"
     },
     {
       "name": "(c) discovery",
@@ -97,7 +97,7 @@
     {
       "name": "(b) rotation",
       "observed": {
-        "fraction": 0.87,
+        "fraction": 0.81,
         "mint": {
           "exit": 0,
           "stderr": ""
@@ -106,74 +106,74 @@
         "token_after": {
           "header": {
             "alg": "RS256",
-            "kid": "nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg"
+            "kid": "SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792171025,
-            "iat": 1792170425,
+            "exp": 1793953120,
+            "iat": 1793952520,
             "iss": "https://l69-a.port49.lab",
-            "jti": "9e134722-5184-4b7b-b9ee-48499eca84ab",
+            "jti": "16690850-e5d6-43e3-a00b-54ba585da903",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "oxidized",
-                "uid": "c7001ad8-6b60-4165-ba1b-9ea1d3d228f9"
+                "uid": "55bd4303-1640-449f-b46c-9ea5575ecef1"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "7c758993-c3b1-441e-a3d9-c0de26f91f9f"
+                "uid": "e45db517-fc03-49c8-8ca7-9047e49d2d58"
               }
             },
-            "nbf": 1792170425,
+            "nbf": 1793952520,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 600,
-          "sha256": "4c64a95fd896adc0e146cc994071bbccf6bf1f531bbe87b81248621cd675d937"
+          "sha256": "e16eaf987579e5f989dfa052c92f6292c9e4ceb028a8a955ff8be0629aafeb68"
         },
         "token_before": {
           "header": {
             "alg": "RS256",
-            "kid": "nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg"
+            "kid": "SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792170511,
-            "iat": 1792169911,
+            "exp": 1793952642,
+            "iat": 1793952042,
             "iss": "https://l69-a.port49.lab",
-            "jti": "5b1411b2-d346-40bf-b030-8696b64ca55e",
+            "jti": "c72c4bc5-2494-45f7-8aa9-0e8012a1ec9c",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "oxidized",
-                "uid": "c7001ad8-6b60-4165-ba1b-9ea1d3d228f9"
+                "uid": "55bd4303-1640-449f-b46c-9ea5575ecef1"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "7c758993-c3b1-441e-a3d9-c0de26f91f9f"
+                "uid": "e45db517-fc03-49c8-8ca7-9047e49d2d58"
               }
             },
-            "nbf": 1792169911,
+            "nbf": 1793952042,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 600,
-          "sha256": "676cc5f16894eb4c34e7e199eb20817c82f08bd89fd5ec71ed24b397385e99f8"
+          "sha256": "8788e261f1a9aa458f21951f1b77bac5943176f2182e54bf98d513a2e5d5ffe5"
         }
       },
       "pass": true,
-      "why": "the file changed at 0.87 of expirationSeconds (measured from the old token's iat; the docs' \"about 80%\" is provisional until this is recorded); the new token minted exit 0"
+      "why": "the file changed at 0.81 of expirationSeconds (measured from the old token's iat; inside [0.75, 0.97], so the docs' \"about 80%\" stands); the new token minted exit 0"
     },
     {
       "name": "(d) key rotation",
@@ -181,8 +181,8 @@
         "first_mint_exit": 0,
         "jwks_keys_after": 2,
         "jwks_keys_before": 1,
-        "kid_after": "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y",
-        "kid_before": "nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg",
+        "kid_after": "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8",
+        "kid_before": "SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M",
         "last_mint": {
           "exit": 0,
           "stderr": ""
@@ -192,74 +192,74 @@
         "token_after": {
           "header": {
             "alg": "RS256",
-            "kid": "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y"
+            "kid": "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792171131,
-            "iat": 1792170531,
+            "exp": 1793953226,
+            "iat": 1793952626,
             "iss": "https://l69-a.port49.lab",
-            "jti": "0a748643-47c6-455e-9c13-1d8b007d4703",
+            "jti": "b6f7371f-08b6-4eea-94b4-87760b69ee32",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "oxidized",
-                "uid": "2f2dfec5-ab45-4fb5-b1b2-4beb3798275c"
+                "uid": "813943c7-4c24-488b-9ce4-ec9850367509"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "7c758993-c3b1-441e-a3d9-c0de26f91f9f"
+                "uid": "e45db517-fc03-49c8-8ca7-9047e49d2d58"
               }
             },
-            "nbf": 1792170531,
+            "nbf": 1793952626,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 600,
-          "sha256": "e0b9df4f6a8edbc7c26c2188976b2045252f49b6817b7803d4cef3444eba616c"
+          "sha256": "a397a2621bb63d0949f1227082b2ce7396d4ab7dde7cdc8f69079919a101053f"
         },
         "token_before": {
           "header": {
             "alg": "RS256",
-            "kid": "nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg"
+            "kid": "SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792171025,
-            "iat": 1792170425,
+            "exp": 1793953120,
+            "iat": 1793952520,
             "iss": "https://l69-a.port49.lab",
-            "jti": "9e134722-5184-4b7b-b9ee-48499eca84ab",
+            "jti": "16690850-e5d6-43e3-a00b-54ba585da903",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "oxidized",
-                "uid": "c7001ad8-6b60-4165-ba1b-9ea1d3d228f9"
+                "uid": "55bd4303-1640-449f-b46c-9ea5575ecef1"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "7c758993-c3b1-441e-a3d9-c0de26f91f9f"
+                "uid": "e45db517-fc03-49c8-8ca7-9047e49d2d58"
               }
             },
-            "nbf": 1792170425,
+            "nbf": 1793952520,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 600,
-          "sha256": "4c64a95fd896adc0e146cc994071bbccf6bf1f531bbe87b81248621cd675d937"
+          "sha256": "e16eaf987579e5f989dfa052c92f6292c9e4ceb028a8a955ff8be0629aafeb68"
         }
       },
       "pass": true,
-      "why": "JWKS keys 1 then 2; kid \"nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg\" then \"J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y\" (differs true); the new key's token minted on the running broker after 0s (first attempt exit 0, 1 attempts), last exit 0"
+      "why": "JWKS keys 1 then 2; kid \"SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M\" then \"RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8\" (differs true); the new key's token minted on the running broker after 0s (first attempt exit 0, 1 attempts), last exit 0"
     },
     {
       "name": "(e) deletion",
@@ -273,10 +273,10 @@
           "tokenreview_error": "[invalid bearer token, service account token has been invalidated]"
         },
         "revoke": {
-          "answer": "revoked system:serviceaccount:netops:oxidized at 2026-10-16T17:09:25Z: 0 live context(s) marked, the unspent tokens under 1 (device, username) key(s) deleted, 0 held broker connection(s) closed; every mint by system:serviceaccount:netops:oxidized is refused until `port49 revoke --lift --principal system:serviceaccount:netops:oxidized` a token its cluster issued stays valid at port49 until its exp, or max_token_age after it was issued, whatever the cluster does; this mark refuses it now, and stands for a service account re-created under that name until `port49 revoke --lift`",
+          "answer": "target: system:serviceaccount:netops:oxidized (subject svc_backup) revoked system:serviceaccount:netops:oxidized at 2026-11-06T08:11:00Z: 0 live context(s) marked, the unspent tokens under 1 (device, username) key(s) deleted, 0 held broker connection(s) closed; every mint by system:serviceaccount:netops:oxidized is refused until `port49 revoke --lift --principal system:serviceaccount:netops:oxidized` a token its cluster issued stays valid at port49 until its exp, or max_token_age after it was issued, whatever the cluster does; this mark refuses it now, and stands for a service account re-created under that name until `port49 revoke --lift` lift it with `port49 revoke --lift` and the same principal or certificate (it needs api: lift_revocations and a press of your security key)",
           "mint_after": {
             "exit": 77,
-            "stderr": "port49 workload token: 401 credential_revoked: this principal was revoked at 2026-10-16T17:09:25Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift): 1 of 1 devices were not minted"
+            "stderr": "port49 workload token: 401 credential_revoked: this principal was revoked at 2026-11-06T08:11:00Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift): 1 of 1 devices were not minted"
           },
           "ran": true
         },
@@ -291,74 +291,74 @@
         "t1": {
           "header": {
             "alg": "RS256",
-            "kid": "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y"
+            "kid": "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792171131,
-            "iat": 1792170531,
+            "exp": 1793953226,
+            "iat": 1793952626,
             "iss": "https://l69-a.port49.lab",
-            "jti": "0a748643-47c6-455e-9c13-1d8b007d4703",
+            "jti": "b6f7371f-08b6-4eea-94b4-87760b69ee32",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "oxidized",
-                "uid": "2f2dfec5-ab45-4fb5-b1b2-4beb3798275c"
+                "uid": "813943c7-4c24-488b-9ce4-ec9850367509"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "7c758993-c3b1-441e-a3d9-c0de26f91f9f"
+                "uid": "e45db517-fc03-49c8-8ca7-9047e49d2d58"
               }
             },
-            "nbf": 1792170531,
+            "nbf": 1793952626,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 600,
-          "sha256": "e0b9df4f6a8edbc7c26c2188976b2045252f49b6817b7803d4cef3444eba616c"
+          "sha256": "a397a2621bb63d0949f1227082b2ce7396d4ab7dde7cdc8f69079919a101053f"
         },
         "t2": {
           "header": {
             "alg": "RS256",
-            "kid": "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y"
+            "kid": "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792171164,
-            "iat": 1792170564,
+            "exp": 1793953259,
+            "iat": 1793952659,
             "iss": "https://l69-a.port49.lab",
-            "jti": "016c1fa3-bd54-4ae5-b501-e79b19e2a757",
+            "jti": "4e160d2d-9aaf-4297-8707-3d5b287b7b51",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "oxidized",
-                "uid": "27c0529b-529e-4c55-8ae7-c40ea65d00df"
+                "uid": "228bdb0d-a535-499f-ae67-8fd04401d3af"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "7c758993-c3b1-441e-a3d9-c0de26f91f9f"
+                "uid": "e45db517-fc03-49c8-8ca7-9047e49d2d58"
               }
             },
-            "nbf": 1792170564,
+            "nbf": 1793952659,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 600,
-          "sha256": "098b439f6632cd417abf27064d714bf57a03ca2170e87cc3658d67e4972b1b2c"
+          "sha256": "c1fe18171b91bfd142c1a06722efd832e68c494327c19329f787709b36b9d0db"
         }
       },
       "pass": true,
-      "why": "after the pod was deleted TokenReview answered authenticated=false (\"[invalid bearer token, service account token has been invalidated]\") and port49 minted exit 0; after the service account was deleted authenticated=false (\"[invalid bearer token, serviceaccounts \\\"oxidized\\\" not found]\"), port49 exit 0; after port49 revoke system:serviceaccount:netops:oxidized (ran true) the same token exited 77: port49 workload token: 401 credential_revoked: this principal was revoked at 2026-10-16T17:09:25Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift): 1 of 1 devices were not minted"
+      "why": "after the pod was deleted TokenReview answered authenticated=false (\"[invalid bearer token, service account token has been invalidated]\") and port49 minted exit 0; after the service account was deleted authenticated=false (\"[invalid bearer token, serviceaccounts \\\"oxidized\\\" not found]\"), port49 exit 0; after port49 revoke system:serviceaccount:netops:oxidized (ran true) the same token exited 77: port49 workload token: 401 credential_revoked: this principal was revoked at 2026-11-06T08:11:00Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift): 1 of 1 devices were not minted"
     },
     {
       "name": "(f) another cluster",
@@ -401,22 +401,22 @@
         "legacy_secret_token": {
           "header": {
             "alg": "RS256",
-            "kid": "nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg"
+            "kid": "SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M"
           },
           "claims": {
             "iss": "kubernetes/serviceaccount",
             "kubernetes.io/serviceaccount/namespace": "netops",
             "kubernetes.io/serviceaccount/secret.name": "l69-legacy",
             "kubernetes.io/serviceaccount/service-account.name": "oxidized",
-            "kubernetes.io/serviceaccount/service-account.uid": "87852510-d0ed-4f4a-848e-240b3c4eec80",
+            "kubernetes.io/serviceaccount/service-account.uid": "c2f7eb38-cfe1-4f06-bee8-18e9d8a59c36",
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 0,
-          "sha256": "a8dca4dfed11f171b8834225a5f38b7485dd3024d0183f93b59cda29b232737a"
+          "sha256": "76de6bac1f880cda170035fad6f41c492cdca63aeb686c64637fc799c4dda478"
         },
         "node_bound_kubernetes.io.node": {
           "name": "port49-l69-a-control-plane",
-          "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+          "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
         },
         "node_bound_mint": {
           "exit": 77,
@@ -425,36 +425,36 @@
         "node_bound_token": {
           "header": {
             "alg": "RS256",
-            "kid": "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y"
+            "kid": "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792174201,
-            "iat": 1792170601,
+            "exp": 1793956296,
+            "iat": 1793952696,
             "iss": "https://l69-a.port49.lab",
-            "jti": "099840de-4504-45aa-9b15-a5a5c9600582",
+            "jti": "a8574746-1ca6-44c8-97a7-c5007731d6e3",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "87852510-d0ed-4f4a-848e-240b3c4eec80"
+                "uid": "c2f7eb38-cfe1-4f06-bee8-18e9d8a59c36"
               }
             },
-            "nbf": 1792170601,
+            "nbf": 1793952696,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 3600,
-          "sha256": "aa7b51e188e968bc422f11fe0c608140ac6103bb8be67b44c8a6392f205484ad"
+          "sha256": "e70dba3fda95045b5f8feb596ce29031e8b771adddb053f9f5f1ec28e25ee005"
         },
         "secret_bound_kubernetes.io.secret": {
           "name": "l69-bound",
-          "uid": "2bb86a76-16d7-45e7-98a4-d10a9c2c5135"
+          "uid": "d7652a18-b29b-49de-8fe5-6e81d03717fa"
         },
         "secret_bound_mint": {
           "exit": 77,
@@ -463,32 +463,32 @@
         "secret_bound_token": {
           "header": {
             "alg": "RS256",
-            "kid": "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y"
+            "kid": "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792174201,
-            "iat": 1792170601,
+            "exp": 1793956296,
+            "iat": 1793952696,
             "iss": "https://l69-a.port49.lab",
-            "jti": "d7b0dda1-5882-4e96-b5a5-3f050f94fa39",
+            "jti": "1b6aba05-6fc2-4d32-920f-c5d79b7fc475",
             "kubernetes.io": {
               "namespace": "netops",
               "secret": {
                 "name": "l69-bound",
-                "uid": "2bb86a76-16d7-45e7-98a4-d10a9c2c5135"
+                "uid": "d7652a18-b29b-49de-8fe5-6e81d03717fa"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "87852510-d0ed-4f4a-848e-240b3c4eec80"
+                "uid": "c2f7eb38-cfe1-4f06-bee8-18e9d8a59c36"
               }
             },
-            "nbf": 1792170601,
+            "nbf": 1793952696,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 3600,
-          "sha256": "8fd2c124deccf9b16538c11af42ceaf014a3cf025efd41ef7cbf9fa4fc6a5424"
+          "sha256": "0b1bc2c6aa6fa5f96452499df21c6868ddea972d326484fe11fcf48931dbe52a"
         },
         "unbound_mint": {
           "exit": 77,
@@ -497,28 +497,28 @@
         "unbound_token": {
           "header": {
             "alg": "RS256",
-            "kid": "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y"
+            "kid": "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8"
           },
           "claims": {
             "aud": [
               "port49-lab"
             ],
-            "exp": 1792174201,
-            "iat": 1792170601,
+            "exp": 1793956296,
+            "iat": 1793952696,
             "iss": "https://l69-a.port49.lab",
-            "jti": "d5a2870e-fa5a-4c10-af4e-71381873e266",
+            "jti": "277b0141-83a8-48d4-b04d-e04fc17c8713",
             "kubernetes.io": {
               "namespace": "netops",
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "87852510-d0ed-4f4a-848e-240b3c4eec80"
+                "uid": "c2f7eb38-cfe1-4f06-bee8-18e9d8a59c36"
               }
             },
-            "nbf": 1792170601,
+            "nbf": 1793952696,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 3600,
-          "sha256": "c0aa488c1c1c906e15e06df08c4b357b0fc27e25d61da6deca0041a26b5cf237"
+          "sha256": "edf73b91cc16cd245b8c38ccfe6e6ac0587f2900ad0d1dcd5722aa71b6f2dbdf"
         },
         "wrong_audience_mint": {
           "exit": 77,
@@ -527,36 +527,36 @@
         "wrong_audience_token": {
           "header": {
             "alg": "RS256",
-            "kid": "J3J2tY5XjKwQPfQUcTcHIjch7Aob1vUDb9KmeBO-B6Y"
+            "kid": "RlGt7-Eq402uT6xGKtIselAyaqs2cj1tKbD3sxFXFJ8"
           },
           "claims": {
             "aud": [
               "other"
             ],
-            "exp": 1792174200,
-            "iat": 1792170600,
+            "exp": 1793956296,
+            "iat": 1793952696,
             "iss": "https://l69-a.port49.lab",
-            "jti": "48d3ef3b-b824-478a-9904-575e0de46ab5",
+            "jti": "e89dd168-cf41-4bf4-a560-830b1f5e9b35",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "oxidized",
-                "uid": "d64eaf6e-84ed-476d-b860-06d6fc6b44df"
+                "uid": "ad861758-8139-4b50-9ca8-e0342be09e7d"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "87852510-d0ed-4f4a-848e-240b3c4eec80"
+                "uid": "c2f7eb38-cfe1-4f06-bee8-18e9d8a59c36"
               }
             },
-            "nbf": 1792170600,
+            "nbf": 1793952696,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 3600,
-          "sha256": "8fdcfb632836f3c40505fd323e83e1f332cea8782d647cf596b49312cf97dd43"
+          "sha256": "6c7a57a27cb3a832e3e50b09c7806c42f01c9ad765a7e242a1ccce0a7faf14eb"
         }
       },
       "pass": true,
@@ -569,45 +569,45 @@
           "exit": 77,
           "stderr": "port49 workload token: 401 trust_domain_unresolved: its aud is not exactly [port49-lab]: a token another audience accepts could be replayed here (decision 49 ruling 5): 1 of 1 devices were not minted"
         },
-        "recorded_warnafter": 1792173518,
+        "recorded_warnafter": 1793955649,
         "token": {
           "header": {
             "alg": "RS256",
-            "kid": "nDwCK_22ZnLlGBnBcFGiCuaoi_JuyFlag3i-NOg5bAg"
+            "kid": "SSsr4-paZmvfxzbge_Oe0qWnX9vWSql0Mih2nP72U6M"
           },
           "claims": {
             "aud": [
               "https://l69-a.port49.lab"
             ],
-            "exp": 1823705911,
-            "iat": 1792169911,
+            "exp": 1825488042,
+            "iat": 1793952042,
             "iss": "https://l69-a.port49.lab",
-            "jti": "d2554d0b-03b2-4319-aa5b-8236cf98e986",
+            "jti": "34c1e3af-8c96-4e7a-83f3-c87eb3f8d3a7",
             "kubernetes.io": {
               "namespace": "netops",
               "node": {
                 "name": "port49-l69-a-control-plane",
-                "uid": "d1fa4419-26f0-4106-9d8f-2b3ec4ba6fa2"
+                "uid": "d22e9871-0ea0-4408-ae58-8e4b818f5b24"
               },
               "pod": {
                 "name": "defaulted",
-                "uid": "75b9c947-7ccc-4664-bb0f-d319d528e5c1"
+                "uid": "2438ed18-3479-43a3-8627-f3330c770e14"
               },
               "serviceaccount": {
                 "name": "oxidized",
-                "uid": "7c758993-c3b1-441e-a3d9-c0de26f91f9f"
+                "uid": "e45db517-fc03-49c8-8ca7-9047e49d2d58"
               },
-              "warnafter": 1792173518
+              "warnafter": 1793955649
             },
-            "nbf": 1792169911,
+            "nbf": 1793952042,
             "sub": "system:serviceaccount:netops:oxidized"
           },
           "lifetime_seconds": 31536000,
-          "sha256": "aac1a571c06b5bd3fb069e51e86fb71efadacda9da4e46fa21c1f502d774f662"
+          "sha256": "a7c76091e68c3e40bcb1bfe48145f2882d060173f5ff852502f9f2fefcf48a9b"
         }
       },
       "pass": true,
-      "why": "the default token's aud is [https://l69-a.port49.lab], exp-iat 31536000s, warnafter 1792173518; port49 exit 77: port49 workload token: 401 trust_domain_unresolved: its aud is not exactly [port49-lab]: a token another audience accepts could be replayed here (decision 49 ruling 5): 1 of 1 devices were not minted"
+      "why": "the default token's aud is [https://l69-a.port49.lab], exp-iat 31536000s, warnafter 1793955649; port49 exit 77: port49 workload token: 401 trust_domain_unresolved: its aud is not exactly [port49-lab]: a token another audience accepts could be replayed here (decision 49 ruling 5): 1 of 1 devices were not minted"
     }
   ]
 }

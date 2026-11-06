@@ -48,8 +48,8 @@ Certificate^M
     IP Address: 172.100.100.41^M
     cn=xe1^M
   Validity Date: ^M
-    start date: 06:46:17 UTC Oct 18 2026^M
-    end   date: 07:46:17 UTC Oct 19 2026^M
+    start date: 17:35:36 UTC Nov 5 2026^M
+    end   date: 18:35:36 UTC Nov 6 2026^M
   Associated Trustpoints: l73-dev ^M
 ^M
 CA Certificate^M
@@ -61,8 +61,8 @@ CA Certificate^M
   Subject: ^M
     cn=L73 Lab Device Intermediate^M
   Validity Date: ^M
-    start date: 06:46:02 UTC Oct 18 2026^M
-    end   date: 07:46:02 UTC Oct 20 2026^M
+    start date: 17:35:21 UTC Nov 5 2026^M
+    end   date: 18:35:21 UTC Nov 7 2026^M
   Associated Trustpoints: l73-dev ^M
 ^M
 ^M

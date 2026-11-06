@@ -3,25 +3,25 @@ depth=1 CN=L72 Device CA
 verify return:1
 depth=0 
 verify return:1
-CONNECTED(00000003)
+CONNECTED(00000004)
 ---
 Certificate chain
  0 s:
    i:CN=L72 Device CA
    a:PKEY: EC, (prime256v1); sigalg: ecdsa-with-SHA256
-   v:NotBefore: Oct 22 02:09:50 2026 GMT; NotAfter: Oct 22 03:10:50 2026 GMT
+   v:NotBefore: Nov  6 08:10:40 2026 GMT; NotAfter: Nov  6 09:11:40 2026 GMT
 ---
 Server certificate
 -----BEGIN CERTIFICATE-----
-MIIBfTCCASSgAwIBAgIIOgJJLUp4ZOkwCgYIKoZIzj0EAwIwGDEWMBQGA1UEAxMN
-TDcyIERldmljZSBDQTAeFw0yNjEwMjIwMjA5NTBaFw0yNjEwMjIwMzEwNTBaMAAw
-WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARse4gT+RDazaPnJYJ/WpYwRlf0kqT1
-Cde/eP9ayxCH4mkNXUVTXXfmpQBUFEPM3UIqLorCHIO1u9r/0gcgopHRo3AwbjAO
+MIIBfjCCASSgAwIBAgIIDRup8wAPvpQwCgYIKoZIzj0EAwIwGDEWMBQGA1UEAxMN
+TDcyIERldmljZSBDQTAeFw0yNjExMDYwODEwNDBaFw0yNjExMDYwOTExNDBaMAAw
+WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAT1davVjf1Su26Nn4FxliiIBZ0s3uVa
+QMEdDXTHphiRB2OXrjrIzF4c39ap41VwdkSRjrjsfo+l9Chv+2dPRSUno3AwbjAO
 BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwHwYDVR0jBBgwFoAU
-l7A1I7B16QVlDxTAeEsj7FKO8cwwJgYDVR0RAQH/BBwwGoISdGFjYWNzLmw3Mi5l
-eGFtcGxlhwR/AAABMAoGCCqGSM49BAMCA0cAMEQCIAwSxE+gOX6nwIgWDb4n1kSu
-08fpOuqAnF/oRvSD0RjeAiBu2VNFvPbw/uCTrrx3PD0faKV7qQohzO2u9D3EoIR9
-Pg==
+t/QOWwimZDDlm3bpZ3FgjZCgU78wJgYDVR0RAQH/BBwwGoISdGFjYWNzLmw3Mi5l
+eGFtcGxlhwR/AAABMAoGCCqGSM49BAMCA0gAMEUCIEObCYOZNYNYbuDJVEAfEP3i
++p+Ls3C0iV96eB+VNeRNAiEA6viUgUCSsWCA1f0wpY8dxiuD4WS/gbPcO9o1ROt3
+q2I=
 -----END CERTIFICATE-----
 subject=
 issuer=CN=L72 Device CA
@@ -33,7 +33,7 @@ Peer signing digest: SHA256
 Peer signature type: ecdsa_secp256r1_sha256
 Negotiated TLS1.3 group: X25519MLKEM768
 ---
-SSL handshake has read 1918 bytes and written 2425 bytes
+SSL handshake has read 1921 bytes and written 2424 bytes
 Verification: OK
 ---
 New, TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256
@@ -53,7 +53,7 @@ SSL-Session:
     Cipher    : TLS_AES_128_GCM_SHA256
     SRP username: None
 
-    Start Time: 1792635114
+    Start Time: 1793952764
     Timeout   : 7200 (sec)
     Verify return code: 0 (ok)
     Extended master secret: no
@@ -63,19 +63,19 @@ read R BLOCK
 
 ----
 Connecting to 127.0.0.1
-CONNECTED(00000003)
+CONNECTED(00000004)
 ---
 Server certificate
 -----BEGIN CERTIFICATE-----
-MIIBfTCCASSgAwIBAgIIOgJJLUp4ZOkwCgYIKoZIzj0EAwIwGDEWMBQGA1UEAxMN
-TDcyIERldmljZSBDQTAeFw0yNjEwMjIwMjA5NTBaFw0yNjEwMjIwMzEwNTBaMAAw
-WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARse4gT+RDazaPnJYJ/WpYwRlf0kqT1
-Cde/eP9ayxCH4mkNXUVTXXfmpQBUFEPM3UIqLorCHIO1u9r/0gcgopHRo3AwbjAO
+MIIBfjCCASSgAwIBAgIIDRup8wAPvpQwCgYIKoZIzj0EAwIwGDEWMBQGA1UEAxMN
+TDcyIERldmljZSBDQTAeFw0yNjExMDYwODEwNDBaFw0yNjExMDYwOTExNDBaMAAw
+WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAT1davVjf1Su26Nn4FxliiIBZ0s3uVa
+QMEdDXTHphiRB2OXrjrIzF4c39ap41VwdkSRjrjsfo+l9Chv+2dPRSUno3AwbjAO
 BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwHwYDVR0jBBgwFoAU
-l7A1I7B16QVlDxTAeEsj7FKO8cwwJgYDVR0RAQH/BBwwGoISdGFjYWNzLmw3Mi5l
-eGFtcGxlhwR/AAABMAoGCCqGSM49BAMCA0cAMEQCIAwSxE+gOX6nwIgWDb4n1kSu
-08fpOuqAnF/oRvSD0RjeAiBu2VNFvPbw/uCTrrx3PD0faKV7qQohzO2u9D3EoIR9
-Pg==
+t/QOWwimZDDlm3bpZ3FgjZCgU78wJgYDVR0RAQH/BBwwGoISdGFjYWNzLmw3Mi5l
+eGFtcGxlhwR/AAABMAoGCCqGSM49BAMCA0gAMEUCIEObCYOZNYNYbuDJVEAfEP3i
++p+Ls3C0iV96eB+VNeRNAiEA6viUgUCSsWCA1f0wpY8dxiuD4WS/gbPcO9o1ROt3
+q2I=
 -----END CERTIFICATE-----
 subject=
 issuer=CN=L72 Device CA
@@ -83,7 +83,7 @@ issuer=CN=L72 Device CA
 No client certificate CA names sent
 Negotiated TLS1.3 group: X25519MLKEM768
 ---
-SSL handshake has read 1313 bytes and written 2458 bytes
+SSL handshake has read 1313 bytes and written 2457 bytes
 Verification: OK
 ---
 Reused, TLSv1.3, Cipher is TLS_AES_128_GCM_SHA256
@@ -103,7 +103,7 @@ SSL-Session:
     Cipher    : TLS_AES_128_GCM_SHA256
     SRP username: None
 
-    Start Time: 1792635116
+    Start Time: 1793952766
     Timeout   : 7200 (sec)
     Verify return code: 0 (ok)
     Extended master secret: no

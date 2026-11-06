@@ -1,5 +1,5 @@
 show running-config tacacs-server^M
-^MWed Oct 21 06:05:45.102 UTC^M
+^MThu Nov  5 19:42:12.704 UTC^M
 tacacs-server host 172.100.100.1 port 300^M
  tls^M
   trustpoint l73-dev^M
@@ -8,7 +8,7 @@ tacacs-server host 172.100.100.1 port 300^M
 ^M
 RP/0/RP0/CPU0:xrd1#
 show running-config aaa^M
-^MWed Oct 21 06:05:45.354 UTC^M
+^MThu Nov  5 19:42:12.958 UTC^M
 tacacs-server host 172.100.100.1 port 300^M
  tls^M
   trustpoint l73-dev^M
@@ -29,36 +29,36 @@ aaa authentication login default group port49 local^M
 ^M
 RP/0/RP0/CPU0:xrd1#
 show crypto ca certificates l73-dev^M
-^MWed Oct 21 06:05:45.603 UTC^M
+^MThu Nov  5 19:42:13.205 UTC^M
 ^M
 Trustpoint       : l73-dev^M
 <LONG>^M
 CA certificate ^M
-  Serial Number  : 2D:E0:92:E3:67:D6:32:BA:F0:27:4A:5F:6C:91:C6:A1^M
+  Serial Number  : E8:B0:06:01:38:2D:CE:DC:72:AC:74:19:77:00:E5^M
   Subject:^M
 	CN=L73 Lab Device Intermediate^M
   Issued By      :^M
 	CN=L73 Lab Root^M
-  Validity Start : 04:57:05 UTC Wed Oct 21 2026^M
-  Validity End   : 05:57:05 UTC Fri Oct 23 2026^M
+  Validity Start : 18:33:36 UTC Thu Nov 05 2026^M
+  Validity End   : 19:33:36 UTC Sat Nov 07 2026^M
   SHA1 Fingerprint:^M
 	 <LONG> ^M
 Router certificate^M
   Key usage      : General Purpose ^M
   Status         : Available ^M
-  Serial Number  : 3C:B8:1B:BC:19:83:D0:88:FD:A8:29:FB:F9:23:D4:78^M
+  Serial Number  : 1A:59:3E:DF:9A:56:78:D7:FF:7F:94:A7:B7:27:E4:49^M
   Subject:^M
 	CN=xrd1^M
   Issued By      :^M
 	CN=L73 Lab Device Intermediate^M
-  Validity Start : 04:57:26 UTC Wed Oct 21 2026^M
-  Validity End   : 05:57:26 UTC Thu Oct 22 2026^M
+  Validity Start : 18:33:58 UTC Thu Nov 05 2026^M
+  Validity End   : 19:33:58 UTC Fri Nov 06 2026^M
   SHA1 Fingerprint:^M
 	 <LONG> ^M
 Associated Trustpoint: l73-dev ^M
 RP/0/RP0/CPU0:xrd1#
 show tacacs details^M
-^MWed Oct 21 06:05:45.854 UTC^M
+^MThu Nov  5 19:42:13.459 UTC^M
 ^M
 TACACS+ Server                                 : 172.100.100.1/300 [Global]^M
     Family                                     : IPv4^M
@@ -78,7 +78,7 @@ TACACS+ Server                                 : 172.100.100.1/300 [Global]^M
     Server On-Hold                             : True^M
     Tacacs-Single-Connect                      : False^M
     <LONG>(in secs): 0^M
-    Last Connection Attempted                  : 06:05:44 UTC Wed Oct 21 2026^M
+    Last Connection Attempted                  : 19:42:11 UTC Thu Nov 05 2026^M
 ^M
 ^M
 TACACS+ Server-groups:^M

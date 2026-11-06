@@ -1,12 +1,12 @@
 # L71 — cisco_iosxe
 
-- **Date measured:** 2026-10-17
+- **Date measured:** 2026-11-05
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
 - **Capture:** `tests/lab/evidence/L71-cisco_iosxe/probe.txt` — the CLI exchange from the help request to the empty-line check, credentials masked and control bytes shown as `cat -v` shows them. L71 sends no TACACS+ traffic, so there is no pcap.
 - **Transport:** SSH
-- **Run:** commit `7631fe1679233017c4467e990e23c04184553b75`, `PORT49_LAB_PLATFORMS=eos,iosxe,nxos,vjunos,vsrx`, `-run TestL71TLSClientSupport`
+- **Run:** commit `5ed06f5ff587893a8740a7fd30042d3c53eb0bb0-dirty`, `PORT49_LAB_PLATFORMS=eos,vjunos,vsrx,nxos,iosxe`, `-run ^TestL71TLSClientSupport$`
 
 ## Claim
 
@@ -39,11 +39,9 @@ TACACS server sub-mode commands:
 xe1(config-server-tacacs)#
 ```
 
+## Addendum: TestL73 probe
 
-
-## Addendum 2026-10-18: Catalyst 8000V 17.18.02 (`vrnetlab/cisco_c8000v:17.18.02`)
-
-Probed by TestL73 (commit `d9275748b9332d095549d52020d9f866bd330c12`, `PORT49_LAB_PLATFORMS=iosxe1718`, `-run ^TestL73$`); the exchange is `tests/lab/evidence/L73-cisco_iosxe/l71-probe.txt`.
+Measured 2026-11-05 on Catalyst 8000V 17.18.02 (`vrnetlab/cisco_c8000v:17.18.02`). Probed by TestL73 (commit `5ed06f5ff587893a8740a7fd30042d3c53eb0bb0-dirty`, `PORT49_LAB_PLATFORMS=iosxe1718`, `-run ^TestL73$`); the exchange is `tests/lab/evidence/L73-cisco_iosxe/l71-probe.txt`.
 
 **Has a client.** Typed `?`; the help lists:
 
@@ -68,4 +66,3 @@ TACACS server sub-mode commands:
 
 xe1(config-server-tacacs)#
 ```
-

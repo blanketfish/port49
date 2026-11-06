@@ -1,11 +1,12 @@
 # L26c — juniper_vsrx
 
-- **Date measured:** 2026-09-25
+- **Date measured:** 2026-11-05
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L26c-juniper_vsrx.pcap` — 2535 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L26c-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26c-juniper_vsrx.pcap` — 2412 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L26c-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `a158aaf875a2e57e5d2f0a883e26f0db3fcae2b2-dirty`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL26cJunosRPCReach$`
 
 ## Claim
 
@@ -59,7 +60,7 @@ breakglass@srx1>
 ### Read off the table
 
 - RPC reachable from projected CLI: true
-- every P and F refusal isolated: false
+- every P and F refusal isolated: true
 - reached: op url in P (accepted)
 - start shell refused in P and C alike (the bits), reached in R
 - start shell refused in F and C alike (the bits), reached in R
@@ -67,11 +68,11 @@ breakglass@srx1>
 - port 22 runs nowhere: refused in R too (refused)
 - reached: entry: xml-mode netconf need-trailer in P (hello)
 - reached: xml-mode netconf need-trailer: get-software-information in P (result)
-- not observed: xml-mode netconf need-trailer: get-configuration in P (not observed)
+- bits-limited: xml-mode netconf need-trailer: get-configuration neither ran nor was refused in P, as in C; reached in R
 - xml-mode netconf need-trailer: command show configuration refused in P and C alike (the bits), reached in R
 - reached: entry: xml-mode netconf in P (hello)
 - reached: xml-mode netconf: get-software-information in P (result)
-- not observed: xml-mode netconf: get-configuration in P (not observed)
+- bits-limited: xml-mode netconf: get-configuration neither ran nor was refused in P, as in C; reached in R
 - xml-mode netconf: command show configuration refused in P and C alike (the bits), reached in R
 
 ### P
@@ -98,7 +99,7 @@ xml-mode netconf
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29688</session-id>
+  <session-id>29687</session-id>
 … (2 more lines)
 ```
 
@@ -124,7 +125,7 @@ xml-mode netconf need-trailer
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29440</session-id>
+  <session-id>29436</session-id>
 … (3 more lines)
 ```
 
@@ -234,7 +235,7 @@ alice01@srx1>
 
 ```
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790344810" junos:changed-localtime="2026-09-25 14:00:10 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793919712" junos:changed-localtime="2026-11-05 23:01:52 UTC">
 </configuration>
 </rpc-reply>
 ]]>]]>
@@ -289,7 +290,7 @@ alice01@srx1>
 
 ```
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790344810" junos:changed-localtime="2026-09-25 14:00:10 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793919712" junos:changed-localtime="2026-11-05 23:01:52 UTC">
 </configuration>
 </rpc-reply>
 ]]>]]>
@@ -460,7 +461,7 @@ xml-mode netconf
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>30070</session-id>
+  <session-id>30072</session-id>
 … (2 more lines)
 ```
 
@@ -486,7 +487,7 @@ xml-mode netconf need-trailer
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29828</session-id>
+  <session-id>29830</session-id>
 … (3 more lines)
 ```
 
@@ -532,7 +533,7 @@ alice05@srx1>
 
 ```
 show configuration 
-## Last commit: 2026-09-25 14:00:10 UTC by breakglass
+## Last commit: 2026-11-05 23:01:52 UTC by breakglass
 version /* ACCESS-DENIED */;
 system { /* ACCESS-DENIED */ };
 interfaces { /* ACCESS-DENIED */ };
@@ -583,7 +584,7 @@ alice05@srx1>
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
 <configuration-information>
 <configuration-output>
-## Last commit: 2026-09-25 14:00:10 UTC by breakglass
+## Last commit: 2026-11-05 23:01:52 UTC by breakglass
 version /* ACCESS-DENIED */;
 system { /* ACCESS-DENIED */ };
 interfaces { /* ACCESS-DENIED */ };
@@ -599,7 +600,7 @@ routing-instances { /* ACCESS-DENIED */ };
 
 ```
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790344810" junos:changed-localtime="2026-09-25 14:00:10 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793919712" junos:changed-localtime="2026-11-05 23:01:52 UTC">
 </configuration>
 </rpc-reply>
 ]]>]]>
@@ -638,7 +639,7 @@ routing-instances { /* ACCESS-DENIED */ };
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
 <configuration-information>
 <configuration-output>
-## Last commit: 2026-09-25 14:00:10 UTC by breakglass
+## Last commit: 2026-11-05 23:01:52 UTC by breakglass
 version /* ACCESS-DENIED */;
 system { /* ACCESS-DENIED */ };
 interfaces { /* ACCESS-DENIED */ };
@@ -654,7 +655,7 @@ routing-instances { /* ACCESS-DENIED */ };
 
 ```
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790344810" junos:changed-localtime="2026-09-25 14:00:10 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793919712" junos:changed-localtime="2026-11-05 23:01:52 UTC">
 </configuration>
 </rpc-reply>
 ]]>]]>
@@ -711,7 +712,7 @@ xml-mode netconf
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29315</session-id>
+  <session-id>29314</session-id>
 … (2 more lines)
 ```
 
@@ -737,7 +738,7 @@ xml-mode netconf need-trailer
     <capability>http://xml.juniper.net/netconf/junos/1.0</capability>
     <capability>http://xml.juniper.net/dmi/system/1.0</capability>
   </capabilities>
-  <session-id>29065</session-id>
+  <session-id>29058</session-id>
 … (3 more lines)
 ```
 
@@ -767,12 +768,12 @@ request the netconf subsystem on port 22: ssh: subsystem request failed
 
 ```
 show configuration 
-## Last commit: 2026-09-25 14:00:10 UTC by breakglass
+## Last commit: 2026-11-05 23:01:52 UTC by breakglass
 version 21.4R3.15;
 system {
     host-name srx1;
     root-authentication {
-        plain-text-password-value "«redacted»"; ## SECRET-DATA
+        plain-text-password-value /* SECRET-DATA */; ## SECRET-DATA
         ## Warning: missing mandatory statement(s): 'encrypted-password'
     }
     login {
@@ -786,7 +787,7 @@ system {
             uid 2000;
             class super-user;
             authentication {
-… (152 more lines)
+… (164 more lines)
 ```
 
 `show version`:
@@ -833,12 +834,12 @@ breakglass@srx1>
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
 <configuration-information>
 <configuration-output>
-## Last commit: 2026-09-25 14:00:10 UTC by breakglass
+## Last commit: 2026-11-05 23:01:52 UTC by breakglass
 version 21.4R3.15;
 system {
     host-name srx1;
     root-authentication {
-        plain-text-password-value "«redacted»"; ## SECRET-DATA
+        plain-text-password-value /* SECRET-DATA */; ## SECRET-DATA
         ## Warning: missing mandatory statement(s): 'encrypted-password'
     }
     login {
@@ -850,19 +851,19 @@ system {
         }
         user admin {
             uid 2000;
-… (157 more lines)
+… (169 more lines)
 ```
 
 `xml-mode netconf need-trailer: get-configuration`:
 
 ```
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790344810" junos:changed-localtime="2026-09-25 14:00:10 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793919712" junos:changed-localtime="2026-11-05 23:01:52 UTC">
     <version>21.4R3.15</version>
     <system>
         <host-name>srx1</host-name>
         <root-authentication>
-            <plain-text-password-value>«redacted»</plain-text-password-value>
+            <plain-text-password-value>/* SECRET-DATA */</plain-text-password-value>
         </root-authentication>
         <login>
             <class>
@@ -876,7 +877,7 @@ system {
             </class>
             <user>
                 <name>admin</name>
-… (178 more lines)
+… (197 more lines)
 ```
 
 `xml-mode netconf need-trailer: get-software-information`:
@@ -911,12 +912,12 @@ system {
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
 <configuration-information>
 <configuration-output>
-## Last commit: 2026-09-25 14:00:10 UTC by breakglass
+## Last commit: 2026-11-05 23:01:52 UTC by breakglass
 version 21.4R3.15;
 system {
     host-name srx1;
     root-authentication {
-        plain-text-password-value "«redacted»"; ## SECRET-DATA
+        plain-text-password-value /* SECRET-DATA */; ## SECRET-DATA
         ## Warning: missing mandatory statement(s): 'encrypted-password'
     }
     login {
@@ -928,19 +929,19 @@ system {
         }
         user admin {
             uid 2000;
-… (157 more lines)
+… (169 more lines)
 ```
 
 `xml-mode netconf: get-configuration`:
 
 ```
 <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790344810" junos:changed-localtime="2026-09-25 14:00:10 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1793919712" junos:changed-localtime="2026-11-05 23:01:52 UTC">
     <version>21.4R3.15</version>
     <system>
         <host-name>srx1</host-name>
         <root-authentication>
-            <plain-text-password-value>«redacted»</plain-text-password-value>
+            <plain-text-password-value>/* SECRET-DATA */</plain-text-password-value>
         </root-authentication>
         <login>
             <class>
@@ -954,7 +955,7 @@ system {
             </class>
             <user>
                 <name>admin</name>
-… (178 more lines)
+… (197 more lines)
 ```
 
 `xml-mode netconf: get-software-information`:
