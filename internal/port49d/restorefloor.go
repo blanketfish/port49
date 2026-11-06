@@ -45,7 +45,7 @@ const restoreSkew = 5 * time.Minute
 //
 // A read of the witness that fails holds every redemption store_unavailable
 // until one answers (Held). The record outlives the process: it is kept in
-// restore.json beside accounting.spool_path, so a restart after a restore
+// <accounting.spool_path>.restore.json, so a restart after a restore
 // still tells it, and a restart does not forget the floor.
 type restoreFloor struct {
 	out io.Writer
@@ -83,7 +83,7 @@ type restoreFloor struct {
 	m          *metrics.Metrics
 }
 
-// floorFile is restore.json.
+// floorFile is the record at restoreRecordPath.
 type floorFile struct {
 	Prefix        string    `json:"prefix"`
 	Witness       uint64    `json:"witness"`
@@ -342,12 +342,12 @@ func (f *restoreFloor) drop(s floorSnap, r etcdstore.RestoreRead) {
 	}
 	fmt.Fprintf(f.out, "port49d: store: the session store was restored from a snapshot: meta/witness is %s at revision "+
 		"%d, from %s. Tokens at or below revision %d are refused (token_spent) and their users mint again; a token "+
-		"minted after this read is served; tokens minted since the restore and before this read are refused once "+
-		"too.", witnessWords(r.Witness), r.Header, from, f.floor)
+		"minted after this read is served, except within the band below; tokens minted since the restore and "+
+		"before this read are refused once too.", witnessWords(r.Witness), r.Header, from, f.floor)
 	if f.band != 0 {
-		fmt.Fprintf(f.out, " The restore kept the revision counter, so a token minted before this read at a revision "+
-			"up to %d is refused until %s; restore with --bump-revision (design §13) to end that.", f.band,
-			f.bandUntil.UTC().Format(time.RFC3339))
+		fmt.Fprintf(f.out, " The restore kept the revision counter, so a token minted until %s (5 minutes after this "+
+			"read) at a revision up to %d is refused until %s; restore with --bump-revision (design §13) to end that.",
+			f.bandFrom.Add(restoreSkew).UTC().Format(time.RFC3339), f.band, f.bandUntil.UTC().Format(time.RFC3339))
 	}
 	fmt.Fprintln(f.out, " Revocations and marks made after the snapshot are lost: follow the restore runbook (design §13)")
 }
@@ -434,4 +434,10 @@ func (f *restoreFloor) pass(ctx context.Context, callTimeout time.Duration,
 	f.judge(s, r, err)
 	floorPassed(f)
 	return true
+}
+
+// restoreRecordPath is the floor's record for a spool: the spool's path plus
+// ".restore.json", so two port49d with spools in one directory keep their own.
+func restoreRecordPath(spoolPath string) string {
+	return spoolPath + ".restore.json"
 }
