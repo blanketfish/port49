@@ -1033,7 +1033,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// The restore floor reads the store once before any listener opens,
 		// so a drop found there is in force before the first redemption, and
 		// then every second; joined before sts.close too.
-		restored.attach(filepath.Join(filepath.Dir(cfg.Accounting.SpoolPath), "restore.json"),
+		restored.attach(restoreRecordPath(cfg.Accounting.SpoolPath),
 			cfg.Stores.Session.Etcd.Prefix)
 		restored.begin(m)
 		restored.pass(ctx, cfg.Stores.Session.Etcd.CallTimeout, sts.etcd.RestoreRead)

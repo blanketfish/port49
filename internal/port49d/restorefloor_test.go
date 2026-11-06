@@ -38,7 +38,7 @@ const floorPrefix = "/p49/"
 func floorAt(t *testing.T) *floorT {
 	t.Helper()
 	f := &floorT{t: t, out: &bytes.Buffer{}, now: time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC),
-		path: filepath.Join(safeDir(t), "restore.json")}
+		path: filepath.Join(safeDir(t), "accounting.jsonl.restore.json")}
 	f.open()
 	return f
 }
@@ -370,7 +370,7 @@ func TestARecordOfAnotherPrefixIsNoRecord(t *testing.T) {
 
 func TestAnUnreadableRecordMakesTheFirstReadADrop(t *testing.T) {
 	f := &floorT{t: t, out: &bytes.Buffer{}, now: time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC),
-		path: filepath.Join(safeDir(t), "restore.json")}
+		path: filepath.Join(safeDir(t), "accounting.jsonl.restore.json")}
 	if err := os.WriteFile(f.path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +581,7 @@ func TestARecordThatIsNoRecordIsUnreadable(t *testing.T) {
 		"a prefix alone": `{"prefix":"` + floorPrefix + `"}`} {
 		t.Run(name, func(t *testing.T) {
 			f := &floorT{t: t, out: &bytes.Buffer{}, now: time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC),
-				path: filepath.Join(safeDir(t), "restore.json")}
+				path: filepath.Join(safeDir(t), "accounting.jsonl.restore.json")}
 			if err := os.WriteFile(f.path, []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -620,7 +620,7 @@ func TestAReattachToAnotherPrefixOpensItsRecordAfresh(t *testing.T) {
 	if f.restored(400, f.now) || f.Restored(store.Token{Revision: 400}, f.now) {
 		t.Fatal("another prefix's floor was kept")
 	}
-	f.attach(filepath.Join(safeDir(t), "restore.json"), floorPrefix)
+	f.attach(filepath.Join(safeDir(t), "accounting.jsonl.restore.json"), floorPrefix)
 	if f.restored(400, f.now) {
 		t.Fatal("another path's floor was kept")
 	}
@@ -715,7 +715,7 @@ func TestAReattachToAnotherPathKeepsTheFloorAndMovesTheRecord(t *testing.T) {
 	f := floorAt(t)
 	f.read(1000, 1010)
 	f.read(480, 500) // a drop, not yet saved
-	moved := filepath.Join(safeDir(t), "restore.json")
+	moved := filepath.Join(safeDir(t), "accounting.jsonl.restore.json")
 	f.attach(moved, floorPrefix)
 	if !f.restored(400, f.now) {
 		t.Fatal("a path-only re-attach dropped the floor: the restored token was served")
@@ -737,7 +737,7 @@ func TestAReattachToAnAbsentRecordSavesNothing(t *testing.T) {
 	f.read(1000, 1010)
 	f.read(480, 500)
 	f.savedRev = 0 // the drop's save failed: the old record is dirty
-	other := filepath.Join(safeDir(t), "restore.json")
+	other := filepath.Join(safeDir(t), "accounting.jsonl.restore.json")
 	f.attach(other, "/other/")
 	f.saveIfDirty()
 	if _, err := os.Stat(other); err == nil {
@@ -751,5 +751,28 @@ func TestAnEmptyStateIsNeverSaved(t *testing.T) {
 	f.saveIfDirty()
 	if _, err := os.Stat(f.path); err == nil {
 		t.Fatal("a record with no witness and no header was saved")
+	}
+}
+
+// Two port49d whose spools sit in one directory, on stores with the same
+// prefix, each keep their own record: one's high header is not the other's.
+func TestATwoSpoolsInOneDirectoryKeepTheirOwnRecords(t *testing.T) {
+	dir := safeDir(t)
+	open := func(spool string) *floorT {
+		f := &floorT{t: t, out: &bytes.Buffer{}, now: time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC),
+			path: restoreRecordPath(filepath.Join(dir, spool))}
+		f.open()
+		return f
+	}
+	a := open("r1-acct.jsonl")
+	a.read(1000, 1010)
+	a.saveIfDirty()
+	b := open("r3-acct.jsonl")
+	b.read(10, 20) // a fresh store far below A's header
+	if b.said(dropped) != 0 || b.restored(5, b.now) {
+		t.Fatalf("B took A's record; floor %d", b.floor)
+	}
+	if a.path == b.path {
+		t.Fatalf("both floors keep %s", a.path)
 	}
 }

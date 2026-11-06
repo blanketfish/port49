@@ -125,7 +125,7 @@ func TestARestoredTokenIsRefusedOrPurgedWhateverStartsFirst(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Remove(filepath.Join(filepath.Dir(cfg.Accounting.SpoolPath), "restore.json")); err != nil {
+		if err := os.Remove(restoreRecordPath(cfg.Accounting.SpoolPath)); err != nil {
 			t.Fatal(err)
 		}
 		before := len(x.out.String())
