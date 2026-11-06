@@ -11810,7 +11810,7 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
    revisions rise on one timeline.
 
    ```text
-   record (restore.json beside accounting.spool_path; written with writeOwnerOnly and read after ownedHere,
+   record (<accounting.spool_path>.restore.json; written with writeOwnerOnly and read after ownedHere,
            as witness.json is, a refusal of either being an unreadable record; saved each second when changed,
            and at once by a pass that judged a drop):
      prefix, witness, header       highest meta/witness ModRevision and read header since the last drop

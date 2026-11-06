@@ -45,7 +45,7 @@ const restoreSkew = 5 * time.Minute
 //
 // A read of the witness that fails holds every redemption store_unavailable
 // until one answers (Held). The record outlives the process: it is kept in
-// restore.json beside accounting.spool_path, so a restart after a restore
+// <accounting.spool_path>.restore.json, so a restart after a restore
 // still tells it, and a restart does not forget the floor.
 type restoreFloor struct {
 	out io.Writer
@@ -83,7 +83,7 @@ type restoreFloor struct {
 	m          *metrics.Metrics
 }
 
-// floorFile is restore.json.
+// floorFile is the record at restoreRecordPath.
 type floorFile struct {
 	Prefix        string    `json:"prefix"`
 	Witness       uint64    `json:"witness"`
@@ -434,4 +434,10 @@ func (f *restoreFloor) pass(ctx context.Context, callTimeout time.Duration,
 	f.judge(s, r, err)
 	floorPassed(f)
 	return true
+}
+
+// restoreRecordPath is the floor's record for a spool: the spool's path plus
+// ".restore.json", so two port49d with spools in one directory keep their own.
+func restoreRecordPath(spoolPath string) string {
+	return spoolPath + ".restore.json"
 }

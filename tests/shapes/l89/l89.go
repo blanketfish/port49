@@ -192,7 +192,7 @@ func DecodeMarks(body string) ([]Mark, error) {
 // The files cells (c) and (d) compare with the backup.
 const (
 	// Sentinel is the file cell (a) writes in each port49d spool before the backup: the spool holds no
-	// accounting record in the lab, and port49d writes restore.json there at every start, so a listing
+	// accounting record in the lab, and port49d writes its restore record there at every start, so a listing
 	// of the directory cannot tell a restored spool from an empty one.
 	Sentinel = "/v/data/l89-sentinel"
 	// MarksPath is a broker's copy of the marks. The copy writes it only when its marks change
