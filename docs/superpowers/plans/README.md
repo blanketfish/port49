@@ -8324,10 +8324,11 @@ Each is true of the code as built; the load, alert and matrix figures come from 
   - **fork-PR approval** (pre-beta fixes Task 23, `RELEASING.md`): set "Require approval for all outside collaborators" for fork pull request workflows. It replaces the `synchronize` item, which is moot (below);
   - **`.github/`, `.gitleaks.toml` and `tests/ci/` need CODEOWNERS** (parked by Task 22): a pull request that changes a CI gate should need its owner's review;
   - **GitHub disables scheduled workflows after 60 days of inactivity on a public repository** (parked by Task 22): the weekly `leaks` check of `main` since the baseline stops with them, so re-enable it or keep the repository active;
+  - **free lab images in CI** (Task 26's option 2): cEOS, XRd, SR Linux and the openldap and etcd entries on hosted runners, once the repository is public and Actions minutes are free;
   - history holds 369 `claude-session-link` fingerprints (`.gitleaksignore`), published with the history (Ryan, 2026-10-15: not rewritten). Reconfirm at go-public;
   - **the `main` ruleset, the macOS admin exception and plan 13's README selling points stay open** (each is listed above and again here so none is lost): the ruleset is applied by Ryan, `CheckOwned`'s group `admin` trust on darwin is a real-Mac check, and the top-level `README.md` is rewritten as a high-level overview of the selling points.
 - **Ryan:**
-  - confirm the restore-guard ruling's overturn (Pre-beta fixes, below);
+  - ~~confirm the restore-guard ruling's overturn~~ (confirmed 2026-11-06);
   - L91 on the SER8 (`tests/lab/L91-runbook.md`);
   - applying the `main` ruleset;
   - the one-time release setup from 12b is still open.
@@ -8357,7 +8358,7 @@ directory open (spec 11186).
 
 Status: **written 2026-11-05** (branch `feature/pre-beta-fixes`; twenty-six tasks in seven lanes; spec decision 56;
 opens L93). Revised the same day after its pre-flight (`.superpowers/pre-beta/preflight.md`, 0C/9I/14M, all applied as
-the controller ruled). **Executed 2026-11-05** on `feature/pre-beta-fixes` (Tasks 1 to 24 built and reviewed and their lanes merged, with Task 12's `leader_dark` cell pending the pull request's CI; Task 25 is this entry, lane H pending merge; Task 26, the full lab regression, runs on the branch, below). The base was `be92d427` on `main`.
+the controller ruled). **Executed 2026-11-05** on `feature/pre-beta-fixes` (Tasks 1 to 26 built, reviewed and merged into the branch; Task 12's `leader_dark` cell ran on the pull request's CI, worst refusal 2.13 s over 6 rounds, run 42080677952; Task 26, the full lab regression, is below). The base was `be92d427` on `main`.
 
 **Builds.** The fixes for every Critical and Important finding of the pre-beta review, and the Minors and carried items
 it triaged as security-relevant or small. Each is a task with a failing test, or a docs task that cites its note:
@@ -8475,7 +8476,17 @@ Operator-facing notes for the pull request body. Each name was checked against t
 
 #### Pre-beta fixes — Task 26, the full lab regression
 
-`make lab-regress` runs in full on this branch (`5ed06f5f`, `.worktrees/pb-L`); its outcome is recorded here when it ends.
+`make lab-regress` ran in full on this branch from 2026-11-05 to 2026-11-06 (`5ed06f5f`, then `af39f71d` with the fixes below), one entry at a time so a failure did not stop the rest (`lab-regress` stops at its first failure). Each failure was rerun on `main` (`be92d427`) before it was judged.
+- **Passed: 53 of the manifest's 68 entries** (the 15 failures are each below), among them L74-L75-L79 after the fix below. The results notes they rewrote are committed on the branch (`docs: the pre-beta fixes' full lab regression`).
+- **A bug the run found and the branch fixed:** L74 cells (a) and (f) failed (region 3's token login refused) on the branch and passed on `main`. The floor's record was `restore.json` in the spool's directory, keyed by the session prefix; L74's three regions keep their spools in one directory with one prefix, so they shared one record and region 3 judged a false drop and armed the band. The record is now `<accounting.spool_path>.restore.json` (`restoreRecordPath`, `TestATwoSpoolsInOneDirectoryKeepTheirOwnRecords`); L74-L75-L79 then passed (19.7 min).
+- **A stale manifest line fixed:** `L73-xrd261` ran without `PORT49_LAB_REMEASURE` after L73 and L71 closed on XRd; it now sets `L73,L71` (the manifest sums to 745.7 minutes), and passed.
+- **Failing on `main` too (not the branch):** L73-nxos106 (cell (a) captured no ClientHello; issue #46); L76-srlinux (the session table has no row; sr_cli did not run the exec command), L66 on all five platforms (the harness policy has no `keys:` block since plan 12a), L42-L43 and L48 (the 12c file fence refuses the harness's files under a group-writable `~/git`), all in issue #47.
+- **Device flakes, rerun once and still failing:** NX-OS 10.6 did not come up within 8m for L5, L31 and L64-L65-nxos (L7, L3-nxos and L35-restore passed on their rerun); L29-reload's documented vJunos premise flake. Issue #47.
+- **L80-nxos106**, run last on the clean tree (`21c94f39`): port49d refuses the conformance config because `lab_key` is not in its policy's `keys:` block, the L66 cause (plan 12a, `91e18f58`); the branch does not touch the qualify harness. Issue #47.
+- **Kept, not committed:** the L71 NX-OS note's 10.6(2)F addendum (`21c94f39`), which the L71 entry rewrote away and L73-nxos106 would have added back.
+- **Not re-measured:** L86, L60 and L91 (hardware keys), L84 and L89 (hosted and kind runs, CI only).
+
+**Cadence (Ryan, 2026-11-06):** a full `make lab-regress` when the last sub-plan of each numbered plan merges, and before each release; until this run none had run since 2026-10-20, which is how the L66, L42-L43, L48 and L76 breakage went unseen. The run takes about 13 hours, most of it booting a device per entry. **Future work:** keep a platform's devices booted across its entries, with a reset and a check between them (option 1, before plan 13's release run); free images in CI (option 2) waits for go-public, because a private repository pays for Actions minutes.
 
 #### Pre-beta fixes — left for later and carried
 
@@ -8484,7 +8495,8 @@ Operator-facing notes for the pull request body. Each name was checked against t
   - **the logout-burst compose cell** (pre-beta Task 9's carried lab item): a split topology and a 1024-logout generator exist in no stack, so the unit test proves the burst's mechanism and the at-scale path is unmeasured;
   - **the baseline SHA:** `be92d427` (the plan's own base, on `main`) is the `leaks.yml` baseline and `tests/ci`'s `baselineSHA`; `git merge-base --is-ancestor be92d427 HEAD` holds (checked). The weekly check scans `main` since it;
   - **the etcd-init Job** (`deploy/helm/port49/examples/etcd/etcd-init-job.yaml`) still installs its tools with `apk` at install time: publish a setup image instead (ruling (c); the restore Job already uses etcd's own image by digest);
-  - **the l86 unit test** writes holder text into `/tmp/port49-lab.lock` (kept from the 12c list).
+  - **the l86 unit test** writes holder text into `/tmp/port49-lab.lock` (kept from the 12c list);
+  - **from Task 26's run:** issues #46 and #47 (fix before plan 13's release run); `broker.state_dir` is not locked against two brokers sharing it (an flock on `<state_dir>/.lock`, as the floor's record was split per spool); `sharedDownLine` (`internal/port49d/fresh.go`) says "this broker" in port49d's own line; `TestARunningBrokerSaysALateUnreadableFileOnceAndFollowsTheFix` fails with `TMPDIR` under `~/.cache` and passes under `/tmp` (cause unknown).
 - **Not fixed:** more systemd sandboxing (deploy M5: unmeasured directives could stop a start; measure on the hosted runner's systemd and do it before go-public); `inventory.service.min_published_at` (policy M5: a new key, and Task 19 states the cold-start line); `--broker-ca-fd` fstat and the askpass pidfd test (identity P8 and P12: unreachable by an attacker); a fully clock-free restore band (re-creating `meta/witness` so its `CreateRevision` falling is the drop: the path if Ryan rules the band's clock term out).
 - **Can wait:** sealing `oo/` and `lo/` with the principal as AAD (a store writer can already delete marks and tokens); the enrollment windows (D2) and `Proven` (TOFU by design, documented); the detached JWKS save (a public file, written atomically and owner-only); GSSAPI channel binding (a hardening feature); the 24h directory outage revoking directory sessions on restart (fails closed; plan 13 puts it on the 3am page).
 - **Cosmetic or noted:** the `port49d` package's test time (about 17 minutes in a full run at 85a2ef49, so a make target's `-timeout` is needed; `make test` sets 30m); `GOOS=darwin go vet -tags lab` at `tests/lab/l56_test.go:131`; the CertNameToStr characters, the multi-valued RDN and `identity_unmapped` printing the searched value (plan 13 notes them); the doubled broker lines after a restart and the restart output dropped on a follow error (parked from lane B).
