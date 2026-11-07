@@ -179,7 +179,12 @@ Break-glass, when no broker is reachable: `scripts/revoke-offline.sh <ns> <relea
 <name> [--lift|--list]` scales the brokers to 0, runs `port49-broker revoke --offline` against
 broker-0's volume, and scales back on every exit. The chart is on etcd, which keeps the revocation
 marks, so it has no `init-revocations` step (that command is for a single-process trial on the memory
-store). `init-enrollments` is a one-off Job, run once per new deployment that uses directory password
+store). The etcd roles are applied once per cluster by `examples/etcd/etcd-init-job.yaml`, which applies
+`port49d store-roles`' output as etcd's root and enables auth. Before it, run
+`port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml > roles.sh` (the broker's
+config names the broker's own etcd certificate) and
+`kubectl -n port49-etcd create configmap port49-etcd-roles --from-file=roles.sh`; the Job's header
+comment has the details. `init-enrollments` is a one-off Job, run once per new deployment that uses directory password
 sign-in: `examples/init-enrollments-job.yaml` is it (adapt its names to
 your values, then `kubectl -n <ns> apply -f` it and `kubectl -n <ns> wait --for=condition=complete job/port49-init-enrollments
 --timeout=300s`; the kind job `make kind-enrollments` applies that file with only the image and the release's ConfigMap name changed, in the namespace `-n` names). A broker already running when `init-enrollments` finishes
