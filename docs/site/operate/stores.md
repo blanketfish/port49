@@ -105,7 +105,7 @@ what you see, and what to do.
 | A region's link to the directory is cut | Devices notice nothing: logins and commands are answered from the session store and the cached marks. The line `directory store: not answering (...): serving from the cache confirmed <age> ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers`. `port49_store_directory_reachable` is 0 and `time() - port49_store_directory_confirmed_timestamp_seconds` climbs. `port49 store status` prints the directory `unreachable` and exits 3. Alerts [port49_store_directory_unreachable](../reference/alerts.md#port49_store_directory_unreachable), then [port49_store_directory_stale](../reference/alerts.md#port49_store_directory_stale). | Restore the link. On the heal the line `directory store: answering again; the cache was <age> old` appears and the marks catch up. |
 | Someone is revoked in region A while region C is cut | A and B deny the person's next command. C does not: open sessions keep working, and tokens minted before the cut still log in. | To cut C off now without the directory, remove the person's grants from the policy file C's hosts load (live within two watch intervals), or stop C's port49d. On the heal, C's runner says `a revocation of <principal> made elsewhere reached N token key(s) and M context(s) here`. |
 | A lift made in A during a long cut comes back when C heals | C's runner says `N revocation(s) in broker.state_dir/marks.json were missing from the store (...) and are put back`. | Lift it again in any region once the cut has healed (`port49 revoke --lift`). |
-| A person signs in with a password and a TOTP code in the cut region | 503 `store_unavailable` ("the broker could not reach the directory store"). The log records an `issue` denial with reason `store_unavailable`. | Use a certificate, OIDC or a hardware key, or break-glass. Password sign-in returns when the cut heals. It fails closed so that one code never signs in twice across regions. |
+| A person signs in with a password and a TOTP code in the cut region | 503 `store_unavailable`, "the broker could not reach its store, so it signed no one in; try again shortly" (the first directory read of a sign-in, the person's unlock record, is what fails). The broker says `sign-in: the unlock store did not answer: ...`, at most once every 10 seconds. The log records an `issue` denial with reason `store_unavailable`. | Use a certificate, OIDC or a hardware key, or break-glass. Password sign-in returns when the cut heals. It fails closed so that one code never signs in twice across regions. |
 | `port49 revoke`, `port49 directory unlock`, `reset-second-factor`, `init-enrollments` or `import` in the cut region | The command fails in about `stores.directory.etcd.call_timeout` with "the directory store did not answer, so nothing changed". A revocation says the record may not have been made and names the fallback. | Run it from a region that reaches the directory. |
 | port49d or port49-broker restarts during the cut (a deploy, an OOM kill) | It serves from a snapshot, up to the ceiling (below). `port49 store status` shows `cache <age> (snapshot)`. | Nothing while the cut is shorter than the ceiling. |
 | The cut outlasts the ceiling on a process that started from a snapshot | port49d: the line `directory store: the snapshot this run serves from is <age> old, past session.staleness_ceiling (4h0m0s): the listeners close until the directory answers`. port49-broker: every mint and sign-in is 503 `store_unavailable`. Processes that never restarted keep serving. | Restore the link. Or raise `session.staleness_ceiling` and restart, if you know the copy is current. |
@@ -134,6 +134,12 @@ alert is [port49_store_health_failures_close](../reference/alerts.md#port49_stor
 [port49_store_circuit_open](../reference/alerts.md#port49_store_circuit_open) says which pool's circuit
 opened.
 
+A token or context pool whose circuit stays open for `etcd.hold_ttl` (15 seconds by default) closes the
+listeners too, without waiting for the checks.
+
+port49-broker never closes anything: it keeps answering 503 `store_unavailable` while its store is
+down, and `/readyz` says it is serving.
+
 Two things stay true while this happens:
 
 - **Only the token and context pools close the listeners.** A slow or refused bulk scan opens a circuit
@@ -158,13 +164,17 @@ etcd members answer out of those listed, whether the store is reachable, and for
 the cache. Examples:
 
 ```text
-directory  etcd    3/3 members  reachable    cache 0.4s
+directory  etcd    3/3 members  reachable  cache 0.4s
 session    etcd    1/1 members  reachable
 ```
 
 ```text
 directory  etcd    ?/? members  unreachable  cache 41.2s  1 logouts pending
+           <why the store did not answer, on a line of its own>
 ```
+
+The indented second line is the reason, printed only when a store does not answer; it is not an error of
+its own.
 
 `cache <age> (snapshot)` means the process started from a snapshot, not a live load. `feeds down:` lists
 a feed whose watch has stopped. A session store that is the directory store prints `shares the directory

@@ -42,6 +42,7 @@ tls_listener:
 | `intermediates_file` | Optional. Issuing CAs held here, so a device that sends only its leaf still verifies. |
 | `device_identity` | Which certificate names identify a device (below). |
 | `server_names` | When set, the SNI names a ClientHello may ask for. |
+| `state_dir` | Absolute directory where the verified CRLs are kept so a restart keeps them. Required when `certificate_status.crls` names any. |
 | `certificate_status` | Required. Revocation: CRLs, OCSP, or `disabled: true`, always a written choice. |
 | `handshake_timeout`, `session_ticket_lifetime`, `reload_interval`, `expiry_warning_fraction` | Timing. Defaults and limits are in the [reference](../reference/config/port49d.md#tls_listener). |
 
@@ -79,7 +80,10 @@ A device configured with a DNS name or an address may or may not check that port
 it. In the lab, IOS XE 17.18.02 accepted a server certificate that named only a DNS name, and one that
 named another address, though it was configured by address
 ([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md)).
-EOS refused both. So do not count on the device to check the names: the server certificate must come from
+EOS and XRd 26.1.1 refused the one naming another address
+([EOS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md),
+[XRd](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)), and EOS
+refused the DNS-only one too. So do not count on the device to check the names: the server certificate must come from
 a CA the device trusts for nothing else. A certificate from a CA your devices also trust for web sites is
 a certificate anyone who can get one issued can use against them.
 
@@ -87,9 +91,9 @@ If you want a wildcard in the server certificate, confine it to a subdomain only
 (RFC 9887 section 5.1.6).
 
 !!! warning "Unmeasured"
-    Whether Junos and NX-OS check the server certificate's DNS name or address is unknown. In the lab both
-    failed the logins with a certificate naming only a DNS name and one naming another address, but the
-    cause was not proven. Give them a certificate that carries every name and address the device might be
+    Whether Junos, NX-OS and XRd check the server certificate's DNS name or address is unknown. In the lab
+    Junos and NX-OS failed the logins with a certificate naming only a DNS name and one naming another
+    address, and XRd failed the DNS-only one, but the cause was not proven. Give them a certificate that carries every name and address the device might be
     configured with, and do not rely on either result.
 
 ## Junos
@@ -105,14 +109,17 @@ set system accounting destination tacplus server <server-address> tls mutual-aut
 ```
 
 The lab configured exactly this on vJunos-router 26.2R1.7
-([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md)).
+([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md)),
+beside a `tls trusted-ca-group` line. The whole stanza is in
+[`deploy/device-aaa/juniper_junos-tls.set`](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/juniper_junos-tls.set).
 Junos also sends the server's IP address as the SNI name, so if you set `server_names`, list every address
 the device may dial, or leave it unset. The device sees an `internal_error` alert and port49d logs
 `tls_refused` with `sni_mismatch`.
 
 !!! warning "Unmeasured"
     Which Junos releases accept this line, and whether SRX does, is unknown; the line was run on one image
-    only. The lab placed the client certificate through a lab-only root shell, so the documented enrolment
+    only. Whether a Junos device whose `authentication-order` lists `tacplus` alone falls to anything over
+    TLS when port49 answers ERROR was not measured. The lab placed the client certificate through a lab-only root shell, so the documented enrolment
     on Junos is also unmeasured, and which of two certificates the device sent is not recorded.
 
 ## Revocation
@@ -132,19 +139,30 @@ allow` admits the connection and says so; it is the reviewed escape, not the def
 
 1. Issue the device a client certificate (`clientAuth`) from a CA in `client_ca_file`, naming the device
    by its inventory name or address. If the device sends only its leaf, put the issuing CA in
-   `intermediates_file`. In the lab, EOS sent its leaf alone; Junos, IOS XE, NX-OS and XRd sent the leaf
-   and the intermediate.
+   `intermediates_file`. In the lab, EOS sent its leaf alone
+   ([EOS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md));
+   Junos, IOS XE, NX-OS and XRd sent the leaf and the intermediate
+   ([Junos](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md),
+   [IOS XE](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md),
+   [NX-OS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_nxos.md),
+   [XRd](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)).
 2. Start the TLS listener beside the RFC 8907 one, and check `port49_tls_server_certificate_lifetime_left_ratio`.
 3. On the device, add the TLS server at port 300. With no port configured the lab found Junos and
-   NX-OS dial 49, IOS XE dials 6049, XRd dials 49 and EOS dials 300, so configure the port explicitly.
+   NX-OS dial 49, IOS XE dials 6049, XRd dials 49 and EOS dials 300, so configure the port explicitly
+   (the same five notes).
 4. Change the device's inventory `transport` to `tls`. From then on the device is declined on 49 and
    served on 300.
 5. Remove the shared-key server from the device.
 
 Keep the window in which the device lists both the TLS server and a plain one as short as you can
-(RFC 9887 section 6.1). In the lab, XRd sent plain TACACS+ headers to a plain server in a mixed list;
-IOS XE and NX-OS never opened a connection to it. Whether the other platforms would have sent a header
-is not measured. port49 refuses a `tls` device's packet on the RFC 8907 listener (`transport_mismatch`),
+(RFC 9887 section 6.1). In the lab, XRd sent plain TACACS+ headers to the plain server in a mixed list
+([XRd](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)). IOS XE,
+Junos and EOS opened a connection to it that was reset before any header, and NX-OS opened none
+([IOS XE](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md),
+[Junos](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md),
+[EOS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md),
+[NX-OS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_nxos.md)). Whether
+those three would have sent a header had the server stayed up is not measured. port49 refuses a `tls` device's packet on the RFC 8907 listener (`transport_mismatch`),
 so a device that does fall back is not served, but it is a header on the wire.
 
 A sync that flips a device from `tls` to `tcp` is recorded `transport_changed`, and port49 does not block
@@ -157,7 +175,7 @@ it. The alert is [port49_inventory_transport_changed](../reference/alerts.md#por
 | A device's certificate expired | Record `tls_refused` with `certificate_expired`, naming the device and the certificate's `NotAfter`; the counter `port49_tls_handshakes_total{outcome="certificate_expired"}`. Before it expired, the `expiry_warning_fraction` line and `port49_tls_device_certificate_lifetime_left_ratio` below 0.33. | Renew it on the device. |
 | A device stopped renewing a short-lived certificate | One line a day naming it, once it is in the last third of its own life. | Fix its enrolment before the certificate expires. |
 | The device CA rotated | `unknown_ca` per device once `client_ca_file` lost the old CA; a reload line names the anchors in force. Open connections close at their next packet. | Keep both CAs in `client_ca_file` until every device has re-enrolled; read `outcome="unknown_ca"` at zero before you remove the old one. |
-| The CRL is unreachable | After `nextUpdate`: `tls_listener: certificate status: CRL ...` lines and `status_unavailable` records, and then one line every 10 minutes counting the declined devices. `port49_cert_status_unavailable_total{component="tls_listener"}`. | Restore the CRL source. A `file:` source copied in by hand works at once. |
+| The CRL is unreachable | After `nextUpdate`: `tls_listener: certificate status: CRL ...` lines and `status_unavailable` records, and then one line every 10 minutes counting the declined devices. `port49_cert_status_unavailable_total{component="tls_listener"}`. | Restore the CRL source. A failed source is retried from 30 seconds, doubling up to `refresh_interval`, so a `file:` source copied in by hand is read at the next retry, at most `refresh_interval` later. |
 | A device speaks TLS 1.2 only | Record `version_refused`: "offered 303; RFC 9887 requires TLS 1.3". | Upgrade the device, or set it back to `transport: tcp`. |
 | A device on the wrong port or transport | Record `transport_mismatch` naming the device and its record's transport. | Correct the device's server port, or the record's `transport`. |
 | SNI mismatch | Record `sni_mismatch`, "asked for server name X". A decline, no strike. | Correct the device's server name, or `server_names`. |
@@ -178,7 +196,8 @@ not fall to its local method, so break-glass fails: the lab login failed in 4.1 
 ([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md)).
 XRd 26.1.1 behaved the same way
 ([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)).
-Junos, EOS and NX-OS fell to local in the same test
+Junos (with `password` after `tacplus` in `authentication-order`, as the lab configured it), EOS and NX-OS
+fell to local in the same test
 ([Junos](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md),
 [EOS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md),
 [NX-OS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_nxos.md)).
@@ -202,13 +221,16 @@ sum by (component) (rate(port49_cert_status_unavailable_total[5m]))
   / sum by (component) (rate(port49_cert_status_checks_total[5m]))
 ```
 
-Or match with `ignoring(component)` where only that label differs. Every shipped rule already does one or
-the other; see the [alerts notes](../reference/alerts.md#notes).
+Or match with `ignoring(component)` where only that label differs. The shipped rules each name
+their component (`component="tls_listener"`), so they need neither; see the
+[alerts notes](../reference/alerts.md#notes).
 
 ## Which edits need a restart
 
 An edit to any `tls_listener:` key needs a restart. port49d says this once, at the first SIGHUP:
-`tls_listener: config changes take effect at restart; files reload now`.
+`tls_listener: config changes take effect at restart; files reload now`. Only the first SIGHUP says
+it; a later SIGHUP of an edited restart-only key says nothing and changes nothing, so do not read
+silence as applied.
 
 The files reload by themselves. `cert_file`, `key_file`, `client_ca_file` and `intermediates_file` are
 re-read every `reload_interval` (1 minute by default, 10 seconds to 1 hour) and at SIGHUP. A CA rotation
