@@ -3,24 +3,24 @@
   "lab_platform": "cisco_nxos",
   "firmware": "Nexus 9300v 10.6(2)F",
   "image": "Nexus 9300v 10.6(2)F",
-  "commit": "5f9a2d84c6da",
-  "date": "2026-10-22",
+  "commit": "8c93afade21f",
+  "date": "2026-11-07",
   "transports": [
     "tcp",
     "tls"
   ],
   "cells": {
-    "accounting": "2026-10-22T17:35:58.832156114Z",
-    "command_denied": "2026-10-22T17:35:57.554025452Z",
-    "command_permitted": "2026-10-22T17:35:57.554025452Z",
-    "single_connection": "2026-10-22T17:36:11.53924937Z",
-    "store_unavailable": "2026-10-22T17:36:02.107860666Z",
-    "tls_single_connection": "2026-10-22T17:43:02.806534378Z",
-    "tls_store_unavailable": "2026-10-22T17:42:01.391342584Z",
-    "tls_token_login": "2026-10-22T17:41:42.759583717Z",
-    "tls_unknown_ca": "2026-10-22T17:42:29.253021673Z",
-    "token_login": "2026-10-22T17:35:55.733391865Z",
-    "wrong_credential": "2026-10-22T17:35:59.967777635Z"
+    "accounting": "2026-11-07T10:20:55.431419141Z",
+    "command_denied": "2026-11-07T10:20:54.134339534Z",
+    "command_permitted": "2026-11-07T10:20:54.134339534Z",
+    "single_connection": "2026-11-07T10:21:06.47097498Z",
+    "store_unavailable": "2026-11-07T10:20:58.408613076Z",
+    "tls_single_connection": "2026-11-07T10:27:58.309098574Z",
+    "tls_store_unavailable": "2026-11-07T10:26:54.662184282Z",
+    "tls_token_login": "2026-11-07T10:26:36.104858906Z",
+    "tls_unknown_ca": "2026-11-07T10:27:24.965231943Z",
+    "token_login": "2026-11-07T10:20:52.39759197Z",
+    "wrong_credential": "2026-11-07T10:20:56.601981945Z"
   },
   "registers": {
     "accounting": [
@@ -89,7 +89,7 @@
   "denied_command_asked": {},
   "tls_server_single_connect_offered": true,
   "port49d": {
-    "vcs_revision": "5f9a2d84c6da",
+    "vcs_revision": "8c93afade21f",
     "vcs_modified": false
   },
   "tls_capture_started_clean": true
