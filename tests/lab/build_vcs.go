@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -123,9 +124,43 @@ func treeDirty(dir string, paths ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// codePaths are the paths a lab run's binary and harness are built from,
-// with the evidence and results the run reads or writes.
-var codePaths = []string{"internal", "cmd", "platforms", "tests/lab", "tests/qual"}
+// codePaths are the code a lab run's binary and harness are built from (go.mod and go.sum included).
+// qualTreeDirty excludes tests/lab's results and evidence from it and adds the run's own outputs
+// (qualOwnOutputs).
+var codePaths = []string{"internal", "cmd", "platforms", "tests/lab", "tests/qual", "go.mod", "go.sum"}
+
+// qualOwnOutputs are the results and evidence the qualify and L80 runs write
+// themselves, for each prefix a run owns. Under :(glob) a * does not cross a
+// /, so the evidence directories take their own pattern.
+var qualOwnOutputs = func() []string {
+	var p []string
+	for _, prefix := range []string{"L80-", "QUAL-", "L78-"} {
+		p = append(p,
+			":(glob)tests/lab/results/"+prefix+"*",
+			":(glob)tests/lab/evidence/"+prefix+"*",
+			":(glob)tests/lab/evidence/"+prefix+"*/**")
+	}
+	return p
+}()
+
+// qualTreeDirty is the dirty check of the qualify and L80 runs: the code
+// their binary and harness are built from, and the run's own outputs. The
+// check is the binary's and the harness's provenance (review I2, N4); nothing
+// reads or embeds other entries' notes or evidence, and requiring L80 to run
+// first would hold only in a full run. It takes two calls, because a git
+// exclude pathspec also removes a positive glob under it.
+func qualTreeDirty(dir string) (string, error) {
+	code := append(slices.Clone(codePaths), ":(exclude)tests/lab/results", ":(exclude)tests/lab/evidence")
+	a, err := treeDirty(dir, code...)
+	if err != nil {
+		return "", err
+	}
+	b, err := treeDirty(dir, qualOwnOutputs...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(a + "\n" + b), nil
+}
 
 // qualBinaryCheck holds the qual run's bin/port49d to the harness tree:
 // run.json's tls_server_single_connect_offered is read from this tree's

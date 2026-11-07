@@ -122,7 +122,7 @@ type tokenRun struct {
 }
 
 func newTokenRun(exit int, stderr string, at time.Duration) tokenRun {
-	return tokenRun{Exit: exit, Stderr: oneLineMax(stderr, 600), AtSeconds: int(at.Seconds())}
+	return tokenRun{Exit: exit, Stderr: scrubHome(oneLineMax(stderr, 600)), AtSeconds: int(at.Seconds())}
 }
 
 // stepEvidence is a run's evidence: an ordered list of named steps, written as
@@ -146,7 +146,7 @@ func (e *stepEvidence) encode(secrets []string) ([]byte, error) {
 	if lerr := stepLeak(string(b), secrets); lerr != nil {
 		return nil, fmt.Errorf("the evidence is not written: %w", lerr)
 	}
-	return append(b, '\n'), nil
+	return append([]byte(scrubHome(string(b))), '\n'), nil
 }
 
 // keySecrets are the strings that identify a PEM private key in text: each of
@@ -366,17 +366,18 @@ func describeCounts(m map[string]int) string {
 // l48Run is the state of one TestL48StepCA: the CA, the broker the cells
 // currently talk to, the evidence and the observation being written.
 type l48Run struct {
-	t      *testing.T
-	s      *stepCA
-	broker *localBroker
-	ev     stepEvidence
-	obs    strings.Builder
-	keys   []string // the workload keys' material, never printed
-	inter  *x509.Certificate
-	anchor string // the intermediate's PEM file, the broker's workload anchor
-	cert   string // the workload's certificate and key on the host
-	key    string
-	repo   string // the repository root, for examples/oxidized
+	t       *testing.T
+	s       *stepCA
+	broker  *localBroker
+	ev      stepEvidence
+	obs     strings.Builder
+	keys    []string // the workload keys' material, never printed
+	inter   *x509.Certificate
+	anchor  string // the intermediate's PEM file, the broker's workload anchor
+	cert    string // the workload's certificate and key on the host
+	key     string
+	repo    string   // the repository root, for examples/oxidized
+	invalid []string // steps that never reached the broker: the run is INVALID
 }
 
 func (r *l48Run) say(format string, a ...any) { fmt.Fprintf(&r.obs, format+"\n", a...) }
@@ -411,7 +412,15 @@ func (r *l48Run) tokenWith(label, cert, key string, at time.Duration) tokenRun {
 	r.keys = append(r.keys, tokenSecrets(out)...)
 	tr := newTokenRun(code, errs, at)
 	r.ev.add(label, tr)
+	r.guard(label, tr)
 	return tr
+}
+
+// guard marks the run INVALID when step never reached the broker.
+func (r *l48Run) guard(step string, tr tokenRun) {
+	if why := workloadHarnessFault(tr.Exit, tr.Stderr); why != "" {
+		r.invalid = append(r.invalid, fmt.Sprintf("%s: %s (exit %d)", step, why, tr.Exit))
+	}
 }
 
 // mustIssue is s.issue, where a refusal is a setup fault: INVALID, not a cell.
@@ -430,9 +439,16 @@ func (r *l48Run) cell1Issue() {
 	r.ev.add("issue", f)
 	r.files()
 	// The workload anchor is step-ca's intermediate.
-	r.broker = startLocalBroker(r.t, filepath.Join(filepath.Dir(r.s.dir), "local-broker"), r.anchor, "", "", "")
+	bdir, err := localBrokerDir("l48")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	keepLocalBrokerLogs(r.t, bdir, "local-broker")
+	r.broker = startLocalBroker(r.t, bdir, r.anchor, "", "", "")
 	idCode, idOut, idErr := r.broker.workloadIdentity(r.cert, r.key)
-	r.ev.add("workload_identity", newTokenRun(idCode, idErr, 0)) // stdout is a SPIFFE ID, kept in the note
+	idRun := newTokenRun(idCode, idErr, 0)
+	r.ev.add("workload_identity", idRun) // stdout is a SPIFFE ID, kept in the note
+	r.guard("workload_identity", idRun)
 	tr := r.token("token_after_issue", 0)
 	r.say("- **1. Issue** (`step ca certificate`, 24h, `--san %s`):", l48ID)
 	r.say("  - URI SANs `%v` (exactly the requested ID, alone: %s); DNS SANs `%v`; EKUs `%v`; IsCA `%v`.", f.URIs,
@@ -635,7 +651,12 @@ func (r *l48Run) cell5CRL() {
 	// The CRL is fetched over https under step-ca's private root: the broker
 	// trusts it through SSL_CERT_FILE (pre-flight I-3).
 	r.broker.stop() // cell 1's broker, so one port49d runs
-	b, refusal := launchLocalBroker(r.t, filepath.Join(filepath.Dir(r.s.dir), "local-broker-crl"), r.anchor, stepCACRLURL,
+	crlDir, err := localBrokerDir("l48-crl")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	keepLocalBrokerLogs(r.t, crlDir, "local-broker-crl")
+	b, refusal := launchLocalBroker(r.t, crlDir, r.anchor, stepCACRLURL,
 		r.anchor, r.s.root())
 	if b == nil {
 		// port49d refused the CRL source at start (its issuer is not under an
@@ -840,12 +861,19 @@ func TestL48StepCA(t *testing.T) {
 	})
 
 	r.cell1Issue()
+	if len(r.invalid) > 0 {
+		t.Fatalf("INVALID, no note written: %s", strings.Join(r.invalid, "; "))
+	}
 	r.cell2Renew()
 	r.cell3Daemon()
 	r.cell4CADown()
 	r.cell5CRL()
 	r.cell6NamePolicy()
 
+	if len(r.invalid) > 0 {
+		t.Errorf("INVALID, no note written: %s", strings.Join(r.invalid, "; "))
+		return
+	}
 	out, err := directoryOut()
 	if err != nil {
 		t.Fatal(err)

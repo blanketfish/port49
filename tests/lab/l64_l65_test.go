@@ -447,6 +447,11 @@ func l64GradeSSHRefusal(r l64Stderr, exit, packets int, other []string) (bool, s
 	return true, ""
 }
 
+// l64WantChanged is the code L65 (c) and (d) must see: a replaced key is host_key_changed. Every platform
+// measured it (the L65 notes before 719721c7), and the codes the library raises before it contacts the device
+// (ssh_config_unread, known_hosts_unread, host_key_uncheckable, host_keys_not_kept) are not that refusal.
+const l64WantChanged = "host_key_changed"
+
 // l64GradePyRefusal reads the L65 (c), (d) and (f) claim: a HostKeyError (of the code wantCode, if one is
 // named), no TACACS+ packet, no record but mint and blob.
 func l64GradePyRefusal(d l64Driver, wantCode string, packets int, other []string) (bool, string) {
@@ -500,7 +505,7 @@ except Exception as e:
 
 conn = None
 try:
-    agent = port49.Agent(port49=os.environ["P49_BIN"], socket=os.environ["P49_SOCK"], timeout=90)
+    agent = port49.Agent(port49=os.environ["P49_BIN"], timeout=90)
     conn = connect(os.environ["P49_DEVICE"], agent=agent, ssh_config=os.environ["P49_SSHCONF"],
                    conn_timeout=30, auth_timeout=60, banner_timeout=60)
     out = conn.send_command(os.environ["P49_CMD"], read_timeout=60)
@@ -821,17 +826,88 @@ type l64PyRun struct {
 	err     error
 }
 
+// l64HarnessErrors are the Python error classes of a driver that is itself wrong (a bad call, a missing name or
+// module): such a run never reached the device. A paramiko or netmiko error is the device's answer, and stays a
+// measurement.
+var l64HarnessErrors = []string{"TypeError", "AttributeError", "NameError", "KeyError", "ImportError",
+	"ModuleNotFoundError", "SyntaxError", "UnboundLocalError", "ValueError", "RuntimeError", "AssertionError",
+	"IndexError", "LookupError", "OSError", "FileNotFoundError", "PermissionError"}
+
+// l64HarnessPort49 are the port49 library errors that are about the harness or the lab, not about the device:
+// no agent, no CLI, a session that ended, a broker that was briefly unavailable. A Denied, a BrokerRefused or
+// a plain Port49Error is something a cell can observe, so it stays a measurement.
+var l64HarnessPort49 = []string{"NoAgent", "NotInstalled", "SessionOver", "Temporary"}
+
+// l64HarnessHostKeyCodes are the HostKeyError codes the library raises before it contacts the device, from the
+// harness's own ssh_config or known_hosts.
+var l64HarnessHostKeyCodes = []string{"ssh_config_unread", "known_hosts_unread", "host_key_uncheckable", "host_keys_not_kept"}
+
+// l64DriverFault says why a Python run measured nothing, or "" when it reached the library and the device: an
+// import error, a harness error class, or no result line at all.
+func l64DriverFault(r l64PyRun) string {
+	switch {
+	case !r.parsed:
+		return fmt.Sprintf("the driver printed no result line (exit %d, error %v)", r.exit, r.err)
+	case r.d.Outcome == "import_error":
+		return "the driver could not import the library (" + r.d.ErrorClass + ")"
+	case r.d.Outcome == "error" && slices.Contains(l64HarnessErrors, r.d.ErrorClass):
+		return "the driver failed with " + r.d.ErrorClass + " before it reached the device"
+	case r.d.Outcome == "port49_error" && slices.Contains(l64HarnessPort49, r.d.ErrorClass):
+		return "the library raised " + r.d.ErrorClass + ", which is the harness's or the lab's, not the device's"
+	case r.d.Outcome == "port49_error" && r.d.ErrorClass == "HostKeyError" && slices.Contains(l64HarnessHostKeyCodes, r.d.Code):
+		return "the library refused with " + r.d.Code + " before it contacted the device"
+	}
+	return ""
+}
+
+// noteDriver marks the running cell INVALID when its driver run was a harness error.
+func (e *l64Env) noteDriver(r l64PyRun) {
+	if why := l64DriverFault(r); why != "" && e.invalid == "" {
+		e.invalid = why
+	}
+}
+
+// l64Writable is whether an entry's note may be written: an INVALID cell measured nothing, so the entry writes
+// no note and the test fails, as L66's does.
+func l64Writable(rs []l64Result, entry string) (bool, string) {
+	var bad []string
+	n := 0
+	for _, r := range rs {
+		if !strings.HasPrefix(r.id, entry) {
+			continue
+		}
+		n++
+		if r.outcome == "INVALID" {
+			bad = append(bad, r.id)
+		}
+	}
+	switch {
+	case n == 0:
+		return false, "no " + entry + " cell ran"
+	case len(bad) > 0:
+		return false, "INVALID cells: " + strings.Join(bad, ", ")
+	}
+	return true, ""
+}
+
+// pythonEnv is the driver's environment. The library finds a non-default agent through
+// PORT49_TEST_AGENT_SOCKET alone, which its CLI children inherit: Agent takes no socket
+// parameter (d97c52c6).
+func (e *l64Env) pythonEnv() []string {
+	return append(e.env(), "P49_BIN="+filepath.Join(root, "bin", "port49"), "PORT49_TEST_AGENT_SOCKET="+e.sock,
+		"P49_SSHCONF="+e.cfgPath, "P49_DEVICE="+e.node, "P49_CMD=show version")
+}
+
 func (e *l64Env) python(ctx context.Context) l64PyRun {
 	off, from := e.l.mark(), time.Now()
-	env := append(e.env(), "P49_BIN="+filepath.Join(root, "bin", "port49"), "P49_SOCK="+e.sock,
-		"P49_SSHCONF="+e.cfgPath, "P49_DEVICE="+e.node, "P49_CMD=show version")
 	var r l64PyRun
 	var stdout string
-	stdout, r.stderr, r.exit, r.err = l64Run(ctx, env, e.home, venvPython, "-I", "-B", e.driverPath)
+	stdout, r.stderr, r.exit, r.err = l64Run(ctx, e.pythonEnv(), e.home, venvPython, "-I", "-B", e.driverPath)
 	r.d, r.parsed = l64ParseDriver(stdout)
 	r.recs = e.l.drainRecords(off, 6*time.Second)
 	r.packets = e.tacacsIn(from, time.Now())
 	r.other, r.redeems = l64OtherRecords(r.recs), l64Redeems(r.recs)
+	e.noteDriver(r)
 	return r
 }
 
@@ -1417,12 +1493,12 @@ func runL64L65(e *l64Env, versions string) {
 	// L65 (c) and (d): the same replacements, through connect.
 	e.replaced("L65c", false, func(ctx context.Context, typ string) (bool, string) {
 		r := e.python(ctx)
-		ok, why := l64GradePyRefusal(r.d, "", r.packets, r.other)
+		ok, why := l64GradePyRefusal(r.d, l64WantChanged, r.packets, r.other)
 		return ok, fmt.Sprintf("`connect(%s)` against an entry replaced by a fresh `%s` key: %s; %s. %s", node, typ, r.said(), r.counts(), why)
 	})
 	e.replaced("L65d", true, func(ctx context.Context, typ string) (bool, string) {
 		r := e.python(ctx)
-		ok, why := l64GradePyRefusal(r.d, "", r.packets, r.other)
+		ok, why := l64GradePyRefusal(r.d, l64WantChanged, r.packets, r.other)
 		return ok, fmt.Sprintf("`connect(%s)` against an entry replaced by a `%s` key, a type other than the filed `%s`: %s; %s. %s",
 			node, typ, e.filedType, r.said(), r.counts(), why)
 	})
@@ -1562,6 +1638,11 @@ func l64Tail(s string) string { return l53Tail(strings.TrimSpace(s), 8) }
 func l64WriteNotes(e *l64Env, versions string) {
 	t, l := e.t, e.l
 	for _, entry := range []string{"L64", "L65"} {
+		if ok, why := l64Writable(e.results, entry); !ok {
+			fmt.Fprintf(os.Stdout, "%s %s NO_NOTE %s\n", entry, l.p.name, why)
+			t.Errorf("%s: %s is INVALID, so no note is written (%s)", l.p.name, entry, why)
+			continue
+		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "Client versions in this run: %s.\n\n", versions)
 		fmt.Fprintf(&b, "%s\n\n", e.idleNote)

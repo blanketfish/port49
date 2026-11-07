@@ -1,9 +1,9 @@
 # L43 — samba_ad
 
-- **Date measured:** 2026-10-07
+- **Date measured:** 2026-11-07
 - **Platform:** samba_ad, as a container on `tests/lab/directory/compose.yaml` (no network device)
-- **Image version:** Samba Version 4.17.12-Debian; image `port49lab/samba:bookworm` (port49lab/samba@sha256:2b297ab07e3c0b25c0ff80cca17f6bffb642285b36f20d36bc4cb7b8ecae7f2d), built on debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
-- **Run:** commit `e3db1d3808e6faec0d54817e03260af6167b0125`, `go test -tags lab ./tests/lab/ -run 'TestL42|TestL43'`
+- **Image version:** Samba Version 4.17.12-Debian; image `port49lab/samba:bookworm` (port49lab/samba@sha256:2e672110bd3558ac3e2e72c6d3bee837ab7ceefbd2bbec55f76945f84137e93c), built on debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+- **Run:** commit `40b86b32e432ee6ead36ebe83ea7cca0bf3c3288`, `go test -tags lab ./tests/lab/ -run 'TestL42|TestL43'`
 - **Capture:** `tests/lab/evidence/L43-samba_ad.json`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, the LDAP result code and the duration, recorded by the broker's own client (the wire is LDAPS, so a pcap would be encrypted).
 - **Credentials:** none appear here or in the evidence. The bind password is generated for each run and never printed; the keytab and every ticket stay on the host that ran it.
 
@@ -24,13 +24,13 @@ Which bind mechanisms each directory accepts from port49-broker, and how each re
 
 | mechanism | outcome | LDAP result | time |
 |---|---|---|---|
-| SASL EXTERNAL over LDAPS, the broker's certificate | refused: `LDAP Result Code 1 "Operations Error": bind external as CN=port49-broker,O=port49 lab: LDAP result 1` | 1 | 5ms |
-| simple bind over LDAPS | accepted; a search for alice found 1 entry | 0 | 8ms |
-| GSSAPI over LDAPS, keytab, no SASL security layer (`ldap server require strong auth = yes`) | refused: `LDAP Result Code 8 "Strong Auth Required": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 8` | 8 | 30ms |
-| simple bind over plain LDAP, built by hand (`ldap server require strong auth = yes`) | refused: `LDAP Result Code 8 "Strong Auth Required": BindSimple: Transport encryption required.` | 8 | 2ms |
-| GSSAPI over LDAPS, keytab, no SASL security layer (`ldap server require strong auth = allow_sasl_over_tls`, after a restart) | accepted; a search for alice found 1 entry | 0 | 70ms |
-| simple bind over LDAPS (`ldap server require strong auth = allow_sasl_over_tls`, after a restart) | accepted; a search for alice found 1 entry | 0 | 42ms |
-| simple bind over plain LDAP, built by hand (`ldap server require strong auth = allow_sasl_over_tls`, after a restart) | refused: `LDAP Result Code 8 "Strong Auth Required": BindSimple: Transport encryption required.` | 8 | 3ms |
+| SASL EXTERNAL over LDAPS, the broker's certificate | refused: `LDAP Result Code 1 "Operations Error": bind external as CN=port49-broker,O=port49 lab: LDAP result 1` | 1 | 6ms |
+| simple bind over LDAPS | accepted; a search for alice found 1 entry | 0 | 41ms |
+| GSSAPI over LDAPS, keytab, no SASL security layer (`ldap server require strong auth = yes`) | refused: `LDAP Result Code 8 "Strong Auth Required": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 8` | 8 | 70ms |
+| simple bind over plain LDAP, built by hand (`ldap server require strong auth = yes`) | refused: `LDAP Result Code 8 "Strong Auth Required": BindSimple: Transport encryption required.` | 8 | 34ms |
+| GSSAPI over LDAPS, keytab, no SASL security layer (`ldap server require strong auth = allow_sasl_over_tls`, after a restart) | accepted; a search for alice found 1 entry | 0 | 103ms |
+| simple bind over LDAPS (`ldap server require strong auth = allow_sasl_over_tls`, after a restart) | accepted; a search for alice found 1 entry | 0 | 10ms |
+| simple bind over plain LDAP, built by hand (`ldap server require strong auth = allow_sasl_over_tls`, after a restart) | refused: `LDAP Result Code 8 "Strong Auth Required": BindSimple: Transport encryption required.` | 8 | 4ms |
 
 Whether the directory's LDAPS asked the client for a certificate (what EXTERNAL needs): the server sent a CertificateRequest listing 1 acceptable CA name(s). A Samba refusal of EXTERNAL says nothing about a Windows DC (L44).
 
@@ -52,7 +52,7 @@ These are port49's own guarantees on a real directory and close nothing in the r
 | alice's certificate under `san_email`, issuer pinned to `CN=lab-users-CA,DC=corp,DC=example,DC=com` | ok as `user:alice@corp.example.com`, username `alice`, DN `CN=alice,OU=Staff,DC=corp,DC=example,DC=com` |
 | alice's certificate under `issuer_serial`, the `altSecurityIdentities` the seed wrote from `directory.ADIssuerSerial` | ok as `user:alice@corp.example.com`, DN `CN=alice,OU=Staff,DC=corp,DC=example,DC=com` |
 | alice's certificate under `sid`, the extension holding her `objectSid` | ok as `user:alice@corp.example.com`, DN `CN=alice,OU=Staff,DC=corp,DC=example,DC=com` |
-| eve's certificate under `san_email` (`eve` and `eve2` hold one `mail`) | `directory: identity_ambiguous: 2 or more entries (CN=eve,OU=Staff,DC=corp,DC=example,DC=com; CN=eve2,OU=Contractors,DC=corp,DC=example,DC=com)` |
+| eve's certificate under `san_email` (`eve` and `eve2` hold one `mail`) | `directory: identity_ambiguous: 2 or more entries (CN=eve2,OU=Contractors,DC=corp,DC=example,DC=com; CN=eve,OU=Staff,DC=corp,DC=example,DC=com)` |
 | `principal_attribute: mail`; `samba-tool`-equivalent edit gives bob alice's `mail`; alice's certificate under `issuer_serial` | `directory: identity_ambiguous: mail "alice@corp.example.com" is held by CN=alice,OU=Staff,DC=corp,DC=example,DC=com and by CN=bob,OU=Staff,DC=corp,DC=example,DC=com: two people under one principal is ...` |
 | the same, `Verify` of `user:alice@corp.example.com` | `directory: identity_ambiguous: 2 or more entries (CN=bob,OU=Staff,DC=corp,DC=example,DC=com; CN=alice,OU=Staff,DC=corp,DC=example,DC=com)` |
 | bob's `mail` restored, alice's certificate again | ok |

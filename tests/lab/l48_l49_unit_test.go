@@ -17,11 +17,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/fence"
 	"github.com/blanketfish/port49/internal/testpki"
 )
 
@@ -915,5 +918,106 @@ func TestRunLineSaysWhenTheTreeWasDirty(t *testing.T) {
 	}
 	if got := runLineOf("abc123", true, "eos", "^TestL90$"); !strings.HasPrefix(got, "commit `abc123-dirty`") {
 		t.Errorf("dirty: got %q", got)
+	}
+}
+
+// The local broker runs port49d, which reads its policy, inventory, revocations file, certificates and
+// anchors through the fence: none may stay inside the repository, where a lab host's group-writable
+// parent would refuse them (decision 53 ruling 11; #47).
+func TestTheLocalBrokerKeepsEveryFencedFileOutsideTheTree(t *testing.T) {
+	t.Setenv("PORT49_LAB_ENC_KEY", labEncKeyDefault)
+	t.Setenv("PORT49_LAB_KEY", labKeyDefault)
+	t.Setenv("PORT49_KEY_LAB", labKeyDefault)
+	r := labTree(t)
+	hostW := filepath.Join(r, "tests", "lab", "logs", "host-w")
+	wl := filepath.Join(hostW, "wl")
+	if err := testpki.WriteWorkloadLab(wl, l48ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	anchor := filepath.Join(wl, testpki.WorkloadCA)
+
+	dir, err := localBrokerDir("unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	if _, err := prepareLocalBroker(dir, anchor, "https://localhost:1/1.0/crl", anchor); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "port49d.yaml")
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := regexp.MustCompile(`\w+_(?:file|path): ([^\s,}]+)`).FindAllStringSubmatch(string(raw), -1)
+	seen := 0
+	for _, m := range files {
+		p := m[1]
+		if !filepath.IsAbs(p) {
+			continue
+		}
+		seen++
+		if _, in := underRoot(p); in {
+			t.Errorf("port49d.yaml names %s, inside the tree", p)
+		}
+	}
+	if seen < 6 {
+		t.Errorf("only %d absolute file paths found in port49d.yaml: the check read too little", seen)
+	}
+	if _, err := fence.Read(filepath.Join(dir, "policy.yaml"), 1<<20, "policy"); err != nil {
+		t.Errorf("the fence refuses the policy: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("port49d refuses the config: %v", err)
+	}
+	files2 := map[string]string{"tls_cert_file": cfg.Broker.TLSCertFile, "tls_key_file": cfg.Broker.TLSKeyFile,
+		"policy_file": cfg.Broker.PolicyFile, "trust_anchor_file": cfg.Broker.WorkloadCAFile}
+	if cs := cfg.Broker.CertificateStatus; cs != nil && len(cs.CRLs) > 0 {
+		files2["issuer_file"] = cs.CRLs[0].IssuerFile
+	}
+	if files2["trust_anchor_file"] == "" || files2["issuer_file"] == "" {
+		t.Errorf("the config names no machines trust_anchor_file or crls issuer_file to check: %v", files2)
+	}
+	for name, p := range files2 {
+		if _, err := fence.Read(p, 1<<20, name); err != nil {
+			t.Errorf("the fence refuses %s: %v", name, err)
+		}
+	}
+
+	// Control: the same files kept inside the tree are refused, which is the lab's refusal.
+	bad := filepath.Join(r, "tests", "lab", "logs", "workload", "local-broker-bad")
+	if _, err := prepareLocalBroker(bad, anchor, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fence.Read(filepath.Join(bad, "policy.yaml"), 1<<20, "policy"); err == nil {
+		t.Error("the fence accepted a policy inside a group-writable tree: the control does not control")
+	}
+}
+
+// L48 brings up no platform, so the harness's root is "" while it runs: a path joined from root alone is
+// relative to the test's working directory (tests/lab), and the local broker's logs landed in
+// tests/lab/tests/lab/logs, which git does not ignore (L80's dirty check refused the tree). The log
+// directory comes from the repository root instead.
+func TestLocalBrokerLogsGoUnderTheRepoRootEvenWithNoRoot(t *testing.T) {
+	prev := root
+	t.Cleanup(func() { root = prev })
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []string{"", repo} {
+		root = r
+		dir, err := localBrokerLogDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(repo, "tests", "lab", "logs", "workload")
+		if dir != want {
+			t.Errorf("with root %q the logs go to %q, want %q", r, dir, want)
+		}
+		if !filepath.IsAbs(dir) || strings.HasPrefix(dir, filepath.Join(repo, "tests", "lab", "tests")) {
+			t.Errorf("log directory %q is relative or under tests/lab/tests", dir)
+		}
 	}
 }

@@ -676,7 +676,7 @@ func l66InvDoc(t *testing.T, s string) (hosts map[string]map[string]any, vars ma
 }
 
 func TestL66LookupInventoryPutsBothLookupsInTheConnectionVariables(t *testing.T) {
-	inv := l66Inventory(l66InvSpec{Hosts: []l66Host{{"leaf1", "172.100.100.11"}}, Socket: "/s/agent.sock", Bin: "/r/bin/port49",
+	inv := l66Inventory(l66InvSpec{Hosts: []l66Host{{"leaf1", "172.100.100.11"}}, Bin: "/r/bin/port49",
 		Platform: l66Platforms["arista_eos"], Conn: "network_cli", SSHType: "libssh", Mode: "lookup"})
 	hosts, vars := l66InvDoc(t, inv)
 	if hosts["leaf1"]["ansible_host"] != "172.100.100.11" || hosts["leaf1"]["p49_name"] != "{{ inventory_hostname }}" {
@@ -691,7 +691,7 @@ func TestL66LookupInventoryPutsBothLookupsInTheConnectionVariables(t *testing.T)
 		t.Errorf("ansible_user = %q: a second lookup for the username", us)
 	}
 	if vars["ansible_connection"] != "ansible.netcommon.network_cli" || vars["ansible_network_os"] != "arista.eos.eos" ||
-		vars["ansible_network_cli_ssh_type"] != "libssh" || vars["p49_socket"] != "/s/agent.sock" || vars["p49_bin"] != "/r/bin/port49" {
+		vars["ansible_network_cli_ssh_type"] != "libssh" || vars["p49_bin"] != "/r/bin/port49" {
 		t.Errorf("vars = %v", vars)
 	}
 	if _, ok := vars["ansible_connect_timeout"]; ok {
@@ -911,7 +911,7 @@ func TestL66FactPlaysMintUnderRealAnsible(t *testing.T) {
 			if err := os.WriteFile(bin, []byte(l66StubPort49), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			s := l66InvSpec{Hosts: []l66Host{{"leaf1", "127.0.0.1"}}, Socket: filepath.Join(dir, "agent.sock"), Bin: bin,
+			s := l66InvSpec{Hosts: []l66Host{{"leaf1", "127.0.0.1"}}, Bin: bin,
 				Platform: l66Platforms["arista_eos"], Conn: conn, SSHType: "libssh", Mode: "fact", ConnectTimeout: 5}
 			kind := "once"
 			if conn == "ssh" {
@@ -1074,7 +1074,7 @@ func TestL66RawOverSSHEndsAtACLIThatPagesOnATerminal(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	s := l66InvSpec{Hosts: []l66Host{{"srx1", "127.0.0.1"}}, Socket: p("agent.sock"), Bin: p("port49"),
+	s := l66InvSpec{Hosts: []l66Host{{"srx1", "127.0.0.1"}}, Bin: p("port49"),
 		Platform: l66Platforms["juniper_vjunos-router"], Conn: "ssh", Mode: "fact", SSHCommonArgs: "-F " + p("ssh_config")}
 	if err := os.WriteFile(p("inv.yml"), []byte(l66Inventory(s)), 0o600); err != nil {
 		t.Fatal(err)

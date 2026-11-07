@@ -957,7 +957,12 @@ note would otherwise read "unchanged".
 
 **NX-OS boot hang.** 11 of 39 NX-OS deployments never booted: the container log stops after
 `feature netconf` and port49d sees no packet within 8 min. The cause is not yet known; the device
-appears to hang while the launcher applies its startup config. Retry the entry.
+appears to hang while the launcher applies its startup config. Retry the entry. Each deploy now logs
+`lab: <platform>: boot:` and `host:` lines, for example
+`lab: cisco_nxos: boot: phase=ssh_auth at=2026-11-07T01:04:10Z since_deploy=2m7s` and
+`lab: cisco_nxos: host: phase=failed mem_total_kb=32768000 mem_available_kb=900000 swap_total_kb=8388608 swap_free_kb=100000 load1=9.50 load5=7.25 load15=5.00 procs_running=6 procs_total=812`.
+Read a hang from them: `ssh_auth` with no `tacacs_seen` is the config apply, and `mem_available_kb` at
+`failed` against `deploy_start` shows host pressure. Do not raise the timeout without them.
 
 **What a run needs beyond the base setup:**
 

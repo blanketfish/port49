@@ -698,3 +698,49 @@ func TestL73ClientHelloKeepsKeyShareGroupsOnly(t *testing.T) {
 		t.Fatal("a key_share cut inside a key parsed without error")
 	}
 }
+
+// #46: the missing-hello INVALID names what cell a captured, as counts and
+// flags only.
+func TestL73ConnKindsNamesPlainIncompleteAndTLS(t *testing.T) {
+	conns := []l73Conn{
+		{Server: "172.100.100.1:49", Answer: "syn-ack", Plain: []l73Plain{{Version: 0xc1, Type: 1}}, DevicePayloadBytes: 40},
+		{Server: "172.100.100.1:300", Answer: "syn-ack", DeviceRecords: 2, ServerRecords: 1, Incomplete: true, DevicePayloadBytes: 517},
+		{Server: "172.100.100.1:300", Answer: "syn-ack", DeviceRecords: 3, ServerRecords: 2, Hello: &l73Hello{}, ServerHello: &l73ServerHello{}, DevicePayloadBytes: 900},
+	}
+	got := l73ConnKinds(conns)
+	for _, want := range []string{
+		"172.100.100.1:49 syn-ack plain hello=no server_hello=no incomplete=false device_records=0 server_records=0 device_bytes=40",
+		"172.100.100.1:300 syn-ack tls hello=no server_hello=no incomplete=true device_records=2 server_records=1 device_bytes=517",
+		"172.100.100.1:300 syn-ack tls hello=yes server_hello=yes incomplete=false device_records=3 server_records=2 device_bytes=900",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("l73ConnKinds lacks %q:\n%s", want, got)
+		}
+	}
+	if hits := l73SummaryLeaks(got); len(hits) != 0 {
+		t.Errorf("l73SummaryLeaks found %v in %q", hits, got)
+	}
+	if l73ConnKinds(nil) == "" {
+		t.Error("no connections should say so")
+	}
+}
+
+// #46's candidates include a connection that carried nothing: no TLS records
+// and no plain TACACS+, such as an RST with no bytes.
+func TestL73ConnKindsNamesAConnectionThatCarriedNothingOther(t *testing.T) {
+	got := l73ConnKinds([]l73Conn{
+		{Server: "172.100.100.1:300", Answer: "rst"},
+		{Server: "172.100.100.1:300", Answer: "syn-ack", Incomplete: true, DevicePayloadBytes: 0},
+	})
+	for _, want := range []string{
+		"172.100.100.1:300 rst other hello=no server_hello=no incomplete=false device_records=0 server_records=0 device_bytes=0",
+		"172.100.100.1:300 syn-ack other hello=no server_hello=no incomplete=true device_records=0 server_records=0 device_bytes=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("l73ConnKinds lacks %q:\n%s", want, got)
+		}
+	}
+	if hits := l73SummaryLeaks(got); len(hits) != 0 {
+		t.Errorf("l73SummaryLeaks found %v in %q", hits, got)
+	}
+}

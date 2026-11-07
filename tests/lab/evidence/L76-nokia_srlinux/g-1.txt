@@ -2,21 +2,21 @@ $ show system aaa authentication session
   <LONG>
   | ID | User name  | Service name | Authentication method | Priv-lvl | TTY |  Remote host  | Network instance |        Login time        |        Role         |
   <LONG>
-  | 10 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:54:58.033Z | p49-admin           |
-  | 11 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:54:58.346Z | p49-admin           |
-  | 18 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:03.087Z | p49-admin           |
-  | 21 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:05.235Z | p49-admin           |
-  | 24 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:07.374Z | p49-admin           |
-  | 26 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:08.984Z | p49-admin           |
-  | 27 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:10.471Z | p49-admin           |
-  | 30 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:12.627Z | p49-admin           |
-  | 43 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:19.289Z | p49-admin           |
-  | 51 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:24.780Z | p49-admin           |
-  | 57 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:29.001Z | p49-admin           |
-  | 58 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:39.117Z | p49-admin           |
-  | 63 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:41.198Z | p49-admin           |
-  | 64 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:51.590Z | p49-admin           |
-  | 65 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:52.214Z | p49-admin           |
-  | 69 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-10-18T18:55:53.474Z | p49-admin           |
-  | 70 | alice14*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-10-18T18:55:54.093Z | p49-admin, p49-read |
+  | 10 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:03.654Z | p49-admin           |
+  | 11 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:03.964Z | p49-admin           |
+  | 18 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:08.789Z | p49-admin           |
+  | 21 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:10.888Z | p49-admin           |
+  | 24 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:12.998Z | p49-admin           |
+  | 26 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:14.346Z | p49-admin           |
+  | 27 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:15.741Z | p49-admin           |
+  | 30 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:17.837Z | p49-admin           |
+  | 43 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:24.488Z | p49-admin           |
+  | 51 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:29.906Z | p49-admin           |
+  | 57 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:33.952Z | p49-admin           |
+  | 58 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:44.084Z | p49-admin           |
+  | 63 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:46.142Z | p49-admin           |
+  | 64 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:56.534Z | p49-admin           |
+  | 65 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:57.101Z | p49-admin           |
+  | 69 | breakglass | sshd         | local                 |          | ssh | 172.100.100.1 | mgmt             | 2026-11-07T08:52:58.376Z | p49-admin           |
+  | 70 | alice14*   | srlinux-cli  | port49                | 15       |     | 172.100.100.1 | mgmt             | 2026-11-07T08:52:58.939Z | p49-admin, p49-read |
   <LONG>

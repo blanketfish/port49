@@ -735,3 +735,33 @@ func l73LoginWindows(conns []l73Conn, host string, spans []l73Span) [][]l73Conn 
 	}
 	return out
 }
+
+// l73ConnKinds is one entry per connection, for the INVALID that says cell a
+// captured no hello: its server, answer, whether it carried TLS records, plain
+// TACACS+ (only that it did, never its headers) or neither, and which hellos
+// were parsed. Counts and flags only, so l73SummaryLeaks passes over it.
+func l73ConnKinds(conns []l73Conn) string {
+	if len(conns) == 0 {
+		return "no connection"
+	}
+	yn := func(b bool) string {
+		if b {
+			return "yes"
+		}
+		return "no"
+	}
+	var parts []string
+	for _, c := range conns {
+		kind := "other"
+		switch {
+		case c.DeviceRecords > 0:
+			kind = "tls"
+		case c.Plain != nil:
+			kind = "plain"
+		}
+		parts = append(parts, fmt.Sprintf("%s %s %s hello=%s server_hello=%s incomplete=%t device_records=%d server_records=%d device_bytes=%d",
+			c.Server, c.Answer, kind, yn(c.Hello != nil), yn(c.ServerHello != nil), c.Incomplete,
+			c.DeviceRecords, c.ServerRecords, c.DevicePayloadBytes))
+	}
+	return strings.Join(parts, "; ")
+}

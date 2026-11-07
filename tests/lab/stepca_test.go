@@ -125,7 +125,7 @@ func workloadNote(row, platform, claim, observation, evidencePath, run, version 
 	fmt.Fprintf(&b, "- **Credentials:** none here or in the evidence: tokens, keys and the provisioner password are "+
 		"never written; certificates are public.\n")
 	fmt.Fprintf(&b, "\n## Claim\n\n%s\n\n## Observation\n\n%s\n", claim, observation)
-	return b.String()
+	return scrubHome(b.String())
 }
 
 // caJSONWithCRL is raw (step-ca's ca.json) with its crl block set to
@@ -322,7 +322,11 @@ func startStepCA(t *testing.T) *stepCA {
 		t.Fatal(err)
 	}
 	logs := filepath.Join(repo, "tests", "lab", "logs", "workload")
-	s := &stepCA{t: t, dir: filepath.Join(logs, "step"), hostW: filepath.Join(logs, "host-w"),
+	hostDir, err := stepCAHostDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &stepCA{t: t, dir: filepath.Join(logs, "step"), hostW: hostDir,
 		compose: filepath.Join(repo, stepCACompose)}
 	if err := os.RemoveAll(s.hostW); err != nil {
 		t.Fatal(err)
@@ -718,4 +722,39 @@ func (s *stepCA) workloadFiles() (certFile, keyFile string, err error) {
 		}
 	}
 	return filepath.Join(s.hostW, "w.pem"), filepath.Join(s.hostW, "w-key.pem"), nil
+}
+
+// stepCAHostDir is where the workload's certificate and key are copied for bin/port49: a private
+// directory outside the tree, because the 12c file fence refuses a file under a group-writable ancestor
+// (a lab host's ~/git is one).
+func stepCAHostDir() (string, error) { return labPrivateSub("l48-host-w") }
+
+// workloadHarnessFault is why a `port49 workload` step never reached the broker (a usage or
+// configuration refusal, the file fence's among them), or "" when the exit is the product's answer. Exit
+// 2 is the CLI's usage and config code; the step-ca renew refusal at 77 is a measurement.
+func workloadHarnessFault(exit int, stderr string) string {
+	switch {
+	case strings.Contains(stderr, " is mode "):
+		return "the file fence refused the workload's files"
+	case exit == 2:
+		return "exit 2 is a usage or configuration error"
+	case strings.Contains(stderr, "flag provided but not defined"):
+		return "a usage error"
+	case exit == 75:
+		return "the broker did not answer (EX_TEMPFAIL)"
+	case strings.Contains(stderr, "does not verify against --broker-ca"):
+		return "the broker's certificate does not verify against the lab CA"
+	case exit < 0:
+		return "the command did not run"
+	}
+	return ""
+}
+
+// scrubHome replaces the operator's home directory with $HOME: a note is committed, and the tree names
+// no personal path (tests/ci TestNoPersonalPathInTheTree).
+func scrubHome(s string) string {
+	if home, err := os.UserHomeDir(); err == nil && len(home) > 1 {
+		return strings.ReplaceAll(s, home, "$HOME")
+	}
+	return s
 }

@@ -1,9 +1,9 @@
 # L42 — openldap
 
-- **Date measured:** 2026-10-07
+- **Date measured:** 2026-11-07
 - **Platform:** openldap, as a container on `tests/lab/directory/compose.yaml` (no network device)
-- **Image version:** @(#) $OpenLDAP: slapd 2.5.13+dfsg-5 (Feb  8 2023 01:56:12) $; image `port49lab/openldap:bookworm` (port49lab/openldap@sha256:e5ee1f178c6d1e471dd5614547c1e258ee56840644f2b36846fef00e18f86660), built on debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
-- **Run:** commit `e3db1d3808e6faec0d54817e03260af6167b0125`, `go test -tags lab ./tests/lab/ -run 'TestL42|TestL43'`
+- **Image version:** @(#) $OpenLDAP: slapd 2.5.13+dfsg-5 (Feb  8 2023 01:56:12) $; image `port49lab/openldap:bookworm` (port49lab/openldap@sha256:f5426ef98cba3e213199aa15c5b09a1f3aa067c1e4cb8636562a113e8bf85202), built on debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+- **Run:** commit `40b86b32e432ee6ead36ebe83ea7cca0bf3c3288`, `go test -tags lab ./tests/lab/ -run 'TestL42|TestL43'`
 - **Capture:** `tests/lab/evidence/L42-openldap.json`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, the LDAP result code and the duration, recorded by the broker's own client (the wire is LDAPS, so a pcap would be encrypted).
 - **Credentials:** none appear here or in the evidence. The bind password is generated for each run and never printed; the keytab and every ticket stay on the host that ran it.
 
@@ -24,14 +24,14 @@ For alice (alice ∈ g-leaf ∈ g-mid ∈ netops-oncall), carol (∈ netops-onca
 | user | mode | groups returned | result | time |
 |---|---|---|---|---|
 | alice | in_chain | (none) | ok | 3ms |
-| carol | in_chain | (none) | ok | 1ms |
-| dave | in_chain | (none) | ok | 1ms |
-| alice | recursive | g-leaf, g-mid, netops-oncall | ok | 2ms |
+| carol | in_chain | (none) | ok | 2ms |
+| dave | in_chain | (none) | ok | 2ms |
+| alice | recursive | g-leaf, g-mid, netops-oncall | ok | 3ms |
 | carol | recursive | netops-oncall | ok | 2ms |
 | dave | recursive | g-loop-a, g-loop-b | ok | 2ms |
-| alice | direct | g-leaf | ok | 1ms |
+| alice | direct | g-leaf | ok | 2ms |
 | carol | direct | netops-oncall | ok | 2ms |
-| dave | direct | g-loop-a | ok | 17ms |
+| dave | direct | g-loop-a | ok | 2ms |
 
 memberOf on alice's entry: cn=g-leaf,ou=G,dc=corp,dc=example,dc=com
 

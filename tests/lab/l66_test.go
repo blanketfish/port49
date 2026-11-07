@@ -547,10 +547,10 @@ func l66Policy(node string) string {
 		"  - {name: slice_operator, identity: [\"user:" + sliceEmail + "\"], username: slice01,\n" +
 		"     enable: token, token_ttl: 60s}\n" +
 		"grants:\n" +
-		"  - {subject: slice_operator, scope: this_node, roles: [network_admin], max_privilege: admin}\n"
+		"  - {subject: slice_operator, scope: this_node, roles: [network_admin], max_privilege: admin}\n" + labPolicyKeys
 }
 
-const l66MintFact = `"{{ lookup('port49.client.token', p49_name, field='all', socket=p49_socket, port49=p49_bin) }}"`
+const l66MintFact = `"{{ lookup('port49.client.token', p49_name, field='all', port49=p49_bin) }}"`
 
 // l66Playbook renders a play: kind ten (n commands, the lookup in the connection variables mints), once (a
 // no_log mint in pre_tasks, then n commands), gap (the mint, one command, the between task, then n commands)
@@ -591,10 +591,10 @@ type l66Host struct{ Name, Address string }
 type l66InvSpec struct {
 	Hosts []l66Host
 	// P49Name is the port49 device every host's lookup asks for; "" asks for the inventory name.
-	P49Name     string
-	Socket, Bin string
-	Platform    l66Platform
-	Conn        string // network_cli, or ssh for ansible.builtin.ssh
+	P49Name  string
+	Bin      string
+	Platform l66Platform
+	Conn     string // network_cli, or ssh for ansible.builtin.ssh
 	// NoConn leaves ansible_connection out of a network_cli inventory: the play's `connection:` keyword names it.
 	NoConn  bool
 	SSHType string // libssh or paramiko, for network_cli
@@ -620,7 +620,7 @@ func l66Inventory(s l66InvSpec) string {
 		}
 	}
 	b.WriteString("  vars:\n")
-	b.WriteString("    p49_socket: " + q(s.Socket) + "\n    p49_bin: " + q(s.Bin) + "\n")
+	b.WriteString("    p49_bin: " + q(s.Bin) + "\n")
 	if s.Conn == "ssh" {
 		// use_tty (default true) runs `raw` as `ssh -tt`. A network CLI given a terminal pages its output
 		// (Junos's ---(more)---) and waits for a key that never comes: in lab run 2 vJunos and vSRX accounted the
@@ -636,8 +636,8 @@ func l66Inventory(s l66InvSpec) string {
 		b.WriteString("    ansible_look_for_keys: false\n")
 	}
 	if s.Mode == "lookup" {
-		b.WriteString("    ansible_user: \"{{ lookup('port49.client.token', p49_name, field='username', socket=p49_socket, port49=p49_bin) }}\"\n")
-		b.WriteString("    ansible_password: \"{{ lookup('port49.client.token', p49_name, socket=p49_socket, port49=p49_bin) }}\"\n")
+		b.WriteString("    ansible_user: \"{{ lookup('port49.client.token', p49_name, field='username', port49=p49_bin) }}\"\n")
+		b.WriteString("    ansible_password: \"{{ lookup('port49.client.token', p49_name, port49=p49_bin) }}\"\n")
 	} else {
 		// ansible-core templates these into remote_user and password for the mint's set_fact too, before the
 		// fact exists; without the default every fact play fails at its mint (the collection README's pattern).
@@ -1089,6 +1089,9 @@ func (e *l66Env) ansibleEnv(o l66Opts) []string {
 		"ANSIBLE_CONFIG="+e.path("ansible.cfg"),
 		"ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "clients", "ansible")+":"+e.collDir,
 		"ANSIBLE_COLLECTIONS_SCAN_SYS_PATH=false",
+		// The CLI finds a non-default agent through this variable alone: no command takes a socket flag
+		// (d97c52c6; agent.SocketPath reads it).
+		"PORT49_TEST_AGENT_SOCKET="+e.sock,
 		"ANSIBLE_NOCOLOR=1", "ANSIBLE_FORCE_COLOR=0",
 		"ANSIBLE_HOST_KEY_CHECKING="+checking,
 		"ANSIBLE_HOST_KEY_AUTO_ADD="+auto,
@@ -1302,7 +1305,7 @@ func (e *l66Env) runPlay(ctx context.Context, name, kind string, n int, between 
 
 // spec is the inventory of the one node, over network_cli with the given ssh type.
 func (e *l66Env) spec(mode, sshType string) l66InvSpec {
-	return l66InvSpec{Hosts: []l66Host{{e.node, e.l.p.addr}}, Socket: e.sock, Bin: filepath.Join(root, "bin", "port49"),
+	return l66InvSpec{Hosts: []l66Host{{e.node, e.l.p.addr}}, Bin: filepath.Join(root, "bin", "port49"),
 		Platform: l66Platforms[e.l.p.name], Conn: "network_cli", SSHType: sshType, Mode: mode}
 }
 
@@ -1322,7 +1325,7 @@ func (e *l66Env) libsshAliasConf() string {
 func (e *l66Env) sshSpec(hosts []l66Host, p49 string) l66InvSpec {
 	cfg := e.path("ssh_config")
 	_ = os.WriteFile(cfg, []byte("Host *\n  UserKnownHostsFile "+e.khPath+"\n  GlobalKnownHostsFile /dev/null\n  UpdateHostKeys yes\n"), 0o600)
-	return l66InvSpec{Hosts: hosts, P49Name: p49, Socket: e.sock, Bin: filepath.Join(root, "bin", "port49"),
+	return l66InvSpec{Hosts: hosts, P49Name: p49, Bin: filepath.Join(root, "bin", "port49"),
 		Platform: l66Platforms[e.l.p.name], Conn: "ssh", Mode: "fact", SSHCommonArgs: "-F " + cfg,
 		SSHExtraArgs: "-o HostKeyAlias={{ inventory_hostname }} -o StrictHostKeyChecking=accept-new -o LogLevel=DEBUG3 -E " +
 			e.path("ssh-{{ inventory_hostname }}.log")}

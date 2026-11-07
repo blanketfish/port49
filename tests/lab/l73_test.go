@@ -1913,7 +1913,8 @@ func (e *l73Env) cellF() {
 	e.guard()
 	h, s := l73FirstHello(e.first)
 	if h == nil || s == nil {
-		e.t.Fatal("INVALID: cell a's control login captured no ClientHello and ServerHello")
+		e.t.Fatal("INVALID: cell a's control login captured no ClientHello and ServerHello; cell a's connections: " +
+			l73ConnKinds(e.first) + "; " + l73Describe(e.first, e.firstSpan.Start))
 	}
 	var versions, suites, groups, sigs []string
 	for _, v := range h.Versions {

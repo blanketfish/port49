@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/admission"
-	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/projection"
 )
 
@@ -163,14 +162,12 @@ func TestProjectionShapes120Render(t *testing.T) {
 	}
 	for _, node := range []string{"srx1", "vsrx1"} {
 		for _, s := range projectionShapes120 {
-			body := "platform_set: 1.2.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + s.roles + "\n" +
-				"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
-				", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n"
+			body := projectionPolicy("1.2.0", s.roles)
 			path := filepath.Join(t.TempDir(), "shape.yaml")
 			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			pol, err := policy.Load(path, policy.Env{Devices: inv.Devices})
+			pol, err := loadProjectionPolicy(path, inv)
 			if err != nil {
 				t.Fatalf("%s: the shape's policy does not load: %v", s.name, err)
 			}

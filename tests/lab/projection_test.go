@@ -346,7 +346,7 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 	var rendered []string
 	for _, shape := range shapes {
 		fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
-		b.WriteString(l.projectionShape(t, v, port49, pki, inv.Devices, shape.name, shape.roles, shape.want,
+		b.WriteString(l.projectionShape(t, v, port49, pki, inv, shape.name, shape.roles, shape.want,
 			netconfOff, probes, &rendered))
 	}
 	b.WriteString("\n### the commit checker (L9)\n\n")
@@ -375,22 +375,35 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 	l.entryResult(t, entry, claim, b.String())
 }
 
+// projectionPolicy is the policy one shape runs under: set pinned, roles as
+// given, the slice operator granted them on every device.
+func projectionPolicy(set, roles string) string {
+	return "platform_set: " + set + "\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
+		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
+		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n" + labPolicyKeys
+}
+
+// loadProjectionPolicy loads a projection shape's policy as port49d does: with the inventory's devices and its
+// key groups, which the policy file does not carry. Without them no device matches a key group and every
+// resolve is refused.
+func loadProjectionPolicy(path string, inv admission.Inventory) (*policy.Policy, error) {
+	return policy.Load(path, policy.Env{Devices: inv.Devices, InventoryKeyGroups: inv.KeyGroups})
+}
+
 // projectionShape runs one shape and renders its section of the note.
-func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []admission.Device, name, roles string,
+func (l *lab) projectionShape(t *testing.T, set, port49, pki string, inv admission.Inventory, name, roles string,
 	want string, netconfOff bool, probes []projectionProbe, rendered *[]string) string {
 	t.Helper()
 	// The lab's rules before each row: the STOP sentinel and the disk floor.
 	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
 		t.Fatalf("%v", err)
 	}
-	body := "platform_set: " + set + "\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
-		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
-		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n"
+	body := projectionPolicy(set, roles)
 	path := filepath.Join(root, "tests", "lab", "logs", "projection-"+l16Slug(name)+".yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pol, err := policy.Load(path, policy.Env{Devices: devices})
+	pol, err := loadProjectionPolicy(path, inv)
 	if err != nil {
 		t.Fatalf("%s: the shape's policy does not load: %v", name, err)
 	}
