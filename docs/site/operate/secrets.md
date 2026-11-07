@@ -64,8 +64,8 @@ The three shapes set it like this:
 | Helm | the default, `/run/port49/keys` | One Secret mounted whole, one Secret key per version, in port49d's pod only. |
 
 The encryption key is never under the key directory. A policy may name any file below `file_dir`, so a
-sealing key kept there could be named as a device key. It lives at `/etc/port49/secrets/encryption.key`
-on all three shapes. A port49d configuration that names key material inside `file_dir` is refused at start.
+sealing key kept there could be named as a device key. port49d's lives at `/etc/port49/secrets/encryption.key`
+on all three shapes. On systemd the broker's copy, the same 32 bytes, is `/etc/port49/secrets/broker-encryption.key`. A port49d configuration that names key material inside `file_dir` is refused at start.
 
 Prefer `file:`. An `env:` variable is read once and never again, and a new one cannot be added to a
 running process, so a version that needs an `env:` name needs a restart. A file can be added while port49d
@@ -87,8 +87,14 @@ when the file and everything above it are fenced. For a `file:` reference, port4
   process's or root, a group the process is not in, anyone with write, or other with anything, is refused.
 - **Stay inside the allowed directory.** A link is followed (a Kubernetes Secret volume is made of links),
   but the file it comes to must lie inside `file_dir`. A link out to the TLS key is refused.
-- **The directory.** The directory holding the file, and each ancestor, may not be writable by anyone
-  but root and the service user. A read-only mount is excused.
+- **The directory holding the file.** Owned by the service user or root, and writable by nobody else. A
+  read-only mount does **not** excuse it. The one excuse is a sticky directory (mode with the `t` bit, such
+  as the Vault injector's 1777 volume) that the service user or root owns, and then only for a file with
+  a single hard link.
+- **The directories above it, and the directories that hold a link on the way.** Each is owned by the
+  service user or root. An ancestor that others can write passes only if it is sticky or on a read-only
+  mount; a directory holding a link passes on a read-only mount. A read-only mount trusts whoever writes
+  its source, so bind only a directory that root or the service user alone can write.
 
 Every refusal names the file and the fix, and none prints a byte of the secret. The text you will see is
 like `... is group-readable by gid N, which this process is not in (gid M) ... chgrp it to the service's
@@ -126,7 +132,7 @@ kind ([L82](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8
 - A **`subPath`** mount of the same Secret did not change after three minutes while the whole mount did.
   Never mount device keys with `subPath`; the kubelet updates only a whole mount in place.
 
-The broker's pod loads no device key and sets no `fsGroup`. Each etcd client identity is its own Secret,
+The broker's pod loads no device key. Each etcd client identity is its own Secret,
 so neither pod holds the other's etcd key.
 
 ### Secret agents
@@ -145,6 +151,9 @@ A device key must reach a running process with no restart, which is why only a m
 test is offered for one. The encryption key changes rarely, and a rollout is acceptable for it.
 
 ## systemd and containers
+
+Both were measured in [L84](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L84-systemd-docker.md)
+(systemd 255 and Docker Compose).
 
 - **systemd.** `LoadCredential=` renders a file that passes the rule and may carry the encryption key for
   `port49d`. It cannot add a credential to a running unit, so device keys stay in `/etc/port49/keys`.

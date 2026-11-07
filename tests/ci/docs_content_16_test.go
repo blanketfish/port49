@@ -10,6 +10,7 @@ func init() {
 	mustSay["admin/key-rotation.md"] = append(mustSay["admin/key-rotation.md"],
 		"port49_key_secret_files_changed", "single_device", "init-issuer", "rotate-issuer",
 		"forget-issuer", "encryption.previous", "port49 keys status", "port49_key_version_devices",
-		"every 30 seconds", "issuance: this broker's issuing CA", "reference/config/port49d.md",
+		"every 30 seconds", "Directory pins are never re-sealed", "ErrUnknownKey", "held_refused",
+		"Always give a new key a new id", "issuance: this broker's issuing CA", "reference/config/port49d.md",
 	)
 }

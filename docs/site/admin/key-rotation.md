@@ -50,7 +50,9 @@ holds what it read. So:
 Never edit a key file in place, and never point an existing version at another reference. port49d refuses
 a policy that gives a version a different `secret_ref` than the one it has held since it started. If a held
 file is rewritten anyway, or can no longer be read, port49d keeps the bytes it holds, says
-`keys.<name> version N: <path> has changed since port49d read it`, and sets
+`keys.<name> version N: <path> has changed since port49d read it` (or, for an unreadable file,
+`... can no longer be read (...); port49d keeps the secret it read, but a restart will refuse to start until
+the file is back or the policy no longer names the version`), and sets
 `port49_key_secret_files_changed` above 0 (alert
 [port49_key_secret_files_changed](../reference/alerts.md#port49_key_secret_files_changed)). A restart would
 take the new bytes on that replica alone, so two replicas would then hold two secrets for one version.
@@ -60,8 +62,8 @@ Put the new bytes in a new file under a new version number.
 
 Adding the policy line before the file exists does not take effect, and does no harm to a running port49d:
 the policy already serving stays in force, and the refusal is tried again every 30 seconds until the file
-reads or the policy file changes. On Kubernetes this is the normal case for a few seconds after you add a
-key to a Secret. A SIGHUP tries at once. After a restart the same mistake is a refused start, so a pod
+reads or the policy file changes. On Kubernetes this is the normal case for up to a couple of minutes after
+you add a key to a Secret (the kubelet took 1m34s in the L82 run). A SIGHUP tries at once. After a restart the same mistake is a refused start, so a pod
 crash-loops until the file is restored or the policy line is taken out.
 
 To remove a key, take the policy line out first, then the file.
@@ -69,7 +71,9 @@ To remove a key, take the policy line out first, then the file.
 ### Phasing out the old version
 
 `retire_after` is the last day (UTC) an `accept` version admits a device. From midnight after it, the
-version admits none, and connections on it reset at their next packet with no strike. An `accept` version
+version admits none: the device's next packet on it is a struck failure and the connection is reset at
+once, so its next connections meet the strike backoff (`held_refused`). A policy edit that removes a
+version or moves it to `retired` resets connections on it at their next packet with no strike. An `accept` version
 with no `retire_after` is reported by `port49 policy test` as an indefinitely accepted version, which is
 what rotation exists to prevent.
 
@@ -106,8 +110,9 @@ refused at load. Pick another name for the set.
 
 port49 seals tokens, receipts, contexts and second-factor records at rest under `encryption.current`.
 `encryption.previous` is an optional second key that records can still be opened with, which is what makes
-rotation possible. The ids label every sealed record, so the new key needs a **new id**; the same id on a
-new secret is refused. Both keys are 32 bytes; their fields are in the
+rotation possible. The ids label every sealed record, so the new key needs a **new id**. port49 refuses a
+`previous` whose id equals `current`'s, but it cannot see a new secret put under an old id: records
+sealed earlier then fail to open, with no warning at the start. Always give a new key a new id. Both keys are 32 bytes; their fields are in the
 [reference](../reference/config/port49d.md#encryption). Every region holds the same set, and the key
 is the same value in port49d and in the broker.
 
@@ -119,7 +124,8 @@ before you begin the next.** Each step is a configuration change and a restart.
 2. **Swap.** The new key becomes `current` and the old key `previous`, everywhere. New records are sealed
    under the new key, and a process that has not swapped yet can still open them, because step 1 gave it
    that key.
-3. **Remove `previous`** everywhere, and then the old key file.
+3. **Remove `previous`** everywhere, only when the conditions below hold. Keep the old key file as
+   described there.
 
 Why the order cannot be changed. In step 1 no process seals under the new key, so a process that has not
 restarted yet is never handed a record it cannot open. In step 2 every process already holds both keys, so
@@ -133,18 +139,36 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   broker's scheduled directory pass (every `refresh_interval`). Wait for a pass to complete after step 2.
   If the broker says `the re-seal could not open N second factors; encryption.previous cannot be retired
   while they are sealed under it`, do not run step 3.
-- Tokens, receipts and contexts are short-lived, and the scheduled pass above does not re-seal them. Wait longer than a session can last
-  (`session.max_session_age_default`, 12 hours unless the policy sets another, and `session.grace_window`)
-  after step 2 finished everywhere. Records still under the old key after step 3 do not open: a token is dropped
+- Tokens, receipts and contexts are short-lived, and the scheduled pass above does not re-seal them. Wait
+  after step 2 finished everywhere for the **largest** of: `session.max_session_age_default` plus
+  `session.grace_window` (port49d.yaml; 12 hours plus 10 minutes by default, and a policy role can only
+  lower it), `receipt_max_age` (2 hours by default), `session.staleness_ceiling` (4 hours by default, the
+  age of the snapshots a stopped process is read from), and the token life (20 minutes at most). Tokens are
+  also purged at every start on etcd. Records still under the old key after step 3 do not open: a token is dropped
   from the candidates and counted in `port49_crypt_open_failures_total{record="token"}`, a session's context is
   denied `store_unavailable`, and a second factor is never treated as "not enrolled". For that second factor an
   operator runs `port49 directory reset-second-factor`.
+- **Directory pins are never re-sealed. On a directory store that holds pins (a split, or more than one
+  region), do not run step 3 at all: keep the old key as `encryption.previous`.** A pin is kept with no
+  expiry, and an unchanged pin is never written again, so a pin sealed under the old key stays sealed under
+  it. Drop that key and reading the pin fails with an unknown-key error (`ErrUnknownKey`). That failure is
+  not "not found" and not "unavailable", so the pin write for that principal fails too, and a broker on
+  the split cannot mint or refresh for anyone pinned before the rotation. The broker's hourly check says
+  `... pins sealed under that key fail here until it holds it`. The cure is to put the old key back as
+  `previous` and restart. A single shared store with no separate directory holds no directory pins; the
+  rest of this list still applies to it.
+- **Backups and exports keep the key they were sealed under.** An etcd snapshot, a Velero backup, and a
+  `port49-broker export-enrollments` file are sealed under whichever key was current when they were taken.
+  `port49 directory import` refuses a file sealed under a key the broker does not hold and tells you to set
+  that key as `previous`. Keep the old key file, offline, for as long as any backup taken under it is kept;
+  restoring one without it loses every second factor and pin in it, and each enrolled person must then run
+  through `port49 directory reset-second-factor`.
 
 If a process starts without a key the store was last written under, what you see depends on the store:
 
 - On a directory store of its own, the start is refused, naming the store and the key id. Fix `encryption:`
   and start again.
-- On the session store, the start goes on. port49d says that the store was last written by a process whose
+- On the session store, the start goes on. port49d (and `port49-broker`, in its own name) says that the store was last written by a process whose
   current key it does not hold, the sessions sealed under that key are denied `store_unavailable`, none is
   revoked, and `port49_crypt_store_key_unknown` is 1
   ([alert](../reference/alerts.md#port49_crypt_store_key_unknown)). If the key was retired by mistake, set it
@@ -215,7 +239,8 @@ another CA. The current fingerprint is the one a broker's start line prints.
 **one** broker, twice, with copies between:
 
 1. **Stage.** `rotate-issuer` makes `issuing-ca-next.pem` and `issuing-ca-next.key`. Copy the **certificate
-   only** (`issuing-ca-next.pem`) to every other broker and restart each, so every broker trusts it. The key stays on this broker.
+   only** (`issuing-ca-next.pem`) to every other broker and restart each, so every broker trusts it. The key
+   stays on this broker. This broker loads the CA only at its start, so restart it too before it promotes.
 2. **Promote.** Run `rotate-issuer` again on the same broker. The current certificate becomes
    `issuing-ca-previous.pem`, the staged pair becomes current. Copy `issuing-ca.pem`, `issuing-ca.key` and
    `issuing-ca-previous.pem` to every other broker, remove the staged `issuing-ca-next.pem` there, and restart each.

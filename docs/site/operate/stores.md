@@ -82,9 +82,12 @@ empty, and let people sign in again and the brokers re-mint.
 
 Every region holds the same `encryption:` keys. The directory records, in `meta/seal_keys`, the key ids
 it was last written under, and every broker start writes it. A process whose keys do not include the
-current id there refuses to start and exits 1, naming the directory store and the key id. A running
-runner says the same once an hour, and `port49_crypt_store_key_unknown` is 1 (alert
-[port49_crypt_store_key_unknown](../reference/alerts.md#port49_crypt_store_key_unknown)).
+current id there refuses to start and exits 1, naming the directory store and the key id. That is the
+rule for a directory store of its own (a split); on a single shared store the start goes on, says it, and
+`port49_crypt_store_key_unknown` is 1 (alert
+[port49_crypt_store_key_unknown](../reference/alerts.md#port49_crypt_store_key_unknown)). A running
+runner on a split rechecks the directory every hour and says the same on stderr once; that recheck sets no
+gauge.
 
 Rotate in three steps. Finish a step in every region before you begin the next, and restart the
 processes at each (`encryption` needs a restart):
