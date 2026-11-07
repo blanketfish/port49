@@ -971,8 +971,15 @@ func TestTheLocalBrokerKeepsEveryFencedFileOutsideTheTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("port49d refuses the config: %v", err)
 	}
-	for name, p := range map[string]string{"tls_cert_file": cfg.Broker.TLSCertFile, "tls_key_file": cfg.Broker.TLSKeyFile,
-		"policy_file": cfg.Broker.PolicyFile} {
+	files2 := map[string]string{"tls_cert_file": cfg.Broker.TLSCertFile, "tls_key_file": cfg.Broker.TLSKeyFile,
+		"policy_file": cfg.Broker.PolicyFile, "trust_anchor_file": cfg.Broker.WorkloadCAFile}
+	if cs := cfg.Broker.CertificateStatus; cs != nil && len(cs.CRLs) > 0 {
+		files2["issuer_file"] = cs.CRLs[0].IssuerFile
+	}
+	if files2["trust_anchor_file"] == "" || files2["issuer_file"] == "" {
+		t.Errorf("the config names no machines trust_anchor_file or crls issuer_file to check: %v", files2)
+	}
+	for name, p := range files2 {
 		if _, err := fence.Read(p, 1<<20, name); err != nil {
 			t.Errorf("the fence refuses %s: %v", name, err)
 		}
