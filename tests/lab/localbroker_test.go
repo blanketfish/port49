@@ -142,14 +142,29 @@ func localBrokerDir(name string) (string, error) {
 	return labPrivateSub("local-broker-" + name)
 }
 
+// localBrokerLogDir is tests/lab/logs/workload under the repository root. It
+// does not use the harness's root: L48 brings up no platform, so root is ""
+// while it runs, and a path joined from it would be relative to tests/lab.
+func localBrokerLogDir() (string, error) {
+	repo, err := repoRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(repo, "tests", "lab", "logs", "workload"), nil
+}
+
 // keepLocalBrokerLogs copies the broker's stderr and decision log from its
-// private directory into tests/lab/logs/workload/<name>.err and .out at
+// private directory into localBrokerLogDir()/<name>.err and .out at
 // cleanup, so the log keeps its place. Register it before the broker starts,
 // so it runs after the broker stops. The decision log holds no credential
 // (spec §11).
 func keepLocalBrokerLogs(t *testing.T, dir, name string) {
 	t.Cleanup(func() {
-		dst := filepath.Join(root, "tests", "lab", "logs", "workload")
+		dst, err := localBrokerLogDir()
+		if err != nil {
+			t.Logf("keeping %s's logs: %v", name, err)
+			return
+		}
 		if err := os.MkdirAll(dst, 0o755); err != nil {
 			t.Logf("keeping %s's logs: %v", name, err)
 			return

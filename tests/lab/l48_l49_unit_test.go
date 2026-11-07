@@ -994,3 +994,30 @@ func TestTheLocalBrokerKeepsEveryFencedFileOutsideTheTree(t *testing.T) {
 		t.Error("the fence accepted a policy inside a group-writable tree: the control does not control")
 	}
 }
+
+// L48 brings up no platform, so the harness's root is "" while it runs: a path joined from root alone is
+// relative to the test's working directory (tests/lab), and the local broker's logs landed in
+// tests/lab/tests/lab/logs, which git does not ignore (L80's dirty check refused the tree). The log
+// directory comes from the repository root instead.
+func TestLocalBrokerLogsGoUnderTheRepoRootEvenWithNoRoot(t *testing.T) {
+	prev := root
+	t.Cleanup(func() { root = prev })
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []string{"", repo} {
+		root = r
+		dir, err := localBrokerLogDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(repo, "tests", "lab", "logs", "workload")
+		if dir != want {
+			t.Errorf("with root %q the logs go to %q, want %q", r, dir, want)
+		}
+		if !filepath.IsAbs(dir) || strings.HasPrefix(dir, filepath.Join(repo, "tests", "lab", "tests")) {
+			t.Errorf("log directory %q is relative or under tests/lab/tests", dir)
+		}
+	}
+}
