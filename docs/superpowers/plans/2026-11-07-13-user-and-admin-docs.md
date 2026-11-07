@@ -201,6 +201,7 @@ Contributing: contributing/index.md, contributing/qualification.md, contributing
   - The two requirements tests above.
 - [ ] **Step 2: Run them and see them fail:** `go test ./tests/ci/ -run 'Docs|Nav|PageHas|PipTools' -count=1`. Expected: FAIL (no `mkdocs.yml`, no requirements files). Paste the red output.
 - [ ] **Step 3: Write the files above.** The hashed bootstrap cannot install itself the first time, so build it in this order:
+  0. `bin/` is gitignored, so a fresh worktree has no venv. Make Python 3.12 available first: `pyenv install 3.12` (the workstation has 3.13 and 3.14 only), or any 3.12 interpreter, named by `PYTHON=` on each `make` line below. Then create the venv unhashed, once: `python3.12 -m venv bin/piptools-venv && bin/piptools-venv/bin/pip install pip-tools==7.5.0`;
   1. with the recipe still as it is (`pip install pip-tools==$(PIP_TOOLS_VERSION)`, unhashed), run `bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras -o packaging/requirements-piptools.txt packaging/requirements-piptools.in`;
   2. switch the recipe to `--require-hashes -r packaging/requirements-piptools.txt`;
   3. `rm -rf bin/piptools-venv` and run `make requirements-release`: it installs from the hashed file and writes every `.txt`.
@@ -226,10 +227,13 @@ Contributing: contributing/index.md, contributing/qualification.md, contributing
     - checkout (`persist-credentials: false`, `fetch-depth: 0`, so the tags are present);
     - setup-go (`go-version-file: go.mod`);
     - step `id: publish`: `go run ./tests/ci/cmd/docspublish -ref "$GITHUB_REF" >> "$GITHUB_OUTPUT"`. It writes `publish=true|false` and `banner=<text>`:
-      - `refs/heads/main` with no `v*` tag in `git tag -l 'v*'`: `publish=true`, banner "This site describes port49 as it is on main, not a release.";
-      - `refs/heads/main` once a `v*` tag exists: `publish=false`;
-      - `refs/tags/v<X>` whose commit is on `main` (`git merge-base --is-ancestor`): `publish=true`, banner "This site describes port49 v<X>.";
-      - anything else, a pull request included: `publish=false`.
+      - a **release tag** is `v<X>` with no hyphen, the release workflow's rule (`release.yml`: a version with a hyphen is a pre-release);
+      - `refs/heads/main` with no release tag in `git tag -l 'v*'`: `publish=true`;
+      - `refs/heads/main` once a release tag exists: `publish=false`. A pre-release tag (`v0.1.0-rc1`) does not count;
+      - `refs/tags/v<X>`, a release tag whose commit is on `main` (`git merge-base --is-ancestor`): `publish=true`, banner "This site describes port49 v<X>.";
+      - a pre-release tag: `publish=false`;
+      - anything else, a pull request included: `publish=false`;
+      - every non-release ref, a pull request included, emits the `main` banner, "This site describes port49 as it is on main, not a release.", so `banner=` is never empty (an empty `PORT49_DOCS_BANNER` would beat the `!ENV` default and blank the bar).
     - setup-python 3.12;
     - `python -m pip install --require-hashes -r packaging/requirements-docs.txt`;
     - `go test ./internal/docgen/ ./tests/ci/ -count=1`;
@@ -263,7 +267,10 @@ Contributing: contributing/index.md, contributing/qualification.md, contributing
     - `deploy` has no checkout.
   - `TestTheDocsBuildRunsStrictWithHashes`: the build job runs `mkdocs build --strict`; each `pip install` line carries `--require-hashes`; the build job's permissions are `contents: read` only.
   - `TestTheDocsWorkflowRunsOnPullRequests`: the triggers include `pull_request`, and `push` names `main` and the tag pattern `v*`.
-  - `TestDocsPublish` (in `tests/ci/cmd/docspublish`), on a temporary git repository: each of the four cases above gives its `publish` and `banner`; a `v*` tag on a commit not on `main` gives `publish=false`.
+  - `TestDocsPublish` (in `tests/ci/cmd/docspublish`), on a temporary git repository: each case above gives its `publish` and `banner`. Also covered:
+    - a release tag on a commit not on `main` gives `publish=false`;
+    - `v0.1.0-rc1` neither publishes nor stops `main`'s deploys;
+    - a pull-request ref's `banner` is the `main` banner, never empty.
 
   `TestEveryActionIsPinnedBySHA` already covers the new file.
 - [ ] **Step 2: Run and see them fail:** `go test ./tests/ci/ -run 'Docs|Publishers' -count=1`. Expected: FAIL, no `docs.yml`.
@@ -322,7 +329,7 @@ The lint reads the page sources (`docs/site/**/*.md` and `README.md`). When `POR
     - `port49 <word>` names a `case` of the top-level switch in `cmd/port49/main.go` (walk it with `go/ast`);
     - for `policy`, `platform`, `store`, `directory`, `hwkey`, `keys`, `devices`, `access`, `grants` and `inventory`, the second word (when it is not a flag) names that command's own `case` or `args[0] == "<word>"` comparison, found with `go/ast` in the function the top-level case calls;
     - `port49d <word>` is in `port49d.DaemonSubcommands()`, `port49-broker <word>` in `port49d.BrokerSubcommands()`, and `port49-inventory <word>` in the subcommands `cmd/port49-inventory/main.go` dispatches. Today `forget-issuer` is broker-only, and `init-revocations`, `keys-diagnose` and `store-roles` are port49d-only.
-    - Both `port49d` lists are tables that `Main` and `BrokerMain` themselves dispatch from (`map[string]func(args []string) int`), replacing today's `if args[0] == …` chains, so a list cannot disagree with the dispatch. `TestEachSubcommandDispatches` in `internal/port49d` runs each name with `--help` and wants no "unknown command".
+    - Both `port49d` lists are tables that `Main` and `BrokerMain` themselves dispatch from (`map[string]func(args []string) int`), replacing today's `if args[0] == …` chains, so a list cannot disagree with the dispatch. `TestEachSubcommandDispatches` in `internal/port49d` runs each name with `--help` and wants the top-level usage line (`usage: port49d …` or `usage: port49-broker …`, which an unknown first word prints, with exit 2) absent from its output. Its control: an unknown word prints that line.
   - `TestRepoLinksNameTrackedFiles`: every `https://github.com/blanketfish/port49/(blob|tree)/main/<path>` in the sources names a path `git ls-files` lists.
 - [ ] **Step 2: Run and see them fail:** `go test ./tests/ci/ -run 'Lint|Docs|Command|RepoLinks' -count=1`. Expected: FAIL, undefined `LintText`.
 - [ ] **Step 3: Implement** `docslint.go`, `config.RemovedKeys`, the two `port49d` tables.
@@ -370,24 +377,47 @@ On each page:
 - An open row passes:
   - inside `<div class="admonition warning">` whose title begins "Unmeasured";
   - in a sentence naming a `tests/lab/results/L<N>…` note for the page's platforms;
-  - in a sentence that says "not measured", "unmeasured" or "open" (the READMEs' own wording).
+  - with the READMEs' own wording, matched tightly:
+    - "open" counts only next to the ID: `L<N> is open`, `L<N>, open`, `(L<N>; open)`, `(L<N>, open)`;
+    - "unmeasured" and "not measured" count only in the same clause as the ID (no `.`, `;` or `:` between them, and within 80 characters).
+
+    "Open" anywhere else in the sentence ("opens a connection", "the session stays open") does not count.
 - A README line that fails is fixed in the README, by the task that includes it: under CLAUDE.md the README is then wrong too.
 
-**Device claims carry evidence** (`TestEveryDeviceClaimCitesItsEvidence`). On a page with `platforms:`, every list item under `## What the lab measured` and `## Traps`:
+**Device claims carry evidence** (`TestEveryDeviceClaimCitesItsEvidence`). On a page with `platforms:`, every paragraph and every list item in the lead (the text before the first `##`), `## What the lab measured` and `## Traps` either:
 - links a results note for one of the page's suffixes; or
 - sits in an `!!! warning "Unmeasured…"` admonition.
 
-A claim with no L-ID at all fails too.
+A claim with no L-ID at all fails too. The one other block the check skips is a `!!! note "Regression rerun pending"` admonition, and only when it holds no L-ID: it reports a rerun's state, not a device claim (Task 21's NX-OS #46 line). With an L-ID inside, it is checked like any other block.
 
-**Note-name matching** (shared with Task 8): a note `L<N>[-L<M>…]-<rest>.md` belongs to a suffix when `<rest>`, split on `-`, begins with that suffix's segments (`juniper_vjunos-router` is two segments). The longest suffix wins, so `juniper_vjunos` never takes a `juniper_vjunos-router` note.
+**Note-name matching** (shared with Task 8):
+- A note `L<N>[-L<M>…]-<rest>.md` belongs to a suffix when that suffix's segments occur as a contiguous run anywhere in `<rest>` split on `-`. `juniper_vjunos-router` is two segments.
+- Many notes put a word before the platform (`L4-error-juniper_vsrx.md`, `L12-bits-juniper_vjunos-router.md`, `L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md`), and some a tail after it (`L88-cisco_nxos-nxos106-tls.md`).
+- The longest suffix wins, so `juniper_vjunos` never takes a `juniper_vjunos-router` note.
+- `nonDevice` entries match the same way (`systemd-docker` is two segments).
 
 - [ ] **Step 1: Write the failing tests:**
   - `TestLabRegisterReadsTheSpec`: on the real spec, `L4` and `L78` are open, `L45` and `L73` closed (as at `b36913f6`), and more than 90 rows load.
   - `TestLabRegisterSplitsEscapedPipes`: a fixture row with `\|` in a cell keeps its status.
   - `TestOpenLabEntriesAreWrittenAsUnmeasured`, with fixtures under `tests/ci/testdata/docslab/` for each failure. Each fixture is a page plus a fake register, so the test does not change when a row closes. Fixtures also cover a `_snippets/` file and a page with `Header`: both are skipped.
-  - `TestTheBuiltSiteCitesOpenEntriesAsUnmeasured`, with an HTML fixture for each pass and fail case.
-  - `TestEveryDeviceClaimCitesItsEvidence`, with fixtures: a cited bullet, an admonition bullet, a bare bullet (fails).
-  - `TestNoteNamesMatchBySegments`: `L88-cisco_nxos-nxos106-tls.md` is `cisco_nxos`; `L88-juniper_vjunos-router-vjunos26-tls.md` is `juniper_vjunos-router`, not `juniper_vjunos`.
+  - `TestTheBuiltSiteCitesOpenEntriesAsUnmeasured`, with an HTML fixture for each pass and fail case. Failing fixtures:
+    - "L4 measured the fall-through; the session stays open";
+    - "the device opens a connection (L4)";
+    - "L4 is final. Not measured on SRX." (the phrase is in another clause).
+
+    Passing fixtures: "L4, open", "(L92; open)" and "not measured (L92)".
+  - `TestEveryDeviceClaimCitesItsEvidence`, with fixtures:
+    - a cited bullet and an admonition bullet pass;
+    - a bare bullet fails;
+    - an uncited lead paragraph ("IOS XE does not fall to local on ERROR, so keep a console path") fails;
+    - a `Regression rerun pending` note with no L-ID passes, and the same note holding `L73` fails.
+  - `TestNoteNamesMatchBySegments`:
+    - `L88-cisco_nxos-nxos106-tls.md` is `cisco_nxos`;
+    - `L88-juniper_vjunos-router-vjunos26-tls.md` is `juniper_vjunos-router`, not `juniper_vjunos`;
+    - `L4-error-juniper_vsrx.md` is `juniper_vsrx`;
+    - `L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md` is `juniper_vjunos-router` (the leading `vJunos-router` is not a suffix's run);
+    - `L84-systemd-docker.md` is the `nonDevice` entry `systemd-docker`.
+  - `TestACorrectCitationToAPrefixedNotePasses`: on a fixture Junos page with `platforms: [juniper_vjunos-router]`, "An ERROR is final" linking `L4-error-juniper_vjunos-router.md` (L4 open) passes.
 - [ ] **Step 2: Run and see them fail:** `go test ./internal/docgen/ ./tests/ci/ -run 'Lab' -count=1`.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run them:** PASS on the stubs. Then run the built-site pass on a local build (`make docs-build && PORT49_DOCS_SITE=site go test ./tests/ci/ -run '^TestTheBuiltSite' -count=1`); the stubs include no snippet yet, so it passes.
@@ -459,7 +489,7 @@ Six schema files over five root types, each the type its loader strict-decodes:
   **Mutation checks:** each is red; restore both.
   - add `foo string \`yaml:"foo"\`` to `fileConfig`: red, "no description for foo";
   - edit one generated line by hand: red, "stale".
-- [ ] **Step 5: Commit:** `git add internal/docgen internal/config internal/policy internal/admission internal/inventory Makefile docs/site/reference/config tests/ci/docslint_test.go && git commit -m "docs: generate the config reference from the five schemas, with a drift test"`
+- [ ] **Step 5: Commit:** `git add internal/docgen internal/config internal/policy internal/admission internal/inventory internal/userconfig Makefile docs/site/reference/config tests/ci/docslint_test.go && git commit -m "docs: generate the config reference from the five schemas, with a drift test"`
 
 ---
 
@@ -570,7 +600,7 @@ Six schema files over five root types, each the type its loader strict-decodes:
   Each device page's front matter names `platforms:` (its suffixes) for Task 4's check.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `TestEveryResultsNoteBelongsToOnePage`: every `tests/lab/results/L*.md` matches exactly one `DevicePages` entry by segments, or is in `MultiPage`, or its first segment is in `nonDevice`: `kind`, `regions`, `netbox`, `nautobot`, `openldap`, `samba`, `samba_ad`, `windows*`, `keycloak`, `ser8`, `systemd-docker`, `reference`, `step_ca`, `beehive*`. Files not named `L<N>-…` (`load-*`, `slice-*`, `session-*` and the like) are outside the test. A note that fits none fails, so a new platform's notes cannot go missing.
+  - `TestEveryResultsNoteBelongsToOnePage`: every `tests/lab/results/L*.md` matches exactly one `DevicePages` entry by Task 4's contiguous-run rule, or is in `MultiPage`, or matches a `nonDevice` entry by the same rule: `kind`, `regions`, `netbox`, `nautobot`, `openldap`, `samba`, `samba_ad`, `windows*`, `keycloak`, `ser8`, `systemd-docker`, `reference`, `step_ca`, `beehive*`. Files not named `L<N>-…` (`load-*`, `slice-*`, `session-*` and the like) are outside the test. A note that fits none fails, so a new platform's notes cannot go missing.
   - `TestEvidenceParsesEveryHeaderStyle`, on three fixtures shaped like `L4-arista_eos.md`, `L76-nokia_srlinux.md` and `L88-cisco_xrd.md` (header lines only).
   - `TestLLMsTxtFollowsTheNav`: the runbook is the first link, and every nav page appears once.
 - [ ] **Step 2: Run and see them fail.**
@@ -618,7 +648,7 @@ Plan 12b parked it: "a `healthcheck` subcommand (the image has no shell)".
 - Modify:
   - `internal/port49d/main.go`: `Main` (`port49d healthcheck`) and `BrokerMain` (`port49-broker healthcheck`);
   - `cmd/port49-inventory/main.go`;
-  - the address comes from what `port49d` already has: `offlineMetricsListenOf` (`internal/port49d/offline.go`) for the configured `metrics_listen`, falling to the role's default when it is empty (port49d `:9049`, broker `:9050`, `internal/config/config.go`), and `answeringOn`'s mapping (`offline_port49d.go`) from a wildcard to loopback. Move both into `internal/healthcheck` if they must be shared with `port49-inventory`; never write a third copy. No full `Load`: a fence or store fault must not make the check lie;
+  - the address comes from what `port49d` already has: `offlineMetricsListenOf` (`internal/port49d/offline.go`) for the configured `metrics_listen`. Today it returns the default when the file does not read, which would let a missing config probe `:9049` and exit 0. Change it to `offlineMetricsListenOf(cfgPath string) (string, error)`, and keep the offline caller's fallback at its own call site. The healthcheck exits 1 on the error, and falls to the role's default only when the key is empty (port49d `:9049`, broker `:9050`, `internal/config/config.go`), and `answeringOn`'s mapping (`offline_port49d.go`) from a wildcard to loopback. Move both into `internal/healthcheck` if they must be shared with `port49-inventory`; never write a third copy. No full `Load`: a fence or store fault must not make the check lie;
   - `deploy/compose/compose.yaml` (the file `make compose-smoke` runs): a `healthcheck:` on each service, with the service's own binary, `--ready`, `interval: 10s`, `timeout: 3s`, `retries: 3`, `start_period: 30s`:
     - port49d: `["CMD", "/usr/local/bin/port49d", "healthcheck", "--ready", "--config", "<its config path>"]`;
     - the broker: `["CMD", "/usr/local/bin/port49-broker", "healthcheck", "--ready", "--config", "<its config path>"]`.
@@ -828,7 +858,7 @@ Every content task has the same five steps. Each task lists only its pages, its 
 
   Each entry has four parts: **you see**, **it means**, **do this**, **don't**. In "A log line says…", the **you see** is the line in a code span, `<…>` for each variable part, copied from the code.
 
-**An extra test:** `TestEveryQuotedLogLineIsInTheCode`. For each **You see:** code span in that section, the text, with each `<…>` a wildcard, matches a string literal in non-test Go under `internal/` or `cmd/`, a format verb (`%s`, `%v`, `%d`, `%q`) matching a wildcard. Mutation: change one word of a quoted line, and the test is red.
+**An extra test:** `TestEveryQuotedLogLineIsInTheCode`. For each **You see:** code span in that section, the text, with each `<…>` a wildcard, matches a string literal in non-test Go under `internal/` or `cmd/`, a format verb (`%s`, `%v`, `%d`, `%q`) matching a wildcard. Literals joined by `+` (found with `go/ast` as one `BinaryExpr` of `BasicLit`s) count as one string: the cached-membership line spans two (`placement.go`). Mutation: change one word of a quoted line, and the test is red.
 
 **mustSay:**
 - `index.md`: `cached directory membership`, `the logout queue is full`, `port49_revocations_file_failed`, `store_unavailable`;
@@ -889,11 +919,18 @@ Every content task has the same five steps. Each task lists only its pages, its 
 
 **Pages:** `admin/devices/index.md`:
 - how to read a device page (measured, cited, or "Unmeasured");
-- the qualified-platforms table by snippet of `docs/qualified-platforms.md`, with its "What an operator must do" list and its `partial` and "re-vet pending" meanings;
+- the qualified-platforms table by snippet of `docs/qualified-platforms.md`, with its "What an operator must do" list and its `partial` and "re-vet pending" meanings.
+
+  That file is generated (`make qualified-platforms`, from `tests/qual/cmd/qualified/qualified.go`, with its own drift test `TestTheCommittedListIsTheGeneratedOne`). Its cells cite the open L18 as "— (L18)", which fails Task 4's built-site pass. **Fix the generator, not the pass:**
+  - `command()` (and every other cell or gap text that names a register ID) appends `, open` when `docgen.LabRegister` reads the row as open: "— (L18, open)";
+  - a closed row is cited as before;
+  - update `qualified_test.go`'s expected strings (`— (L18)` at lines 77 and 142 become `— (L18, open)` against the real register);
+  - add `TestAnOpenRegisterRowIsCitedAsOpen`, with a fake register in which L18 is closed, wanting `— (L18)`;
+  - run `make qualified-platforms` and commit `docs/qualified-platforms.md` with the generator.
 - the reference configurations by snippet of `deploy/device-aaa/README.md`.
 
 Then one page per `DevicePages` entry, each with these sections in order:
-1. a lead paragraph with the one thing that bites;
+1. a lead paragraph with the one thing that bites, cited to its note like any claim (Task 4 reads the lead);
 2. `## Reference configuration` (the `deploy/device-aaa/<platform>*.cfg` files, linked, and the placeholders table by reference);
 3. `## What the lab measured`;
 4. `## Traps`;
@@ -913,10 +950,12 @@ Then one page per `DevicePages` entry, each with these sections in order:
   - **L78 (a reply over 255 bytes) is open on hardware:** `Unmeasured`, with Ryan's production prior stated as a prior, not a measurement. The page covers vJunos, vSRX and hardware: a hardware or SRX claim stays in an admonition even where a vJunos note link would pass Task 4.
 - **IOS XE:** no fall to local on ERROR (L73 cell i, L4); the 30 to 39 s TCP and 57 to 67 s TLS dead windows; a server certificate naming another address accepted (L73).
 - **IOS XR (XRd 26.1.1):** dials TLS on 49, not 300, unless `port` is set; `domain name` before enrolment; group member and host in separate commits; the `platforms:` privilege block (`policy-platforms.yaml`); no fall to local on ERROR; a local account logging in inside the dead window (L88 a).
-- **NX-OS:** 10.6(2)F over TLS honors single-connect (`L80-cisco_nxos.md`). L73 is closed: state what `L73-cisco_nxos.md` measured on Nexus 9300v 10.6(2)F (2026-10-18), cited to it. Then say, in a paragraph (not a list item, so Task 4's claim check does not read it as a claim), with no L-ID and no admonition, that the 2026-11 regression rerun of that entry did not reproduce and is pending (issue #46). Never write L73 inside an `Unmeasured` admonition: it is closed, and Task 4 fails it.
+- **NX-OS:** 10.6(2)F over TLS honors single-connect (`L80-cisco_nxos.md`). L73 is closed: state what `L73-cisco_nxos.md` measured on Nexus 9300v 10.6(2)F (2026-10-18), cited to it. Then say, in a `!!! note "Regression rerun pending"` admonition holding no L-ID, that the 2026-11 regression rerun of that entry did not reproduce and is pending (issue #46). Never write L73 inside an `Unmeasured` admonition: it is closed, and Task 4 fails it.
 - **EOS:** from its notes.
 - **IOS XE** also carries IOL-XE (`L71-cisco_iol-xe.md`), named as such, and `L31-breakglass-cisco-singleconnection.md` with NX-OS.
 - **Other platforms:** the generic adapter and `generic_platform`.
+
+Task 21's commit pathspec adds `tests/qual/cmd/qualified docs/qualified-platforms.md`.
 
 **mustSay:**
 - `nokia-sr-linux.md`: `sends no command authorization`, `priv-lvl-authorization true`, `services [ cli ]`;
