@@ -8519,6 +8519,13 @@ The plan `2026-11-07-lab-harness-fixes.md` ran on `fix/lab-harness-47` on 2026-1
 
 ## Plan 13 — User and admin documentation
 
+Status: **written 2026-11-07** (`2026-11-07-13-user-and-admin-docs.md`, branch `feature/user-and-admin-docs`; twenty-five
+tasks: the site skeleton, its workflow (deploy gated on a public repository), the docs lint and the lab-register check (1–4);
+the generated config, reason-code, decision-log, metrics and alerts references, device evidence tables and `llms.txt`, with
+`--version`, `healthcheck` and a `runbook_url` on every alert (5–11); the pages (12–24, disjoint files, parallel); the close
+(25). No spec change and no lab run. Five decisions for Ryan at its top: the site URL, the Pages job's `id-token`, the
+README's wording, the go-public Pages settings, and Material for MkDocs' maintenance status).
+
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
 GitHub Action — written when the repository goes public. Six sections:
 
