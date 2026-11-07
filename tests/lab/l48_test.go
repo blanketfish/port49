@@ -430,7 +430,12 @@ func (r *l48Run) cell1Issue() {
 	r.ev.add("issue", f)
 	r.files()
 	// The workload anchor is step-ca's intermediate.
-	r.broker = startLocalBroker(r.t, filepath.Join(filepath.Dir(r.s.dir), "local-broker"), r.anchor, "", "", "")
+	bdir, err := localBrokerDir("l48")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	keepLocalBrokerLogs(r.t, bdir, "local-broker")
+	r.broker = startLocalBroker(r.t, bdir, r.anchor, "", "", "")
 	idCode, idOut, idErr := r.broker.workloadIdentity(r.cert, r.key)
 	r.ev.add("workload_identity", newTokenRun(idCode, idErr, 0)) // stdout is a SPIFFE ID, kept in the note
 	tr := r.token("token_after_issue", 0)
@@ -635,7 +640,12 @@ func (r *l48Run) cell5CRL() {
 	// The CRL is fetched over https under step-ca's private root: the broker
 	// trusts it through SSL_CERT_FILE (pre-flight I-3).
 	r.broker.stop() // cell 1's broker, so one port49d runs
-	b, refusal := launchLocalBroker(r.t, filepath.Join(filepath.Dir(r.s.dir), "local-broker-crl"), r.anchor, stepCACRLURL,
+	crlDir, err := localBrokerDir("l48-crl")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	keepLocalBrokerLogs(r.t, crlDir, "local-broker-crl")
+	b, refusal := launchLocalBroker(r.t, crlDir, r.anchor, stepCACRLURL,
 		r.anchor, r.s.root())
 	if b == nil {
 		// port49d refused the CRL source at start (its issuer is not under an

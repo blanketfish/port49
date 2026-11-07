@@ -135,10 +135,52 @@ func startRefusal(said string) string {
 
 var crlSourceRefusal = regexp.MustCompile(`broker\.certificate_status\.crls\[\d+\]`)
 
+// localBrokerDir is the private directory a local broker runs from, outside the
+// tree: the fence refuses every file under a group-writable checkout
+// (decision 53 ruling 11; labPrivateSub).
+func localBrokerDir(name string) (string, error) {
+	return labPrivateSub("local-broker-" + name)
+}
+
+// keepLocalBrokerLogs copies the broker's stderr and decision log from its
+// private directory into tests/lab/logs/workload/<name>.err and .out at
+// cleanup, so the log keeps its place. Register it before the broker starts,
+// so it runs after the broker stops. The decision log holds no credential
+// (spec §11).
+func keepLocalBrokerLogs(t *testing.T, dir, name string) {
+	t.Cleanup(func() {
+		dst := filepath.Join(root, "tests", "lab", "logs", "workload")
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			t.Logf("keeping %s's logs: %v", name, err)
+			return
+		}
+		for _, ext := range []string{"err", "out"} {
+			raw, err := os.ReadFile(filepath.Join(dir, "port49d."+ext))
+			if err != nil {
+				continue
+			}
+			if err := os.WriteFile(filepath.Join(dst, name+"."+ext), raw, 0o644); err != nil {
+				t.Logf("keeping %s's logs: %v", name, err)
+			}
+		}
+	})
+}
+
 // prepareLocalBroker empties dir and writes what a local broker starts on:
 // the PKI and the three files (localBrokerFiles). It returns the PKI's
-// directory. The daemon's first-install step is initRevocations.
+// directory. The daemon's first-install step is initRevocations. The
+// workload anchor and the CRL issuer are staged as private copies first, as
+// port49d reads them through the fence.
 func prepareLocalBroker(dir, anchorFile, crlURL, crlIssuer string) (string, error) {
+	anchorFile, err := labPrivateCopy(anchorFile)
+	if err != nil {
+		return "", err
+	}
+	if crlIssuer != "" {
+		if crlIssuer, err = labPrivateCopy(crlIssuer); err != nil {
+			return "", err
+		}
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		return "", err
 	}
