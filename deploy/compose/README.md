@@ -356,7 +356,7 @@ A port49d whose etcd is down at boot comes back on its own when etcd does.
 etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
 datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
 500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
-or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms (`tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md`); beehive's QLC drive failed it (`tests/lab/results/load-beehive.md`).
+or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms; a consumer QLC drive failed it (the notes are the `load-*` files in `tests/lab/results/`).
 port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The `port49_accounting_spool_disk_slow` alert watches it.
 
 ## Backups

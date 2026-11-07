@@ -149,7 +149,7 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
   - Name has keys, address has none: it files them under the address, then mints.
   - Both have keys, and a key type in both differs: it mints nothing and fails with
     `host_key_changed`. The message gives both fingerprints and the command that clears the stale
-    address, for example `ssh-keygen -R '[10.0.0.9]:2222' -f /home/ops/.ssh/known_hosts`. Check
+    address, for example `ssh-keygen -R '[10.0.0.9]:2222' -f /home/<user>/.ssh/known_hosts`. Check
     the device's key on its console first. Run the command only if the address now belongs to this device.
   - Name has none, address has keys: it copies them under the name, then mints. If no user
     known_hosts file is writable, it warns and mints anyway.

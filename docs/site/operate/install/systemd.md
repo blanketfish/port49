@@ -1,9 +1,12 @@
 ---
 title: Install with systemd
 description: Installing port49d and the broker from the packages and running them under systemd.
-status: stub
 ---
 
 # Install with systemd
 
-This page is a stub.
+This is one of three peer shapes (see [Install](index.md)). The `port49-server` package, or the same files
+copied by hand, runs `port49d` and `port49-broker` as two units on your own etcd. Read the four
+requirements on the index page first, then follow the guide below, which is the deployment's own README.
+
+--8<-- "deploy/systemd/README.md:3"
