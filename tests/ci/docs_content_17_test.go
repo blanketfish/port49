@@ -10,6 +10,9 @@ func init() {
 		"port49_redemption_restored_refused_total", "port49_broker_mint_gate_closed",
 		"etcdutl snapshot restore", "--mark-compacted", "init-enrollments", "export-enrollments",
 		"port49 directory import", "revoke-offline.sh", "key-rotation.md", "L89-kind.md",
+		"directory holding `broker.revocations_file`", "no bundle has been judged on this keyspace",
+		"Check `broker.policy_file` on every broker host", "suspend every GitOps controller",
+		"restart every port49d only after", "the key current at export time",
 		"L35-restore-arista_eos.md", "!!! warning \"Unmeasured\"", "--8<-- \"deploy/helm/port49/examples/velero/README.md",
 	)
 }

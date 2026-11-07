@@ -32,8 +32,8 @@ All three shapes ([systemd](install/systemd.md), [container](install/container.m
 | The etcd data of every cluster: the directory store, and each region's session store | The revocation marks, second factors, pins and sessions. A snapshot holds the plaintext index (principal, device, username, certificate, `sid`): guard it as the store itself. | the hourly `port49-etcd-snapshot` timer, from an etcd host | each `etcd-N-data` volume | the `port49-etcd-snapshot` CronJob (`examples/backup-cronjob.yaml`) |
 | `broker.state_dir` of **every** broker: `marks.json`, `witness.json`, and `issuing-ca.pem` and `issuing-ca.key` when the broker issues certificates | `marks.json` is the copy that puts back revocations a restore lost. `witness.json` is how a broker tells a restore. The CA is the private key your devices trust: whoever reads the backup can issue certificates. | `/var/lib/port49-broker` | the `broker-state` volume | one PVC per broker replica, `state/` inside it |
 | port49d's accounting spool and the file beside it, `<accounting.spool_path>.restore.json` | `restore.json` is port49d's record of the restore witness, so a restart still knows the store was restored. Two port49d with spools in one directory each keep their own. | `/var/spool/port49d` | the `port49d-spool` volume | the port49d PVC (`/var/spool/port49d/data`) |
-| `broker.revocations_file`, on the memory store only | On the memory store the marks live in this file. On etcd the store keeps the marks and `marks.json` is the copy; the file is not used. | where `broker.revocations_file` points | same | same |
-| The enrollment store of a `directory_password` verifier | Second factors. On etcd it is sealed records in the directory store; on the memory store it is the sealed file `enrollments.json` in `broker.state_dir`. | the daily `port49-enrollments-export` timer, on a broker host | no job is shipped: run `port49-broker export-enrollments --out FILE` from your scheduler | the chart's `backup.enrollments` CronJob (off by default) |
+| On the memory store only: the directory holding `broker.revocations_file` | The memory store runs the broker inside port49d, which refuses `broker.state_dir`; the broker keeps its state beside the revocations file. That directory holds the revocations file (the marks), `enrollments.json` (the sealed enrollment store) and the CRLs the broker verified. On etcd the store keeps the marks and none of this applies. | the directory of `broker.revocations_file` | same | same |
+| The enrollment store of a `directory_password` verifier | Second factors. On etcd it is sealed records in the directory store; on the memory store it is the sealed file `enrollments.json`, in the directory above. | the daily `port49-enrollments-export` timer, on a broker host | no job is shipped: run `port49-broker export-enrollments --out FILE` from your scheduler | the chart's `backup.enrollments` CronJob (off by default) |
 
 The configuration, the policy and the secrets are not on this list: they are in your configuration
 management and your secrets manager. Two cautions:
@@ -42,7 +42,8 @@ management and your secrets manager. Two cautions:
   an etcd snapshot, a Velero backup or an enrollments export stays sealed under the `encryption:` key
   that was current when the record was written. Keep every old key file, offline, as long as any backup
   holding its records is kept. Velero also stores the encryption Secret in its bucket, so the bucket is
-  as sensitive as the key. [Key rotation](../admin/key-rotation.md#the-encryption-key) (the bullet "Backups and exports need every
+  as sensitive as the key. An enrollments export keeps each record's own seal and seals only its envelope
+  under the key current at export time. [Key rotation](../admin/key-rotation.md#the-encryption-key) (the bullet "Backups and exports need every
   key that sealed their records") has the rule and what a missing key costs.
 - **Back up `broker.state_dir` with the broker's host, not from a different moment.** A broker whose
   `state_dir` survived the restore is the one that puts back the revocations the store lost, so the runbook
@@ -152,7 +153,13 @@ same token again keeps failing. Tell users to mint a new token after the window.
 This is the runbook for a restore of etcd on any shape. Do the steps in order. A step marked **Check** is
 a stop: do not go on until the check passes.
 
-1. **Stop every `port49-broker`** (systemd: `systemctl stop port49-broker` on every broker host;
+1. **On Helm, first suspend every GitOps controller** (Argo CD auto-sync or self-heal, Flux) that manages
+   `port49` or `port49-etcd`, with the commands in the [Velero runbook](#restoring-with-velero) below
+   (the paragraph before its step 1). Resume it after step 6. A StatefulSet cannot serve loopback
+   only (step 2), so on Helm the brokers held at 0 are the only guard: a controller that puts the
+   replicas back lets a broker reach the restored store before the delete and before the revocations are
+   re-issued, and **can admit a revoked principal**. Then:
+   **Stop every `port49-broker`** (systemd: `systemctl stop port49-broker` on every broker host;
    container: stop the `port49-broker` service; Helm: scale the broker StatefulSet to 0). port49d may run
    on: it goes dark while the store is down. **Also stop every port49d** when the restore also restored
    the spool directory or `broker.state_dir`, when a port49d's spool is new, or when you cannot serve
@@ -163,8 +170,12 @@ a stop: do not go on until the check passes.
    with the member flags your cluster uses (`--name`, `--initial-cluster`,
    `--initial-advertise-peer-urls`). Start the members serving clients on **loopback only** (for example
    `--listen-client-urls https://127.0.0.1:2379 --advertise-client-urls https://127.0.0.1:2379`, the TLS
-   flags unchanged, the peer URLs as they were so quorum forms). No port49d or broker can reach the
-   restored store yet.
+   flags unchanged, the peer URLs as they were so quorum forms). On systemd and compose, no port49d or
+   broker can reach the restored store yet; on Helm only the stopped StatefulSets keep them off it. If the
+   store was restored without `--bump-revision` anyway, also restart every port49d only after step 5's
+   first runner has said its put-back line: a port49d restarted before it loads the restored marks and
+   enforces none the restore lost, and one started after the restore seals below what a port49d that ran
+   across it knows, so its logins are denied `store_unavailable` until that process writes at the key.
 3. **Delete the unspent tokens and the judged records,** on the loopback address, as etcd's root. Use your
    store prefix (`stores.session.etcd.prefix`, `/port49/` by default):
 
@@ -184,7 +195,13 @@ a stop: do not go on until the check passes.
    (`sudo -u port49-broker`; as root it refuses and names the line). On Helm,
    `deploy/helm/port49/scripts/revoke-offline.sh` does the same from the repository root. It leaves the
    brokers at the 0 it finds.
-5. **Start the brokers, first a broker whose `broker.state_dir` survived the restore.** The first runner
+5. **Check `broker.policy_file` on every broker host** before any broker starts. Step 3 deleted
+   `meta/judged`, so the reload guard at a broker's start has no judged bundle to check against: the first
+   start says `no bundle has been judged on this keyspace; this start is not judged against one` and goes
+   on, and a policy file the guard would have refused is not caught. Confirm each host holds the policy
+   you mean to serve.
+
+   **Start the brokers, first a broker whose `broker.state_dir` survived the restore.** The first runner
    puts back only the revocations its own `marks.json` holds that the store lacks, and names them. A
    broker on an empty or new `state_dir` that runs first puts back none of the revocations made since
    the snapshot: its line says `had no marks.json at this start`. If no broker's `state_dir` survived, step
@@ -229,4 +246,7 @@ unchanged, and a mint and a login working; a restore with the StatefulSets at 0 
 restore order below, with the pods running and then scaled to 0, completed with `marks.json`, the CA and
 the spool intact.
 
---8<-- "deploy/helm/port49/examples/velero/README.md:3"
+Everything from here to the end of the page is that README verbatim: what the backup holds, its
+requirements, how to pin the plugin, then the restore.
+
+--8<-- "deploy/helm/port49/examples/velero/README.md:5"
