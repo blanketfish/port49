@@ -2,7 +2,7 @@
 // the site's banner says. It prints publish=true|false and banner=<text> in the form
 // $GITHUB_OUTPUT takes. Run from the repository root with the full history and tags fetched.
 //
-// Only a final release tag (vX.Y.Z) deploys and moves the banner to that version. main deploys
+// Only the highest final release tag (vX.Y.Z, compared numerically) deploys and moves the banner to that version. main deploys
 // until the first release tag exists. Every other ref, a pull request included, builds only and
 // carries the main banner, so the banner is never empty.
 package main
@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -48,6 +49,16 @@ func decide(dir, ref, mainRef string) (bool, string, error) {
 		if !releaseTag.MatchString(tag) {
 			return false, mainBanner, nil
 		}
+		tags, err := git("tag", "-l", "v*")
+		if err != nil {
+			return false, "", fmt.Errorf("git tag -l: %w", err)
+		}
+		// a lower tag pushed late, or a re-run of an old one, must not overwrite newer docs
+		for _, other := range strings.Fields(tags) {
+			if releaseTag.MatchString(other) && newer(other, tag) {
+				return false, mainBanner, nil
+			}
+		}
 		cmd := exec.Command("git", "merge-base", "--is-ancestor", ref, mainRef)
 		cmd.Dir = dir
 		switch err := cmd.Run().(type) {
@@ -63,6 +74,19 @@ func decide(dir, ref, mainRef string) (bool, string, error) {
 		}
 	}
 	return false, mainBanner, nil
+}
+
+// newer is whether final tag a is a higher version than final tag b, compared numerically.
+func newer(a, b string) bool {
+	pa, pb := strings.Split(a[1:], "."), strings.Split(b[1:], ".")
+	for i := range pa {
+		x, _ := strconv.Atoi(pa[i])
+		y, _ := strconv.Atoi(pb[i])
+		if x != y {
+			return x > y
+		}
+	}
+	return false
 }
 
 func format(publish bool, banner string) string {

@@ -112,6 +112,43 @@ func TestAPrereleaseTagIsNotARelease(t *testing.T) {
 	}
 }
 
+// Only the highest final tag deploys: a lower one pushed late, or its workflow re-run, would
+// overwrite the newer release's docs. Versions compare numerically.
+func TestOnlyTheHighestReleaseTagDeploys(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		tags    []string
+		ref     string
+		publish bool
+	}{
+		{"v0.1.9 pushed after v0.2.0", []string{"v0.2.0", "v0.1.9"}, "refs/tags/v0.1.9", false},
+		{"v0.2.0 after v0.1.9", []string{"v0.1.9", "v0.2.0"}, "refs/tags/v0.2.0", true},
+		{"v0.10.0 against v0.9.0", []string{"v0.9.0", "v0.10.0"}, "refs/tags/v0.10.0", true},
+		{"v0.9.0 against v0.10.0", []string{"v0.10.0", "v0.9.0"}, "refs/tags/v0.9.0", false},
+		{"the major version counts", []string{"v1.0.0", "v0.99.99"}, "refs/tags/v0.99.99", false},
+		{"a higher pre-release does not count", []string{"v0.1.0", "v0.2.0-rc1", "v1"}, "refs/tags/v0.1.0", true},
+		{"a re-run of the only tag", []string{"v0.1.0"}, "refs/tags/v0.1.0", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := repo(t)
+			for _, tag := range c.tags {
+				git(t, d, "commit", "-q", "--allow-empty", "-m", tag)
+				git(t, d, "tag", tag)
+			}
+			publish, banner, err := decide(d, c.ref, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if publish != c.publish {
+				t.Errorf("publish = %v, want %v", publish, c.publish)
+			}
+			if !publish && banner != wantMain {
+				t.Errorf("banner = %q, want the main banner", banner)
+			}
+		})
+	}
+}
+
 func TestTheOutputIsTwoOutputLines(t *testing.T) {
 	if got, want := format(true, "b"), "publish=true\nbanner=b\n"; got != want {
 		t.Errorf("format = %q, want %q", got, want)

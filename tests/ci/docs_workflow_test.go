@@ -118,6 +118,39 @@ func TestTheDocsWorkflowRunsOnPullRequests(t *testing.T) {
 	}
 }
 
+// The required check is the job's name, and RELEASING.md tells the operator to select `docs`;
+// python.yml also has a job called build.
+func TestTheDocsBuildJobIsTheDocsCheck(t *testing.T) {
+	f, _ := docs(t)
+	if n := f.Jobs["build"].Name; n != "docs" {
+		t.Errorf("docs.yml's build job is named %q, want docs", n)
+	}
+}
+
+// The publish decision reads git tag -l and origin/main, so the checkout needs the full history;
+// the banner reaches mkdocs through the step's env.
+func TestTheDocsBuildFetchesHistoryAndPassesTheBanner(t *testing.T) {
+	f, _ := docs(t)
+	var checkouts, mkdocs int
+	for _, s := range f.Jobs["build"].Steps {
+		if strings.HasPrefix(s.Uses, "actions/checkout@") {
+			checkouts++
+			if s.With["fetch-depth"] != 0 {
+				t.Errorf("the build checkout's fetch-depth is %v, want 0", s.With["fetch-depth"])
+			}
+		}
+		if strings.Contains(s.Run, "mkdocs build") {
+			mkdocs++
+			if s.Env["PORT49_DOCS_BANNER"] != "${{ steps.publish.outputs.banner }}" {
+				t.Errorf("the mkdocs step's PORT49_DOCS_BANNER is %q", s.Env["PORT49_DOCS_BANNER"])
+			}
+		}
+	}
+	if checkouts != 1 || mkdocs != 1 {
+		t.Errorf("build has %d checkouts and %d mkdocs steps, want one each", checkouts, mkdocs)
+	}
+}
+
 // topLevel is the lines of raw that start in column 0 and begin with prefix.
 func topLevel(raw, prefix string) string {
 	var out []string

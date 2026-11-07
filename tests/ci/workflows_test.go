@@ -30,7 +30,8 @@ type step struct {
 }
 
 type job struct {
-	If string `yaml:"if"`
+	Name string `yaml:"name"`
+	If   string `yaml:"if"`
 
 	ContinueOnError any               `yaml:"continue-on-error"`
 	Env             map[string]string `yaml:"env"`
