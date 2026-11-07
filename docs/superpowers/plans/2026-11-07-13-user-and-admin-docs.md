@@ -17,7 +17,7 @@ Two small binary changes parked for this plan land first: `--version` on every b
 
 **Tech Stack:**
 - Go 1.26 (`internal/docgen`, `tests/ci`, `internal/version`, `internal/healthcheck`).
-- MkDocs 1.6.1 and Material for MkDocs 9.8.0 (exact pins), with `pymdownx` (snippets, superfences, details, tabbed) and `admonition`, `attr_list` and `toc`. No mermaid: it loads `mermaid.js` from a CDN. Python 3.12 in CI.
+- MkDocs 1.6.1 and Material for MkDocs 9.8.0 (exact pins), with `pymdownx` (snippets, superfences, details, tabbed) and `admonition`, `attr_list` and `toc`. No mermaid: it loads `mermaid.js` from a CDN. Python 3.13 in CI and on the workstation (pyenv has 3.13.15; the system default is 3.14), pinned as `python-version: '3.13'` in `docs.yml`.
 - pip-tools, hash-pinned (`packaging/requirements-docs.txt`).
 - GitHub Actions `actions/upload-pages-artifact` and `actions/deploy-pages`, pinned by SHA.
 
@@ -163,7 +163,7 @@ Each "plan 13" item in `docs/superpowers/plans/README.md`, by the heading it sit
   - `tests/ci/docs_content_test.go`: `var mustSay = map[string][]string{}` and `TestEveryPageSaysWhatItMust` (each page contains each literal string listed for it). The content tasks add rows from their own files.
 - Modify:
   - `Makefile`:
-    - `requirements-release` installs pip-tools with `pip install --require-hashes -r packaging/requirements-piptools.txt` and also compiles `requirements-docs.txt` and `requirements-piptools.txt`. Compile the docs file under Python 3.12, the docs job's (`PYTHON ?= python3.12` for that line; the Makefile's header warns that markers differ between 3.14 and 3.12), and say so in the recipe's comment.
+    - `requirements-release` installs pip-tools with `pip install --require-hashes -r packaging/requirements-piptools.txt` and also compiles `requirements-docs.txt` and `requirements-piptools.txt`. Compile the docs file under Python 3.13, the docs job's (`PYTHON ?= python3.13` for that line; the Makefile's header warns that markers differ between Python versions), and say so in the recipe's comment. The release workflow's 3.12 is unchanged; the docs file is compiled for the docs job only.
     - New `docs-build`: `python3 -m venv bin/docs-venv`, `bin/docs-venv/bin/pip install --require-hashes -r packaging/requirements-docs.txt`, then `bin/docs-venv/bin/mkdocs build --strict --site-dir site`.
     - New `docs-serve`: the same venv, `mkdocs serve`.
   - `.gitignore`: `/site/`.
@@ -201,7 +201,7 @@ Contributing: contributing/index.md, contributing/qualification.md, contributing
   - The two requirements tests above.
 - [ ] **Step 2: Run them and see them fail:** `go test ./tests/ci/ -run 'Docs|Nav|PageHas|PipTools' -count=1`. Expected: FAIL (no `mkdocs.yml`, no requirements files). Paste the red output.
 - [ ] **Step 3: Write the files above.** The hashed bootstrap cannot install itself the first time, so build it in this order:
-  0. `bin/` is gitignored, so a fresh worktree has no venv. Make Python 3.12 available first: `pyenv install 3.12` (the workstation has 3.13 and 3.14 only), or any 3.12 interpreter, named by `PYTHON=` on each `make` line below. Then create the venv unhashed, once: `python3.12 -m venv bin/piptools-venv && bin/piptools-venv/bin/pip install pip-tools==7.5.0`;
+  0. `bin/` is gitignored, so a fresh worktree has no venv. Use Python 3.13, which pyenv already has (`~/.pyenv/versions/3.13.15/bin/python3.13`), named by `PYTHON=` on each `make` line below. Then create the venv unhashed, once: `~/.pyenv/versions/3.13.15/bin/python3.13 -m venv bin/piptools-venv && bin/piptools-venv/bin/pip install pip-tools==7.5.0`;
   1. with the recipe still as it is (`pip install pip-tools==$(PIP_TOOLS_VERSION)`, unhashed), run `bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras -o packaging/requirements-piptools.txt packaging/requirements-piptools.in`;
   2. switch the recipe to `--require-hashes -r packaging/requirements-piptools.txt`;
   3. `rm -rf bin/piptools-venv` and run `make requirements-release`: it installs from the hashed file and writes every `.txt`.
@@ -227,14 +227,14 @@ Contributing: contributing/index.md, contributing/qualification.md, contributing
     - checkout (`persist-credentials: false`, `fetch-depth: 0`, so the tags are present);
     - setup-go (`go-version-file: go.mod`);
     - step `id: publish`: `go run ./tests/ci/cmd/docspublish -ref "$GITHUB_REF" >> "$GITHUB_OUTPUT"`. It writes `publish=true|false` and `banner=<text>`:
-      - a **release tag** is `v<X>` with no hyphen, the release workflow's rule (`release.yml`: a version with a hyphen is a pre-release);
+      - a **release tag** is a final `vX.Y.Z`, matched whole by `^v[0-9]+\.[0-9]+\.[0-9]+$`. Any other `v*` tag is a pre-release for docs publishing: a hyphen suffix (`v0.1.0-rc1`, `v0.1.0-beta.2`), a suffix without one (`v0.1.0rc1`), or a short form (`v1`, `v0.1`). This is stricter than `release.yml`'s hyphen rule for `:latest`, on purpose: only a final version deploys and moves the banner;
       - `refs/heads/main` with no release tag in `git tag -l 'v*'`: `publish=true`;
-      - `refs/heads/main` once a release tag exists: `publish=false`. A pre-release tag (`v0.1.0-rc1`) does not count;
+      - `refs/heads/main` once a release tag exists: `publish=false`. A pre-release tag does not count;
       - `refs/tags/v<X>`, a release tag whose commit is on `main` (`git merge-base --is-ancestor`): `publish=true`, banner "This site describes port49 v<X>.";
       - a pre-release tag: `publish=false`;
       - anything else, a pull request included: `publish=false`;
       - every non-release ref, a pull request included, emits the `main` banner, "This site describes port49 as it is on main, not a release.", so `banner=` is never empty (an empty `PORT49_DOCS_BANNER` would beat the `!ENV` default and blank the bar).
-    - setup-python 3.12;
+    - setup-python with `python-version: '3.13'`;
     - `python -m pip install --require-hashes -r packaging/requirements-docs.txt`;
     - `go test ./internal/docgen/ ./tests/ci/ -count=1`;
     - `mkdocs build --strict --site-dir site`, with `env: {PORT49_DOCS_BANNER: "${{ steps.publish.outputs.banner }}"}`;
@@ -269,7 +269,7 @@ Contributing: contributing/index.md, contributing/qualification.md, contributing
   - `TestTheDocsWorkflowRunsOnPullRequests`: the triggers include `pull_request`, and `push` names `main` and the tag pattern `v*`.
   - `TestDocsPublish` (in `tests/ci/cmd/docspublish`), on a temporary git repository: each case above gives its `publish` and `banner`. Also covered:
     - a release tag on a commit not on `main` gives `publish=false`;
-    - `v0.1.0-rc1` neither publishes nor stops `main`'s deploys;
+    - `TestAPrereleaseTagIsNotARelease`, table-driven over `v0.1.0-rc1`, `v0.1.0-beta.2`, `v0.1.0rc1`, `v1`, `v0.1` and `v0.1.0.1`: pushed as the ref, each gives `publish=false` and the `main` banner; present in `git tag -l`, none stops `main`'s deploys. `v0.1.0` and `v10.20.30` are the positive rows: `publish=true`, banner "This site describes port49 v0.1.0." (and so on);
     - a pull-request ref's `banner` is the `main` banner, never empty.
 
   `TestEveryActionIsPinnedBySHA` already covers the new file.
@@ -282,7 +282,8 @@ Contributing: contributing/index.md, contributing/qualification.md, contributing
   - append ` || true` to `deploy.If`;
   - add a checkout to `deploy`;
   - give `build` `id-token: write`, then `pages: write`;
-  - move `concurrency` to the top level.
+  - move `concurrency` to the top level;
+  - loosen the release-tag match to "no hyphen" (`TestAPrereleaseTagIsNotARelease` fails on `v0.1.0rc1` and `v1`), then drop its `$` anchor (it fails on `v0.1.0.1`).
 - [ ] **Step 5: Commit:** `git add .github/workflows/docs.yml tests/ci/docs_workflow_test.go tests/ci/workflows_test.go tests/ci/cmd/docspublish RELEASING.md && git commit -m "ci: build the docs site on every pull request and deploy it only from a public repository"`
 
 ---

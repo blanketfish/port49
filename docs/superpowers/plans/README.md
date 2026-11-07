@@ -8525,8 +8525,8 @@ the generated config, reason-code, decision-log, metrics and alerts references, 
 `--version`, `healthcheck` and a `runbook_url` on every alert (5–11); the pages (12–24, disjoint files, parallel); the close
 (25). No spec change and no lab run. Revised the same day after its pre-flight
 (`.superpowers/sdd/plan-13-preflight.md`, 0C/15I/13M, all applied): Ryan approved the Pages job's `id-token` (2026-11-07); the
-site URL, the version banner (`main` until `v0.1.0`, then `v*` tags), Material 9.8.0 (end of life 2027-05-05) and the
-healthcheck's liveness default were ruled; the README's wording stays Ryan's before go-public).
+site URL, the version banner (`main` until `v0.1.0`, then final `vX.Y.Z` tags only; a pre-release tag never deploys), Material 9.8.0 (end of life 2027-05-05) and the
+healthcheck's liveness default were ruled; the docs job pins Python 3.13; the README's wording stays Ryan's before go-public).
 
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
 GitHub Action — written when the repository goes public. Six sections:
