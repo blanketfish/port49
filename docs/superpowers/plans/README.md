@@ -6174,8 +6174,10 @@ have not run, and the Secure Enclave has never run on a Mac (below): nothing her
   resets the flag; without one it refuses as before. `ykman piv info` shows the tries left. A typed
   PIN is tried as before. A token whose tries state cannot be read is not tried either: the run is
   refused, no try is spent, and it says to run again.
-  Whether libykcs11 sets these flags is unmeasured (provisional on L60); a module that does not
-  leaves the guard silent and each run spends one try.
+  Measured on a YubiKey 5C Nano FIPS (firmware 5.4.3, libykcs11 2.7.2): libykcs11 set
+  `CKF_USER_PIN_COUNT_LOW` after the first wrong PIN and `CKF_USER_PIN_FINAL_TRY` after the second
+  (`tests/lab/results/L60-ser8.md`); other tokens and modules are unmeasured. A module that does not
+  set them leaves the guard silent and each run spends one try.
 - **A wrong PIN typed in another process logs the running agent off the key** (L60 finding F1,
   `tests/lab/results/L60-ser8.md`, GitHub issue #6). Measured: one wrong PIN typed at a second
   `port49 login` left the running agent's next refresh saying "your key needs its PIN: run port49
