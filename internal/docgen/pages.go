@@ -176,6 +176,20 @@ func Pages(root string) (map[string]string, error) {
 		}
 		out[s.Page] = page
 	}
+	spec, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(specPath)))
+	if err != nil {
+		return nil, err
+	}
+	if out[reasonPage], err = ReasonPage(spec); err != nil {
+		return nil, err
+	}
+	desc, err := LoadDecisionLogDescriptions(root)
+	if err != nil {
+		return nil, err
+	}
+	if out[decisionLogPage], err = DecisionLogPage(spec, desc); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
