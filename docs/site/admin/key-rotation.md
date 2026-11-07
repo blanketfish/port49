@@ -164,22 +164,52 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   the pinned principals. Sessions already open are, by my reading of the code, left as they are until
   `session.staleness_ceiling` (4 hours by default) and then denied `context_stale`; I did not measure that.
   The cure is to put the old key back as `previous` and restart; nothing was deleted.
-- **A store that holds pins can rotate once.** There is one `previous` slot. A second rotation's step 1
-  must put the newer key in it, which drops the first key and strands the pins sealed under it, exactly as
-  step 3 would. If you must rotate again anyway (a key you believe is exposed), the way out for each
-  stranded principal is `port49 directory forget <principal>`. It does not need to open the record: it
-  deletes the pin, and the person's next verification pins whatever entry the directory then gives them.
-  The cost is the pin's protection: a pin exists so a principal cannot silently move to another directory
-  entry, so confirm each is the same person first, as on [Stores](../operate/stores.md). A forget needs the
-  `forget_principals` right, and each use takes a security-key press. Do it for every pinned principal;
-  there is no bulk form. This region's own session copy of the record, sealed under the dropped key, is
-  deleted by the forget only if it opens; otherwise it keeps failing until its 24-hour lease ends.
-  **The admin has to be able to open their own pin.** The forget call first resolves the caller's own
-  membership, to check the right, and an admin whose own pin is sealed under the dropped key is refused
-  there. There is no offline forget on `port49-broker`. Before a second rotation, confirm that at least one
-  admin's own pin still opens: an admin first pinned after the earlier rotation's step 2, or one whose pin
-  has been rewritten since. If none does, do not rotate; if every admin is stranded, put the dropped key back
-  as `previous`, which opens every pin again.
+- **A store that holds pins can rotate again only after re-sealing them.** A process opens a record only
+  if it was sealed under `current` or `previous`, and there is one `previous` slot. Call the keys K1 (the
+  original), K2 (the first rotation's) and K3 (the next one's). After the first rotation, `current` is K2,
+  `previous` is K1, and every pin not written since is still sealed under K1. The second rotation's step 1
+  puts K3 in the `previous` slot, which drops K1 and strands every pin still under it. Nothing tells you
+  which key sealed a pin, so you cannot check for this beforehand; you re-seal instead.
+
+    **Before step 1, re-seal.** While K1 still opens every pin, `port49 directory forget <principal>`
+    deletes a pin and leaves a tombstone, and the person's next sign-in writes a fresh pin sealed under the
+    current key, K2, which the second rotation keeps. Start with two admins, each forgetting the other, so
+    that neither depends on a pin left under K1. Then do every other pinned principal; that is the only way
+    to rotate again with nobody locked out. Also let 24 hours pass after the first rotation's step 2
+    finished everywhere, so that no region still holds a session copy of a membership sealed under K1.
+    The costs:
+
+    - Until the person signs in again, the pin protects nothing. A pin exists so a principal cannot
+      silently move to another directory entry, so confirm that the person who signs in is the same
+      person, as on [Stores](../operate/stores.md).
+    - Each forget is one call for one principal; there is no bulk form. It needs the `forget_principals`
+      right, and each use takes a security-key press.
+    - **The admin has to be able to open their own pin.** The forget call first resolves the caller's own
+      membership, to check the right, and an admin whose own pin does not open is refused there. There is
+      no offline forget on `port49-broker`. Before step 1 every pin opens, which is why the re-seal comes
+      first.
+
+    **At step 1, if principals were missed.** Step 1 seals nothing under K3, so it can be undone. A
+    principal still pinned under K1 fails as soon as K1 is gone: bind, mint and refresh fail for them, the
+    scheduled refresh line above names them, and `port49_crypt_open_failures_total{record="membership"}`
+    rises. Then put K1 back as `previous` in place of K3, everywhere, and restart: with K2 and K1 held
+    every record opens again, and nothing is lost by dropping K3. Re-seal the principals you missed, and
+    run step 1 again.
+
+    **After step 2, no key choice opens every pin.** K1, K2 and K3 have all sealed records now, and only
+    two can be held:
+
+    - `current` K3, `previous` K2 (step 2 as written): every pin still under K1 is stranded.
+    - `current` K3, `previous` K1: everything under K2 is stranded instead. That includes the pins you
+      re-sealed and every other pin written under K2, membership copies and contexts, and the second
+      factors the scheduled pass has not yet moved to K3.
+    - `current` K2, `previous` K1: everything sealed under K3 since step 2 is stranded, including the
+      second factors the pass has already moved. On a split, the broker's start is refused as well,
+      because the directory store was last written under K3.
+
+    So after step 2, each principal still under K1 has one way out: a forget run by an admin whose own pin
+    opens. This region's own session copy of that principal's record is deleted by the forget only if it
+    opens; otherwise it keeps failing until its 24-hour lease ends.
 - **Backups and exports need every key that sealed their records.** An etcd snapshot and a Velero backup
   are the raw stores, and each record in them keeps the key that was current when that record was written.
   An enrollment export (`port49-broker export-enrollments`) keeps each record's seal too, and seals only
