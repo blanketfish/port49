@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l84-host lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red kind-enrollments systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
+.PHONY: requirements-release docs-build docs-servequal qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l84-host lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red kind-enrollments systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -510,14 +510,45 @@ release-packages: bin/goreleaser-$(GORELEASER_VERSION)
 # records the Python that compiled it (3.14 here; the release workflow installs with 3.12). The pins of
 # build and ansible-core carry no marker that differs between the two; a bump that adds a marker-gated
 # dependency must be compiled with the workflow's Python.
-PIP_TOOLS_VERSION ?= 7.5.0
+#
+# pip-tools itself installs from packaging/requirements-piptools.txt with --require-hashes (plan 13,
+# Task 1). That file cannot install itself the first time, so the first compile (and any bump of
+# pip-tools) is a bootstrap: with an unhashed venv (`python3 -m venv bin/piptools-venv &&
+# bin/piptools-venv/bin/pip install pip-tools==<version> pip==<the pin in the .in>`: a fresh venv's
+# pip is newer than pip-tools supports), run
+# `bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras
+# -o packaging/requirements-piptools.txt packaging/requirements-piptools.in`, delete the venv, and run
+# this target: it installs from the hashed file and writes every .txt.
+#
+# requirements-docs.txt is compiled for the docs job only, under Python 3.13 (DOCS_PYTHON), in a venv of
+# its own: the markers in a compiled file differ between Python versions. The release workflow's 3.12 is
+# unchanged.
+DOCS_PYTHON ?= python3.13
 requirements-release:
 	python3 -m venv bin/piptools-venv
-	bin/piptools-venv/bin/pip install --disable-pip-version-check pip-tools==$(PIP_TOOLS_VERSION)
+	bin/piptools-venv/bin/pip install --disable-pip-version-check --require-hashes -r packaging/requirements-piptools.txt
 	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
 		-o packaging/requirements-release.txt packaging/requirements-release.in
 	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
 		-o packaging/requirements-ci.txt packaging/requirements-ci.in
+	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
+		-o packaging/requirements-piptools.txt packaging/requirements-piptools.in
+	$(DOCS_PYTHON) -m venv bin/piptools-docs-venv
+	bin/piptools-docs-venv/bin/pip install --disable-pip-version-check --require-hashes -r packaging/requirements-piptools.txt
+	bin/piptools-docs-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
+		-o packaging/requirements-docs.txt packaging/requirements-docs.in
+
+# The documentation site (plan 13): MkDocs Material, from the hashed requirements, built --strict so a
+# broken link or a page outside the nav fails. `make docs-serve` is the same venv, live-reloading.
+docs-build:
+	$(DOCS_PYTHON) -m venv bin/docs-venv
+	bin/docs-venv/bin/pip install --disable-pip-version-check --require-hashes -r packaging/requirements-docs.txt
+	bin/docs-venv/bin/mkdocs build --strict --site-dir site
+
+docs-serve:
+	$(DOCS_PYTHON) -m venv bin/docs-venv
+	bin/docs-venv/bin/pip install --disable-pip-version-check --require-hashes -r packaging/requirements-docs.txt
+	bin/docs-venv/bin/mkdocs serve
 
 
 # The Helm chart's render checks (plan 12b, Task 10). Helm is pinned by sha256 (the digest is the

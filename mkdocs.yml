@@ -1,0 +1,109 @@
+site_name: port49
+site_url: https://blanketfish.github.io/port49/
+repo_url: https://github.com/blanketfish/port49
+docs_dir: docs/site
+strict: true
+
+theme:
+  name: material
+  # No third-party font requests: the site loads nothing from outside its own origin.
+  font: false
+  custom_dir: docs/overrides
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - content.code.copy
+    - search.highlight
+
+extra:
+  # A tag build sets PORT49_DOCS_BANNER (plan 13, Task 2); main builds say they are not a release.
+  banner: !ENV [PORT49_DOCS_BANNER, "This site describes port49 as it is on main, not a release."]
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  # No mermaid fence: Material loads mermaid.js from a CDN, which `font: false` exists to avoid.
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+
+# With `strict: true` each of these warnings fails the build: this is the link check.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+  nav:
+    omitted_files: warn
+    not_found: warn
+
+nav:
+  - Home: index.md
+  - Concepts:
+      - concepts/index.md
+      - Tokens, receipts and contexts: concepts/tokens-receipts-contexts.md
+      - Identities: concepts/identities.md
+      - Revocation: concepts/revocation.md
+      - Trust domains: concepts/trust-domains.md
+  - Operate:
+      - Install:
+          - operate/install/index.md
+          - systemd: operate/install/systemd.md
+          - Containers: operate/install/container.md
+          - Helm: operate/install/helm.md
+          - Clients: operate/install/clients.md
+      - Broker and agent: operate/broker-and-agent.md
+      - Signing in: operate/login.md
+      - Hardware keys: operate/hardware-keys.md
+      - Stores: operate/stores.md
+      - TLS: operate/tls.md
+      - Secrets: operate/secrets.md
+      - Backup and restore: operate/backup-and-restore.md
+      - Monitoring: operate/monitoring.md
+      - Versions: operate/versions.md
+      - Troubleshooting:
+          - operate/troubleshooting/index.md
+          - Failure matrix: operate/troubleshooting/failure-matrix.md
+          - When it will not start: operate/troubleshooting/will-not-start.md
+  - Administer:
+      - Policy: admin/policy.md
+      - Roles and grants: admin/roles-and-grants.md
+      - Key rotation: admin/key-rotation.md
+      - Revocation: admin/revocation.md
+      - Identity providers: admin/identity-providers.md
+      - Workloads: admin/workloads.md
+      - Inventory: admin/inventory.md
+      - Devices:
+          - admin/devices/index.md
+          - Arista EOS: admin/devices/arista-eos.md
+          - Cisco IOS XE: admin/devices/cisco-ios-xe.md
+          - Cisco NX-OS: admin/devices/cisco-nx-os.md
+          - Cisco IOS XR: admin/devices/cisco-ios-xr.md
+          - Juniper Junos: admin/devices/juniper-junos.md
+          - Nokia SR Linux: admin/devices/nokia-sr-linux.md
+          - Other platforms: admin/devices/other-platforms.md
+  - AI agents:
+      - Quick start: agents/quick-start.md
+      - Setup runbook: agents/setup-runbook.md
+  - Reference:
+      - port49d configuration: reference/config/port49d.md
+      - Policy file: reference/config/policy.md
+      - Inventory file: reference/config/inventory.md
+      - port49-inventory: reference/config/port49-inventory.md
+      - Client configuration: reference/config/client.md
+      - Reason codes: reference/reason-codes.md
+      - Decision log: reference/decision-log.md
+      - Metrics: reference/metrics.md
+      - Alerts: reference/alerts.md
+  - Contributing:
+      - contributing/index.md
+      - Qualification: contributing/qualification.md
+      - Releasing: contributing/releasing.md

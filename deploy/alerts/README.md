@@ -1,5 +1,6 @@
 # port49 alert rules
 
+<!-- --8<-- [start:intro] -->
 `port49.rules.yaml` holds one Prometheus alerting rule for each alarm the design and the roadmap
 state. Load it into Prometheus (`rule_files:`), or set `prometheusRule.enabled: true` on the Helm
 chart, which renders the same file as a Prometheus Operator `PrometheusRule`
@@ -21,6 +22,8 @@ so use one Prometheus per port49 fleet, or add a namespace matcher to the two ex
 No expression names a device, and none groups by one: the series carry no device identity (design
 §15), and the decision log answers "which devices". The labels used are bounded: `instance`,
 `key_ref`, `version`, `server`, `issuer`, `outcome`, `feed`, `pool`, `component`.
+
+<!-- --8<-- [end:intro] -->
 
 ## The rules
 

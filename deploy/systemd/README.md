@@ -372,6 +372,7 @@ refused too.
 
 ## When it will not start
 
+<!-- --8<-- [start:will_not_start] -->
 `journalctl -u port49d -b` (or `-u port49-broker`) holds the line. The units set no start limit, so
 a start that fails is tried again every ten seconds, and a port49d whose etcd is down at boot
 comes back on its own when etcd does; journald rate-limits a repeated line. Fix the cause and the next
@@ -387,6 +388,7 @@ try starts.
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `journalctl -u port49d -b` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the unit restarts | `journalctl -u port49d -b` | nothing: it retries every ten seconds; start etcd |
 
+<!-- --8<-- [end:will_not_start] -->
 ## The smoke test
 
 `make systemd-smoke` installs the package under systemd in a container and drives it. The smokes run in CI

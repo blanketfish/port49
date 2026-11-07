@@ -1,5 +1,7 @@
 # Build artifacts
 /bin/
+# make docs-build's output
+/site/
 # `go build ./cmd/...` at the root writes these; make build writes bin/.
 /port49d
 /port49

@@ -1,0 +1,8 @@
+# The input of packaging/requirements-piptools.txt: pip-tools, which compiles every other .txt here, and
+# which `make requirements-release` installs with --require-hashes. Regenerate (never hand-edit the .txt)
+# by the bootstrap in the Makefile's comment above requirements-release.
+pip-tools==7.5.0
+# pip-tools 7.5.0 calls into pip internals that pip 25.3 removed (AttributeError: 'InstallRequirement'
+# object has no attribute 'use_pep517'; a fresh venv's pip is 26.2.1), so pip is pinned to 25.2 here.
+# Drop the pin when a pip-tools release follows pip.
+pip==25.2

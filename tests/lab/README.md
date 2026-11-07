@@ -924,6 +924,7 @@ there was no output to read.
 Every evidence file passes a leak gate before any is written; a failure names the file and the kind
 of content, never the content.
 
+<!-- --8<-- [start:regressions] -->
 ## Regressions (plan 11b)
 
 `make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
@@ -974,3 +975,5 @@ Read a hang from them: `ssh_auth` with no `tacacs_seen` is the config apply, and
 - Building `vrnetlab/cisco_iol` needs the image file copied into the build directory first (step 3's
   IOL-XE recipe); an `IMAGE=/mnt/images/...` path fails the Makefile's version regex.
 - cEOS 4.36.3M must be docker-imported from its tarball (`docker import ... ceos:4.36.3M`).
+
+<!-- --8<-- [end:regressions] -->
