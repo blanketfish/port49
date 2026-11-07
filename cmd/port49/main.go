@@ -39,6 +39,7 @@ import (
 	"github.com/blanketfish/port49/internal/hwkey"
 	"github.com/blanketfish/port49/internal/printsafe"
 	"github.com/blanketfish/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/version"
 )
 
 const usage = `usage:
@@ -160,6 +161,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "version", "--version":
+		fmt.Fprintln(stdout, version.Line("port49"))
+		return 0
 	case "login":
 		return login(args[1:], stdout, stderr)
 	case "token":

@@ -18,7 +18,7 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
-    ldflags: [-s -w]
+    ldflags: ["-s -w -X github.com/blanketfish/port49/internal/version.Version={{.Version}}"]
   - id: port49-broker
     main: ./cmd/port49-broker
     binary: port49-broker
@@ -26,7 +26,7 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
-    ldflags: [-s -w]
+    ldflags: ["-s -w -X github.com/blanketfish/port49/internal/version.Version={{.Version}}"]
   - id: port49-inventory
     main: ./cmd/port49-inventory
     binary: port49-inventory
@@ -34,7 +34,7 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
-    ldflags: [-s -w]
+    ldflags: ["-s -w -X github.com/blanketfish/port49/internal/version.Version={{.Version}}"]
   - id: port49-static
     main: ./cmd/port49
     binary: port49
@@ -42,7 +42,7 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
-    ldflags: [-s -w]
+    ldflags: ["-s -w -X github.com/blanketfish/port49/internal/version.Version={{.Version}}"]
   # The client build: the PKCS#11 backend through purego (still CGO_ENABLED=0). It and
   # port49-static are both /usr/bin/port49, so no archive and no package holds both.
   - id: port49-client
@@ -53,7 +53,7 @@ builds:
     goarch: [amd64, arm64]
     flags: [-trimpath]
     tags: [hwkey_dlopen]
-    ldflags: [-s -w]
+    ldflags: ["-s -w -X github.com/blanketfish/port49/internal/version.Version={{.Version}}"]
 
 archives:
   - id: server

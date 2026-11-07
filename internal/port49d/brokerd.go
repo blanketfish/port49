@@ -37,6 +37,7 @@ import (
 	"github.com/blanketfish/port49/internal/store/guard"
 	"github.com/blanketfish/port49/internal/store/placement"
 	"github.com/blanketfish/port49/internal/token"
+	"github.com/blanketfish/port49/internal/version"
 )
 
 // brokerSubcommands is every subcommand port49-broker dispatches, by name. BrokerMain dispatches
@@ -77,12 +78,17 @@ func BrokerMain(args []string) int {
 	}
 	fs := flag.NewFlagSet("port49-broker", flag.ContinueOnError)
 	cfgPath := fs.String("config", "/etc/port49/port49-broker.yaml", "path to port49-broker.yaml")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		// The exit codes flag.ExitOnError would have used.
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+	if *showVersion {
+		fmt.Fprintln(os.Stdout, version.Line("port49-broker"))
+		return 0
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-enrollments|export-enrollments|init-issuer|rotate-issuer|forget-issuer …")

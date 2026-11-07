@@ -4,13 +4,18 @@
 # environment says, so these are the four static binaries the image carries.
 STATIC_CMDS = port49d port49 port49-inventory port49-broker
 
+# What every binary prints for --version: the nearest tag, or the commit, marked -dirty when the
+# tree has changes. The release sets the same variable from the tag (.goreleaser.yaml).
+VERSION ?= $(shell git describe --tags --always --dirty)
+VERSION_LDFLAGS = -ldflags "-X github.com/blanketfish/port49/internal/version.Version=$(VERSION)"
+
 build:
-	set -e; for c in $(STATIC_CMDS); do CGO_ENABLED=0 go build -o bin/$$c ./cmd/$$c; done
+	set -e; for c in $(STATIC_CMDS); do CGO_ENABLED=0 go build $(VERSION_LDFLAGS) -o bin/$$c ./cmd/$$c; done
 
 # The client build: the PKCS#11 backend through purego, which links the
 # system's dynamic loader. Written beside, never over, bin/port49.
 build-client:
-	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
+	CGO_ENABLED=0 go build $(VERSION_LDFLAGS) -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
 
 # L86's and L91's binaries, at the fixed paths tests/lab/L86-runbook.md and L91-runbook.md run: the
 # client and the L86 and L91 cells as one compiled test binary, so what Ryan runs is this tree's.

@@ -66,6 +66,7 @@ import (
 	"github.com/blanketfish/port49/internal/store/crypt"
 	"github.com/blanketfish/port49/internal/token"
 	"github.com/blanketfish/port49/internal/username"
+	"github.com/blanketfish/port49/internal/version"
 )
 
 // daemonSubcommands is every subcommand port49d dispatches, by name. Main dispatches from this
@@ -110,12 +111,17 @@ func Main(args []string) int {
 	}
 	fs := flag.NewFlagSet("port49d", flag.ContinueOnError)
 	cfgPath := fs.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		// The exit codes flag.ExitOnError would have used.
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+	if *showVersion {
+		fmt.Fprintln(os.Stdout, version.Line("port49d"))
+		return 0
 	}
 	// A subcommand after a flag (port49d --config X init-revocations) would
 	// otherwise start the daemon (pre-flight M20).

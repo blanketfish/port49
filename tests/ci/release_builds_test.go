@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The release's builds (pre-beta Task 20): what a pull request must build so a tag never meets a
@@ -26,6 +28,28 @@ func TestThePythonProjectHasNoLicenseClassifierBesideItsExpression(t *testing.T)
 	raw := readRepo(t, "clients", "python", "pyproject.toml")
 	if regexp.MustCompile(`(?m)^license\s*=\s*"`).MatchString(raw) && strings.Contains(raw, "License ::") {
 		t.Error("pyproject.toml has license = \"...\" and a License :: classifier")
+	}
+}
+
+// Every binary the release builds reports the tag it was built from (plan 13 task 9).
+func TestTheReleaseSetsTheVersion(t *testing.T) {
+	var cfg struct {
+		Builds []struct {
+			ID      string   `yaml:"id"`
+			Ldflags []string `yaml:"ldflags"`
+		} `yaml:"builds"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepo(t, ".goreleaser.yaml")), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Builds) < 5 {
+		t.Fatalf("found %d builds, want at least 5: the scan is broken", len(cfg.Builds))
+	}
+	const flag = "-X github.com/blanketfish/port49/internal/version.Version={{.Version}}"
+	for _, b := range cfg.Builds {
+		if !strings.Contains(strings.Join(b.Ldflags, " "), flag) {
+			t.Errorf("build %s: ldflags %q lack %s", b.ID, b.Ldflags, flag)
+		}
 	}
 }
 

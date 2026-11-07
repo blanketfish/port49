@@ -32,13 +32,19 @@ import (
 	"github.com/blanketfish/port49/internal/fence"
 	"github.com/blanketfish/port49/internal/inventory"
 	"github.com/blanketfish/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/version"
 )
 
 const prefix = "port49-inventory: "
 
 func main() {
 	cfgPath := flag.String("config", "/etc/port49-inventory/port49-inventory.yaml", "path to port49-inventory.yaml")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.Line("port49-inventory"))
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	hup := make(chan os.Signal, 1)
