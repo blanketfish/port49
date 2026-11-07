@@ -48,6 +48,37 @@ func TestMetricsFindsTheKnownSeries(t *testing.T) {
 	}
 }
 
+func TestKeyCollectorSeriesAreGauges(t *testing.T) {
+	for _, n := range []string{"port49_key_version_devices", "port49_key_retirement_seconds"} {
+		if m := metricByName(t, n); m.Kind != "gauge" {
+			t.Errorf("%s kind = %q, want gauge (the key collector emits GaugeValue)", n, m.Kind)
+		}
+	}
+}
+
+func TestStaleKindOverridesFail(t *testing.T) {
+	ms := []Metric{{Name: "a", Kind: "collector"}, {Name: "b", Kind: "counter"}}
+	if err := applyKindOverrides(ms, map[string]string{"a": "gauge"}); err != nil || ms[0].Kind != "gauge" {
+		t.Fatalf("a live override: err = %v, kind = %q", err, ms[0].Kind)
+	}
+	err := applyKindOverrides(ms, map[string]string{"gone": "gauge", "b": "gauge"})
+	if err == nil || !strings.Contains(err.Error(), "gone is not registered") || !strings.Contains(err.Error(), "b is found as a counter") {
+		t.Errorf("stale overrides: err = %v", err)
+	}
+}
+
+func TestProcessParagraphLinksTheAlertsThatReadStartTime(t *testing.T) {
+	ms := []Metric{{Name: "process_start_time_seconds", Kind: "collector"}}
+	as := []Alert{{Name: "uses_it", Expr: "time() - process_start_time_seconds > 1"}, {Name: "not_it", Expr: "x"}}
+	page := MetricsPage(ms, as)
+	if !strings.Contains(page, "[uses_it](alerts.md)") || strings.Contains(page, "not_it") {
+		t.Errorf("the process paragraph does not link exactly the alerts on process_start_time_seconds:\n%s", page)
+	}
+	if strings.Contains(page, "count that starts at 0") {
+		t.Error("the process paragraph still carries the stale uptime claim")
+	}
+}
+
 func TestNoMetricHasADeviceLabel(t *testing.T) {
 	ms, err := Metrics()
 	if err != nil {

@@ -133,7 +133,43 @@ func Metrics() (out []Metric, err error) {
 		out = append(out, *m)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	if err := applyKindOverrides(out, kindOverrides); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// kindOverrides names the series a custom collector emits whose type the Describe pass cannot see. The key
+// collector emits both as GaugeValue, but it emits nothing before WatchKeys runs, so no Collect pass finds it.
+var kindOverrides = map[string]string{
+	"port49_key_version_devices":    "gauge",
+	"port49_key_retirement_seconds": "gauge",
+}
+
+// applyKindOverrides sets the kind of each overridden metric. It fails on an override that names a metric that
+// is not registered, or whose kind the recorder now finds: the override is stale and must go.
+func applyKindOverrides(ms []Metric, overrides map[string]string) error {
+	idx := map[string]int{}
+	for i, m := range ms {
+		idx[m.Name] = i
+	}
+	var problems []string
+	for name, kind := range overrides {
+		i, ok := idx[name]
+		switch {
+		case !ok:
+			problems = append(problems, name+" is not registered")
+		case ms[i].Kind != "collector":
+			problems = append(problems, fmt.Sprintf("%s is found as a %s", name, ms[i].Kind))
+		default:
+			ms[i].Kind = kind
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		return fmt.Errorf("stale kind override: %s", strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 // Alerts reads the alert rules of a Prometheus rules file, in file order.
@@ -201,9 +237,13 @@ func MetricsPage(ms []Metric, as []Alert) string {
 	var order []string
 	groups := map[string][]Metric{}
 	process := false
+	var processStart Metric
 	for _, m := range ms {
 		if strings.HasPrefix(m.Name, "process_") {
 			process = true
+			if m.Name == "process_start_time_seconds" {
+				processStart = m
+			}
 			continue
 		}
 		s := section(m.Name)
@@ -234,8 +274,12 @@ func MetricsPage(ms []Metric, as []Alert) string {
 	}
 	if process {
 		b.WriteString("\n## process\n\nThe standard Prometheus process collector adds the `process_*` series " +
-			"(CPU time, open file descriptors, memory, start time). `process_start_time_seconds` is the one an " +
-			"alert uses: a count that starts at 0 on every restart is gated on uptime.\n")
+			"(CPU time, open file descriptors, memory, start time).")
+		if links := alertsOn(processStart, as); len(links) > 0 {
+			fmt.Fprintf(&b, " `process_start_time_seconds` is read by %s, which gate a refresh timestamp on "+
+				"uptime so that a fresh start does not fire them.", strings.Join(links, " and "))
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
 }

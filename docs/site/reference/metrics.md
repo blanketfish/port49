@@ -191,10 +191,10 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_key_retirement_seconds` | collector | `key_ref`, `version` | Seconds until a key version's retire_after passes; negative once it has. | [port49_key_retirement_within_7d](alerts.md), [port49_key_retirement_within_1d](alerts.md) |
+| `port49_key_retirement_seconds` | gauge | `key_ref`, `version` | Seconds until a key version's retire_after passes; negative once it has. | [port49_key_retirement_within_7d](alerts.md), [port49_key_retirement_within_1d](alerts.md) |
 | `port49_key_secret_files_changed` | gauge |  | Key versions whose held file: secret has changed or can no longer be read (spec §12); the held secret stays in force. | [port49_key_secret_files_changed](alerts.md) |
 | `port49_key_validations_total` | counter | `key_ref`, `version`, `outcome` | Key trial outcomes by key_ref and version. |  |
-| `port49_key_version_devices` | collector | `key_ref`, `version` | Devices whose latest validated connection since start used this key version. | [port49_key_retirement_within_7d](alerts.md), [port49_key_retirement_within_1d](alerts.md) |
+| `port49_key_version_devices` | gauge | `key_ref`, `version` | Devices whose latest validated connection since start used this key version. | [port49_key_retirement_within_7d](alerts.md), [port49_key_retirement_within_1d](alerts.md) |
 
 ## ledger
 
@@ -319,4 +319,4 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 
 ## process
 
-The standard Prometheus process collector adds the `process_*` series (CPU time, open file descriptors, memory, start time). `process_start_time_seconds` is the one an alert uses: a count that starts at 0 on every restart is gated on uptime.
+The standard Prometheus process collector adds the `process_*` series (CPU time, open file descriptors, memory, start time). `process_start_time_seconds` is read by [port49_directory_refresh_stale](alerts.md) and [port49_directory_refresh_half_ceiling](alerts.md), which gate a refresh timestamp on uptime so that a fresh start does not fire them.
