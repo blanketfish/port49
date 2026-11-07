@@ -18,7 +18,11 @@ left out of a record when they have no value, so a query must treat a missing ke
 A record that names its policy blob can be replayed offline and must give the same verdict. The
 [reason codes](reason-codes.md) page lists every value of `reason`.
 
+The meanings are the policy-engine spec's own text, so a section or decision number in one points into [the spec](https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md). A lab ID in a meaning is an entry of the spec's lab register, marked open or closed. It stays open until a lab test has measured the behavior it names, and a claim that cites an open entry is not yet measured.
+
 ## Events
+
+A decision event records one decision, with a verdict and a reason.
 
 | Event | Emitted by | What it decides |
 |---|---|---|
@@ -37,12 +41,28 @@ A record that names its policy blob can be replayed offline and must give the sa
 | `enroll` | broker | whether a person's TOTP second factor is enrolled (`POST /v1/sign-in/confirm`; §13 decision 47 ruling 4): `permit second_factor_enrolled`, carrying `auth.directory_password` and `sign_in: {source}`, or a deny with the sign-in's reasons. Every enrollment is alertable: inside an enrollment window a stolen password enrolls the thief's authenticator |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
+### Report events
+
+A report event shares the envelope but is not a decision: it carries no verdict.
+
+| Event | Emitted by | What it reports |
+|---|---|---|
+| `account` | daemon | A device's accounting record: what the device did, after the fact. It carries the `record` block and no `policy` block. |
+| `account_gap` | daemon | Accounting records port49 received and did not write to the log, with the `gap` block: the stage, how many and since when. A window with a gap cannot say a device did not ask. |
+| `unvalidated` | daemon | A packet no key validated, or a connection the listener refused or ended: the `unvalidated` block, with a diagnosis, the cleartext header fields and a hash of the body. Never the body. |
+| `inventory_change` | daemon and broker | One security-relevant change a policy or inventory swap made, in the `change` block, with the device in the `device` block. `port49_inventory_changes_total{kind}` counts them. |
+| `directory_forget` | broker | An operator ran `port49 directory forget` for a principal, which deleted the principal's directory membership and the entry it was pinned to. The `forget` block holds the entry. |
+| `second_factor_reset` | broker | An operator reset a person's second factor (`port49 directory reset-second-factor`), or `port49-broker init-enrollments` created the enrollment store. The `second_factor_reset` block holds the cleared enrollment. |
+| `sign_in_unlock` | broker | An operator cleared a principal's failed-attempt count (`port49 directory unlock`). The `sign_in_unlock` block holds the count the broker held. |
+| `enrollments_import` | `port49 directory import` | The command filled or replaced the enrollment store. The `enrollments_import` block holds the record count and the export time. |
+| `generic_platform` | daemon | port49d serves an admitted device whose platform has no adapter, with the set's generic adapter. One record per such device at start and at each bundle swap. It carries no verdict, and the broker does not write it. |
+
 ## Fields
 
 | Field | Type | Description |
 |---|---|---|
 | `ts` | timestamp | When the record was written, as an RFC 3339 timestamp. |
-| `event` | string | What the record is about. The events table lists each value and what it decides. |
+| `event` | string | What the record is about. The two events tables list each value: the decision events and what they decide, then the report events. |
 | `verdict` | string | `permit` or `deny`. Absent on the report events, which decide nothing, and on an `explain` that answered with a mint error. |
 | `reason` | string | Why the verdict is what it is: one value of the closed reason vocabulary. |
 | `principal` | string | Who the decision was about. |
@@ -93,7 +113,7 @@ A record that names its policy blob can be replayed offline and must give the sa
 | `session.privilege` | integer | On `authorize_session` and `authorize_command`, the privilege level in the request's header, which is the level the device asked at. On other events, what that event says: a refresh's is the context's level and a redeem's is the login's start level. |
 | `session.held_privilege` | integer | The privilege level port49 held for the context when the request arrived, before any raise this request makes. Present on authorize records whose context was read and is this user's, denials included. Compare it with `session.privilege` to see what the device asked for against what port49 held. |
 | `request.service` | string | The `service` attribute of the request. Recorded on every `authorize_session` and `authorize_command` record, denials included, so it can be grouped by. It is checked against the platform's session services and nothing else. |
-| `request.raw` | list of string | The request's arguments exactly as the device sent them. |
+| `request.raw` | list of string | The request's arguments as the device sent them, after redaction: a word that matches a secret rule is replaced with `«redacted»` first, and `request.redacted` says so. |
 | `request.vector` | list of string | The request's command as a list of words. |
 | `request.redacted` | boolean | `true` when words were replaced with `«redacted»` before the record was written. A secret is never logged. |
 | `packet_fields.action` | string | The authentication action, as a name. Authentication requests only. |
@@ -103,9 +123,9 @@ A record that names its policy blob can be replayed offline and must give the sa
 | `packet_fields.priv_lvl` | integer | The privilege level in the request header. |
 | `reply.attributes` | list of string | The attributes a permitted authorization returned to the device, as sent, with every placeholder filled. |
 | `flags` | string | On an `account` record, the accounting flags the device sent, such as `stop`. |
-| `attribution` | string | On an `account` record, whether the record was tied to a login port49 knows. `resolved` means it was. |
+| `attribution` | string | On an `account` record, whether the record was tied to a login port49 knows. `resolved`: it was. `foreign`: a record for a session whose start port49 never saw, on a device where it did watch this user's other sessions begin (a local fallback, a console login, or a device-local account with the same name); this is the value to alert on, and `port49_accounting_attributions_total{attribution="foreign"}` counts it. `system`: the device acting on its own behalf. `unattributed`: none of these. |
 | `task_id` | string | The `task_id` of an accounting record. |
-| `record.raw` | list of string | On an `account` record, the accounting arguments exactly as the device sent them. |
+| `record.raw` | list of string | On an `account` record, the accounting arguments as the device sent them, after redaction: a word that matches a secret rule is replaced with `«redacted»` before the record is written, and `record.redacted` says so. |
 | `record.vector` | list of string | On an `account` record, the command as a list of words. |
 | `record.redacted` | boolean | `true` when words were replaced before the accounting record was written, so no secret reaches the disk. |
 | `record.priv_lvl` | integer | The privilege level in the accounting record. |
@@ -133,27 +153,27 @@ A record that names its policy blob can be replayed offline and must give the sa
 | `blob.body` | object | On a `blob` record, the compiled blob whole, emitted once per hash, so replay depends on the log alone. |
 | `blob.redacted` | boolean | `true` when rule text in the body was redacted before it was logged. The body is then not the blob the hash names, and replay reports every record that names it unverifiable. |
 | `unvalidated.source` | string | The source address of a packet no key validated. |
-| `unvalidated.diagnosis` | string | What port49 concluded about why the packet did not validate. |
+| `unvalidated.diagnosis` | string | Why the packet or connection is on this record. `no_known_key_matches`: no key of the device's `key_ref` validates it. `matches_retired`: a retired key validates it, and `unvalidated.version` says which. `unencrypted_refused`: the packet was not obfuscated. `not_tacacs`: the header is not TACACS+. `unadmitted_source`: the source address is not in the inventory. `malformed_after_validation`: the key validated and the body did not decode. `device_quarantined`: the device is admitted but quarantined by policy. `admission_refused`: the device is in the inventory and admission refused it. `admission_withdrawn`: a reload renamed, re-keyed or re-platformed the device of an open connection. `transport_mismatch`: the device reached the listener it does not speak. `tls_refused`: the TLS listener refused or ended the connection, and `unvalidated.tls_outcome` says why. `obfuscated_over_tls`: a packet over TLS with the unencrypted flag clear. |
 | `unvalidated.key_ref` | string | The key tried, when there was one. |
-| `unvalidated.version` | integer | The protocol version in the packet header. |
+| `unvalidated.version` | integer | The version of the key (the numbered version within the device's `key_ref`) that the packet matched, or that the connection speaks. During a key rotation, a `matches_retired` record carries the retired version a device is still using, which is how you find the devices that have not moved to the new key. Absent where no key matched. |
 | `unvalidated.type` | integer | The packet type in the header. |
 | `unvalidated.seq_no` | integer | The sequence number in the header. |
 | `unvalidated.session_id` | integer | The session id in the header. |
 | `unvalidated.length` | integer | The body length in the header. |
 | `unvalidated.body_sha256` | string | The SHA-256 of the body. The body itself is never logged. |
 | `unvalidated.transport` | string | `tls` on a record from the TLS listener. |
-| `unvalidated.tls_outcome` | string | On a `tls_refused` record, why the handshake was refused. See the values below. |
-| `unvalidated.detail` | string | On a `tls_refused` record, a bounded, printable note. It is never a body. |
-| `unvalidated.cert_sha256` | string | On a `tls_refused` record, the SHA-256 of the certificate the device sent, where it sent one. |
+| `unvalidated.tls_outcome` | string | On a record with `diagnosis: tls_refused`, why the handshake was refused. See the values below. |
+| `unvalidated.detail` | string | A bounded, printable note on a record from the TLS listener, or on a `transport_mismatch` record from either listener (which names the transport the device record says and the listener it reached). It is never a body. |
+| `unvalidated.cert_sha256` | string | On a record with `diagnosis: tls_refused`, the SHA-256 of the certificate the device sent, where it sent one. |
 | `server_msg` | string | The message the reply carried to the person at the device. A denial's names the rule that decided and does not echo the command. |
 | `gap.stage` | string | Where accounting records were dropped: `offer_refused` (answered `ERROR`, so the device may send the record again), `drain_unparseable` or `drain_set_aside` (answered `SUCCESS` and not in the log). |
 | `gap.records` | integer | How many accounting records were dropped at this stage. |
 | `gap.since` | string | The earliest arrival among the dropped records, as far as the spool knows it. |
-| `change.kind` | string | What changed in the inventory. |
+| `change.kind` | string | What changed. Only security-relevant changes are written: `device_added` (a device added and admitted), `admission_changed` (a device already in the inventory becoming admitted), `address_added` (an address added to a device already in the inventory), `key_ref_changed`, `transport_changed` and `platform_changed` (a device's key assignment, `transport` or `platform` changed), and `scope_joined` or `scope_left` (a device entering or leaving a scope with `security_log: true`). |
 | `change.scope` | string | The scope involved, when the change names one. |
 | `change.address` | string | The address involved, when the change names one. |
-| `change.from` | string | The earlier value, for a key reference change or an admission change. |
-| `change.to` | string | The later value. |
+| `change.from` | string | The earlier value, on `key_ref_changed`, `transport_changed`, `platform_changed` and `admission_changed`. |
+| `change.to` | string | The later value, on those kinds and on `device_added`, where it is `admitted`. |
 | `change.from_bundle` | string | The policy version before the swap that made the change. |
 | `change.to_bundle` | string | The policy version after it. |
 | `forget.entry_id` | string | The id of the directory entry the principal was pinned to. |
@@ -179,7 +199,7 @@ A record that names its policy blob can be replayed offline and must give the sa
 | `revocation.connections` | integer | How many connections it ended. Zero is left out. |
 | `revocation.unreached.[].device` | string | A live context the revocation could not reach: its device. |
 | `revocation.unreached.[].username` | string | A live context the revocation could not reach: its username. |
-| `revocation.saved` | boolean | Whether `broker.revocations_file` was written. Present for a standing mark only. |
+| `revocation.saved` | boolean | Whether `broker.revocations_file` was written. Present for a standing mark only: absent for a self or key revocation, which writes none, and on a broker that keeps no `revocations_file`. |
 | `revocation.error` | string | What went wrong, when something did. |
 | `explain.asked_by` | string | The principal that asked the hypothetical question. |
 | `explain.asked_by_fingerprint` | string | The fingerprint of the certificate the asker presented. |
@@ -199,7 +219,7 @@ A record that names its policy blob can be replayed offline and must give the sa
 | `admin.operation` | string | On an `admin_touch` record, the operation the proof was for. |
 | `admin.target` | string | The operation's target, as the challenge shows it. |
 | `admin.challenge_sha256` | string | The SHA-256 of the challenge. The challenge, the signature and the attestation are never logged. |
-| `admin.why` | string | For a refusal, a fixed cause. |
+| `admin.why` | string | For a refusal or an unavailable answer, a fixed cause. |
 | `sign_in.source` | string | The source network a directory-password sign-in came from. |
 | `sign_in.failed` | string | On a refusal, which check failed. |
 | `sign_in.skew_seconds` | integer | For a clock too far off, by how many seconds. |
@@ -217,16 +237,14 @@ A record that names its policy blob can be replayed offline and must give the sa
 | `enrollments_import.exported_at` | string | When the imported export was made. |
 | `enrollments_import.replaced` | boolean | `true` when the import replaced an existing store. |
 | `enrollments_import.origin` | string | Who ran the import. |
-| `index_error` | string | What a failed index write cost, on the record for the session that lost it. It is the only place that says which contexts a revocation could not reach. |
+| `index_error` | string | What a failed session-index write cost, on the record for the session that lost it. That session is missing from the index, so a later revocation cannot find it. This is different from `revocation.unreached`, which lists live contexts a revocation found and could not reach. |
 
 ## The tls_outcome values {#tls_outcome}
 
-A record from the RFC 9887 (TACACS+ over TLS) listener carries `transport: "tls"`. A `tls_refused` record carries the `tls_outcome` that says why the handshake was refused. The handshake counter `port49_tls_handshakes_total` uses the same values as its `outcome` label. Strike says whether the refusal counts against the source address, as a wrong key does.
+A record from the RFC 9887 (TACACS+ over TLS) listener carries `transport: "tls"`. An `unvalidated` record with `diagnosis: tls_refused` carries the `tls_outcome` that says why the handshake was refused. The handshake counter `port49_tls_handshakes_total` uses the same values as its `outcome` label. Strike says whether the refusal counts against the source address, as a wrong key does.
 
 | `tls_outcome` | Means | Strike |
 |---|---|---|
-| `ok` | The handshake completed and the certificate was admitted. | no |
-| `resumed` | The handshake resumed an earlier session. | no |
 | `version_refused` | The ClientHello offered no TLS 1.3. | yes |
 | `no_client_certificate` | The device sent no certificate. | yes |
 | `unknown_ca` | Its chain reaches no `client_ca_file` anchor. | yes |
@@ -239,6 +257,11 @@ A record from the RFC 9887 (TACACS+ over TLS) listener carries `transport: "tls"
 | `early_data_refused` | The ClientHello carried `early_data` (RFC 9887 section 5.1.2). | yes |
 | `handshake_timeout` | No handshake within `handshake_timeout`. | yes |
 | `handshake_failed` | Anything else: a bad signature, a client abort. | yes |
+
+Two more values are never in a record. They are label values of `port49_tls_handshakes_total` only, and both mean the device was admitted:
+
+- `ok`: The handshake completed and the device's certificate was admitted. Counted after the status check passes.
+- `resumed`: The handshake resumed an earlier TLS session and the device was admitted.
 
 ## packet_fields
 
