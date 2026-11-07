@@ -30,6 +30,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,27 +68,45 @@ import (
 	"github.com/blanketfish/port49/internal/username"
 )
 
+// daemonSubcommands is every subcommand port49d dispatches, by name. Main dispatches from this
+// table and DaemonSubcommands lists it, so the docs lint (tests/ci) cannot disagree with it.
+var daemonSubcommands = map[string]func(args []string) int{
+	"init-revocations": func(a []string) int { return initRevocationsCmd(a, os.Stdout, os.Stderr) },
+	"revoke":           func(a []string) int { return offlineRevokeDaemon(a, os.Stdout, os.Stderr) },
+	"init-enrollments": func(a []string) int { return enrollmentsCmd("port49d", "init-enrollments", a, os.Stdout, os.Stderr) },
+	"export-enrollments": func(a []string) int {
+		return enrollmentsCmd("port49d", "export-enrollments", a, os.Stdout, os.Stderr)
+	},
+	"keys-diagnose": func(a []string) int { return keysDiagnoseCmd(a, os.Stdin, os.Stdout, os.Stderr) },
+	"store-roles":   func(a []string) int { return storeRolesCmd(a, os.Stdout, os.Stderr) },
+	"init-issuer": func(a []string) int {
+		return issuerCmd("port49d", "init-issuer", "/etc/port49/port49d.yaml", config.Load, a, os.Stdout, os.Stderr)
+	},
+	"rotate-issuer": func(a []string) int {
+		return issuerCmd("port49d", "rotate-issuer", "/etc/port49/port49d.yaml", config.Load, a, os.Stdout, os.Stderr)
+	},
+}
+
+// DaemonSubcommands is the names of port49d's subcommands, sorted.
+func DaemonSubcommands() []string { return subcommandNames(daemonSubcommands) }
+
+func subcommandNames(table map[string]func(args []string) int) []string {
+	names := make([]string, 0, len(table))
+	for n := range table {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // Main runs port49d with args (os.Args[1:]) and returns its exit code.
 func Main(args []string) int {
 	// The subcommands, before the daemon's flags: each reads port49d.yaml and
 	// starts nothing (spec §12; §13 decisions 32, amended, and 35).
-	if len(args) > 0 && args[0] == "init-revocations" {
-		return initRevocationsCmd(args[1:], os.Stdout, os.Stderr)
-	}
-	if len(args) > 0 && args[0] == "revoke" {
-		return offlineRevokeDaemon(args[1:], os.Stdout, os.Stderr)
-	}
-	if len(args) > 0 && (args[0] == "init-enrollments" || args[0] == "export-enrollments") {
-		return enrollmentsCmd("port49d", args[0], args[1:], os.Stdout, os.Stderr)
-	}
-	if len(args) > 0 && args[0] == "keys-diagnose" {
-		return keysDiagnoseCmd(args[1:], os.Stdin, os.Stdout, os.Stderr)
-	}
-	if len(args) > 0 && args[0] == "store-roles" {
-		return storeRolesCmd(args[1:], os.Stdout, os.Stderr)
-	}
-	if len(args) > 0 && (args[0] == "init-issuer" || args[0] == "rotate-issuer") {
-		return issuerCmd("port49d", args[0], "/etc/port49/port49d.yaml", config.Load, args[1:], os.Stdout, os.Stderr)
+	if len(args) > 0 {
+		if cmd, ok := daemonSubcommands[args[0]]; ok {
+			return cmd(args[1:])
+		}
 	}
 	fs := flag.NewFlagSet("port49d", flag.ContinueOnError)
 	cfgPath := fs.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")

@@ -2154,6 +2154,17 @@ var removedSecretKeys = map[string]string{
 	"key_refs":     "the policy's keys: block (decision 53 ruling 3)",
 }
 
+// RemovedKeys is the names of removedSecretKeys, sorted: the docs lint (tests/ci) keeps every
+// page from teaching a key the loader refuses.
+func RemovedKeys() []string {
+	keys := make([]string, 0, len(removedSecretKeys))
+	for k := range removedSecretKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // resolveInto reads the secret text names, at key at, into c.secrets under
 // that text.
 func (c *Config) resolveInto(at, text string) error {
