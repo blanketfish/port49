@@ -379,7 +379,7 @@ func TestTheDirectoryBindFilesAreStagedOutsideTheTree(t *testing.T) {
 	if _, err := directory.LoadCredentials(directory.Bind{Mechanism: "external", TLSCertFile: cert, TLSKeyFile: key}, nil); err == nil {
 		t.Fatal("the control: the in-tree key was loaded; the fixture proves nothing")
 	}
-	b := l.bindExternal()
+	b := l.bindExternal(t)
 	if _, err := directory.LoadCredentials(b, nil); err != nil {
 		t.Fatalf("the staged pair is refused: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestTheDirectoryBindFilesAreStagedOutsideTheTree(t *testing.T) {
 			t.Errorf("the external bind names %s, inside the tree", p)
 		}
 	}
-	g := l.bindGSSAPI()
+	g := l.bindGSSAPI(t)
 	for _, p := range []string{g.KeytabFile, g.KRB5Conf} {
 		if _, in := underRoot(p); in {
 			t.Errorf("the gssapi bind names %s, inside the tree", p)

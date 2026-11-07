@@ -595,26 +595,26 @@ func (l *labDir) viaStartTLS() *labDir {
 	return &c
 }
 
-func (l *labDir) bindExternal() directory.Bind {
-	cert, key := l.d.pki.privateBroker()
+func (l *labDir) bindExternal(t testing.TB) directory.Bind {
+	cert, key := l.d.pki.privateBroker(t)
 	return directory.Bind{Mechanism: "external", TLSCertFile: cert, TLSKeyFile: key}
 }
 
 // privateKerberos is the broker's keytab and the client krb5.conf as this process loads them: private
 // copies, made by path (the keytab is never read into a string, a log or a note).
-func (l *labDir) privateKerberos() (keytab, krb5 string) {
+func (l *labDir) privateKerberos(t testing.TB) (keytab, krb5 string) {
 	var err error
-	if keytab, err = labPrivateCopy(l.keytabFile); err != nil {
+	if keytab, err = labPrivateSecret(t, l.keytabFile); err != nil {
 		panic(fmt.Sprintf("the keytab %s cannot be staged: %v", l.keytabFile, err))
 	}
-	if krb5, err = labPrivateCopy(l.krb5File); err != nil {
+	if krb5, err = labPrivateSecret(t, l.krb5File); err != nil {
 		panic(fmt.Sprintf("the krb5.conf %s cannot be staged: %v", l.krb5File, err))
 	}
 	return keytab, krb5
 }
 
-func (l *labDir) bindGSSAPI() directory.Bind {
-	keytab, krb5 := l.privateKerberos()
+func (l *labDir) bindGSSAPI(t testing.TB) directory.Bind {
+	keytab, krb5 := l.privateKerberos(t)
 	return directory.Bind{Mechanism: "gssapi", KeytabFile: keytab, Principal: "port49@" + dirRealm, KRB5Conf: krb5}
 }
 

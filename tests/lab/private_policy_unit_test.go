@@ -84,3 +84,29 @@ func TestPrivatePolicyCopiesABrokerConfigsInventory(t *testing.T) {
 		}
 	}
 }
+
+// The broker's bind key, the keytab and krb5.conf are copied into the private directory for one test; the
+// copies are removed when it ends, so key material does not outlive the run.
+func TestPrivateSecretCopiesAreRemovedWhenTheTestEnds(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "secret-fixture.bin")
+	if err := os.WriteFile(src, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var cert, key, kt, krb string
+	t.Run("copies", func(t *testing.T) {
+		pki := &dirPKI{brokerCert: src, brokerKey: src}
+		cert, key = pki.privateBroker(t)
+		l := &labDir{keytabFile: src, krb5File: src}
+		kt, krb = l.privateKerberos(t)
+		for _, p := range []string{cert, key, kt, krb} {
+			if _, err := os.Stat(p); err != nil {
+				t.Fatalf("the copy %s is not there during the test: %v", p, err)
+			}
+		}
+	})
+	for _, p := range []string{cert, key, kt, krb} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("the private copy %s outlived its test (stat: %v)", p, err)
+		}
+	}
+}

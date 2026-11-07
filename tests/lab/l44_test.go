@@ -55,7 +55,7 @@ func TestL44Bringup(t *testing.T) {
 	}
 	if why := dc.win.invalidFor("keytab"); why != "" {
 		t.Logf("GSSAPI: no keytab (%s); its cells will be INVALID", why)
-	} else if r := dc.tryBind(t, ev, "gssapi", dc.bindGSSAPI(), ""); !r.ok {
+	} else if r := dc.tryBind(t, ev, "gssapi", dc.bindGSSAPI(t), ""); !r.ok {
 		t.Logf("GSSAPI as installed: %s (measured in TestL44WindowsAD, not a bring-up failure)", winScrub(r.text, dc.l44Secrets()...))
 	}
 	ev.assertClean(t, append([]string{d.password}, d.extra...)...)
@@ -217,7 +217,7 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 			t.Errorf("L44 %s: no keytab (%s); the cell is INVALID (R6)", label, noKeytab)
 			return fmt.Sprintf("| %s | INVALID (R6): no keytab: `%s` | n/a | — |\n", what, l44MDCell(noKeytab))
 		}
-		c := l.tryBind(t, ev, label, l.bindGSSAPI(), "")
+		c := l.tryBind(t, ev, label, l.bindGSSAPI(t), "")
 		c.text = winScrub(c.text, l.l44Secrets()...)
 		row, invalid := l44GSSAPIRow(what, c)
 		if invalid != "" {
@@ -254,7 +254,7 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	e2 := l.l44External(t, ev, "external, unmapped", adcsExt, false)
 	b.WriteString(l44ExtRow("SASL EXTERNAL over StartTLS, the same certificate, no `altSecurityIdentities` on port49 (carried question b)", e2))
 	ev.mark("L44 external, a certificate from the lab directory CA")
-	e3 := l.l44External(t, ev, "external, lab CA", l.bindExternal(), false)
+	e3 := l.l44External(t, ev, "external, lab CA", l.bindExternal(t), false)
 	b.WriteString(l44ExtRow("SASL EXTERNAL over StartTLS, a certificate from the lab directory CA (in the DC's Root store, not in NTAuth), unmapped (carried question b)", e3))
 
 	restoreCBT := l.l44GuardRegistry(t, "LdapEnforceChannelBinding", l44AsInstalled(cbtInstalled))

@@ -146,7 +146,7 @@ func TestL43BindMechanisms(t *testing.T) {
 			obs.WriteString("### Bind\n\n| mechanism | outcome | LDAP result | time |\n|---|---|---|---|\n")
 
 			ev.mark("L43 external")
-			ext := dir.tryBind(t, ev, "external", dir.bindExternal(), "")
+			ext := dir.tryBind(t, ev, "external", dir.bindExternal(t), "")
 			obs.WriteString(ext.row("SASL EXTERNAL over LDAPS, the broker's certificate"))
 			ev.mark("L43 simple over LDAPS")
 			simple := dir.tryBind(t, ev, "simple", dir.bindSimple(), d.password)
@@ -160,7 +160,7 @@ func TestL43BindMechanisms(t *testing.T) {
 			var gss l43Cell
 			if dir.name == platSamba {
 				ev.mark("L43 gssapi, strong auth yes")
-				gss = dir.tryBind(t, ev, "gssapi, strong auth yes", dir.bindGSSAPI(), "")
+				gss = dir.tryBind(t, ev, "gssapi, strong auth yes", dir.bindGSSAPI(t), "")
 				obs.WriteString(gss.row("GSSAPI over LDAPS, keytab, no SASL security layer" + setting))
 			} else {
 				obs.WriteString("| GSSAPI | not run: the OpenLDAP container has no KDC | n/a | n/a |\n")
@@ -172,7 +172,7 @@ func TestL43BindMechanisms(t *testing.T) {
 				val := dir.setStrongAuth(t, "allow_sasl_over_tls")
 				setting2 := " (`" + val + "`, after a restart)"
 				ev.mark("L43 gssapi, strong auth allow_sasl_over_tls")
-				gss2 := dir.tryBind(t, ev, "gssapi, strong auth allow_sasl_over_tls", dir.bindGSSAPI(), "")
+				gss2 := dir.tryBind(t, ev, "gssapi, strong auth allow_sasl_over_tls", dir.bindGSSAPI(t), "")
 				obs.WriteString(gss2.row("GSSAPI over LDAPS, keytab, no SASL security layer" + setting2))
 				ev.mark("L43 simple over LDAPS, strong auth allow_sasl_over_tls")
 				simple2 := dir.tryBind(t, ev, "simple, strong auth allow_sasl_over_tls", dir.bindSimple(), d.password)

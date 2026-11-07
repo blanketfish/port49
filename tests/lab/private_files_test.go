@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"testing"
 )
 
 // The fence walks every directory above a trust, policy or secret file and refuses one that others can
@@ -69,6 +70,16 @@ func labPrivateCopy(src string) (string, error) {
 	return dst, os.Chmod(dst, 0o600)
 }
 
+// labPrivateSecret is labPrivateCopy for key material (a private key, a keytab): the copy is removed when
+// the test ends, so it does not outlive the run in the temp directory.
+func labPrivateSecret(t testing.TB, src string) (string, error) {
+	dst, err := labPrivateCopy(src)
+	if err == nil {
+		t.Cleanup(func() { os.Remove(dst) })
+	}
+	return dst, err
+}
+
 // stagedKeys are the config keys whose file a daemon reads through the fence, or as a secret.
 var stagedKeys = regexp.MustCompile(`\b(tls_cert_file|tls_key_file|client_ca_file|ca_file|trust_anchor_file|` +
 	`attestation_roots_file|tls_ca_bundle_file|issuer_file|cert_file|key_file|intermediates_file|keytab_file|` +
@@ -120,12 +131,12 @@ func (p *dirPKI) privateCA() string {
 // privateBroker is the broker's client certificate and key for the directory's EXTERNAL bind as this process
 // loads them (directory.LoadCredentials reads the pair through the fence): private copies. It panics with the
 // path, never the content.
-func (p *dirPKI) privateBroker() (cert, key string) {
+func (p *dirPKI) privateBroker(t testing.TB) (cert, key string) {
 	var err error
-	if cert, err = labPrivateCopy(p.brokerCert); err != nil {
+	if cert, err = labPrivateSecret(t, p.brokerCert); err != nil {
 		panic(fmt.Sprintf("the directory bind certificate %s cannot be staged: %v", p.brokerCert, err))
 	}
-	if key, err = labPrivateCopy(p.brokerKey); err != nil {
+	if key, err = labPrivateSecret(t, p.brokerKey); err != nil {
 		panic(fmt.Sprintf("the directory bind key %s cannot be staged: %v", p.brokerKey, err))
 	}
 	return cert, key
