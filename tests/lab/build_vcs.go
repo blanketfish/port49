@@ -124,8 +124,9 @@ func treeDirty(dir string, paths ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// codePaths are the paths a lab run's binary and harness are built from,
-// with the evidence and results the run reads or writes.
+// codePaths are the code a lab run's binary and harness are built from (go.mod and go.sum included).
+// qualTreeDirty excludes tests/lab's results and evidence from it and adds the run's own outputs
+// (qualOwnOutputs).
 var codePaths = []string{"internal", "cmd", "platforms", "tests/lab", "tests/qual", "go.mod", "go.sum"}
 
 // qualOwnOutputs are the results and evidence the qualify and L80 runs write

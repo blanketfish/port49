@@ -21,16 +21,15 @@ func TestL65DriverPassesOnlyParametersAgentTakes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig := regexp.MustCompile(`(?s)class Agent:.*?def __init__\(self([^)]*)\)`).FindStringSubmatch(string(b))
-	if sig == nil {
+	_, afterClass, ok := strings.Cut(string(b), "class Agent:")
+	if !ok {
+		t.Fatal("class Agent not found in client.py")
+	}
+	inits := callArgs(afterClass, "def __init__(")
+	if len(inits) == 0 {
 		t.Fatal("Agent.__init__ not found in client.py")
 	}
-	var params []string
-	for _, p := range strings.Split(sig[1], ",") {
-		if name, _, _ := strings.Cut(strings.TrimSpace(p), "="); name != "" {
-			params = append(params, name)
-		}
-	}
+	params := pyParams(inits[0])
 	if !slices.Contains(params, "port49") {
 		t.Fatalf("read Agent parameters %v", params)
 	}
@@ -265,5 +264,49 @@ func TestL65ReplacedKeyCellsPinTheirCode(t *testing.T) {
 	d.Code = "host_key_changed"
 	if ok, why := l64GradePyRefusal(d, l64WantChanged, 0, nil); !ok {
 		t.Errorf("host_key_changed: %s", why)
+	}
+}
+
+// pyParams are the parameter names of a Python def's argument text (self removed), split at top-level
+// commas so a default such as float(90) does not end the list.
+func pyParams(args string) []string {
+	var names []string
+	depth, quote, start := 0, byte(0), 0
+	flush := func(end int) {
+		name, _, _ := strings.Cut(strings.TrimSpace(args[start:end]), "=")
+		if name = strings.TrimSpace(name); name != "" && name != "self" {
+			names = append(names, name)
+		}
+	}
+	for j := 0; j < len(args); j++ {
+		c := args[j]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(' || c == '[' || c == '{':
+			depth++
+		case c == ')' || c == ']' || c == '}':
+			depth--
+		case c == ',' && depth == 0:
+			flush(j)
+			start = j + 1
+		}
+	}
+	flush(len(args))
+	return names
+}
+
+func TestPyParamsHandleANestedDefault(t *testing.T) {
+	text := "def __init__(self, port49=\"port49\", timeout=float(90), stderr=None):\n    pass\n"
+	calls := callArgs(text, "def __init__(")
+	if len(calls) != 1 {
+		t.Fatalf("calls = %q", calls)
+	}
+	if got := pyParams(calls[0]); !slices.Equal(got, []string{"port49", "timeout", "stderr"}) {
+		t.Errorf("params = %v: a default with parentheses must not cut the list", got)
 	}
 }
