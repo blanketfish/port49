@@ -50,8 +50,7 @@ func TestL28KeyMiss(t *testing.T) {
 				"    retired: [{version: 1, secret_ref: env:PORT49_LAB_KEY}]\n", "matches_retired"},
 			{"expired", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n" +
 				"    accept: [{version: 1, secret_ref: env:PORT49_LAB_KEY, retire_after: " + yesterday + "}]\n", "matches_retired"},
-			{"accepted", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n" +
-				"    accept: [{version: 1, secret_ref: env:PORT49_LAB_KEY, retire_after: 2999-12-31}]\n", ""},
+			{"accepted", l28AcceptedKeys, ""},
 		} {
 			obs.WriteString(l.l28Phase(t, ph.name, ph.keys, ph.expect))
 		}
@@ -77,6 +76,23 @@ const l28Branch = "**Branch H.** port49d as first built held a key miss for the 
 	"`malformed_after_validation`, `not_tacacs` or unadmitted source's — is refused at Accept with a reset for " +
 	"that backoff: no record, counted as `port49_connection_events_total{event=\"held_refused\"}`. Each phase " +
 	"below compares with the `stopped` phase, the device's local fall-through with nothing listening."
+
+// l28AcceptedKeys is the keys block of the `accepted` phase and of the rotation: the new key current, the lab
+// key still accepted. The status policy carries the same block, so the two cannot differ.
+const l28AcceptedKeys = "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n" +
+	"    accept: [{version: 1, secret_ref: env:PORT49_LAB_KEY, retire_after: 2999-12-31}]\n"
+
+// l28StatusPolicy is base (tests/lab/l28/policy.yaml) with keys as its keys: block, which `port49 keys
+// status` requires of a policy (decision 53 ruling 3).
+func l28StatusPolicy(base, keys string) string {
+	return strings.TrimRight(base, "\n") + "\nkeys:\n" + keys
+}
+
+// l28StatusArgs is `port49 keys status` over the run's log. The flags are cmd/port49/policy.go:36's and
+// keys.go:62's; `--config` was removed with decision 53 ruling 3.
+func l28StatusArgs(bin, policy, inventory, log string) []string {
+	return []string{bin, "keys", "status", "--policy", policy, "--inventory", inventory, log}
+}
 
 // l28Anchor is the standing config's keys block, which each phase replaces.
 const l28Anchor = "  lab_key:\n    current: {version: 1, secret_ref: env:PORT49_LAB_KEY}\n"
@@ -247,8 +263,7 @@ func (l *lab) l28Rotate(t *testing.T) string {
 	if lines != nil {
 		l.carriedConfigure(t, lines...)
 	}
-	accepted := l.l28Config(t, "accepted", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n"+
-		"    accept: [{version: 1, secret_ref: env:PORT49_LAB_KEY, retire_after: 2999-12-31}]\n")
+	accepted := l.l28Config(t, "accepted", l28AcceptedKeys)
 	live := l.l28Live(t, accepted)
 	stop := l.capture(t, "L28-rotation")
 	defer stop()
@@ -271,11 +286,26 @@ func (l *lab) l28Rotate(t *testing.T) string {
 	if v2 == 0 {
 		t.Errorf("rotation: no record carried key_version 2 after the device was given the new key")
 	}
-	status, err := exec.Command(filepath.Join(root, "bin", "port49"), "keys", "status",
-		"--policy", filepath.Join(root, "tests", "lab", "l28", "policy.yaml"),
-		"--inventory", filepath.Join(root, "tests", "lab", "inventory-lab.yaml"),
-		"--config", accepted, l.logPath).CombinedOutput()
+	base, err := os.ReadFile(filepath.Join(root, "tests", "lab", "l28", "policy.yaml"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	priv, err := labPrivateSub("l28-" + l.p.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(priv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	statusPolicy := filepath.Join(priv, "policy.yaml")
+	if err := os.WriteFile(statusPolicy, []byte(l28StatusPolicy(string(base), l28AcceptedKeys)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	argv := l28StatusArgs(filepath.Join(root, "bin", "port49"), statusPolicy,
+		filepath.Join(root, "tests", "lab", "inventory-lab.yaml"), l.logPath)
+	status, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+	if err != nil {
+		t.Errorf("rotation: port49 keys status exited %v: %s", err, tailOf(string(status), 400))
 		status = append(status, fmt.Sprintf("(exit: %v)\n", err)...)
 	}
 	return fmt.Sprintf("### Rotation: the device given the new key\n\n%s\n\nToken login (`%s`) after the device's key "+

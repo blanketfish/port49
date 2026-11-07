@@ -199,3 +199,48 @@ func TestQualInventoryRewritesExactlyOneKeyRef(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestL28StatusPolicyCarriesTheAcceptedKeys(t *testing.T) {
+	base, err := os.ReadFile(filepath.Join("l28", "policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := l28StatusPolicy(string(base), l28AcceptedKeys)
+	assertPolicyAdmits(t, "l28 status policy", text, labInventoryForUnit(t), labRefusalsControl(t))
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv := labInventoryForUnit(t)
+	p, err := policy.Load(path, policy.Env{Devices: inv.Devices, InventoryKeyGroups: inv.KeyGroups})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, ok := p.KeySets()["lab_key"]
+	if !ok {
+		t.Fatal("the status policy has no lab_key set")
+	}
+	if set.Current.Version != 2 {
+		t.Errorf("lab_key current version %d, want 2", set.Current.Version)
+	}
+	if len(set.Accept) != 1 || set.Accept[0].Version != 1 {
+		t.Errorf("lab_key accepts %+v, want version 1 only", set.Accept)
+	}
+}
+
+func TestL28StatusArgsNameNoRemovedFlag(t *testing.T) {
+	args := l28StatusArgs("port49", "p.yaml", "i.yaml", "log")
+	// cmd/port49/policy.go:36 and keys.go:62 register --policy, --inventory and --since.
+	known := map[string]bool{"--policy": true, "--inventory": true, "--since": true}
+	for _, a := range args {
+		if !strings.HasPrefix(a, "--") {
+			continue
+		}
+		if a == "--config" {
+			t.Errorf("keys status no longer has --config (decision 53 ruling 3): %v", args)
+		}
+		if !known[a] {
+			t.Errorf("%s is not a flag of port49 keys status: %v", a, args)
+		}
+	}
+}
