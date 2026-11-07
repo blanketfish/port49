@@ -389,7 +389,7 @@ On each page:
 - links a results note for one of the page's suffixes; or
 - sits in an `!!! warning "Unmeasured…"` admonition.
 
-A claim with no L-ID at all fails too. The one other block the check skips is a `!!! note "Regression rerun pending"` admonition, and only when it holds no L-ID: it reports a rerun's state, not a device claim (Task 21's NX-OS #46 line). With an L-ID inside, it is checked like any other block.
+A claim with no L-ID at all fails too. The one other block the check skips is a `!!! note "Regression rerun pending"` admonition, and only when it holds no L-ID and names an issue as `#<n>`: it reports a rerun's state, not a device claim (Task 21's NX-OS #46 line). A page holds at most one such note. With an L-ID inside, it is checked like any other block; without an issue number, or as a page's second such note, it fails.
 
 **Note-name matching** (shared with Task 8):
 - A note `L<N>[-L<M>…]-<rest>.md` belongs to a suffix when that suffix's segments occur as a contiguous run anywhere in `<rest>` split on `-`. `juniper_vjunos-router` is two segments.
@@ -411,7 +411,10 @@ A claim with no L-ID at all fails too. The one other block the check skips is a 
     - a cited bullet and an admonition bullet pass;
     - a bare bullet fails;
     - an uncited lead paragraph ("IOS XE does not fall to local on ERROR, so keep a console path") fails;
-    - a `Regression rerun pending` note with no L-ID passes, and the same note holding `L73` fails.
+    - a `Regression rerun pending` note with no L-ID that names `#46` passes;
+    - the same note holding `L73` fails;
+    - the same note without an issue number ("the regression rerun is pending") fails;
+    - a page with two such notes, each naming an issue, fails on the second.
   - `TestNoteNamesMatchBySegments`:
     - `L88-cisco_nxos-nxos106-tls.md` is `cisco_nxos`;
     - `L88-juniper_vjunos-router-vjunos26-tls.md` is `juniper_vjunos-router`, not `juniper_vjunos`;
@@ -583,6 +586,7 @@ Six schema files over five root types, each the type its loader strict-decodes:
     | `other-platforms` | none (the generic adapter has no notes) |
 
     Matching is by segments, longest suffix first (Task 4). Within a page, each note is listed once. `var MultiPage = map[string][]string{"L31-breakglass-cisco-singleconnection.md": {"cisco-ios-xe", "cisco-nx-os"}}` holds a note that measured two images.
+  - `func NoteOwner(name string) (page string, nonDevice string, err error)`: the one device page whose suffixes match `name` by Task 4's rule, else the `nonDevice` entry that does. A device match beats a `nonDevice` match; two device matches, or none of either, is an error. `EvidenceFor` and `TestEveryResultsNoteBelongsToOnePage` both use it.
   - `type Evidence struct{ ID, File, Platform, Image, Date string }`.
   - `func EvidenceFor(resultsDir string, p DevicePage) ([]Evidence, error)`:
     - it lists the notes that match the page by segments, plus `MultiPage`'s;
@@ -601,7 +605,8 @@ Six schema files over five root types, each the type its loader strict-decodes:
   Each device page's front matter names `platforms:` (its suffixes) for Task 4's check.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `TestEveryResultsNoteBelongsToOnePage`: every `tests/lab/results/L*.md` matches exactly one `DevicePages` entry by Task 4's contiguous-run rule, or is in `MultiPage`, or matches a `nonDevice` entry by the same rule: `kind`, `regions`, `netbox`, `nautobot`, `openldap`, `samba`, `samba_ad`, `windows*`, `keycloak`, `ser8`, `systemd-docker`, `reference`, `step_ca`, `beehive*`. Files not named `L<N>-…` (`load-*`, `slice-*`, `session-*` and the like) are outside the test. A note that fits none fails, so a new platform's notes cannot go missing.
+  - `TestEveryResultsNoteBelongsToOnePage`: every `tests/lab/results/L*.md` matches exactly one `DevicePages` entry by Task 4's contiguous-run rule, or is in `MultiPage`, or matches a `nonDevice` entry by the same rule: `kind`, `regions`, `netbox`, `nautobot`, `openldap`, `samba`, `samba_ad`, `windows*`, `keycloak`, `ser8`, `systemd-docker`, `reference`, `step_ca`, `beehive*`. Files not named `L<N>-…` (`load-*`, `slice-*`, `session-*` and the like) are outside the test. A note that fits none fails, so a new platform's notes cannot go missing. A note that matches one `DevicePages` entry and also a `nonDevice` entry belongs to the device page: `L33-e2e-netbox-arista_eos.md` and `L33-e2e-nautobot-arista_eos.md` ran on vEOS and appear in EOS's evidence table. A note matching two device pages still fails.
+  - `TestADeviceMatchBeatsNonDevice`: on fixture names `L33-e2e-netbox-arista_eos.md` and `L33-e2e-nautobot-arista_eos.md`, `NoteOwner` returns the device page `arista-eos`; `L33-e2e-netbox.md` returns the `nonDevice` entry `netbox`; a fixture `L99-arista_eos-cisco_nxos.md` fails as matching two device pages.
   - `TestEvidenceParsesEveryHeaderStyle`, on three fixtures shaped like `L4-arista_eos.md`, `L76-nokia_srlinux.md` and `L88-cisco_xrd.md` (header lines only).
   - `TestLLMsTxtFollowsTheNav`: the runbook is the first link, and every nav page appears once.
 - [ ] **Step 2: Run and see them fail.**
@@ -925,7 +930,11 @@ Every content task has the same five steps. Each task lists only its pages, its 
   That file is generated (`make qualified-platforms`, from `tests/qual/cmd/qualified/qualified.go`, with its own drift test `TestTheCommittedListIsTheGeneratedOne`). Its cells cite the open L18 as "— (L18)", which fails Task 4's built-site pass. **Fix the generator, not the pass:**
   - `command()` (and every other cell or gap text that names a register ID) appends `, open` when `docgen.LabRegister` reads the row as open: "— (L18, open)";
   - a closed row is cited as before;
-  - update `qualified_test.go`'s expected strings (`— (L18)` at lines 77 and 142 become `— (L18, open)` against the real register);
+  - `Build(repoRoot)` reads the register from `filepath.Join(repoRoot, "docs/design/2026-08-23-policy-engine-spec.md")` and passes it to `docgen.LabRegister`. A missing spec, or a cited ID absent from the register, is an error, never an uncited cell;
+  - `repoWith` writes a minimal spec at that path whose `## 15. Lab register` table holds L18 open and L99 closed, so only L18's citations gain `, open` and every other expected string holds;
+  - update `qualified_test.go`'s expected strings (`— (L18)` at lines 77 and 142 become `— (L18, open)`);
+  - line 230's check that SR Linux's command cell does not cite Junos's L18 matches `"(L18"`, not `"(L18)"`, so it still fails when the bug returns once open rows read "(L18, open)";
+  - add `TestBuildFailsWithoutTheRegister`: `repoWith` with its spec removed makes `Build` return an error;
   - add `TestAnOpenRegisterRowIsCitedAsOpen`, with a fake register in which L18 is closed, wanting `— (L18)`;
   - run `make qualified-platforms` and commit `docs/qualified-platforms.md` with the generator.
 - the reference configurations by snippet of `deploy/device-aaa/README.md`.
@@ -951,7 +960,7 @@ Then one page per `DevicePages` entry, each with these sections in order:
   - **L78 (a reply over 255 bytes) is open on hardware:** `Unmeasured`, with Ryan's production prior stated as a prior, not a measurement. The page covers vJunos, vSRX and hardware: a hardware or SRX claim stays in an admonition even where a vJunos note link would pass Task 4.
 - **IOS XE:** no fall to local on ERROR (L73 cell i, L4); the 30 to 39 s TCP and 57 to 67 s TLS dead windows; a server certificate naming another address accepted (L73).
 - **IOS XR (XRd 26.1.1):** dials TLS on 49, not 300, unless `port` is set; `domain name` before enrolment; group member and host in separate commits; the `platforms:` privilege block (`policy-platforms.yaml`); no fall to local on ERROR; a local account logging in inside the dead window (L88 a).
-- **NX-OS:** 10.6(2)F over TLS honors single-connect (`L80-cisco_nxos.md`). L73 is closed: state what `L73-cisco_nxos.md` measured on Nexus 9300v 10.6(2)F (2026-10-18), cited to it. Then say, in a `!!! note "Regression rerun pending"` admonition holding no L-ID, that the 2026-11 regression rerun of that entry did not reproduce and is pending (issue #46). Never write L73 inside an `Unmeasured` admonition: it is closed, and Task 4 fails it.
+- **NX-OS:** 10.6(2)F over TLS honors single-connect (`L80-cisco_nxos.md`). L73 is closed: state what `L73-cisco_nxos.md` measured on Nexus 9300v 10.6(2)F (2026-10-18), cited to it. Then say, in a `!!! note "Regression rerun pending"` admonition holding no L-ID, that the 2026-11 regression rerun of that entry did not reproduce and is pending (#46). It is the page's only such note, and it must name the issue, or Task 4 fails it. Never write L73 inside an `Unmeasured` admonition: it is closed, and Task 4 fails it.
 - **EOS:** from its notes.
 - **IOS XE** also carries IOL-XE (`L71-cisco_iol-xe.md`), named as such, and `L31-breakglass-cisco-singleconnection.md` with NX-OS.
 - **Other platforms:** the generic adapter and `generic_platform`.
