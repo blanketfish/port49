@@ -43,7 +43,7 @@ Its first line says which attestation roots it will check against:
 
 ```text
 roots: from broker broker.example.com:8443
-module: /usr/lib/x86_64-linux-gnu/libykcs11.so (found)
+module: <path-to>/libykcs11.so.2 (found)
 token: <masked label>
 ok    session_slot
 ...
@@ -82,15 +82,18 @@ port49 hwkey setup
 - **When a check fails, it prints the commands to run.** The key is made with `ykman`, which asks for
   the management key; port49 never does, and never runs `ykman` itself:
 
-  ```sh
+  ```text
+  # if 9a already holds a key, add its certificate (this replaces nothing):
+  ykman piv certificates generate --subject "CN=port49 9a" 9a port49-9a.pub.pem
+  # only if 9a holds no key, make one (this replaces any key already there):
   ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a port49-9a.pub.pem
-  ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy ALWAYS 9c port49-9c.pub.pem
   ```
 
-  For a slot that holds a key but no certificate, it prints a `ykman piv certificates generate`
-  line first. No line names a serial, PIN, PUK or management key. Run `ykman piv keys generate` on a
-  slot that already holds a key only if you mean to replace it; the printed lines say which case
-  they are.
+  That is what an empty session slot prints; slot `9c` prints the same with `--touch-policy ALWAYS`.
+  port49 cannot tell an empty slot from a key that has no certificate, because `libykcs11` lists a
+  slot's key only with a certificate in it, so it prints both lines, certificate first. Run the
+  `keys generate` line only if the slot holds no key. No line names a serial, PIN, PUK or management
+  key.
 - **Which token and which module.** The module is found by `--module`, then the `module-path` of a key
   already in your config, then a probe of the system paths (not on macOS: pass `--module`). With more
   than one token present it lists them by number, model and masked label, exits 2, and wants
@@ -102,7 +105,7 @@ port49 hwkey setup
 |---|---|
 | 0 | ready; for `setup`, the keys were written or already name this token |
 | 1 | action needed: a check failed, no token is inserted, the session key is not on a token, or `setup` would replace a key and did not |
-| 2 | an error, with a message: a bad flag, no roots, no module, a module that is refused, several tokens and no `--token` |
+| 2 | an error, with a message: a bad flag, a config file that is refused, no roots, no module, a module that is refused, several tokens and no `--token`, a config write that fails |
 
 The roots have their own messages, all exit 2, and each names the way out:
 
@@ -118,24 +121,28 @@ The roots have their own messages, all exit 2, and each names the way out:
 
 `port49 login` asks the key's PIN once, on the terminal, with echo off. The PIN goes to the agent on a
 file descriptor and is zeroed after use. It is never on a command line, in the environment, or in a
-log. A wrong PIN is sent once and never retried, and the message says how many tries are left when
-the token reports it. A blocked PIN is unblocked with the PUK: `ykman piv access unblock-pin`.
+log. A wrong PIN is sent once and never retried. The message says `fewer tries are left` after the
+first wrong PIN and `one try is left before the key locks` after the second: the YubiKey measured
+for this page reports the first as the token's low-tries flag and the second as its final-try flag.
+A blocked PIN is unblocked with the PUK: `ykman piv access unblock-pin`.
 
 When a device asks for a touch, `port49 token` and `port49 ssh` say `touch your key now`. The token
-blinks. Touch it, or run the command again: a touch that does not come within the token's timeout
-ends the attempt with `no touch within ...` and leaves the key unlocked.
+blinks. Touch it, or run the command again. On that YubiKey an untouched request ended after 14.4
+seconds with `no touch within 15s; touch the key when it blinks and try again`, the key stayed
+unlocked, no PIN try was spent, and a touch right after the timeout signed with no PIN.
 
 ### A wrong PIN typed anywhere on the machine logs the agent off the key
 
 This is intended behaviour, not a fault to report. A mistyped PIN in another process, such as a
 second terminal's `port49 login`, makes the token log the running agent's session off. The agent's
-next refresh then says `your key needs its PIN: run port49 login`, and its status reads `locked`. The second box under "What has not been measured" lists what is still
-unknown about it.
+next refresh then says `your key needs its PIN: run port49 login`, and its status reads `locked`. This was seen with one
+wrong PIN at a second `port49 login` on one YubiKey.
 
-The remedy is to log in again: `port49 login` asks the PIN and puts the agent back on the key. A
-correct PIN typed in another process does not do this. Until you have a reason to do otherwise, give each token to one
+The instruction is to log in again with `port49 login`, which asks the PIN. A correct PIN typed in
+another process did not do this. Until you have a reason to do otherwise, give each token to one
 user at a time, and never let a script try a PIN on a token that an agent holds. A script that guesses
-a wrong PIN on a timer logs the agent off every time and spends the token's tries.
+a wrong PIN on a timer logs the agent off every time and spends the token's tries. The second box
+under "What has not been measured" lists what is still unknown about it.
 
 ## Two risks
 
@@ -161,18 +168,25 @@ offline, and when you are, take the file from the broker's administrator, not fr
     print; treat them as a starting point and read `ykman piv info` before and after.
 
 !!! warning "Unmeasured"
-    Whether parallel forks, such as several Ansible workers sharing one agent, are asked for one touch
-    or for several when a device requires `hardware_key_touch` is unknown (L60, open). The agent
-    serializes token requests, but what the key does is not measured. Run `port49 token` once for one
-    such device before a play, as the Ansible collection's README says. How long the token waits
-    before a touch times out, and whether `libykcs11` raises the token's low-tries flags, are also
-    unmeasured (L60); a PIN read from a file with `pin-source` is not tried while the token reports
-    low tries, and without that flag from the module it would spend one try per run. After a wrong
-    PIN typed in another process, whether `port49 token` still mints on the connection the agent
-    already holds is also unknown (L60).
+    The touch timeout, the low-tries flags and the wrong-PIN behaviour above were measured on one
+    YubiKey 5C Nano FIPS, firmware 5.4.3, with libykcs11 2.7.2
+    ([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L60-ser8.md)).
+    Other tokens, other firmware and other libykcs11 versions are unknown (L60, open). Also unknown:
+    whether a `port49 login` to the running agent puts it back on the key after a wrong PIN typed in
+    another process; whether `port49 token` still mints on the connection the agent already holds
+    after it; and what other processes using the token do to the agent. Whether parallel forks, such
+    as several Ansible workers sharing one agent, are asked for one touch or for several when a
+    device requires `hardware_key_touch` is a question for L60's next session. The agent serializes
+    token requests, but what the key does is not measured. Run `port49 token` once for one such
+    device before a play, as the Ansible collection's README says.
 
 !!! warning "Unmeasured"
     On macOS, `port49` accepts a PKCS#11 module that the `admin` group can write, and no other group,
-    because Homebrew's prefix is group-writable by `admin`. Whether a real YubiKey on a Mac signs in
-    end to end through that module, and how the Secure Enclave key store behaves on a Mac, are
-    unknown (L63, open).
+    because Homebrew's prefix is group-writable by `admin` (decision 45 ruling 3). That ruling's
+    evidence is a CI run in which Homebrew's `libykcs11.dylib` was refused without the rule, and its
+    hardware claims were measured on Linux. No register entry covers a YubiKey on a Mac, so whether
+    a Homebrew Mac loads the module and signs in end to end is unknown.
+
+!!! warning "Unmeasured"
+    How the macOS Secure Enclave key store behaves on a Mac is unknown (L63, open). It is experimental
+    and opt-in.

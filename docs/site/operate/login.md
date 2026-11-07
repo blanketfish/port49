@@ -151,9 +151,9 @@ Two consequences an operator should know:
   presented. Verify the new key on the device's console, then remove the old one with
   `ssh-keygen -R <device>` (the failure message prints the exact command for your `known_hosts`) and
   connect again. Do not remove it first and accept whatever answers.
-- If your `ssh_config` points `UserKnownHostsFile` somewhere that cannot keep a key, such as
-  `/dev/null`, `port49 ssh` refuses before sending anything, because every connection would be a
-  first contact.
+- Under `accept-new`, if your `ssh_config` points `UserKnownHostsFile` somewhere that cannot keep a
+  key, such as `/dev/null`, `port49 ssh` refuses before sending anything, because every connection
+  would be a first contact. With your own `StrictHostKeyChecking yes` that refusal does not apply.
 
 ### Telling port49's refusals from ssh's
 
@@ -169,22 +169,27 @@ Read from the commands themselves.
 | Command | Code | Meaning |
 |---|---|---|
 | `port49 login` | 0 | logged in, or an agent already running was refreshed |
-| `port49 login` | 1 | the agent did not start, or did not answer within 15 seconds (the end of `agent.log` is printed); another broker's or another certificate's agent holds the socket; refreshing the running agent failed; the broker refused the certificate it issued; a hardware key is absent, blocked or refused its PIN |
+| `port49 login` | 1 | the agent did not start, or did not answer within 15 seconds (the end of `agent.log` is printed); another broker's or another certificate's agent holds the socket, or `--sign-in` was given while one runs; refreshing the running agent failed; the agent socket's directory is not private; the sign-in failed at the identity provider or the directory; the broker did not answer; the broker refused the certificate it issued; a hardware key is absent, blocked or refused its PIN |
 | `port49 login` | 2 | the command line or the config is refused: an unknown flag, flags that contradict each other, a config file that cannot be read or that others can write, a missing `--broker` or `--broker-ca`, or a key file that is readable by others |
 | `port49 ssh` | 0 | ssh ended with 0 |
-| `port49 ssh` | 1 | port49 refused before ssh ran: no OpenSSH, one older than 8.5, a mint that failed, no agent, a socket directory that is not private, or an `ssh_config` that keeps no host keys. **Also ssh's own status when the remote command exits 1.** Read the `port49 ssh:` line |
-| `port49 ssh` | 2 | a flag or a device name `port49 ssh` does not accept |
+| `port49 ssh` | 1 | port49 refused before ssh ran: no OpenSSH, one older than 8.5, a mint that failed, no agent, a socket directory that is not private, an `ssh_config` that keeps no host keys under `accept-new`, or a config file refused while proving an `idp_mfa` device's sign-in. **Also ssh's own status when the remote command exits 1.** Read the `port49 ssh:` line |
+| `port49 ssh` | 2 | a flag it does not accept, no device named, or a device name it does not accept |
 | `port49 ssh` | 255 | ssh's own failure (connection, host key, authentication), or port49 ended ssh: the asker could not be verified, the token was asked for after it expired, or the device asked for the password again |
 | `port49 revoke` | 0 | done; `--list` printed |
-| `port49 revoke` | 1 | refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (`nothing was revoked`), an unreadable `--cert` file |
+| `port49 revoke` | 1 | refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (`nothing was revoked`), an unreadable `--cert` file. **Also when the broker did not answer and the revocation may be in force** (`it may be in force`, `it may have run`): run `port49 revoke --list` before you retry |
 | `port49 revoke` | 2 | the flags are wrong: no target, two targets, or a flag that does not go with the form |
 | `port49 revoke` | 3 | the revocation is in force but incomplete or not saved, or a lift step did not finish: run the same command again |
 | `port49 hwkey` | 0 | ready; for `setup`, the keys are written, or already name this token |
 | `port49 hwkey` | 1 | action needed: a check failed, no token is inserted, the session key is not on a token, or setup would change a key and was not allowed to |
-| `port49 hwkey` | 2 | an error: a bad flag, no attestation roots, an unreachable or untrusted broker, no module found or one refused, several tokens with no `--token`, or the build has no hardware-key support |
+| `port49 hwkey` | 2 | an error: a bad flag, no attestation roots, an unreachable or untrusted broker, a config file that is refused or cannot be written, no module found or one refused, several tokens with no `--token`, or the build has no hardware-key support |
 
 Also, `port49 token` and `port49 refresh` exit 0 when they worked, 1 when they did not, and 2 for a
 usage error. Under `--json`, `port49 token` writes its failure object before it exits 1.
+
+**One refused config file, three commands.** A config file that others can write is refused. `port49
+login` reads it first and exits 2. `port49 ssh` and `port49 token` read it only when a device asks for
+an `idp_mfa` sign-in, and there the refusal ends the mint with exit 1. A script that tells the two
+apart by the code alone will be wrong.
 
 A command run by `cron` or a script should check the code and not the text: the words are meant for a
 person and may change.
