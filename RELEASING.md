@@ -26,6 +26,12 @@ without approval harmless.
    outside collaborators": **Require approval for all outside collaborators**.
 6. **Public packages.** When the repository goes public, make the GHCR package `port49` and the
    chart package public.
+7. **Docs site.** Settings, Pages, source **GitHub Actions**. The `github-pages` environment's
+   deployment branches and tags are restricted to `main` and the `v*` tag pattern. `docs.yml`'s
+   `deploy` job is the only one that names it, and it deploys only from a public repository.
+8. **Required check.** Add `docs` to the required status checks of the `main` ruleset.
+9. **Link check.** At go-public, run one external link check over the built site (for example
+   `lychee` on `site/`) and fix what it finds.
 
 ## Each release
 
