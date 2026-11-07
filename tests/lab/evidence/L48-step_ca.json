@@ -8,11 +8,11 @@
       "dns_sans": null,
       "ekus": null,
       "is_ca": true,
-      "serial": "679122d04e477847c7c5b54f569b8250",
-      "not_before": "2026-10-08T13:45:24Z",
-      "not_after": "2036-10-05T13:45:24Z",
+      "serial": "5731b459c4d447af5231e51eabf19129",
+      "not_before": "2026-11-07T08:32:23Z",
+      "not_after": "2036-11-04T08:32:23Z",
       "lifetime": "87600h0m0s",
-      "pem": "-----BEGIN CERTIFICATE-----\nMIIB+DCCAZ6gAwIBAgIQZ5Ei0E5HeEfHxbVPVpuCUDAKBggqhkjOPQQDAjBGMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczElMCMGA1UEAxMccG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgUm9vdCBDQTAeFw0yNjEwMDgxMzQ1MjRaFw0zNjEwMDUxMzQ1\nMjRaME4xHTAbBgNVBAoTFHBvcnQ0OSBsYWIgd29ya2xvYWRzMS0wKwYDVQQDEyRw\nb3J0NDkgbGFiIHdvcmtsb2FkcyBJbnRlcm1lZGlhdGUgQ0EwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAATTCFh3DB5dbTCbEDX1y1iS5rx9LOyYPTTrpcUPz6Pg0AAg\nqlfbiyh2Mr9LB2MK/XAtxBwOEFGQhhHDCR1uuFNco2YwZDAOBgNVHQ8BAf8EBAMC\nAQYwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQU1/ED/JCVeqhiHirYs40t\nhTgnkqQwHwYDVR0jBBgwFoAUDGL8+osAS4wNubrE/u5Jdxq9oZEwCgYIKoZIzj0E\nAwIDSAAwRQIhAOcqCJ5sYbsESIwZ5eQcd9FV+l7Ym4QF6vgR0N0MJ/LOAiAhSPto\nTs8WpfKIcQZinzMDN4Y8s7ZVQYnIriIMOtp3uQ==\n-----END CERTIFICATE-----\n"
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIB+TCCAZ6gAwIBAgIQVzG0WcTUR69SMeUeq/GRKTAKBggqhkjOPQQDAjBGMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczElMCMGA1UEAxMccG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgUm9vdCBDQTAeFw0yNjExMDcwODMyMjNaFw0zNjExMDQwODMy\nMjNaME4xHTAbBgNVBAoTFHBvcnQ0OSBsYWIgd29ya2xvYWRzMS0wKwYDVQQDEyRw\nb3J0NDkgbGFiIHdvcmtsb2FkcyBJbnRlcm1lZGlhdGUgQ0EwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAARbgBzVfuYVbZXjqPVIyt06GX37MfeKG1nkF0zAtsyeSicm\nrXOi0159BdcWbVFTiFw10Ch15HbyJISAyWhcWqyJo2YwZDAOBgNVHQ8BAf8EBAMC\nAQYwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQUSItKDUt1QoiKYRkVFuqH\n8tjQccswHwYDVR0jBBgwFoAUO//nlR6SWp48nhvCD2o03qRmtvUwCgYIKoZIzj0E\nAwIDSQAwRgIhAJGwuU+jczLrC7cijnfbRsSlm7QejbnEoX0u2AhysKhMAiEA78Mb\nq9HUFJ8eXtk2zQBtIEBswUDHvmgbFD1NbW4MHi4=\n-----END CERTIFICATE-----\n"
     }
   },
   {
@@ -29,26 +29,26 @@
         "clientAuth"
       ],
       "is_ca": false,
-      "serial": "1d2955aee8452f7070d102011d9fd3c0",
-      "not_before": "2026-10-08T13:44:25Z",
-      "not_after": "2026-10-09T13:45:25Z",
+      "serial": "9907d77e7b961d2082598ad561f586f7",
+      "not_before": "2026-11-07T08:31:24Z",
+      "not_after": "2026-11-08T08:32:24Z",
       "lifetime": "24h1m0s",
-      "pem": "-----BEGIN CERTIFICATE-----\nMIICaDCCAg6gAwIBAgIQHSlVruhFL3Bw0QIBHZ/TwDAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTAwODEzNDQyNVoXDTI2\nMTAwOTEzNDUyNVowLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEonRyjM2A0onW\noAX2PZnAgLx1XblQ2X5BuXbqVUyi5CG77encEI1StCMv5CymloDoDnEBevBare83\nrzWw1AOX8qOB7DCB6TAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0lBBYwFAYIKwYBBQUH\nAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBSubT8GO9lfFoKQkmhw3XvolUM1GTAfBgNV\nHSMEGDAWgBTX8QP8kJV6qGIeKtizjS2FOCeSpDAvBgNVHREEKDAmhiRzcGlmZmU6\nLy9wb3J0NDkubGFiL2hvc3Qvb3hpZGl6ZWQtMDEwRwYMKwYBBAGCpGTGKEABBDcw\nNQIBAQQDbGFiBCtyMG5oTG1oYVlUNVhYNjhIOWQwcjVaMGdrQzhVYnBIUGMtOVJU\nZmZqWERVMAoGCCqGSM49BAMCA0gAMEUCIQDDtyAO1cTnpv4vHNzkQtVqAswDybaF\n7GZzY5njiIii+AIgTyhjGGXgeTWGlh3qtzBNxGUX8Wtbfr128ocSWvmlsb4=\n-----END CERTIFICATE-----\n"
+      "pem": "-----BEGIN CERTIFICATE-----\nMIICajCCAg+gAwIBAgIRAJkH1357lh0gglmK1WH1hvcwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjExMDcwODMxMjRaFw0y\nNjExMDgwODMyMjRaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKjPmWeMtVwE\noPGq4u5+17fY806rMhZ4ZKSAZ/pu9oCTGW2DHiuHhN3hQOMCgtQah+hL7Lrpi2uL\nqEE34qjOxqyjgewwgekwDgYDVR0PAQH/BAQDAgeAMB0GA1UdJQQWMBQGCCsGAQUF\nBwMBBggrBgEFBQcDAjAdBgNVHQ4EFgQUDVhjhXYJJFv1kO/Y5TPCkSX47J8wHwYD\nVR0jBBgwFoAUSItKDUt1QoiKYRkVFuqH8tjQccswLwYDVR0RBCgwJoYkc3BpZmZl\nOi8vcG9ydDQ5LmxhYi9ob3N0L294aWRpemVkLTAxMEcGDCsGAQQBgqRkxihAAQQ3\nMDUCAQEEA2xhYgQrQTRLb0lJQkVpNmtEME85dzJNTGJjY0ttemlFSU1xYi0wSlNt\nMExRMkxuODAKBggqhkjOPQQDAgNJADBGAiEA5yIYCcpnRvugXoTg8UbSc+4NfUTM\ngY0L35iKoba1w+8CIQDUqnmsYYhzmeJaMt4F81+/1UhmMNZOUOewwvj0zUKgSw==\n-----END CERTIFICATE-----\n"
     }
   },
   {
     "step": "workload_identity",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload identity: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 0
     }
   },
   {
     "step": "token_after_issue",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 0
     }
   },
@@ -66,18 +66,18 @@
         "clientAuth"
       ],
       "is_ca": false,
-      "serial": "f0d722707bde19b80dfc415b27cd0896",
-      "not_before": "2026-10-08T13:44:26Z",
-      "not_after": "2026-10-09T13:45:26Z",
+      "serial": "ffa544540969eca89babb07b1d0624f3",
+      "not_before": "2026-11-07T08:31:25Z",
+      "not_after": "2026-11-08T08:32:25Z",
       "lifetime": "24h1m0s",
-      "pem": "-----BEGIN CERTIFICATE-----\nMIICajCCAg+gAwIBAgIRAPDXInB73hm4DfxBWyfNCJYwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjEwMDgxMzQ0MjZaFw0y\nNjEwMDkxMzQ1MjZaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKJ0cozNgNKJ\n1qAF9j2ZwIC8dV25UNl+Qbl26lVMouQhu+3p3BCNUrQjL+QsppaA6A5xAXrwWq3v\nN681sNQDl/KjgewwgekwHwYDVR0jBBgwFoAU1/ED/JCVeqhiHirYs40thTgnkqQw\nDgYDVR0PAQH/BAQDAgeAMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAd\nBgNVHQ4EFgQUrm0/BjvZXxaCkJJocN176JVDNRkwLwYDVR0RBCgwJoYkc3BpZmZl\nOi8vcG9ydDQ5LmxhYi9ob3N0L294aWRpemVkLTAxMEcGDCsGAQQBgqRkxihAAQQ3\nMDUCAQEEA2xhYgQrcjBuaExtaGFZVDVYWDY4SDlkMHI1WjBna0M4VWJwSFBjLTlS\nVGZmalhEVTAKBggqhkjOPQQDAgNJADBGAiEAsHkJy0DgAJfZtIt/T06Mie+NsnwU\nxxrxOzkAXqQ7D20CIQCxhkMfsMPvl6jdveNKzaje+6MnZ9E88bbeNqJOfbSTiQ==\n-----END CERTIFICATE-----\n"
+      "pem": "-----BEGIN CERTIFICATE-----\nMIICaTCCAg+gAwIBAgIRAP+lRFQJaeyom6uwex0GJPMwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjExMDcwODMxMjVaFw0y\nNjExMDgwODMyMjVaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKjPmWeMtVwE\noPGq4u5+17fY806rMhZ4ZKSAZ/pu9oCTGW2DHiuHhN3hQOMCgtQah+hL7Lrpi2uL\nqEE34qjOxqyjgewwgekwHwYDVR0jBBgwFoAUSItKDUt1QoiKYRkVFuqH8tjQccsw\nDgYDVR0PAQH/BAQDAgeAMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAd\nBgNVHQ4EFgQUDVhjhXYJJFv1kO/Y5TPCkSX47J8wLwYDVR0RBCgwJoYkc3BpZmZl\nOi8vcG9ydDQ5LmxhYi9ob3N0L294aWRpemVkLTAxMEcGDCsGAQQBgqRkxihAAQQ3\nMDUCAQEEA2xhYgQrQTRLb0lJQkVpNmtEME85dzJNTGJjY0ttemlFSU1xYi0wSlNt\nMExRMkxuODAKBggqhkjOPQQDAgNIADBFAiEAuEyRJlPlHHu1Vya4V/uXqIPsh6wO\nVx2fIOekOdGCQysCIFegJOgsoE9GMXObZIolxsLY4ladpExBbrvr2gsBxLOM\n-----END CERTIFICATE-----\n"
     }
   },
   {
     "step": "token_after_renew",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 0
     }
   },
@@ -95,18 +95,18 @@
         "clientAuth"
       ],
       "is_ca": false,
-      "serial": "561922cca73c27c7c8caffc67a60a79c",
-      "not_before": "2026-10-08T13:44:26Z",
-      "not_after": "2026-10-08T14:00:26Z",
+      "serial": "148592dc6d5f2125f9594f3992d418fd",
+      "not_before": "2026-11-07T08:31:25Z",
+      "not_after": "2026-11-07T08:47:25Z",
       "lifetime": "16m0s",
-      "pem": "-----BEGIN CERTIFICATE-----\nMIICaDCCAg6gAwIBAgIQVhkizKc8J8fIyv/GemCnnDAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTAwODEzNDQyNloXDTI2\nMTAwODE0MDAyNlowLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEop2l4sZEqR8r\nOc7D1fC1KfVQqZ+1ujybmsJ4wm4Nv8gTRIMBVYOobVxCsAW+ycHDE2QrSut9V7gI\nx9vOF08FLqOB7DCB6TAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0lBBYwFAYIKwYBBQUH\nAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBREO0ZkxSeqBuo3gmZ48tquD4qX9TAfBgNV\nHSMEGDAWgBTX8QP8kJV6qGIeKtizjS2FOCeSpDAvBgNVHREEKDAmhiRzcGlmZmU6\nLy9wb3J0NDkubGFiL2hvc3Qvb3hpZGl6ZWQtMDEwRwYMKwYBBAGCpGTGKEABBDcw\nNQIBAQQDbGFiBCtyMG5oTG1oYVlUNVhYNjhIOWQwcjVaMGdrQzhVYnBIUGMtOVJU\nZmZqWERVMAoGCCqGSM49BAMCA0gAMEUCIBVXnOVDyOIEMF6BtvEjLfi84jy7JMij\nkvMg7nmPdSaQAiEA5OZmEX46BaHqKSq//gW1a7wSnkquZvz5QVCfBIxXksI=\n-----END CERTIFICATE-----\n"
+      "pem": "-----BEGIN CERTIFICATE-----\nMIICZzCCAg6gAwIBAgIQFIWS3G1fISX5WU85ktQY/TAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTEwNzA4MzEyNVoXDTI2\nMTEwNzA4NDcyNVowLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0E59pQySaAHh\ndSl/SHgjoRIcmc5oiIVxXhtkipF8QIi2Fkq+e385p1y0GLOwH3jNfQQxLxnNCOQd\ndrRwCZpIV6OB7DCB6TAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0lBBYwFAYIKwYBBQUH\nAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBRHGpTAYx8DSgCAGToW0B6WdVFGgzAfBgNV\nHSMEGDAWgBRIi0oNS3VCiIphGRUW6ofy2NBxyzAvBgNVHREEKDAmhiRzcGlmZmU6\nLy9wb3J0NDkubGFiL2hvc3Qvb3hpZGl6ZWQtMDEwRwYMKwYBBAGCpGTGKEABBDcw\nNQIBAQQDbGFiBCtBNEtvSUlCRWk2a0QwTzl3Mk1MYmNjS216aUVJTXFiLTBKU20w\nTFEyTG44MAoGCCqGSM49BAMCA0cAMEQCIB8PoZkumLD7ByRprmdYDJvF9vMfc8FS\nWOFvnM0eiXjXAiBxOPKnUba6SIg9jk6DpiUh3C0gqD8vQFq1odS7pngQQw==\n-----END CERTIFICATE-----\n"
     }
   },
   {
     "step": "daemon",
     "value": {
-      "detected_after_seconds": 568,
-      "relative_to_old_certificate": "10m29s after NotBefore and 5m31s before NotAfter",
+      "detected_after_seconds": 534,
+      "relative_to_old_certificate": "9m56s after NotBefore and 6m4s before NotAfter",
       "renewed": {
         "subject": "CN=spiffe://port49.lab/host/oxidized-01",
         "issuer": "CN=port49 lab workloads Intermediate CA,O=port49 lab workloads",
@@ -119,11 +119,11 @@
           "clientAuth"
         ],
         "is_ca": false,
-        "serial": "2dcef317802f7cde9c5bc7bf212465f2",
-        "not_before": "2026-10-08T13:53:50Z",
-        "not_after": "2026-10-08T14:09:50Z",
+        "serial": "9fe75ccc3a3b0bbcebfe8cf5daa806b3",
+        "not_before": "2026-11-07T08:40:18Z",
+        "not_after": "2026-11-07T08:56:18Z",
         "lifetime": "16m0s",
-        "pem": "-----BEGIN CERTIFICATE-----\nMIICaDCCAg6gAwIBAgIQLc7zF4AvfN6cW8e/ISRl8jAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTAwODEzNTM1MFoXDTI2\nMTAwODE0MDk1MFowLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEop2l4sZEqR8r\nOc7D1fC1KfVQqZ+1ujybmsJ4wm4Nv8gTRIMBVYOobVxCsAW+ycHDE2QrSut9V7gI\nx9vOF08FLqOB7DCB6TAfBgNVHSMEGDAWgBTX8QP8kJV6qGIeKtizjS2FOCeSpDAO\nBgNVHQ8BAf8EBAMCB4AwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0G\nA1UdDgQWBBREO0ZkxSeqBuo3gmZ48tquD4qX9TAvBgNVHREEKDAmhiRzcGlmZmU6\nLy9wb3J0NDkubGFiL2hvc3Qvb3hpZGl6ZWQtMDEwRwYMKwYBBAGCpGTGKEABBDcw\nNQIBAQQDbGFiBCtyMG5oTG1oYVlUNVhYNjhIOWQwcjVaMGdrQzhVYnBIUGMtOVJU\nZmZqWERVMAoGCCqGSM49BAMCA0gAMEUCIDoupLV156K/eKd89e9NFhSQAHRet9L7\nTJDdEeqImvNfAiEA06u25RINjdOI+auYALEBTWhXwdxoA6Afjn2N2IYbA9g=\n-----END CERTIFICATE-----\n"
+        "pem": "-----BEGIN CERTIFICATE-----\nMIICaTCCAg+gAwIBAgIRAJ/nXMw6Owu86/6M9dqoBrMwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjExMDcwODQwMThaFw0y\nNjExMDcwODU2MThaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABNBOfaUMkmgB\n4XUpf0h4I6ESHJnOaIiFcV4bZIqRfECIthZKvnt/OadctBizsB94zX0EMS8ZzQjk\nHXa0cAmaSFejgewwgekwHwYDVR0jBBgwFoAUSItKDUt1QoiKYRkVFuqH8tjQccsw\nDgYDVR0PAQH/BAQDAgeAMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAd\nBgNVHQ4EFgQURxqUwGMfA0oAgBk6FtAelnVRRoMwLwYDVR0RBCgwJoYkc3BpZmZl\nOi8vcG9ydDQ5LmxhYi9ob3N0L294aWRpemVkLTAxMEcGDCsGAQQBgqRkxihAAQQ3\nMDUCAQEEA2xhYgQrQTRLb0lJQkVpNmtEME85dzJNTGJjY0ttemlFSU1xYi0wSlNt\nMExRMkxuODAKBggqhkjOPQQDAgNIADBFAiAL3h3dgkXuv7XMdKaK6lwLSPfJlwww\n4OLmMqEFqSQeFgIhAOstJSP5WIs1vgCuVcq1lL5ycORXXlpMpMcrJZKyYTP5\n-----END CERTIFICATE-----\n"
       }
     }
   },
@@ -141,11 +141,11 @@
         "clientAuth"
       ],
       "is_ca": false,
-      "serial": "9f0518972444e9c133daae86de0883f0",
-      "not_before": "2026-10-08T13:53:55Z",
-      "not_after": "2026-10-08T14:00:55Z",
+      "serial": "20e227c4d4c5edec96ab8a611458434b",
+      "not_before": "2026-11-07T08:40:21Z",
+      "not_after": "2026-11-07T08:47:21Z",
       "lifetime": "7m0s",
-      "pem": "-----BEGIN CERTIFICATE-----\nMIICajCCAg+gAwIBAgIRAJ8FGJckROnBM9quht4Ig/AwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjEwMDgxMzUzNTVaFw0y\nNjEwMDgxNDAwNTVaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKx2xakow1dN\nk5u+NTGraI6INDPAl3lzrdKrfl2RKEeOuf14AuMBtjSQNSnGwuUBek+jF2s5wIc7\n5u5BXmfCPPCjgewwgekwDgYDVR0PAQH/BAQDAgeAMB0GA1UdJQQWMBQGCCsGAQUF\nBwMBBggrBgEFBQcDAjAdBgNVHQ4EFgQU1brXXK3OYbnTCxI+0J/SY0tPR8YwHwYD\nVR0jBBgwFoAU1/ED/JCVeqhiHirYs40thTgnkqQwLwYDVR0RBCgwJoYkc3BpZmZl\nOi8vcG9ydDQ5LmxhYi9ob3N0L294aWRpemVkLTAxMEcGDCsGAQQBgqRkxihAAQQ3\nMDUCAQEEA2xhYgQrcjBuaExtaGFZVDVYWDY4SDlkMHI1WjBna0M4VWJwSFBjLTlS\nVGZmalhEVTAKBggqhkjOPQQDAgNJADBGAiEA57HJ9ATGJw5p1fxHzr8L9IJiIeRb\nLQJk2ctc6fqjLE0CIQDmPcnBmNhm9qf59OXUET05c4gwRbjh6CgHC8yOscOpkQ==\n-----END CERTIFICATE-----\n"
+      "pem": "-----BEGIN CERTIFICATE-----\nMIICaDCCAg6gAwIBAgIQIOInxNTF7eyWq4phFFhDSzAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTEwNzA4NDAyMVoXDTI2\nMTEwNzA4NDcyMVowLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEw+b3lBWP6z/f\n5b8EKD1n8BjRq3crCG9MnYElSPqygDdIWY1iCMTjH14FTYKX0ymPlUR9Z9H+oqrU\nVjy6K1qV7qOB7DCB6TAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0lBBYwFAYIKwYBBQUH\nAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBTS6HIR5T+uyEDjk/i+emBkHJbtbTAfBgNV\nHSMEGDAWgBRIi0oNS3VCiIphGRUW6ofy2NBxyzAvBgNVHREEKDAmhiRzcGlmZmU6\nLy9wb3J0NDkubGFiL2hvc3Qvb3hpZGl6ZWQtMDEwRwYMKwYBBAGCpGTGKEABBDcw\nNQIBAQQDbGFiBCtBNEtvSUlCRWk2a0QwTzl3Mk1MYmNjS216aUVJTXFiLTBKU20w\nTFEyTG44MAoGCCqGSM49BAMCA0gAMEUCIQCsFZYm8PUZTHBbrWYQel3ickgxFDeB\nMvO7NQKx737qxQIgXfa6vumowUNax9CJ12WwyrFmA7n/Pc7ZDJE4EjFsBQw=\n-----END CERTIFICATE-----\n"
     }
   },
   {
@@ -157,134 +157,134 @@
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
-      "at_seconds": 0
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 1
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 30
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 60
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 90
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 120
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 150
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 180
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 210
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 240
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in 1m) with under a quarter of its validity left: its renewal is late; renew it against your CA",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 270
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in 1m) with under a quarter of its validity left: its renewal is late; renew it against your CA",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 300
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 0,
-      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in ) with under a quarter of its validity left: its renewal is late; renew it against your CA",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 330
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 77,
-      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 360
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 77,
-      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 390
     }
   },
   {
     "step": "token_ca_down",
     "value": {
-      "exit": 77,
-      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 420
     }
   },
   {
     "step": "crl",
     "value": {
-      "as_served_base64": "MIIBPTCB5AIBATAKBggqhkjOPQQDAjBOMR0wGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxhYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBFw0yNjEwMDgxNDAxNTlaFw0yNjEwMDkxNDAxNTlaoGUwYzAfBgNVHSMEGDAWgBTX8QP8kJV6qGIeKtizjS2FOCeSpDAKBgNVHRQEAwIBADA0BgNVHRwBAf8EKjAooCagJIYiaHR0cHM6Ly9zdGVwLWNhLnBvcnQ0OS5sYWIvMS4wL2NybDAKBggqhkjOPQQDAgNIADBFAiAOANuKV6ftZWPdYkIYUsfyb0q/SsWiOkGUekNJWwkTeAIhAI/ARxFtf7eAyKFldhIJvV+x3g8kbWNmaZizz54BXu9n",
+      "as_served_base64": "MIIBPDCB5AIBATAKBggqhkjOPQQDAjBOMR0wGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxhYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBFw0yNjExMDcwODQ4MjRaFw0yNjExMDgwODQ4MjRaoGUwYzAfBgNVHSMEGDAWgBRIi0oNS3VCiIphGRUW6ofy2NBxyzAKBgNVHRQEAwIBADA0BgNVHRwBAf8EKjAooCagJIYiaHR0cHM6Ly9zdGVwLWNhLnBvcnQ0OS5sYWIvMS4wL2NybDAKBggqhkjOPQQDAgNHADBEAiBhsJh6WgvWwDQEXgkyDhDfkWk/MXxzv8o6/awu1o23ugIgFnfOULW7HkmHbFKeHhoR8sU8h1Xac23na1BXwHmbsiA=",
       "facts": {
         "der": true,
         "issuer": "CN=port49 lab workloads Intermediate CA,O=port49 lab workloads",
         "issuer_is_intermediate": true,
         "signature_ok": true,
-        "this_update": "2026-10-08T14:01:59Z",
-        "next_update": "2026-10-09T14:01:59Z",
+        "this_update": "2026-11-07T08:48:24Z",
+        "next_update": "2026-11-08T08:48:24Z",
         "entries": 0
       }
     }
@@ -309,11 +309,11 @@
         "clientAuth"
       ],
       "is_ca": false,
-      "serial": "fb8dd670c2a31762305afbc9d254ac09",
-      "not_before": "2026-10-08T14:01:01Z",
-      "not_after": "2026-10-09T14:02:01Z",
+      "serial": "434c3afcb6093ee8e31e89274ffbd0e",
+      "not_before": "2026-11-07T08:47:26Z",
+      "not_after": "2026-11-08T08:48:26Z",
       "lifetime": "24h1m0s",
-      "pem": "-----BEGIN CERTIFICATE-----\nMIICaTCCAg+gAwIBAgIRAPuN1nDCoxdiMFr7ydJUrAkwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjEwMDgxNDAxMDFaFw0y\nNjEwMDkxNDAyMDFaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABE+zFhA4P3hM\niPb7spYY6CzFvf/gwwgmi1m1dk8mK9b/3r9enXCSHUhVD0ZRCEvForigZ+s1K0pv\n04I3KYjWR7CjgewwgekwDgYDVR0PAQH/BAQDAgeAMB0GA1UdJQQWMBQGCCsGAQUF\nBwMBBggrBgEFBQcDAjAdBgNVHQ4EFgQUsMcX08yyTA5wPVj6pmeJ2812kZQwHwYD\nVR0jBBgwFoAU1/ED/JCVeqhiHirYs40thTgnkqQwLwYDVR0RBCgwJoYkc3BpZmZl\nOi8vcG9ydDQ5LmxhYi9ob3N0L294aWRpemVkLTAxMEcGDCsGAQQBgqRkxihAAQQ3\nMDUCAQEEA2xhYgQrcjBuaExtaGFZVDVYWDY4SDlkMHI1WjBna0M4VWJwSFBjLTlS\nVGZmalhEVTAKBggqhkjOPQQDAgNIADBFAiARlYc+x91ootaWPv4o+mYxHY9w4t0o\nZx+1USmNQQLtygIhAJmuDu+9lR0Yb5vpCtQQCYxoYaHSJMeTdCcEdA71rBrw\n-----END CERTIFICATE-----\n"
+      "pem": "-----BEGIN CERTIFICATE-----\nMIICaDCCAg6gAwIBAgIQBDTDr8tgk+6OMeiSdP+9DjAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTEwNzA4NDcyNloXDTI2\nMTEwODA4NDgyNlowLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErIopFx+3IGPa\naWjVyKfIyNNWtvpTLfSRt4hdyMQ0lyMb00ktAbFGJsOHWY11yY5wOsrpbMtx86ik\nhOhtsaGUpqOB7DCB6TAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0lBBYwFAYIKwYBBQUH\nAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBTgv+ZSnQJm186YZrfAvoe7gbL4yTAfBgNV\nHSMEGDAWgBRIi0oNS3VCiIphGRUW6ofy2NBxyzAvBgNVHREEKDAmhiRzcGlmZmU6\nLy9wb3J0NDkubGFiL2hvc3Qvb3hpZGl6ZWQtMDEwRwYMKwYBBAGCpGTGKEABBDcw\nNQIBAQQDbGFiBCtBNEtvSUlCRWk2a0QwTzl3Mk1MYmNjS216aUVJTXFiLTBKU20w\nTFEyTG44MAoGCCqGSM49BAMCA0gAMEUCIQD5nCVlKCxFOQjKJTVF/tnZDpWqiUh+\nEoWL1AjXY6Q3TgIgVTZjb37hf+DzunwA2KHOjwgtaxKRK6g01X9vjdD5jx8=\n-----END CERTIFICATE-----\n"
     }
   },
   {
@@ -329,91 +329,179 @@
         "clientAuth"
       ],
       "is_ca": false,
-      "serial": "92f3686e32576a985c0871ab05dbb371",
-      "not_before": "2026-10-08T14:01:04Z",
-      "not_after": "2026-10-09T14:02:04Z",
+      "serial": "cd6c1a3e6eaa25c033ebc9b9f8691687",
+      "not_before": "2026-11-07T08:47:29Z",
+      "not_after": "2026-11-08T08:48:29Z",
       "lifetime": "24h1m0s",
-      "pem": "-----BEGIN CERTIFICATE-----\nMIICljCCAjygAwIBAgIRAJLzaG4yV2qYXAhxqwXbs3EwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjEwMDgxNDAxMDRaFw0y\nNjEwMDkxNDAyMDRaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABPzT2iyzb6C2\nyOy23UKsIN2PH2XzaIBrDE+4dFG0nKT28IuIDldXj75isZ/AJuKC8MbB+l+IvU9x\nqcC9liMVII2jggEYMIIBFDAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYB\nBQUHAwIwHQYDVR0OBBYEFIhJYFxNtMWAyvAQFxCY0+9yvrRCMB8GA1UdIwQYMBaA\nFNfxA/yQlXqoYh4q2LONLYU4J5KkMC8GA1UdEQQoMCaGJHNwaWZmZTovL3BvcnQ0\nOS5sYWIvaG9zdC9veGlkaXplZC0wMTAzBgNVHR8ELDAqMCigJqAkhiJodHRwczov\nL3N0ZXAtY2EucG9ydDQ5LmxhYi8xLjAvY3JsMEcGDCsGAQQBgqRkxihAAQQ3MDUC\nAQEEA2xhYgQrcjBuaExtaGFZVDVYWDY4SDlkMHI1WjBna0M4VWJwSFBjLTlSVGZm\nalhEVTAKBggqhkjOPQQDAgNIADBFAiBYSLnZl0KdpioaLZJWvDxQL4x6ynsAOFgz\nwl4HgBx4QgIhAPnikKjceW2f2B4oD2bfvan3fhBpuk53P9e5J2x6Y6/W\n-----END CERTIFICATE-----\n"
+      "pem": "-----BEGIN CERTIFICATE-----\nMIICljCCAjygAwIBAgIRAM1sGj5uqiXAM+vJufhpFocwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjExMDcwODQ3MjlaFw0y\nNjExMDgwODQ4MjlaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABOr/2fLXPu+A\nDb3h4lQL/q/Nr5fwSpjgvMbq0FIENtA6o98MNkplPFUxNpcL8YoRtbSLP7lmRaT3\n6dc3sKg8gVCjggEYMIIBFDAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYB\nBQUHAwIwHQYDVR0OBBYEFMidJqDb488sLqe/JxzmqNTsWfuGMB8GA1UdIwQYMBaA\nFEiLSg1LdUKIimEZFRbqh/LY0HHLMC8GA1UdEQQoMCaGJHNwaWZmZTovL3BvcnQ0\nOS5sYWIvaG9zdC9veGlkaXplZC0wMTAzBgNVHR8ELDAqMCigJqAkhiJodHRwczov\nL3N0ZXAtY2EucG9ydDQ5LmxhYi8xLjAvY3JsMEcGDCsGAQQBgqRkxihAAQQ3MDUC\nAQEEA2xhYgQrQTRLb0lJQkVpNmtEME85dzJNTGJjY0ttemlFSU1xYi0wSlNtMExR\nMkxuODAKBggqhkjOPQQDAgNIADBFAiEA1SewWsIMo4flvUGeCqbw0xv3N1Lob+5u\nv9GgRKf0YOQCIGAOSGzSXZ8x6tVQREyMFlUI5J0wFxmT+svAuncnOwEM\n-----END CERTIFICATE-----\n"
     }
   },
   {
     "step": "broker_certificate_status_lines",
     "value": [
-      "port49d: broker: certificate status: every certificate under CN=port49 lab slice CA (broker.identity.humans[].trust_anchor_file) will be refused (503, retried): no crls entry is that anchor or a CA it signed, and no ocsp is set; turn the CA's CRL on and name it in crls, or sync it to a file: source",
+      "port49d: broker: certificate status: every certificate under CN=port49 lab slice CA (broker.identity.humans[].trust_anchor_file) will be refused (503; final at port49 workload): no crls entry is that anchor or a CA it signed, and no ocsp is set; turn the CA's CRL on and name it in crls, or sync it to a file: source",
       "port49d: broker: certificate status from CRL step_ca (not loaded yet); a status that cannot be established is refused (503, retried)",
-      "port49d: broker: certificate status: CRL step_ca loaded (next update 2026-10-09T14:02:02Z)"
+      "port49d: broker: certificate status: CRL step_ca loaded (next update 2026-11-08T08:48:27Z)"
     ]
   },
   {
     "step": "token_default_leaf",
     "value": {
-      "exit": 77,
-      "stderr": "port49 workload token: 503 certificate_status_unavailable: the broker cannot establish this certificate's revocation status (no fresh CRL or OCSP answer covers \"CN=port49 lab workloads Intermediate CA,O=port49 lab workloads\" (CRL step_ca is scoped to the distribution point https://step-ca.port49.lab/1.0/crl, which this certificate's CRL distribution points do not name outside a reasons or cRLIssuer restriction; issue it with that name)); it stays so until a CRL or OCSP source covers this certificate: 1 of 1 devices were not minted",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/default.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/default-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/default-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories onl…",
       "at_seconds": 0
     }
   },
   {
     "step": "token_before_revoke",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 0
     }
   },
   {
     "step": "token_after_revoke",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 0
     }
   },
   {
     "step": "token_after_revoke",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 10
     }
   },
   {
     "step": "token_after_revoke",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 20
     }
   },
   {
     "step": "token_after_revoke",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 30
     }
   },
   {
     "step": "token_after_revoke",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 40
     }
   },
   {
     "step": "token_after_revoke",
     "value": {
-      "exit": 0,
-      "stderr": "",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 50
     }
   },
   {
     "step": "token_after_revoke",
     "value": {
-      "exit": 77,
-      "stderr": "port49 workload token: 401 credential_revoked: this certificate was revoked at its CA (crl step_ca) and marked at 2026-10-08T14:03:04Z; nothing is minted for it; request a new certificate: 1 of 1 devices were not minted",
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
       "at_seconds": 60
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 70
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 80
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 90
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 100
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 110
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 120
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 130
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 140
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 150
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 160
+    }
+  },
+  {
+    "step": "token_after_revoke",
+    "value": {
+      "exit": 2,
+      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w.pem and key /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem: keyfile: the directory /home/rwendt/git (above /home/rwendt/git/port49/.worktrees/fix-47/tests/lab/logs/workload/host-w/w-key.pem) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file under directories only root or uid 1000…",
+      "at_seconds": 170
     }
   },
   {
@@ -437,11 +525,11 @@
           "clientAuth"
         ],
         "is_ca": false,
-        "serial": "799ed590a48e9bb3f92ba2f18b6a758f",
-        "not_before": "2026-10-08T14:02:09Z",
-        "not_after": "2026-10-09T14:03:09Z",
+        "serial": "c23654e0dfaaa5d736a7c76c75b80613",
+        "not_before": "2026-11-07T08:50:35Z",
+        "not_after": "2026-11-08T08:51:35Z",
         "lifetime": "24h1m0s",
-        "pem": "-----BEGIN CERTIFICATE-----\nMIIClDCCAjugAwIBAgIQeZ7VkKSOm7P5K6Lxi2p1jzAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTAwODE0MDIwOVoXDTI2\nMTAwOTE0MDMwOVowLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdd4KzEVA1qP5\nmHwYDMi6SKvVk3U2mIo+3l09WUE2TIHcyaxMBsXOskObVtX+QP0mJHA+WIhSgnpV\n6QFh08T/wqOCARgwggEUMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEF\nBQcDAjAdBgNVHQ4EFgQUJgf2c4E8p/0BQq3ewhaRm2VRagkwHwYDVR0jBBgwFoAU\n1/ED/JCVeqhiHirYs40thTgnkqQwLwYDVR0RBCgwJoYkc3BpZmZlOi8vcG9ydDQ5\nLmxhYi9ob3N0L294aWRpemVkLTAxMDMGA1UdHwQsMCowKKAmoCSGImh0dHBzOi8v\nc3RlcC1jYS5wb3J0NDkubGFiLzEuMC9jcmwwRwYMKwYBBAGCpGTGKEABBDcwNQIB\nAQQDbGFiBCtyMG5oTG1oYVlUNVhYNjhIOWQwcjVaMGdrQzhVYnBIUGMtOVJUZmZq\nWERVMAoGCCqGSM49BAMCA0cAMEQCIDEih1JEUG8zcFe9ZBnlVVME8Vz4lo8+pu68\nkNEMJ+9gAiBXt4XdD3QtN0D6h3SCoWjKutQRbTBw0fp0VaSHoY22Bg==\n-----END CERTIFICATE-----\n"
+        "pem": "-----BEGIN CERTIFICATE-----\nMIIClTCCAjygAwIBAgIRAMI2VODfqqXXNqfHbHW4BhMwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjExMDcwODUwMzVaFw0y\nNjExMDgwODUxMzVaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABBIjoRGMgThQ\nkTsoHkluDpejyNB+SkheNxARHgDL2fdhOqygzpbOhg8fWe1QPGTkskxvxrh3YBl7\n+hBAgPxNw4GjggEYMIIBFDAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYB\nBQUHAwIwHQYDVR0OBBYEFIOYyII4hgqtFQGpwZ86H/MmpDnuMB8GA1UdIwQYMBaA\nFEiLSg1LdUKIimEZFRbqh/LY0HHLMC8GA1UdEQQoMCaGJHNwaWZmZTovL3BvcnQ0\nOS5sYWIvaG9zdC9veGlkaXplZC0wMTAzBgNVHR8ELDAqMCigJqAkhiJodHRwczov\nL3N0ZXAtY2EucG9ydDQ5LmxhYi8xLjAvY3JsMEcGDCsGAQQBgqRkxihAAQQ3MDUC\nAQEEA2xhYgQrQTRLb0lJQkVpNmtEME85dzJNTGJjY0ttemlFSU1xYi0wSlNtMExR\nMkxuODAKBggqhkjOPQQDAgNHADBEAiBAaVfDnpqEEnFYqxFVBMpSKdP8YogGMgis\noqYa5sMVmQIgbzFK9ZQ5kTMs/lO2bLxxuf0mlc3lAl00XmdaNQgNXdg=\n-----END CERTIFICATE-----\n"
       }
     }
   },
@@ -460,11 +548,11 @@
           "clientAuth"
         ],
         "is_ca": false,
-        "serial": "d80bd2671904aee9b07b61a8832f1fd0",
-        "not_before": "2026-10-08T14:02:09Z",
-        "not_after": "2026-10-09T14:03:09Z",
+        "serial": "79e9197a2560208acb181315e6b655b8",
+        "not_before": "2026-11-07T08:50:35Z",
+        "not_after": "2026-11-08T08:51:35Z",
         "lifetime": "24h1m0s",
-        "pem": "-----BEGIN CERTIFICATE-----\nMIICkDCCAjagAwIBAgIRANgL0mcZBK7psHthqIMvH9AwCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjEwMDgxNDAyMDlaFw0y\nNjEwMDkxNDAzMDlaMCwxKjAoBgNVBAMTIXNwaWZmZTovL2Vsc2V3aGVyZS5sYWIv\naG9zdC9vdGhlcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABOEZY5aLqFXNAkiE\ngbfsRwIHfe9DEqg9sTTPsATL4uRlCSCKOW8sM7M7KyqUXQridbPaQ/rtoBnGiXyp\nuGn+sLSjggEVMIIBETAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUH\nAwIwHQYDVR0OBBYEFMBvooiEb7ZngcoVy9kxczZ4fquYMB8GA1UdIwQYMBaAFNfx\nA/yQlXqoYh4q2LONLYU4J5KkMCwGA1UdEQQlMCOGIXNwaWZmZTovL2Vsc2V3aGVy\nZS5sYWIvaG9zdC9vdGhlcjAzBgNVHR8ELDAqMCigJqAkhiJodHRwczovL3N0ZXAt\nY2EucG9ydDQ5LmxhYi8xLjAvY3JsMEcGDCsGAQQBgqRkxihAAQQ3MDUCAQEEA2xh\nYgQrcjBuaExtaGFZVDVYWDY4SDlkMHI1WjBna0M4VWJwSFBjLTlSVGZmalhEVTAK\nBggqhkjOPQQDAgNIADBFAiEAlUX0UufQVIk4PqXgZjE2xokj6yToe05BjVhw+H2S\nYWcCIGYTguT2CSn/qlWJ/aduAVAQxoaGNih3iXsChtjEcsdd\n-----END CERTIFICATE-----\n"
+        "pem": "-----BEGIN CERTIFICATE-----\nMIICkDCCAjWgAwIBAgIQeekZeiVgIIrLGBMV5rZVuDAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTEwNzA4NTAzNVoXDTI2\nMTEwODA4NTEzNVowLDEqMCgGA1UEAxMhc3BpZmZlOi8vZWxzZXdoZXJlLmxhYi9o\nb3N0L290aGVyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEj73Da3LvqwwcnC1b\n+NCj/RAKPh7KTxEAJhvHt50CgqmYOHYTKh7iazDYH/u0VRPCHwvuPNwejEBMnYug\n+/cPS6OCARUwggERMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD\nAjAdBgNVHQ4EFgQU8w8bGUwkoOUZuFNwsDCDLqsibdYwHwYDVR0jBBgwFoAUSItK\nDUt1QoiKYRkVFuqH8tjQccswLAYDVR0RBCUwI4Yhc3BpZmZlOi8vZWxzZXdoZXJl\nLmxhYi9ob3N0L290aGVyMDMGA1UdHwQsMCowKKAmoCSGImh0dHBzOi8vc3RlcC1j\nYS5wb3J0NDkubGFiLzEuMC9jcmwwRwYMKwYBBAGCpGTGKEABBDcwNQIBAQQDbGFi\nBCtBNEtvSUlCRWk2a0QwTzl3Mk1MYmNjS216aUVJTXFiLTBKU20wTFEyTG44MAoG\nCCqGSM49BAMCA0kAMEYCIQCKOFLOBnbhi6pdxO+BmiBNEhS4wmuJs97dw8C0HfZh\nEgIhAL08EtCxyq3yjJNV6Rw7SQsxT3bG9V8+PZX62WaO7CIK\n-----END CERTIFICATE-----\n"
       }
     }
   },
@@ -490,11 +578,11 @@
           "clientAuth"
         ],
         "is_ca": false,
-        "serial": "f66276b9d6b54e1f01bb32ae633868ef",
-        "not_before": "2026-10-08T14:02:17Z",
-        "not_after": "2026-10-09T14:03:17Z",
+        "serial": "b78044315ddfe92233c2bd65aabf48ef",
+        "not_before": "2026-11-07T08:50:43Z",
+        "not_after": "2026-11-08T08:51:43Z",
         "lifetime": "24h1m0s",
-        "pem": "-----BEGIN CERTIFICATE-----\nMIICXjCCAgWgAwIBAgIRAPZidrnWtU4fAbsyrmM4aO8wCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjEwMDgxNDAyMTdaFw0y\nNjEwMDkxNDAzMTdaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABFktZoWM5nM9\nVt76yo6OLkkS0yoq6epo+vnPZA9MaOnSFm7Pf4MHW/3kKm/lKkAeYl1+lnrC6CgU\n8N1/RNBxLTijgeIwgd8wDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUF\nBwMCMB0GA1UdDgQWBBRFaosEAOha+8ZTEgmajm8DWQ4gZzAfBgNVHSMEGDAWgBTX\n8QP8kJV6qGIeKtizjS2FOCeSpDAvBgNVHREEKDAmhiRzcGlmZmU6Ly9wb3J0NDku\nbGFiL2hvc3Qvb3hpZGl6ZWQtMDEwRwYMKwYBBAGCpGTGKEABBDcwNQIBAQQDbGFi\nBCtyMG5oTG1oYVlUNVhYNjhIOWQwcjVaMGdrQzhVYnBIUGMtOVJUZmZqWERVMAoG\nCCqGSM49BAMCA0cAMEQCIBQukAaFjTq4+6k1eK9DG9SVrw/CVbPUoYn6ZkanSKD3\nAiB0Bh9YRDHj9/V/E7Ah9ucMiCi23fgUFO7Sv/1CIwzqdw==\n-----END CERTIFICATE-----\n"
+        "pem": "-----BEGIN CERTIFICATE-----\nMIICYDCCAgWgAwIBAgIRALeARDFd3+kiM8K9Zaq/SO8wCgYIKoZIzj0EAwIwTjEd\nMBsGA1UEChMUcG9ydDQ5IGxhYiB3b3JrbG9hZHMxLTArBgNVBAMTJHBvcnQ0OSBs\nYWIgd29ya2xvYWRzIEludGVybWVkaWF0ZSBDQTAeFw0yNjExMDcwODUwNDNaFw0y\nNjExMDgwODUxNDNaMC8xLTArBgNVBAMTJHNwaWZmZTovL3BvcnQ0OS5sYWIvaG9z\ndC9veGlkaXplZC0wMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABNMPX8Mm+QHA\n4WVPiSSxhlob1fLlvZIGowyai/OWxzjIVIFKMcX8UulpX4nD23G+p3p4VkpMk3PL\nnxEHKEqZJx6jgeIwgd8wDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUF\nBwMCMB0GA1UdDgQWBBTXNvgtq0lb3j65bu/7JIVSMSJP+jAfBgNVHSMEGDAWgBRI\ni0oNS3VCiIphGRUW6ofy2NBxyzAvBgNVHREEKDAmhiRzcGlmZmU6Ly9wb3J0NDku\nbGFiL2hvc3Qvb3hpZGl6ZWQtMDEwRwYMKwYBBAGCpGTGKEABBDcwNQIBAQQDbGFi\nBCtBNEtvSUlCRWk2a0QwTzl3Mk1MYmNjS216aUVJTXFiLTBKU20wTFEyTG44MAoG\nCCqGSM49BAMCA0kAMEYCIQDvGi6rsCEG/0q3fLaOWc3cn5RlmzD5iKpkVBB9uvnX\nawIhAJfsOpP7pXGVfzM0LxV2cPzOIHbTDcZfboQ51zVvx2gV\n-----END CERTIFICATE-----\n"
       }
     }
   },
@@ -513,11 +601,11 @@
           "clientAuth"
         ],
         "is_ca": false,
-        "serial": "237d41ddd74ec105ebb39b44505e73f9",
-        "not_before": "2026-10-08T14:02:17Z",
-        "not_after": "2026-10-09T14:03:17Z",
+        "serial": "20f947992708c86636a4a1d20184e411",
+        "not_before": "2026-11-07T08:50:43Z",
+        "not_after": "2026-11-08T08:51:43Z",
         "lifetime": "24h1m0s",
-        "pem": "-----BEGIN CERTIFICATE-----\nMIICXTCCAgSgAwIBAgIQI31B3ddOwQXrs5tEUF5z+TAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTAwODE0MDIxN1oXDTI2\nMTAwOTE0MDMxN1owLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEM6NenVP+5n1O\nr6z3ZLU4y6kn0R0LBKw2GCmUphfLlWlJEIAhinznRztckHHutNXOe6tyqV7E+7a+\nZAWDoTkBD6OB4jCB3zAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUH\nAwIwHQYDVR0OBBYEFAVLmrl4RyuLoaMFueXKwvkLqUj5MB8GA1UdIwQYMBaAFNfx\nA/yQlXqoYh4q2LONLYU4J5KkMC8GA1UdEQQoMCaGJHNwaWZmZTovL3BvcnQ0OS5s\nYWIvaG9zdC9veGlkaXplZC0wMTBHBgwrBgEEAYKkZMYoQAEENzA1AgEBBANsYWIE\nK3IwbmhMbWhhWVQ1WFg2OEg5ZDByNVowZ2tDOFVicEhQYy05UlRmZmpYRFUwCgYI\nKoZIzj0EAwIDRwAwRAIgIdW/ar4t/MtSNqF2ua8RTQkTGwX/z6ScuRn6Fck3W88C\nICjqW8UcrNaBMFtBbfB/ASdhTmG3QhdInP6BX4vLQQfV\n-----END CERTIFICATE-----\n"
+        "pem": "-----BEGIN CERTIFICATE-----\nMIICXjCCAgSgAwIBAgIQIPlHmScIyGY2pKHSAYTkETAKBggqhkjOPQQDAjBOMR0w\nGwYDVQQKExRwb3J0NDkgbGFiIHdvcmtsb2FkczEtMCsGA1UEAxMkcG9ydDQ5IGxh\nYiB3b3JrbG9hZHMgSW50ZXJtZWRpYXRlIENBMB4XDTI2MTEwNzA4NTA0M1oXDTI2\nMTEwODA4NTE0M1owLzEtMCsGA1UEAxMkc3BpZmZlOi8vcG9ydDQ5LmxhYi9ob3N0\nL294aWRpemVkLTAxMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECEztiSq++HgA\n+uAZowYCpM4lrxTBqqxjGfBZ8GpTAtCCcMAxP9gCCjwWSdOY1y3cjgfaXJ7Nylvc\nzGgqvn9cmKOB4jCB3zAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUH\nAwIwHQYDVR0OBBYEFGEJuxjy+3XzeUMIqlcLOTqGfdV9MB8GA1UdIwQYMBaAFEiL\nSg1LdUKIimEZFRbqh/LY0HHLMC8GA1UdEQQoMCaGJHNwaWZmZTovL3BvcnQ0OS5s\nYWIvaG9zdC9veGlkaXplZC0wMTBHBgwrBgEEAYKkZMYoQAEENzA1AgEBBANsYWIE\nK0E0S29JSUJFaTZrRDBPOXcyTUxiY2NLbXppRUlNcWItMEpTbTBMUTJMbjgwCgYI\nKoZIzj0EAwIDSAAwRQIhANtBeofsavw6MIj/TwMGk/SNzO+Tp6/RZYI6dlXng53t\nAiBrVvAqMlZcsR3zSD8rbR8jXrS/zVpf9yE1hgsugqx7mQ==\n-----END CERTIFICATE-----\n"
       }
     }
   }
