@@ -631,20 +631,22 @@ Plan 12b parked it: "a `healthcheck` subcommand (the image has no shell)".
 - Produces:
   - `func Run(ctx context.Context, listen, path string, out io.Writer) int`. It GETs `http://<host>:<port><path>` within 3 s, the host mapped as above. It exits 0 on 200, else 1 with one line: `healthcheck: <path> answered <code>: <first line of the body>` or `healthcheck: <dial error>`. Everything printed passes through `printsafe.Line` (`internal/printsafe`).
   - The subcommands are `port49d healthcheck`, `port49-broker healthcheck` and `port49-inventory healthcheck`, each `[--ready] [--config FILE]`, `--config` defaulting as the binary's start does.
-  - **The default probes `/healthz` (liveness); `--ready` probes `/readyz`.** An orchestrator that restarts an unhealthy container (Swarm, autoheal) must use the default: a `/readyz` check there turns "port49d waiting for its store" into a restart loop, and a restart during a store outage only adds a cold start. That is why the chart's liveness probe is `/healthz` and its readiness probe `/readyz`. Use `--ready` only where health is reported, not acted on. Task 18's page says so.
+  - **The default probes `/healthz` (liveness); `--ready` probes `/readyz`; there is no `--live`** (the lead's revised ruling 2, 2026-11-07). A port49d restarted during a store outage answers `/readyz` 503 for the whole outage, so anything that restarts or holds back on unhealthy (Swarm, autoheal, Nomad, ECS, a later `service_healthy` dependency) would kill it again, and it would lose its cached membership and pins. The chart already splits liveness (`/healthz`) from readiness (`/readyz`), and the default matches it. Use `--ready` only for routing or display. Task 18's page says so.
   - **Every path exits 0 or 1,** a bad flag and an unreadable config included: Docker reserves exit 2, and these mains' `flag.ContinueOnError` paths return 2 today, so the healthcheck parses its own flags.
 
 - [ ] **Step 1: Write the failing tests:**
   - `TestRunProbesThePath` (`httptest`): `/healthz` 200 gives 0; `/readyz` 503 with body `waiting for the store` gives 1 and that line; a body holding a control character prints it escaped (`printsafe`).
   - `TestRunDialsLoopbackForAWildcard`: `:9049`, `0.0.0.0:9049` and `[::]:9049`.
-  - `TestTheDefaultIsLivenessAndReadyIsReadiness`: the subcommand with no flag requests `/healthz`, with `--ready` `/readyz`.
+  - `TestTheDefaultProbesHealthz`: the subcommand with no flag requests `/healthz`.
+  - `TestReadyProbesReadyz`: with `--ready` it requests `/readyz`. There is no `--live`: it is refused as an unknown flag (exit 1).
+  - `TestComposeHealthchecksPassReady` in `tests/ci`: every service in `deploy/compose/compose.yaml` with a `healthcheck:` runs its own binary's `healthcheck` with `--ready`.
   - `TestAHealthcheckNeverExitsTwo`: an unknown flag, a missing config file and an unreadable one each exit 1.
   - `TestAnEmptyMetricsListenTakesTheRoleDefault`: port49d `:9049`, the broker `:9050`.
   - `port49d.DaemonSubcommands()` and `BrokerSubcommands()` (Task 3) list `healthcheck`.
 - [ ] **Step 2: Run and see them fail.**
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `go test ./internal/healthcheck/ ./internal/port49d/ -run 'Healthcheck|Run|Default|Exits|MetricsListen|Subcommand' -count=1` and `go vet -tags compose,failmatrix ./tests/compose/...`. The compose smoke runs in CI (`compose` workflow) on the pull request. Report its run.
-- [ ] **Step 5: Commit:** `git add internal/healthcheck internal/port49d cmd/port49-inventory deploy/compose tests/compose docs/site/operate/troubleshooting/will-not-start.md && git commit -m "feat: a healthcheck subcommand for images without a shell, used by compose"`
+- [ ] **Step 4: Run** `go test ./internal/healthcheck/ ./internal/port49d/ -run 'Healthcheck|Run|Default|Ready|Exits|MetricsListen|Subcommand' -count=1`, `go test ./tests/ci/ -run '^TestComposeHealthchecksPassReady$' -count=1` and `go vet -tags compose,failmatrix ./tests/compose/...`. The compose smoke runs in CI (`compose` workflow) on the pull request. Report its run.
+- [ ] **Step 5: Commit:** `git add internal/healthcheck internal/port49d cmd/port49-inventory deploy/compose tests/compose tests/ci docs/site/operate/troubleshooting/will-not-start.md && git commit -m "feat: a healthcheck subcommand for images without a shell, used by compose"`
 
 ---
 
@@ -812,7 +814,7 @@ Every content task has the same five steps. Each task lists only its pages, its 
 - `operate/troubleshooting/failure-matrix.md`: an intro, then `--8<-- "deploy/failure-matrix.md"`.
 - `operate/troubleshooting/will-not-start.md`:
   - the systemd and compose "When it will not start" sections, by their `will_not_start` snippet markers;
-  - **which healthcheck to use where** (Task 10): the default (`/healthz`) for anything that restarts an unhealthy container; `--ready` (`/readyz`) only where health is reported (compose's `healthy`, a load balancer's member check). A store outage must never restart-loop port49d;
+  - **which healthcheck to use where** (Task 10), said plainly: use the default (`/healthz`) for anything that restarts or holds back on unhealthy (Swarm, autoheal, Nomad, ECS, a `service_healthy` dependency); use `--ready` (`/readyz`) only for routing or display (compose's `healthy`, a load balancer's member check). A store outage must never restart-loop port49d, which would cost it its cached membership and pins;
   - a Kubernetes section written from the chart README's facts (a broker refused "behind a promotion" crash-loops: copy the CA files with a debug pod mounting its state PVC).
 - `operate/troubleshooting/index.md`, **the 3am index**, in three parts:
   - **"A person tells you…"**: cannot log in to one device; to every device; break-glass does not work (IOS XE and XR do not fall to local on ERROR; the dead windows from `deploy/device-aaa/README.md`); a session ended early; "revoked at".
