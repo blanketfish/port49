@@ -21,6 +21,8 @@ const (
 	decisionLogDesc = "internal/docgen/descriptions/decision_log.yaml"
 	reasonPage      = "docs/site/reference/reason-codes.md"
 	decisionLogPage = "docs/site/reference/decision-log.md"
+	evidenceDir     = "docs/site/_snippets/evidence/"
+	llmsPage        = "docs/site/llms.txt"
 	tlsOutcomeKey   = "tls_outcome."
 )
 

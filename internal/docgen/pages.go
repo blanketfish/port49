@@ -203,6 +203,25 @@ func Pages(root string) (map[string]string, error) {
 		return nil, err
 	}
 	out[metricsPage] = MetricsPage(ms, as)
+
+	reg, err := LabRegister(spec)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range DevicePages {
+		ev, err := EvidenceFor(filepath.Join(root, "tests", "lab", "results"), p)
+		if err != nil {
+			return nil, err
+		}
+		out[evidenceDir+p.Slug+".md"] = EvidenceTable(ev, reg)
+	}
+	mk, err := os.ReadFile(filepath.Join(root, "mkdocs.yml"))
+	if err != nil {
+		return nil, err
+	}
+	if out[llmsPage], err = LLMsTxt(mk, filepath.Join(root, "docs", "site")); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

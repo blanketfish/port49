@@ -2,6 +2,9 @@ site_name: port49
 site_url: https://blanketfish.github.io/port49/
 repo_url: https://github.com/blanketfish/port49
 docs_dir: docs/site
+# The evidence tables are included into the device pages; they are not pages of their own.
+exclude_docs: |
+  _snippets/
 strict: true
 
 theme:

@@ -138,6 +138,19 @@ func citesNote(names []string, id string, platforms, universe []string, results 
 		if suffix, ok := docgen.MatchNote(name, universe); ok && contains(platforms, suffix) {
 			return true
 		}
+		// A note that measured two images is carried by each page that lists it.
+		for _, slug := range docgen.MultiPage[name] {
+			for _, p := range docgen.DevicePages {
+				if p.Slug != slug {
+					continue
+				}
+				for _, s := range p.Suffixes {
+					if contains(platforms, s) {
+						return true
+					}
+				}
+			}
+		}
 	}
 	return false
 }
@@ -189,26 +202,66 @@ func readFile(t *testing.T, p string) string {
 	return string(b)
 }
 
-// siteUniverse is every platforms: suffix any page claims.
+// siteUniverse is every suffix the device pages own (docgen.DevicePages). A page's own platforms: must
+// equal its suffixes (TestEveryDevicePageDeclaresItsPlatforms), so this is the suffixes any page claims.
 func siteUniverse(t *testing.T) []string {
 	t.Helper()
-	seen := map[string]bool{}
-	for _, page := range sitePages(t) {
-		fm := frontMatter(t, page)
-		if raw, ok := fm["platforms"].([]any); ok {
-			for _, p := range raw {
-				if s, ok := p.(string); ok {
-					seen[s] = true
-				}
-			}
-		}
-	}
 	var u []string
-	for s := range seen {
-		u = append(u, s)
+	for _, p := range docgen.DevicePages {
+		u = append(u, p.Suffixes...)
 	}
 	sort.Strings(u)
 	return u
+}
+
+// TestEveryDevicePageDeclaresItsPlatforms fails when a device page's platforms: front matter differs from
+// the suffixes docgen.DevicePages gives it. Without it the device checks pass on a page that declares none.
+func TestEveryDevicePageDeclaresItsPlatforms(t *testing.T) {
+	for _, p := range docgen.DevicePages {
+		page := "admin/devices/" + p.Slug + ".md"
+		fm := frontMatter(t, page)
+		if fm == nil {
+			continue
+		}
+		var got []string
+		if raw, ok := fm["platforms"].([]any); ok {
+			for _, v := range raw {
+				s, _ := v.(string)
+				got = append(got, s)
+			}
+		} else if fm["platforms"] != nil {
+			t.Errorf("%s: platforms: is not a list", page)
+		}
+		want := append([]string(nil), p.Suffixes...)
+		sort.Strings(want)
+		sort.Strings(got)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: platforms: is %v, want the suffixes %v", page, got, want)
+		}
+		if b := readFile(t, filepath.Join(docsRoot, filepath.FromSlash(page))); !strings.Contains(b,
+			`--8<-- "docs/site/_snippets/evidence/`+p.Slug+`.md"`) {
+			t.Errorf("%s does not include its evidence table", page)
+		}
+	}
+}
+
+// A note two pages share counts as evidence on both of them.
+func TestAMultiPageNoteCountsOnEachOfItsPages(t *testing.T) {
+	const name = "L31-breakglass-cisco-singleconnection.md"
+	universe := siteUniverse(t)
+	for _, platforms := range [][]string{{"cisco_iosxe", "cisco_iol"}, {"cisco_nxos"}} {
+		if !citesNote([]string{name}, "L31", platforms, universe, resultsDir) {
+			t.Errorf("%s does not carry %v", name, platforms)
+		}
+	}
+	if citesNote([]string{name}, "L31", []string{"arista_eos", "arista_ceos"}, universe, resultsDir) {
+		t.Errorf("%s carries an Arista page", name)
+	}
+	page := "---\nplatforms:\n  - cisco_nxos\n---\n\n# x\n\nThe single-connection break-glass login fails after a reset " +
+		"([L31](" + resultsURL + name + ")).\n"
+	if got := checkDeviceClaims("p.md", page, universe, resultsDir); len(got) != 0 {
+		t.Errorf("a claim citing the shared note failed: %v", got)
+	}
 }
 
 var fixtureUniverse = []string{"juniper_vjunos", "juniper_vjunos-router", "juniper_vsrx", "arista_eos"}

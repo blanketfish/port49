@@ -1,0 +1,81 @@
+# port49
+
+> port49 is a TACACS+ server that gives unmodified network devices certificate-based or OIDC-based identity.
+
+## Start here
+
+- [AI agents setup runbook](https://blanketfish.github.io/port49/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end.
+- [AI agents quick start](https://blanketfish.github.io/port49/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity.
+
+## Home
+
+- [Home](https://blanketfish.github.io/port49/): port49 is a TACACS+ server that gives unmodified network devices certificate-based or OIDC-based identity.
+
+## Concepts
+
+- [Concepts](https://blanketfish.github.io/port49/concepts/): The ideas behind port49, in the order an operator meets them.
+- [Tokens, receipts and contexts](https://blanketfish.github.io/port49/concepts/tokens-receipts-contexts/): What a token, a receipt and a context are, and how a device login uses each.
+- [Identities](https://blanketfish.github.io/port49/concepts/identities/): How port49 knows who is logging in, for people and for workloads.
+- [Revocation](https://blanketfish.github.io/port49/concepts/revocation/): How port49 ends access that was already granted, and how quickly it takes effect.
+- [Trust domains](https://blanketfish.github.io/port49/concepts/trust-domains/): What a trust domain is and what port49 trusts inside and outside one.
+
+## Operate
+
+- [Install](https://blanketfish.github.io/port49/operate/install/): Choosing between the systemd, container and Helm shapes of a port49 deployment.
+- [systemd](https://blanketfish.github.io/port49/operate/install/systemd/): Installing port49d and the broker from the packages and running them under systemd.
+- [Containers](https://blanketfish.github.io/port49/operate/install/container/): Running port49d, the broker and etcd as containers with Compose.
+- [Helm](https://blanketfish.github.io/port49/operate/install/helm/): Deploying port49 to Kubernetes with the Helm chart.
+- [Clients](https://blanketfish.github.io/port49/operate/install/clients/): Installing the port49 command-line client, the Python library and the Ansible lookup.
+- [Broker and agent](https://blanketfish.github.io/port49/operate/broker-and-agent/): What the broker and the agent each do, and where each runs.
+- [Signing in](https://blanketfish.github.io/port49/operate/login/): How a person signs in to port49 and gets a token for a device login.
+- [Hardware keys](https://blanketfish.github.io/port49/operate/hardware-keys/): Requiring a hardware key at sign-in and at each device login.
+- [Stores](https://blanketfish.github.io/port49/operate/stores/): The directory and session stores port49 keeps state in, and what happens when one is down.
+- [TLS](https://blanketfish.github.io/port49/operate/tls/): Running TACACS+ over TLS on port 300 and the certificates it needs.
+- [Secrets](https://blanketfish.github.io/port49/operate/secrets/): Where port49's secrets live, who may read them, and how they are rotated.
+- [Backup and restore](https://blanketfish.github.io/port49/operate/backup-and-restore/): What to back up, how to restore it, and what a restore does to live sessions.
+- [Monitoring](https://blanketfish.github.io/port49/operate/monitoring/): The metrics, alerts and logs that show whether port49 is healthy.
+- [Versions](https://blanketfish.github.io/port49/operate/versions/): Which versions of port49 and its dependencies work together, and how to upgrade.
+- [Troubleshooting](https://blanketfish.github.io/port49/operate/troubleshooting/): Where to start when port49 or a device login is not working.
+- [Failure matrix](https://blanketfish.github.io/port49/operate/troubleshooting/failure-matrix/): What a device login does when each part of port49 is down.
+- [When it will not start](https://blanketfish.github.io/port49/operate/troubleshooting/will-not-start/): The refusals port49d prints at start, what each means and how to fix it.
+
+## Administer
+
+- [Policy](https://blanketfish.github.io/port49/admin/policy/): Writing the policy file that decides who may log in to which devices and what they may run.
+- [Roles and grants](https://blanketfish.github.io/port49/admin/roles-and-grants/): Defining roles, granting them to people and groups, and reading why a grant applied.
+- [Key rotation](https://blanketfish.github.io/port49/admin/key-rotation/): Rotating the devices' shared secrets and port49's encryption setting without locking anyone out.
+- [Revocation](https://blanketfish.github.io/port49/admin/revocation/): Revoking a person, a token or a certificate, and confirming the revocation took effect.
+- [Identity providers](https://blanketfish.github.io/port49/admin/identity-providers/): Connecting an OIDC identity provider or a directory so people can sign in.
+- [Workloads](https://blanketfish.github.io/port49/admin/workloads/): Giving automation its own identity through workload certificates.
+- [Inventory](https://blanketfish.github.io/port49/admin/inventory/): Telling port49 which devices exist, from a file or from an inventory connector.
+- [Devices](https://blanketfish.github.io/port49/admin/devices/): What every device needs to talk to port49, and the page for each qualified platform.
+- [Arista EOS](https://blanketfish.github.io/port49/admin/devices/arista-eos/): Configuring Arista EOS to authenticate and authorize logins through port49.
+- [Cisco IOS XE](https://blanketfish.github.io/port49/admin/devices/cisco-ios-xe/): Configuring Cisco IOS XE to authenticate and authorize logins through port49.
+- [Cisco NX-OS](https://blanketfish.github.io/port49/admin/devices/cisco-nx-os/): Configuring Cisco NX-OS to authenticate and authorize logins through port49.
+- [Cisco IOS XR](https://blanketfish.github.io/port49/admin/devices/cisco-ios-xr/): Configuring Cisco IOS XR to authenticate and authorize logins through port49.
+- [Juniper Junos](https://blanketfish.github.io/port49/admin/devices/juniper-junos/): Configuring Juniper Junos to authenticate and authorize logins through port49.
+- [Nokia SR Linux](https://blanketfish.github.io/port49/admin/devices/nokia-sr-linux/): Configuring Nokia SR Linux to authenticate and authorize logins through port49.
+- [Other platforms](https://blanketfish.github.io/port49/admin/devices/other-platforms/): What to expect from a TACACS+ client port49 has not been qualified against.
+
+## AI agents
+
+- [Quick start](https://blanketfish.github.io/port49/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity.
+- [Setup runbook](https://blanketfish.github.io/port49/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end.
+
+## Reference
+
+- [port49d configuration](https://blanketfish.github.io/port49/reference/config/port49d/): Every key of port49d.yaml and port49-broker.yaml, with its type, default, bound and what a change needs.
+- [Policy file](https://blanketfish.github.io/port49/reference/config/policy/): Every key of the policy file: platform set, platforms, privilege levels, scopes, roles, subjects, grants, tests, acknowledgments, key groups and keys.
+- [Inventory file](https://blanketfish.github.io/port49/reference/config/inventory/): Every key of a device inventory file, the file that tells port49d which devices exist and which key admits each.
+- [port49-inventory](https://blanketfish.github.io/port49/reference/config/port49-inventory/): Every key of port49-inventory.yaml, the configuration of the inventory service that syncs devices from a source of truth and serves the signed bundle.
+- [Client configuration](https://blanketfish.github.io/port49/reference/config/client/): Every key of the client's config.yaml, which gives port49 login its broker, its certificate or its identity provider.
+- [Reason codes](https://blanketfish.github.io/port49/reference/reason-codes/): The closed list of reason codes a decision can carry, and what each means.
+- [Decision log](https://blanketfish.github.io/port49/reference/decision-log/): The fields of the decision log, one line per decision, and how to query it.
+- [Metrics](https://blanketfish.github.io/port49/reference/metrics/): Every metric port49 exports, with its type, labels and meaning.
+- [Alerts](https://blanketfish.github.io/port49/reference/alerts/): Every shipped alert rule, what fires it and what to do about it.
+
+## Contributing
+
+- [Contributing](https://blanketfish.github.io/port49/contributing/): How to build, test and change port49, and where the design lives.
+- [Qualification](https://blanketfish.github.io/port49/contributing/qualification/): How a device platform is qualified against port49 in the lab, and how to add one.
+- [Releasing](https://blanketfish.github.io/port49/contributing/releasing/): How a port49 release is cut, signed and published.
