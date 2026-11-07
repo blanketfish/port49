@@ -28,8 +28,10 @@ No expression names a device, and none groups by one: the series carry no device
 ## The rules
 
 Each rule is a statement from the design or the roadmap and the rule that answers it. The thresholds
-that follow a default (`hold_ttl` 15s, `close_after` 5, `refresh_interval` 10m, `jwks_max_age` 24h,
+that follow a default (`close_after` 5, `refresh_interval` 10m, `jwks_max_age` 24h,
 `expiry_warning_fraction` 0.33, `staleness_ceiling` 4h) are those defaults: edit the rule if you set another.
+The `hold_ttl` rules are the exception: they use multiples of the 15s `hold_ttl` default that hold at any
+allowed setting (10s to 1m), so they need no edit.
 **Edit in the safe direction.** A setting lowered below the default can silence its alarm: with
 `close_after: 3` the page on `port49_store_health_failures >= 5` never fires, and with
 `jwks_max_age: 6h` the 12h keys rule fires after tokens are already refused. Recompute each such
@@ -59,7 +61,7 @@ threshold when you change the setting it follows.
 | roadmap, plan 11a hand-off; design §15: "`port49_store_feed_up{feed="marks"} == 0`; `port49_store_feed_up{feed}` 0 for longer than `hold_ttl`" | `port49_store_marks_feed_down` | page | 1m | Revocation rides this feed; a minute is four times the 15s `hold_ttl` default and the longest `hold_ttl` allows (10s to 1m), so at any setting the feed has been down for a full hold. |
 | design §15: "`port49_store_feed_up{feed}` 0 for longer than `hold_ttl`" | `port49_store_feed_down` | ticket | 1m | A minute is four times the 15s `hold_ttl` default and the longest `hold_ttl` allows (10s to 1m). Every feed but marks, which pages, so a feed added later is covered. |
 | design §15: "`port49_store_feed_legs_colocated` at 1 for 10m" | `port49_store_feed_legs_colocated` | ticket | 10m | Both legs of a feed's watch on one member is no redundancy against that member going dark; the move apart is tried from 2 s doubling to 30 s, so ten minutes is a cluster where no other member is reachable for this feed. A client with one etcd endpoint never moves a leg and holds the gauge at 0 (colocation is not a fault there); port49d logs once at start that the feeds share one member. |
-| design §15: "a circuit open" | `port49_store_circuit_open` | ticket | 1m | A pool open for `hold_ttl` (the 15s `hold_ttl` default) closes the listeners, so a minute is four times that: at the default this ticket records why the listeners closed, it does not warn before they do. |
+| design §15: "a circuit open" | `port49_store_circuit_open` | ticket | 1m | The rule fires for every `{component, pool}` series, and what an open circuit costs depends on which. On port49d (`component="daemon"`), a `token` or `context` pool open for `hold_ttl` (the 15s `hold_ttl` default) closes the listeners, so a minute is four times that and this ticket follows the close; it does not warn before it. A `bulk` pool never closes them: logins and commands are unaffected and the scans (the refresh, a revocation by principal, a start's purge) fail until a probe succeeds. On port49-broker (`component="broker"`) no circuit closes anything, because its guards never stop; mints, refreshes and revocations through the open pool fail. A component whose name ends in `enrollments` refuses password sign-in and second-factor enrollment through its open pool. |
 | design §15: "any increase of `port49_contexts_reindexed_total`" | `port49_contexts_reindexed` | ticket | none | No benign path deletes an index record. |
 | design §15: "any increase of `port49_contexts_reindex_failures_total`" | `port49_contexts_reindex_failures` | ticket | none | Each failure leaves a context for the next pass; a mis-set key repeats it. |
 | design §15: "any increase of `port49_store_calls_total{outcome="refused"}`" | `port49_store_calls_refused` | page | none | A refused call is a role or credential fault that retries cannot fix. |

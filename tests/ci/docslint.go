@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -83,10 +84,14 @@ type lintRule struct {
 
 var labResultPath = regexp.MustCompile(`tests/lab/results/[A-Za-z0-9._/-]+`)
 
-// labNoteExists reports whether m, a match of labResultPath, names a file in the repository. A trailing
-// dot or dash is the sentence's, not the path's. Only an existing note's file name may carry a host name
-// past the lint: an invented path must not.
+// labNoteExists reports whether m, a match of labResultPath, names a file in the repository, by a path
+// with no ".." segment. A
+// trailing dot or dash is the sentence's, not the path's. Only an existing note's file name may carry a
+// host name past the lint: an invented path must not.
 func labNoteExists(m string) bool {
+	if slices.Contains(strings.Split(m, "/"), "..") {
+		return false
+	}
 	_, self, _, _ := runtime.Caller(0)
 	info, err := os.Stat(filepath.Join(filepath.Dir(self), "..", "..", filepath.FromSlash(strings.TrimRight(m, ".-"))))
 	return err == nil && info.Mode().IsRegular()

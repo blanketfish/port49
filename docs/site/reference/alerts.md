@@ -34,8 +34,10 @@ Each alert below carries a `runbook_url` annotation that points at its section h
 ## Thresholds and defaults
 
 Each rule is a statement from the design or the roadmap and the rule that answers it. The thresholds
-that follow a default (`hold_ttl` 15s, `close_after` 5, `refresh_interval` 10m, `jwks_max_age` 24h,
+that follow a default (`close_after` 5, `refresh_interval` 10m, `jwks_max_age` 24h,
 `expiry_warning_fraction` 0.33, `staleness_ceiling` 4h) are those defaults: edit the rule if you set another.
+The `hold_ttl` rules are the exception: they use multiples of the 15s `hold_ttl` default that hold at any
+allowed setting (10s to 1m), so they need no edit.
 **Edit in the safe direction.** A setting lowered below the default can silence its alarm: with
 `close_after: 3` the page on `port49_store_health_failures >= 5` never fires, and with
 `jwks_max_age: 6h` the 12h keys rule fires after tokens are already refused. Recompute each such
@@ -464,7 +466,7 @@ port49_store_circuit_open == 1
 
 **Source:** design §15: "a circuit open"
 
-**Why this threshold:** A pool open for `hold_ttl` (the 15s `hold_ttl` default) closes the listeners, so a minute is four times that: at the default this ticket records why the listeners closed, it does not warn before they do.
+**Why this threshold:** The rule fires for every `{component, pool}` series, and what an open circuit costs depends on which. On port49d (`component="daemon"`), a `token` or `context` pool open for `hold_ttl` (the 15s `hold_ttl` default) closes the listeners, so a minute is four times that and this ticket follows the close; it does not warn before it. A `bulk` pool never closes them: logins and commands are unaffected and the scans (the refresh, a revocation by principal, a start's purge) fail until a probe succeeds. On port49-broker (`component="broker"`) no circuit closes anything, because its guards never stop; mints, refreshes and revocations through the open pool fail. A component whose name ends in `enrollments` refuses password sign-in and second-factor enrollment through its open pool.
 
 ### port49_contexts_reindexed {#port49_contexts_reindexed}
 
