@@ -378,3 +378,21 @@ func TestQualTreeDirtyIgnoresOtherEntriesNotes(t *testing.T) {
 		}
 	}
 }
+
+// An uncommitted replace in go.mod changes the harness build and the binary's,
+// so go.mod and go.sum are part of the tree the check holds clean.
+func TestQualTreeDirtySeesGoModAndGoSum(t *testing.T) {
+	dir, run := gitRepo(t)
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.invalid/m\n")
+	writeFile(t, filepath.Join(dir, "go.sum"), "")
+	writeFile(t, filepath.Join(dir, "internal/a.go"), "package a\n")
+	run("add", "-A")
+	run("commit", "-q", "-m", "base")
+	for _, f := range []string{"go.mod", "go.sum"} {
+		run("reset", "-q", "--hard")
+		writeFile(t, filepath.Join(dir, f), "replace example.invalid/x => ../x\n")
+		if d, err := qualTreeDirty(dir); err != nil || d == "" {
+			t.Errorf("an uncommitted change to %s: %q %v", f, d, err)
+		}
+	}
+}

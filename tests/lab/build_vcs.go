@@ -126,7 +126,7 @@ func treeDirty(dir string, paths ...string) (string, error) {
 
 // codePaths are the paths a lab run's binary and harness are built from,
 // with the evidence and results the run reads or writes.
-var codePaths = []string{"internal", "cmd", "platforms", "tests/lab", "tests/qual"}
+var codePaths = []string{"internal", "cmd", "platforms", "tests/lab", "tests/qual", "go.mod", "go.sum"}
 
 // qualOwnOutputs are the results and evidence the qualify and L80 runs write
 // themselves, for each prefix a run owns. Under :(glob) a * does not cross a
