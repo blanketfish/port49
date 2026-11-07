@@ -190,6 +190,19 @@ func Pages(root string) (map[string]string, error) {
 	if out[decisionLogPage], err = DecisionLogPage(spec, desc); err != nil {
 		return nil, err
 	}
+	ms, err := Metrics()
+	if err != nil {
+		return nil, err
+	}
+	rules, err := os.ReadFile(filepath.Join(root, "deploy/alerts/port49.rules.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	as, err := Alerts(rules)
+	if err != nil {
+		return nil, err
+	}
+	out[metricsPage] = MetricsPage(ms, as)
 	return out, nil
 }
 

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/blanketfish/port49/internal/docgen"
 )
 
 type rule struct {
@@ -237,5 +239,25 @@ func TestEveryAlertHasAPromtoolCase(t *testing.T) {
 		if !fires[r.Alert] || !quiet[r.Alert] {
 			t.Errorf("%s: promtool case where it fires: %v, where it stays quiet: %v", r.Alert, fires[r.Alert], quiet[r.Alert])
 		}
+	}
+}
+
+// One recorder serves the alert checks and the metrics reference: RegisteredNames is the names of docgen.Metrics.
+func TestRegisteredNamesIsMetrics(t *testing.T) {
+	ms, err := docgen.Metrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, m := range ms {
+		want = append(want, m.Name)
+	}
+	sort.Strings(want)
+	got, err := RegisteredNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("RegisteredNames = %v, want %v", got, want)
 	}
 }
