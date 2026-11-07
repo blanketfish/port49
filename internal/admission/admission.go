@@ -466,14 +466,19 @@ func LoadFile(path string) (Inventory, error) {
 	return ParseFile(raw, path)
 }
 
-// ParseFile is LoadFile for bytes already read, named by path in its errors:
-// port49d loads exactly the bytes its watch agreed on (plan 6a). An empty
-// path names nothing, for a caller whose own error already names the file.
-func ParseFile(raw []byte, path string) (Inventory, error) {
-	at := ""
-	if path != "" {
-		at = path + ": "
-	}
+// FileSchema is the zero value of the type ParseFile strict-decodes an inventory file into. It exists for
+// the docs generator (internal/docgen), which reads the schema from its fields.
+func FileSchema() any { return fileInventory{} }
+
+// DecodeStrict is ParseFile's decode without the checks on what it decoded: an unknown key and a second
+// document are refused.
+func DecodeStrict(raw []byte) error {
+	_, err := decodeFile(raw, "")
+	return err
+}
+
+// decodeFile is ParseFile's strict decode; at is the file's name and a colon, or empty.
+func decodeFile(raw []byte, at string) (fileInventory, error) {
 	// KnownFields: an unknown key here is a typo with teeth. `keyref:` for
 	// `key_ref:` silently un-pins a device onto a group key, and the first
 	// packet from it reads `no_known_key_matches` — the 3am discovery this
@@ -484,11 +489,26 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		// A line and a category, never the file's text: a record's key_ref
 		// pin is where a secret gets pasted (yamlfault).
-		return Inventory{}, fmt.Errorf("admission: %s%w; check the key spelling against the inventory schema", at,
+		return f, fmt.Errorf("admission: %s%w; check the key spelling against the inventory schema", at,
 			yamlfault.Of(err))
 	}
 	if err := yamlfault.OneDocument(dec); err != nil {
-		return Inventory{}, fmt.Errorf("admission: %s%w; the inventory is one document", at, err)
+		return f, fmt.Errorf("admission: %s%w; the inventory is one document", at, err)
+	}
+	return f, nil
+}
+
+// ParseFile is LoadFile for bytes already read, named by path in its errors:
+// port49d loads exactly the bytes its watch agreed on (plan 6a). An empty
+// path names nothing, for a caller whose own error already names the file.
+func ParseFile(raw []byte, path string) (Inventory, error) {
+	at := ""
+	if path != "" {
+		at = path + ": "
+	}
+	f, err := decodeFile(raw, at)
+	if err != nil {
+		return Inventory{}, err
 	}
 	var inv Inventory
 	for n, d := range f.Devices {

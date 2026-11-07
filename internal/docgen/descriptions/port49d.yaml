@@ -1,0 +1,289 @@
+# Operator text for port49d.yaml and port49-broker.yaml, keyed by the key's path. Every sentence
+# comes from the loader (internal/config); `make docs` writes the page and the drift test fails
+# when a key has no entry. A path ending `.[]` is an item of a list and `<name>` is a name you choose.
+_description: "Every key of port49d.yaml and port49-broker.yaml, with its type, default, bound and what a change needs."
+_intro: "port49d reads `port49d.yaml` once, at start, and `port49-broker.yaml` is the same schema read by `port49-broker`. A change takes effect at the next restart, with these exceptions, which an entry marks: the policy file and the inventory file (re-read every `policy_watch_interval` and at SIGHUP), `inventory.max_removed_percent` and `inventory.service.verify_key_files` (SIGHUP), and the `tls_listener` certificate, key and CA files (every `reload_interval` and at SIGHUP). An unknown key, a second YAML document and a key the loader has removed refuse the start; the error names the line, never the value. Durations are written with a unit (`30s`, `15m`, `12h`); a bare number is refused, except where an entry says `0` is allowed. Paths are read as written: a relative path resolves against port49d's working directory, not the file's directory."
+
+listen: "Address of the TACACS+ listener (RFC 8907), `host:port`. Default `:49`. The value `none` turns the listener off, which needs `tls_listener`: a file with neither listener is refused. Needs a restart."
+metrics_listen: "Address of the metrics, `/healthz` and `/readyz` listener. Default `:9049`. Needs a restart."
+inventory_file: "Path of the device inventory. Exactly one of `inventory_file` and `inventory.service` is required. Without a policy the file is read once, at start; with a policy it is re-read at every policy watch and at SIGHUP, and a file that does not load leaves the previous inventory serving. A relative path resolves against port49d's working directory."
+
+tls_listener.listen: "Address of the TACACS+ over TLS 1.3 listener (RFC 9887). Default `:300`. It may not bind the same address as `listen`. Needs a restart."
+tls_listener.cert_file: "Server certificate chain, PEM, leaf first. Required, and it must be readable. Re-read every `reload_interval` and at SIGHUP."
+tls_listener.key_file: "Private key of `cert_file`. Required. Re-read every `reload_interval` and at SIGHUP; the key must be owned by port49's user or root, with no group or other mode bit."
+tls_listener.client_ca_file: "The device CA certificates, PEM: the anchors a device certificate must chain to. Required. Re-read every `reload_interval` and at SIGHUP."
+tls_listener.intermediates_file: "Optional PEM file of issuing CAs held here, so a device that sends only its leaf certificate still verifies. Re-read every `reload_interval` and at SIGHUP."
+tls_listener.device_identity.match: "Which certificate names identify a device: `dns_name`, `ip_address`, or both, each at most once. Default both. An empty list is refused. Needs a restart."
+tls_listener.device_identity.dns_suffixes: "DNS suffixes a `dns_name` identity may carry, lower-cased with leading and trailing dots trimmed; letters, digits, `-` and `.`, no wildcard. Needs `dns_name` in `match`. Needs a restart."
+tls_listener.server_names: "When set, the SNI names a ClientHello may ask for: DNS names (lower-cased) and IP addresses (canonical form). A name that looks like an address but is not one in canonical form is refused. Needs a restart."
+tls_listener.handshake_timeout: "How long a TLS handshake may take. Default `10s`; `1s` to `30s`. Needs a restart."
+tls_listener.session_ticket_lifetime: "Lifetime of the TLS session tickets the listener issues. Default `0s`, which issues none; at most `1h`. Needs a restart."
+tls_listener.reload_interval: "How often the certificate, key, CA and intermediates files are re-read. Default `1m`; `10s` to `1h`. SIGHUP re-reads them at once. A change to this key needs a restart."
+tls_listener.state_dir: "Absolute directory where the listener keeps the certificate revocation lists it verified, in its `tls_listener` subdirectory, so a restart keeps them. Required when `certificate_status.crls` names any. Needs a restart."
+tls_listener.certificate_status.disabled: &cs_disabled "Set `true` to check no revocation status. Then none of `crls`, `ocsp`, `refresh_interval` and `on_unavailable` may be set. The block is required: leaving it out is refused, so skipping the check is always a written choice. Needs a restart."
+tls_listener.certificate_status.crls.[].name: &cs_crl_name "Name of this revocation list source: lowercase letters, digits and `_`, starting with a letter, at most 64, and unique in the block. It names the kept file `crl-<name>.der` and the `crl_next_update` metric label."
+tls_listener.certificate_status.crls.[].file: &cs_crl_file "Path of a CRL file. Set exactly one of `file` and `url`."
+tls_listener.certificate_status.crls.[].url: &cs_crl_url "An `http` or `https` URL to fetch the CRL from. Set exactly one of `file` and `url`."
+tls_listener.certificate_status.crls.[].issuer_file: &cs_crl_issuer "Required. The CA certificate that signs the list: the trust anchor, or a certificate the anchor signed."
+tls_listener.certificate_status.ocsp.responder: &cs_ocsp_responder "An `http` or `https` URL of a fixed OCSP responder. Set this or `use_aia: true`."
+tls_listener.certificate_status.ocsp.use_aia: &cs_ocsp_aia "Set `true` to ask each certificate's own OCSP responder, from its Authority Information Access extension. Set this or `responder`."
+tls_listener.certificate_status.ocsp.timeout: &cs_ocsp_timeout "How long one OCSP request may take. Default `2s`; `100ms` to `10s`."
+tls_listener.certificate_status.ocsp.hash: &cs_ocsp_hash "The hash of the OCSP CertID: `sha256` (default) or `sha1`."
+tls_listener.certificate_status.refresh_interval: &cs_refresh "How often the revocation lists are fetched or re-read. Default `10m`; `1m` to `24h`."
+tls_listener.certificate_status.on_unavailable: &cs_unavail "What to do when a certificate's status cannot be established: `refuse` (default) refuses the connection, `allow` admits it and says so."
+tls_listener.expiry_warning_fraction: "A device certificate with less than this fraction of its own lifetime left is named once a day. Default `0.33`, the last third of its life; `0` turns the warning off; it must be below `1`. Needs a restart."
+
+keys.<name>.current.version: &key_version "Version number of this key, `1` or greater and unique within the key. The key name must be lowercase letters, digits and `_`, starting with a letter, at most 64. This `keys:` block is for a port49d with no policy; with a policy, the policy file's `keys:` block replaces it and this one is refused. Needs a restart."
+keys.<name>.current.secret_ref: &key_ref "Where the shared secret is read from: `env:NAME` or `file:/absolute/path`. Required. The secret itself never appears in this file."
+keys.<name>.current.retire_after: &key_retire "Not allowed on the current version: retire it by making another version current. On an `accept` version, the last day (UTC, `YYYY-MM-DD`) it still admits; midnight after that day it is refused. On a `retired` version it is refused."
+keys.<name>.accept.[].version: *key_version
+keys.<name>.accept.[].secret_ref: *key_ref
+keys.<name>.accept.[].retire_after: *key_retire
+keys.<name>.retired.[].version: *key_version
+keys.<name>.retired.[].secret_ref: *key_ref
+keys.<name>.retired.[].retire_after: *key_retire
+
+limits.per_nas_connections: "Most simultaneous connections from one device address. Default `32`; at least `1`. Needs a restart."
+limits.max_connections: "Global cap on simultaneous connections. Leave it out to size it from the open-file limit at start; otherwise `64` to `1048576`. Needs a restart."
+limits.idle_timeout: "How long a connection may wait for the next packet, and how long a write may take. Default `30s`; must be greater than zero. Needs a restart."
+limits.malformed_backoff_base: "A source that sends a malformed packet is held this long before its connection is closed; each further strike doubles the hold, up to `malformed_backoff_max`. Default `100ms`; must be greater than zero. Needs a restart."
+limits.malformed_backoff_max: "The ceiling of the malformed-packet hold. Default `5s`; must be greater than zero. Needs a restart."
+limits.malformed_window: "A source's strike count resets when no strike has arrived within this window. Default `10m`; zero or negative is refused. Needs a restart."
+limits.auth_failure_delay_base: "The delay before the FAIL reply to a failed authentication for one device and username; each further failure doubles it, up to `auth_failure_delay_max`. Default `500ms`; must be greater than zero. Needs a restart."
+limits.auth_failure_delay_max: "The ceiling of the failed-authentication delay. Default `2s`; must be greater than zero. Keep it below your devices' shortest TACACS+ reply timeout: a FAIL that arrives after the device gave up reads as an unreachable server, and the device falls back to its local password. Needs a restart."
+limits.auth_failure_window: "A device and username's failure count resets when no failure has arrived within this window. Default `10m`; zero or negative is refused. Needs a restart."
+
+receipt_idle_ttl: "How long a receipt stays good after its last presentation: each presentation it answers slides the window forward. Default `15m`; must be greater than zero and not longer than `receipt_max_age`. A presentation past either bound is a FAIL on the wire and `token_spent` in the log. Needs a restart."
+receipt_max_age: "The longest a receipt lives from its first redemption, however often it is presented. Default `2h`; must be greater than zero. Needs a restart."
+context_idle_ttl: "How long a context with no activity is kept. Default `12h`; must be greater than zero. Needs a restart."
+
+accounting.spool_capacity: "Reserved: it must be at least `1`, and it does not bound the spool today, which is an append-only durable file. Default `10000`. Needs a restart."
+accounting.spool_path: "Path of the accounting spool file. Default `/var/lib/port49/acct.jsonl`. It may not be the same file as `broker.revocations_file`. Needs a restart."
+
+platforms.<name>.session_services: "Replaces the built-in list of authorization `service` values a session on this platform may arrive with. `<name>` must be a platform port49 ships an adapter for, or the start is refused. A fleet part-way through a service rename lists both names. Omit the key to take the default; an empty list, or an empty string in it, is refused because it would deny every session on that platform. Needs a restart."
+platforms.<name>.enable_username: "Moved to the `platforms:` block of the policy file, where `port49 policy test` reads it as port49d does. `principal`, the default, still loads with a notice; any other value is refused. Delete the line."
+
+encryption.current.id: "Identifier of the key every token, receipt and context is sealed under at rest, 1 to 64 of `A-Z a-z 0-9 . _ -`. It is written into every record the key seals. `encryption.current` is required. Needs a restart."
+encryption.current.secret_ref: "Where the key's 32 bytes are read from: `env:NAME` or `file:/absolute/path`. The secret must be exactly 32 bytes (AES-256). Needs a restart."
+encryption.previous.id: "Identifier of the previous key, kept so records sealed under it still open during a rotation. Optional, and it must differ from `encryption.current.id`: the id labels each record, so a rotation has to change it. Needs a restart."
+encryption.previous.secret_ref: "Where the previous key's 32 bytes are read from, `env:NAME` or `file:/absolute/path`. Naming an `id` without it is refused. Retire the previous key by removing the block. Needs a restart."
+
+session.grace_window: "How long past `session_expires` a context is kept: the authorizer denies through it and then deletes the context, and the broker's refresh can resume inside it. Default `10m`; must be greater than zero. Needs a restart."
+session.ceiling_warning_platforms: "Platforms you add to the list that receive the session-ceiling warning. Each is a platform name: lowercase letters, digits and `_`, starting with a letter. Not checked against the shipped platform set. Needs a restart."
+session.index_ttl: "How long the context indexes (principal, session id, certificate) outlive a write. They let a revocation reach a live context. Default `12h`; must be greater than zero. Needs a restart."
+session.max_session_age_default: "The `max_session_age` a mint uses when the policy names none; `session_expires` is the authentication time plus this. Default `12h`; must be greater than zero. Needs a restart."
+session.ceiling_warning: "How long before `session_expires` a permitted reply carries the warning in `server_msg`. Default `30m`; `0s` turns the warning off; at most `24h`. Needs a restart."
+session.staleness_ceiling: "A context whose last refresh is older than this is denied `context_stale`. Default `4h`. `0s` turns the check off, and every start says so; otherwise at least `1m`. With a broker in the same process, `broker.refresh_interval` may not exceed half of it. Needs a restart."
+
+token.candidate_cap: "How many unspent tokens may stand for one device and username at once. Past it the mint is refused with the count. Default `8`; at least `1`. Needs a restart."
+
+broker.listen: "Address the broker's HTTPS API listens on. Required when `broker` is present. Needs a restart."
+broker.tls_cert_file: "The broker's server certificate. Required. Read once, at start."
+broker.tls_ca_bundle_file: "Optional. The CAs clients are to trust for the server certificate, sent on `GET /v1/config`: the CA in use and, through a rotation, the next. A bundle that does not verify `tls_cert_file` is not sent. Read once, at start."
+broker.tls_key_file: "The server certificate's private key. Required. It must be owned by port49's user or root, with no group or other mode bit, not a symlink, and at most 1 MiB. Read once, at start."
+broker.client_ca_file: "Shorthand for one x509 human verifier: the one trust anchor client certificates are verified against, which must hold exactly one certificate. Use it or `broker.identity`, not both; with `broker.identity`, set `trust_anchor_file` on the x509 verifier instead. Read once, at start."
+broker.identity.humans.[].type: &id_type "Which kind of verifier this is. Under `humans`: `x509`, `oidc` or `directory_password`. Under `machines`: `x509` (a workload certificate), `oidc` or `k8s`. Each type accepts only its own keys; another type's key is refused."
+broker.identity.humans.[].trust_anchor_file: &id_anchor "`x509` only: the PEM file of the one trust anchor a chain is verified against. At most one `x509` verifier per list, and the two lists may not name the same file. Read once, at start."
+broker.identity.humans.[].spiffe_trust_domains: &id_spiffe "`x509` under `machines` only, and required there: the SPIFFE trust domains whose workloads this anchor may name (`spiffe://<trust domain>/<path>`), each written as the domain is, never folded to lower case."
+broker.identity.humans.[].issuer: &id_issuer "`oidc` and `k8s`: the provider's issuer URL, `https` with no user information, query or fragment, spelled as the provider spells it in its discovery document. Required."
+broker.identity.humans.[].client_id: &id_client_id "`oidc` under `humans`, required: the public client's id, which a person's ID token names in `aud`."
+broker.identity.humans.[].audience: &id_audience "Required for `oidc` under `machines` (the API identifier a client-credentials token names in `aud`) and for `k8s` (the audience your pods' projected token volume asks for). Refused on a human verifier."
+broker.identity.humans.[].principal_claim: &id_claim "`oidc` under `humans`, required, with no default: `preferred_username`, `email` or `upn`. Choose the claim only your provider's administrators can set."
+broker.identity.humans.[].principal_domains: &id_domains "`oidc` and `directory_password` under `humans`, required: the domains whose people this verifier may name (`user:<name>@<domain>`), each a name with a dot and no `@`, lower-cased. Matched exactly; no subdomain is implied. Two verifiers at different issuers may not share a domain, and a `directory_password` verifier may not share one with an `oidc` verifier."
+broker.identity.humans.[].clients.[].client_id: &id_clients_client "`oidc` under `machines`: a client id that may be a machine principal (`app:<client id>`). Required, and not repeated."
+broker.identity.humans.[].clients.[].sub: &id_clients_sub "`oidc` under `machines`: the client's own identity at the provider, which its client-credentials tokens carry as `sub` and no person's token does. Required."
+broker.identity.humans.[].scopes: &id_scopes "`oidc` under `humans`: extra scopes to request beyond `openid`, each printable ASCII with no space."
+broker.identity.humans.[].algorithms: &id_algs "`oidc` and `k8s`: the token signature algorithms accepted, from `RS256`, `PS256`, `ES256`, `ES384` and `EdDSA`. Default `RS256`. `none` and the `HS` algorithms are refused."
+broker.identity.humans.[].ca_file: &id_ca "`oidc` and `k8s`: PEM CA for the provider's TLS certificate. Optional; without it the system roots are used. It must be a readable file."
+broker.identity.humans.[].cluster: &id_cluster "`k8s` only, required: this cluster's name in port49's records and log lines. Lowercase letters, digits and `_`, starting with a letter, at most 64; one name per cluster."
+broker.identity.humans.[].jwks: &id_jwks "`k8s` only, required: the `https` URL the cluster's signing keys are read from, typically the API server's `/openid/v1/jwks`."
+broker.identity.humans.[].namespaces: &id_namespaces "`k8s` only, required: the namespaces whose service accounts this cluster may name, by name."
+broker.identity.humans.[].directory.kind: &id_dir_kind "`x509` under `machines`: how a workload certificate finds its directory entry. Must be `spiffe_id`. Needs `broker.directory`."
+broker.identity.humans.[].directory.attribute: &id_dir_attr "`x509` under `machines`: the directory attribute that holds the SPIFFE ID. Required, no default, and not the attribute `broker.directory` uses for `username_attribute` or `principal_attribute`."
+broker.identity.humans.[].directory.allow_weak: &id_dir_weak "`x509` under `machines`: acknowledges that this mapping is weak. Required to be `true`, with `issuers`."
+broker.identity.humans.[].directory.issuers: &id_dir_issuers "`x509` under `machines`: the RFC 4514 issuer DNs the workload certificate's issuer must be one of. Required."
+broker.identity.humans.[].directory.user_filter: &id_dir_filter "`x509` under `machines`: the LDAP filter for the entry lookup. Default `broker.directory.user_filter`."
+broker.identity.humans.[].second_factor: &id_second "`directory_password` only, required: `totp`, the one second factor a password sign-in takes."
+broker.identity.humans.[].filter: &id_filter "`directory_password` only: an LDAP filter, which must compile, that a person's entry must also match to sign in."
+broker.identity.humans.[].enrollment.open_until: &id_enr_open "`directory_password` only: until this RFC 3339 time (for example `2026-12-01T00:00:00Z`), a person with no authenticator enrolled may enroll one by signing in with their directory password. Outside every enrollment window the sign-in is refused."
+broker.identity.humans.[].enrollment.new_entries_for: &id_enr_new "`directory_password` only: a person whose directory entry was created less than this long ago may enroll. Default `336h` (14 days); `0s` turns it off; at most `2160h` (90 days)."
+broker.identity.humans.[].enrollment.reopen_for: &id_enr_reopen "`directory_password` only: how long a person's enrollment window stays open after an administrator resets their second factor, and how long `reset-second-factor --all` reopens enrollment. Default `24h`; `1h` to `168h`."
+broker.identity.humans.[].rate_limits.failures_per_principal: &id_rl_principal "`directory_password` only: failed sign-ins allowed per person within `window`. Default `5`; `1` to `100`."
+broker.identity.humans.[].rate_limits.failures_per_source: &id_rl_source "`directory_password` only: failed sign-ins allowed per source address within `window`. Default `50`; `0` to `10000`."
+broker.identity.humans.[].rate_limits.window: &id_rl_window "`directory_password` only: the window the failure limits count over. Default `15m`; `1m` to `24h`."
+broker.identity.humans.[].totp_label: &id_totp_label "`directory_password` only: the issuer name an authenticator app shows. Printable ASCII, no colon, at most 64 bytes."
+broker.identity.machines.[].type: *id_type
+broker.identity.machines.[].trust_anchor_file: *id_anchor
+broker.identity.machines.[].spiffe_trust_domains: *id_spiffe
+broker.identity.machines.[].issuer: *id_issuer
+broker.identity.machines.[].client_id: *id_client_id
+broker.identity.machines.[].audience: *id_audience
+broker.identity.machines.[].principal_claim: *id_claim
+broker.identity.machines.[].principal_domains: *id_domains
+broker.identity.machines.[].clients.[].client_id: *id_clients_client
+broker.identity.machines.[].clients.[].sub: *id_clients_sub
+broker.identity.machines.[].scopes: *id_scopes
+broker.identity.machines.[].algorithms: *id_algs
+broker.identity.machines.[].ca_file: *id_ca
+broker.identity.machines.[].cluster: *id_cluster
+broker.identity.machines.[].jwks: *id_jwks
+broker.identity.machines.[].namespaces: *id_namespaces
+broker.identity.machines.[].directory.kind: *id_dir_kind
+broker.identity.machines.[].directory.attribute: *id_dir_attr
+broker.identity.machines.[].directory.allow_weak: *id_dir_weak
+broker.identity.machines.[].directory.issuers: *id_dir_issuers
+broker.identity.machines.[].directory.user_filter: *id_dir_filter
+broker.identity.machines.[].second_factor: *id_second
+broker.identity.machines.[].filter: *id_filter
+broker.identity.machines.[].enrollment.open_until: *id_enr_open
+broker.identity.machines.[].enrollment.new_entries_for: *id_enr_new
+broker.identity.machines.[].enrollment.reopen_for: *id_enr_reopen
+broker.identity.machines.[].rate_limits.failures_per_principal: *id_rl_principal
+broker.identity.machines.[].rate_limits.failures_per_source: *id_rl_source
+broker.identity.machines.[].rate_limits.window: *id_rl_window
+broker.identity.machines.[].totp_label: *id_totp_label
+broker.identity.clock_skew: "How far a token's time claims may differ from the broker's clock. Default `1m`; `0s` to `5m`. Needs a restart."
+broker.identity.max_token_age: "The oldest an ID token may be, by its issue time, and still be accepted. Default `2h`; `5m` to `24h`. Needs a restart."
+broker.identity.jwks_refresh_interval: "How often each provider's signing keys are re-fetched. Default `1h`; `5m` to `24h`. Needs a restart."
+broker.identity.jwks_max_age: "How long fetched keys are trusted without a successful refresh. Default `24h`; `10m` to `720h`; at least twice `jwks_refresh_interval`, so one missed refresh does not refuse every token. Needs a restart."
+broker.identity.issuance.certificate_lifetime: "Lifetime of the certificate the broker issues after a sign-in. Default `12h`; `1h` to `24h`. Writing `issuance: {}` turns issuance on with this default. Issuance needs a human `oidc` or `directory_password` verifier, and a `directory_password` sign-in needs it. Needs a restart."
+broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file: "The PEM roots a touch key's attestation chains to. Required when `hardware_key_touch` is present. SIGHUP re-reads it; a file that does not load keeps the roots in force."
+broker.identity.per_login_mfa.idp_mfa.amr: "Authentication method references the identity provider's ID token may carry as proof of the second factor. Default `[mfa]`; none may be empty. Counts only beside an `x509` humans verifier. Needs a restart."
+broker.identity.per_login_mfa.idp_mfa.acr_values: "The `acr_values` the sign-in sends to the provider. Needs a restart."
+broker.policy_file: "Path of the policy file this process admits from. Required. It is watched every `policy_watch_interval` and re-read at SIGHUP; a file that does not load is refused and the policy in force keeps serving. The file and its directory must be writable by port49's user or root alone."
+broker.batch_max: "The most devices in one mint request; a larger sweep pages. Default `100`; `1` to `1000`. Needs a restart."
+broker.policy_watch_interval: "How often the policy file is read for a change. A change is loaded once two reads in a row agree, so an edit takes effect within two intervals and a write in progress is not loaded part-way. Default `5s`; `1s` to `5m`. SIGHUP loads what is on disk at once. Write the file atomically: a temporary file renamed over it. A change to this key needs a restart."
+broker.revocations_file: "port49d.yaml only (refused in `port49-broker.yaml`): where port49d keeps the revocations `port49 revoke` puts in force, so a restart forgets none. Required. Its directory must exist and be writable by port49's user or root alone, and the name may not be a symlink. port49d never creates it: run `port49d init-revocations` once per install. port49d rewrites it, mode 0600 and atomically, after every revocation and lift. Needs a restart."
+broker.max_conns_per_principal: "The most broker connections one principal may hold; a new one closes the oldest idle one, and is refused with 503 when all are busy. Default `4`; `1` to `64`. Needs a restart."
+broker.max_pending_conns_per_source: "The most broker connections one address may hold that are not yet bound to a principal; the next is reset. Default `16`; `1` to `256`. Needs a restart."
+broker.certificate_status.disabled: *cs_disabled
+broker.certificate_status.crls.[].name: *cs_crl_name
+broker.certificate_status.crls.[].file: *cs_crl_file
+broker.certificate_status.crls.[].url: *cs_crl_url
+broker.certificate_status.crls.[].issuer_file: *cs_crl_issuer
+broker.certificate_status.ocsp.responder: *cs_ocsp_responder
+broker.certificate_status.ocsp.use_aia: *cs_ocsp_aia
+broker.certificate_status.ocsp.timeout: *cs_ocsp_timeout
+broker.certificate_status.ocsp.hash: *cs_ocsp_hash
+broker.certificate_status.refresh_interval: *cs_refresh
+broker.certificate_status.on_unavailable: *cs_unavail
+broker.state_dir: "port49-broker.yaml only (refused as a key of `port49d.yaml`): absolute path of a directory that exists and that neither its group nor others can write (create it mode 0700), where port49-broker keeps the CRLs it verified and its other state. Required under the broker's role, which has no revocations file. It may not be inside `inventory.service.state_dir` or `mirror_dir`, nor hold them. Needs a restart."
+broker.directory.servers.[].uri: "An `ldaps://` or `ldap://` URI with a host, and no credentials in it. Plain `ldap://` needs `start_tls: true`. Two servers may not share host and port. At least one server is required. Needs a restart."
+broker.directory.servers.[].priority: "Among servers of the preferred site, the one with the higher number is preferred. Default `0`. Needs a restart."
+broker.directory.servers.[].site: "The site this server belongs to. When the broker's own site is known, servers of that site are tried first. Needs a restart."
+broker.directory.servers.[].start_tls: "Upgrade an `ldap://` connection with StartTLS. Refused on an `ldaps://` URI. Needs a restart."
+broker.directory.site: "The site this broker runs in. Overrides `site_env`. Servers whose `site` matches are preferred. Needs a restart."
+broker.directory.site_env: "Name of the environment variable that holds the site when `site` is not set. Default `PORT49_SITE`. It may not be the variable `bind.password_secret_ref` reads, because the site is logged. Needs a restart."
+broker.directory.ca_file: "PEM CA that verifies the directory servers' certificates. Required, and it must be readable. Needs a restart."
+broker.directory.bind.mechanism: "How the broker authenticates to the directory: `external` (a TLS client certificate), `gssapi` (Kerberos) or `simple` (a DN and password). Required. Needs a restart."
+broker.directory.bind.tls_cert_file: "`external` only, required: the client certificate. Needs a restart."
+broker.directory.bind.tls_key_file: "`external` only, required: the client certificate's key. It must be owned by port49's user or root, with no group or other mode bit. Needs a restart."
+broker.directory.bind.keytab_file: "`gssapi` only, required: the Kerberos keytab. Needs a restart."
+broker.directory.bind.principal: "`gssapi` only, required: the Kerberos principal to bind as. Needs a restart."
+broker.directory.bind.krb5_conf: "`gssapi` only, required: path of the `krb5.conf` to use. Needs a restart."
+broker.directory.bind.bind_dn: "`simple` only, required: the DN to bind as. Needs a restart."
+broker.directory.bind.password_secret_ref: "`simple` only, required: where the bind password is read from, `env:NAME` or `file:/absolute/path`. It is read when the directory opens, not when the file is checked. Needs a restart."
+broker.directory.base_dn: "Required. The base DN people are searched under; it must parse as an RFC 4514 DN. Needs a restart."
+broker.directory.groups_base_dn: "The base DN groups are searched under. Default `base_dn`. Needs a restart."
+broker.directory.user_filter: "LDAP filter for a person's entry; it must compile. Default `(objectClass=person)`. Needs a restart."
+broker.directory.group_filter: "LDAP filter for a group; it must compile. Default `(|(objectClass=group)(objectClass=groupOfNames))`. Needs a restart."
+broker.directory.principal_attribute: "The attribute that holds a person's principal. Default `userPrincipalName`. Must be an attribute name or OID. Needs a restart."
+broker.directory.username_attribute: "The attribute that holds the username a device sees. Default `sAMAccountName`. Needs a restart."
+broker.directory.group_name_attribute: "The attribute that names a group. Default `cn`. Needs a restart."
+broker.directory.member_attribute: "The attribute that lists a group's members. Default `member`. Needs a restart."
+broker.directory.certificate_mapping.kind: "How a client certificate finds its entry: `issuer_serial`, `sid`, `san_upn`, `san_email`, `subject_dn` or `cn`. Required when an x509 human verifier is configured, optional otherwise. `issuer_serial` and `sid` are strong; the others are weak and need `allow_weak` and `issuers`. Needs a restart."
+broker.directory.certificate_mapping.attribute: "The entry attribute the mapping looks up. Default by kind: `altSecurityIdentities` for `issuer_serial`, `objectSid` for `sid`, `userPrincipalName` for `san_upn`, `mail` for `san_email`, `distinguishedName` for `subject_dn`, `cn` for `cn`. Pointing a strong kind at another attribute makes it weak. Needs a restart."
+broker.directory.certificate_mapping.allow_weak: "Acknowledges a weak mapping. Required `true` for a weak kind or a repointed strong one, with `issuers`. Needs a restart."
+broker.directory.certificate_mapping.issuers: "RFC 4514 issuer DNs the mapping is pinned to. Required for a weak or repointed mapping. Needs a restart."
+broker.directory.nested_groups: "How nested group membership is resolved. Required: `in_chain` (Active Directory's chain matching), `recursive` (port49 walks `member_attribute`) or `direct` (groups are flat). Needs a restart."
+broker.directory.max_depth: "How deep `recursive` nesting is followed. Default `16`; `1` to `64`. Needs a restart."
+broker.directory.query_timeout: "How long one directory query may take. Default `5s`; `1s` to `30s`. Needs a restart."
+broker.directory.health_check.interval: "How often each server is checked. Default `30s`; `5s` to `5m`. Needs a restart."
+broker.directory.health_check.timeout: "How long one check may take; at most `interval`. Default `2s`. Needs a restart."
+broker.directory.circuit_breaker.failure_threshold: "Consecutive failures that open a server's circuit. Default `3`; `1` to `20`. Needs a restart."
+broker.directory.circuit_breaker.probe_interval: "How often an open circuit is probed. Default `1m`; `5s` to `10m`. Needs a restart."
+broker.directory.failback.stability_window: "How long a preferred server must stay healthy before the broker moves back to it. Default `5m`; `0s` to `1h`. Needs a restart."
+broker.directory.grace: "When no directory server answers, the membership stored from the last good lookup is used if it was verified no longer ago than this; older than this, the principal is refused `directory_unavailable`. A refusal the directory already gave is never overruled. Default `4h`; `0s` to `24h`; not above `session.staleness_ceiling` when both run in one process. Needs a restart."
+broker.directory.prewarm.interval: "How often the broker pre-verifies every known principal. Default `1h`; `0s` turns it off; otherwise `5m` to `24h`. Needs a restart."
+broker.directory.prewarm.max_principals: "The most principals one pre-warm pass verifies. People and, under a workload mapping, workloads each take up to it, so one interval verifies up to twice it. Default `10000`; `1` to `1000000`. Needs a restart."
+broker.refresh_interval: "How often the broker re-verifies every live principal and stamps `refreshed_at`. Default `5m`; `1m` to `1h`. In one process with `session.staleness_ceiling` it may not exceed half of it. Needs a restart."
+
+lab.session_attributes: "Test lab only; leave it out in production. Attributes attached to a permitted session authorization reply of a seeded context. Not accepted in `port49-broker.yaml`. Needs a restart."
+lab.command_attributes: "Test lab only. Attributes attached to a permitted per-command authorization reply, a separate list from `session_attributes` because the lab asks the same question of each reply separately. Not accepted in `port49-broker.yaml`. Needs a restart."
+lab.deny_prefixes: "Test lab only. Commands the lab denies by prefix, matched on a token boundary: `show` denies `show version` but not `shower`. Not accepted in `port49-broker.yaml`. Needs a restart."
+lab.fault_file: "Test lab only. A file naming the fault in force, re-read on every request; absent means no fault. Not accepted in `port49-broker.yaml`. Needs a restart."
+lab.seed_token_file: "Test lab only. Where port49d writes the token pairs it mints for `seed_tokens`, one JSON object per line, mode 0600. Required when `seed_tokens` is non-empty. Needs a restart."
+lab.seed_tokens.[].nas: "Test lab only. The device address the seeded token is for. Required."
+lab.seed_tokens.[].username: "Test lab only. The username the seeded token is for. Required."
+lab.seed_tokens.[].enable: "Test lab only. `true` also mints an enable token beside the login one."
+lab.deny_message_length: "Test lab only. Pads the lab's deny `server_msg` to this many bytes with a counting pattern. `0` leaves it; otherwise `16` to `4096`. Not accepted in `port49-broker.yaml`. Needs a restart."
+lab.deny_session: "Test lab only. Fails every session authorization of a seeded context with the padded deny message. Not accepted in `port49-broker.yaml`. Needs a restart."
+
+inventory.max_removed_percent: "The most devices, as a percentage of the devices in force, an inventory reload may take out of service (removed, or kept and newly refused). A reload that takes more is refused and the previous inventory keeps serving. Default `10`; `0` refuses every removal; `100` turns the bound off. An empty inventory is refused whatever this says. SIGHUP re-reads this key, so a deliberate large removal needs no restart: raise it, send SIGHUP, lower it again."
+inventory.service.url: "Where port49d takes its inventory from when the inventory service publishes it, in place of `inventory_file`: `https://host[:port]` with no user information, path, query or fragment. Needs a policy. Needs a restart."
+inventory.service.ca_file: "Absolute path of the PEM CA that verifies the service's certificate. Required; without it any public CA could vouch for the service. Needs a restart."
+inventory.service.tls_cert_file: "Absolute path of port49d's client certificate for the service, presented over mutual TLS. Required. Needs a restart."
+inventory.service.tls_key_file: "Absolute path of the client certificate's key. Required; owned by port49's user or root, no group or other mode bit. Needs a restart."
+inventory.service.verify_key_files: "Absolute paths of the service's signing public keys: two while its key rotates. At least one is required. Every document, from the service or from disk, is verified against them. SIGHUP re-reads the list."
+inventory.service.poll_interval: "How often port49d asks the service for the bundle's version. Default `30s`; `5s` to `10m`. Needs a restart."
+inventory.service.state_dir: "Absolute directory that holds the last document port49d applied, so a restart starts from it with no service. Required, and outside `mirror_dir`. Needs a restart."
+inventory.service.mirror_dir: "Optional absolute directory of the shared copy the service writes, read at a cold start when `state_dir` has none. Outside `state_dir`. Needs a restart."
+
+stores.directory.backend: &st_backend "Where records live: `memory` (default) or `etcd`. A store block on `etcd` also needs its `etcd` block; `etcd` in port49d.yaml needs `policy:` and no `broker:` block, and `port49-broker.yaml` must use `etcd`. Needs a restart."
+stores.directory.packet_deadline: &st_deadline "Bounds all store work for one TACACS+ packet, so a device hears an answer before its own timeout. Default `2s`; `100ms` to `2s`; for the session store at least `etcd.call_timeout`. Needs a restart."
+stores.directory.etcd.endpoints: &st_endpoints "etcd endpoints, each `https://host:port` with no user information, path, query or fragment. At least one. port49 authenticates to etcd by client certificate."
+stores.directory.etcd.ca_file: &st_ca "Absolute path of the PEM CA that verifies etcd's certificate. Required."
+stores.directory.etcd.prefix: &st_prefix "The keyspace prefix. Default `/port49/`; it must start with `/`."
+stores.directory.etcd.daemon.cert_file: &st_d_cert "port49d's client certificate for etcd. Required in `port49d.yaml` on etcd, refused in `port49-broker.yaml`. Absolute path. Its CN is the etcd user, and a CN of `root` is refused."
+stores.directory.etcd.daemon.key_file: &st_d_key "The key of port49d's etcd client certificate, absolute path, owned by port49's user or root with no group or other mode bit."
+stores.directory.etcd.broker.cert_file: &st_b_cert "port49-broker's client certificate for etcd. Required in `port49-broker.yaml`, refused in `port49d.yaml`. Absolute path; a CN of `root` is refused."
+stores.directory.etcd.broker.key_file: &st_b_key "The key of port49-broker's etcd client certificate, absolute path, owned by port49's user or root with no group or other mode bit."
+stores.directory.etcd.roles: &st_roles "`enforced` (default) or `unenforced`: whether port49d refuses to start when its etcd identity can do more than its role."
+stores.directory.etcd.call_timeout: &st_call "Bounds each token and context call to etcd. Default `500ms`; `10ms` to `5s`."
+stores.directory.etcd.bulk_timeout: &st_bulk "Bounds each bulk scan. Default `30s`; `1s` to `5m`."
+stores.directory.etcd.breaker.failures: &st_br_fail "Consecutive failures that open a pool's circuit. Default `5`; `1` to `100`."
+stores.directory.etcd.breaker.open_for: &st_br_open "How long an opened circuit stays open. Default `5s`; `1s` to `5m`."
+stores.directory.etcd.max_in_flight.token: &st_if_token "In-flight token calls. Default `64`; `1` to `4096`. A call that gets no slot within its deadline is refused, never queued."
+stores.directory.etcd.max_in_flight.context: &st_if_ctx "In-flight context calls. Default `128`; `1` to `4096`."
+stores.directory.etcd.max_in_flight.bulk: &st_if_bulk "In-flight bulk scans. Default `4`; `1` to `4096`."
+stores.directory.etcd.lease_grace: &st_lease "How long past a record's own expiry its lease reclaims it. Default `5m`; `1m` to `1h`."
+stores.directory.etcd.hold_ttl: &st_hold "The keyspace hold's lease, which is also how long a pool's circuit stays open before the store is gone. Default `15s`; `10s` to `60s`."
+stores.directory.etcd.sweep_interval: &st_sweep "How often the index sweep runs. Default `10m`; `1m` to `24h`."
+stores.directory.etcd.start_timeout: &st_start "How long port49d waits for the store at start. Default `30s`; `0` waits for as long as it takes (a bare `0` is accepted); otherwise `5s` to `10m`."
+stores.directory.etcd.health.interval: &st_h_interval "port49d.yaml only (refused in `port49-broker.yaml`): how often the store is checked. Default `1s`; `200ms` to `10s`; for the session store at least `call_timeout`."
+stores.directory.etcd.health.close_after: &st_h_close "port49d.yaml only: consecutive failed checks after which every listener closes, so devices use their local method. Default `5`; `2` to `60`."
+stores.directory.etcd.health.open_after: &st_h_open "port49d.yaml only: consecutive passing checks after which the listeners open again. Default `3`; `1` to `60`."
+stores.directory.etcd.context_cache.ttl: &st_cc_ttl "port49d.yaml only (refused in `port49-broker.yaml`): how long command and session authorization may read a context from the cache, which adds to revocation latency. Required when the block is present; `100ms` to `1m`. Leave the block out for no cache."
+stores.directory.etcd.context_cache.max_entries: &st_cc_max "port49d.yaml only: the most contexts the cache holds. Default `65536`; `1` to `1048576`."
+stores.session.backend: *st_backend
+stores.session.packet_deadline: *st_deadline
+stores.session.etcd.endpoints: *st_endpoints
+stores.session.etcd.ca_file: *st_ca
+stores.session.etcd.prefix: *st_prefix
+stores.session.etcd.daemon.cert_file: *st_d_cert
+stores.session.etcd.daemon.key_file: *st_d_key
+stores.session.etcd.broker.cert_file: *st_b_cert
+stores.session.etcd.broker.key_file: *st_b_key
+stores.session.etcd.roles: *st_roles
+stores.session.etcd.call_timeout: *st_call
+stores.session.etcd.bulk_timeout: *st_bulk
+stores.session.etcd.breaker.failures: *st_br_fail
+stores.session.etcd.breaker.open_for: *st_br_open
+stores.session.etcd.max_in_flight.token: *st_if_token
+stores.session.etcd.max_in_flight.context: *st_if_ctx
+stores.session.etcd.max_in_flight.bulk: *st_if_bulk
+stores.session.etcd.lease_grace: *st_lease
+stores.session.etcd.hold_ttl: *st_hold
+stores.session.etcd.sweep_interval: *st_sweep
+stores.session.etcd.start_timeout: *st_start
+stores.session.etcd.health.interval: *st_h_interval
+stores.session.etcd.health.close_after: *st_h_close
+stores.session.etcd.health.open_after: *st_h_open
+stores.session.etcd.context_cache.ttl: *st_cc_ttl
+stores.session.etcd.context_cache.max_entries: *st_cc_max
+
+policy.file: "Path of the policy file a port49d with no `broker:` block admits from. Required when `policy:` is present. Refused beside a `broker:` block, whose policy is `broker.policy_file`. Re-read every `watch_interval` and at SIGHUP."
+policy.watch_interval: "How often the policy file is read for a change. Default `5s`; `1s` to `5m`. A change to this key needs a restart."
+
+key_secret_refs.env_prefix: "A policy's key `secret_ref: env:NAME` may name only variables that begin with this prefix, so a policy writer cannot pick which of the host's secrets becomes a TACACS+ key. Default `PORT49_KEY_`; at least 4 characters of a variable name, ending in `_`. Needs a restart."
+key_secret_refs.file_dir: "A policy's key `secret_ref: file:/path` may name only files under this directory. Default `/run/port49/keys`; an absolute, clean path below `/`. Needs a restart."

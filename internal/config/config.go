@@ -1414,15 +1414,40 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 // device key or the daemon's etcd identity, and on etcd keeps no
 // revocations file.
 func brokerRefusals(f fileConfig) error {
+	for _, c := range brokerRefusalTable(f) {
+		if c.set {
+			return fmt.Errorf("config: %s is not port49-broker.yaml's: %s (plan 7e)", c.key, c.why)
+		}
+	}
+	return nil
+}
+
+// brokerRefusal is one key port49-broker.yaml refuses, whether f names it, and why it is refused.
+type brokerRefusal struct {
+	key string
+	set bool
+	why string
+}
+
+// BrokerRefusal is a key port49-broker.yaml refuses and the reason it gives, for the docs generator.
+type BrokerRefusal struct{ Key, Why string }
+
+// BrokerRefusals lists every key port49-broker.yaml refuses, in the order the loader checks them: the
+// docs generator writes the broker's page from it, so the page cannot drift from brokerRefusals.
+func BrokerRefusals() []BrokerRefusal {
+	var out []BrokerRefusal
+	for _, c := range brokerRefusalTable(fileConfig{}) {
+		out = append(out, BrokerRefusal{c.key, c.why})
+	}
+	return out
+}
+
+func brokerRefusalTable(f fileConfig) []brokerRefusal {
 	lab := f.Lab
 	if lab == nil {
 		lab = &LabConfig{}
 	}
-	for _, c := range []struct {
-		key string
-		set bool
-		why string
-	}{
+	return []brokerRefusal{
 		{"listen", f.Listen != "", "port49-broker never speaks TACACS+; that is port49d's"},
 		{"tls_listener", f.TLSListener != nil, "port49-broker never speaks TACACS+; that is port49d's"},
 		{"keys:", len(f.Keys) > 0, "device keys are the policy file's keys: block"},
@@ -1445,12 +1470,7 @@ func brokerRefusals(f fileConfig) error {
 		{"lab.deny_prefixes", len(lab.DenyPrefixes) > 0, "the lab's answers are port49d's"},
 		{"lab.deny_message_length", lab.DenyMessageLength != 0, "the lab's answers are port49d's"},
 		{"lab.deny_session", lab.DenySession, "the lab's answers are port49d's"},
-	} {
-		if c.set {
-			return fmt.Errorf("config: %s is not port49-broker.yaml's: %s (plan 7e)", c.key, c.why)
-		}
 	}
-	return nil
 }
 
 // EncryptionKeys is the two-key window: writes use Current, reads try Current
@@ -1868,6 +1888,49 @@ func decodeFile(raw []byte, f *fileConfig) error {
 		return fmt.Errorf("%w; port49d.yaml is one document: remove the `---` and everything after it", err)
 	}
 	return nil
+}
+
+// FileSchema is the zero value of the type Load strict-decodes port49d.yaml and port49-broker.yaml
+// into. It exists for the docs generator (internal/docgen), which reads the schema from its fields.
+func FileSchema() any { return fileConfig{} }
+
+// DecodeStrict is Load's decode of a port49d.yaml's bytes and the refusals that need no other file: an
+// unknown key, a second document, the keys decision 53 removed (admin_socket, secret_env, key_refs),
+// the stale lab seed keys, receipt_ttl and, under the daemon's role, broker.state_dir. It reads no
+// secret and no inventory, so it is what the docs check runs a config example through.
+func DecodeStrict(raw []byte) error {
+	f, err := decodeStrict(raw)
+	if err != nil {
+		return err
+	}
+	if f.Broker != nil && f.Broker.StateDir != "" {
+		return errors.New("config: broker.state_dir is port49-broker.yaml's: the in-process broker " +
+			"keeps its CRLs beside broker.revocations_file; remove it (plan 7e)")
+	}
+	return nil
+}
+
+// DecodeStrictBroker is DecodeStrict under the broker's role: it refuses what brokerRefusals refuses.
+func DecodeStrictBroker(raw []byte) error {
+	f, err := decodeStrict(raw)
+	if err != nil {
+		return err
+	}
+	return brokerRefusals(f)
+}
+
+func decodeStrict(raw []byte) (fileConfig, error) {
+	var f fileConfig
+	if err := staleSeedKeys(raw); err != nil {
+		return f, err
+	}
+	if err := decodeFile(raw, &f); err != nil {
+		return f, fmt.Errorf("config: %w", err)
+	}
+	if f.ReceiptTTL != 0 {
+		return f, errors.New("config: receipt_ttl was replaced by receipt_idle_ttl and receipt_max_age")
+	}
+	return f, nil
 }
 
 // decodeFault is a port49d.yaml decode error as it is shown: each fault's

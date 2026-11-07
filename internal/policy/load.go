@@ -336,35 +336,9 @@ func Load(path string, env Env) (*Policy, error) {
 
 // Parse validates a policy file's bytes against env.
 func Parse(raw []byte, env Env) (*Policy, error) {
-	if err := refusedKeys(raw); err != nil {
+	f, err := decodeFile(raw)
+	if err != nil {
 		return nil, err
-	}
-	// A block moved verbatim from port49d.yaml names its replacement, not an
-	// unknown field.
-	if err := yamlfault.Replaced(raw, map[string]string{
-		"secret_env": "secret_ref (write secret_ref: env:NAME)",
-	}); err != nil {
-		return nil, err
-	}
-	var f file
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		// A type error quotes the value it could not decode, and the value
-		// may be a rule or a secret in it: the line and the kind of fault say
-		// where (spec §5.8; yamlfault.Described builds them from an allowlist).
-		decoded := yamlfault.Described(err)
-		if strings.Contains(decoded.Error(), "time.Duration") {
-			return nil, fmt.Errorf("%s; durations need a unit, e.g. 60s", decoded)
-		}
-		return nil, decoded
-	}
-	// A second document would be ignored by a single Decode, and an ignored
-	// `---` followed by a `scopes:` block is a policy that reads as scoped and
-	// is not.
-	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		return nil, errors.New("the policy file must be one YAML document; remove the `---` separator and " +
-			"everything after it, or merge it into the first document")
 	}
 	p := &Policy{Bundle: env.Bundle, Source: engine.HashOf(raw), raw: slices.Clone(raw), env: env}
 	if p.Bundle == "" {
@@ -441,6 +415,52 @@ func (p *Policy) KeySets() map[string]keyset.Set {
 
 // KeysDeclared is whether the file has a keys: block, `keys: {}` included.
 func (p *Policy) KeysDeclared() bool { return p.keysDeclared }
+
+// FileSchema is the zero value of the type Parse strict-decodes a policy file into. It exists for the
+// docs generator (internal/docgen), which reads the schema from its fields.
+func FileSchema() any { return file{} }
+
+// DecodeStrict is Parse's decode of a policy file's bytes without the validation that needs an
+// Env: an unknown key, a key a later plan reads, a removed key and a second document are refused.
+func DecodeStrict(raw []byte) error {
+	_, err := decodeFile(raw)
+	return err
+}
+
+// decodeFile is Parse's strict decode.
+func decodeFile(raw []byte) (file, error) {
+	var f file
+	if err := refusedKeys(raw); err != nil {
+		return f, err
+	}
+	// A block moved verbatim from port49d.yaml names its replacement, not an
+	// unknown field.
+	if err := yamlfault.Replaced(raw, map[string]string{
+		"secret_env": "secret_ref (write secret_ref: env:NAME)",
+	}); err != nil {
+		return f, err
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		// A type error quotes the value it could not decode, and the value
+		// may be a rule or a secret in it: the line and the kind of fault say
+		// where (spec §5.8; yamlfault.Described builds them from an allowlist).
+		decoded := yamlfault.Described(err)
+		if strings.Contains(decoded.Error(), "time.Duration") {
+			return f, fmt.Errorf("%s; durations need a unit, e.g. 60s", decoded)
+		}
+		return f, decoded
+	}
+	// A second document would be ignored by a single Decode, and an ignored
+	// `---` followed by a `scopes:` block is a policy that reads as scoped and
+	// is not.
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return f, errors.New("the policy file must be one YAML document; remove the `---` separator and " +
+			"everything after it, or merge it into the first document")
+	}
+	return f, nil
+}
 
 // refusedKeys names the plan that reads a key this build does not, before the
 // strict decode can say only that the field is unknown.

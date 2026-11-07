@@ -15,6 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/blanketfish/port49/internal/docgen"
 	"github.com/blanketfish/port49/internal/port49d"
 	"github.com/blanketfish/port49/tests/alerts"
 )
@@ -547,4 +548,78 @@ func sortedKeys(m map[string][]byte) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// A configuration example on a page is a fenced yaml block titled with the file it is for:
+//
+//	```yaml title="port49d.yaml"
+//
+// The test below decodes each one with that file's own loader, so a page cannot show a key the
+// loader refuses.
+var exampleFence = regexp.MustCompile("^(\\s*)```ya?ml\\s+title=\"([^\"]+)\"")
+
+type configExample struct {
+	File string
+	Line int
+	Body []byte
+}
+
+func configExamples(text string) []configExample {
+	var out []configExample
+	var cur *configExample
+	var indent string
+	var body []string
+	for i, line := range strings.Split(text, "\n") {
+		switch {
+		case cur == nil:
+			if m := exampleFence.FindStringSubmatch(line); m != nil {
+				cur, indent, body = &configExample{File: m[2], Line: i + 1}, m[1], nil
+			}
+		case strings.TrimSpace(line) == "```":
+			cur.Body = []byte(strings.Join(body, "\n") + "\n")
+			out = append(out, *cur)
+			cur = nil
+		default:
+			body = append(body, strings.TrimPrefix(line, indent))
+		}
+	}
+	return out
+}
+
+func decodeExample(ex configExample) error {
+	for _, s := range docgen.Schemas() {
+		if s.File == ex.File {
+			return s.Decode(ex.Body)
+		}
+	}
+	return fmt.Errorf("%s is not a file with a schema; the title is one of the six config file names", ex.File)
+}
+
+func TestTheExampleScannerFindsTitledBlocks(t *testing.T) {
+	text := "text\n```yaml title=\"policy.yaml\"\nscopes: []\n```\n\n!!! note\n    ```yaml title=\"config.yaml\"\n    broker: b\n    ```\n```yaml\nplain: 1\n```\n"
+	got := configExamples(text)
+	if len(got) != 2 || got[0].File != "policy.yaml" || got[0].Line != 2 || string(got[0].Body) != "scopes: []\n" ||
+		got[1].File != "config.yaml" || string(got[1].Body) != "broker: b\n" {
+		t.Fatalf("configExamples = %+v", got)
+	}
+	if err := decodeExample(configExample{File: "policy.yaml", Body: []byte("not_a_key: 1\n")}); err == nil {
+		t.Error("an example with an unknown key decoded")
+	}
+	if err := decodeExample(configExample{File: "other.yaml"}); err == nil {
+		t.Error("an example titled with no schema decoded")
+	}
+}
+
+func TestEveryConfigExampleDecodes(t *testing.T) {
+	pages, err := DocSources(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range sortedKeys(pages) {
+		for _, ex := range configExamples(string(pages[name])) {
+			if err := decodeExample(ex); err != nil {
+				t.Errorf("%s:%d: the %s example does not decode: %v", name, ex.Line, ex.File, err)
+			}
+		}
+	}
 }
