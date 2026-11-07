@@ -724,3 +724,23 @@ func TestL73ConnKindsNamesPlainIncompleteAndTLS(t *testing.T) {
 		t.Error("no connections should say so")
 	}
 }
+
+// #46's candidates include a connection that carried nothing: no TLS records
+// and no plain TACACS+, such as an RST with no bytes.
+func TestL73ConnKindsNamesAConnectionThatCarriedNothingOther(t *testing.T) {
+	got := l73ConnKinds([]l73Conn{
+		{Server: "172.100.100.1:300", Answer: "rst"},
+		{Server: "172.100.100.1:300", Answer: "syn-ack", Incomplete: true, DevicePayloadBytes: 0},
+	})
+	for _, want := range []string{
+		"172.100.100.1:300 rst other hello=no server_hello=no incomplete=false device_records=0 server_records=0 device_bytes=0",
+		"172.100.100.1:300 syn-ack other hello=no server_hello=no incomplete=true device_records=0 server_records=0 device_bytes=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("l73ConnKinds lacks %q:\n%s", want, got)
+		}
+	}
+	if hits := l73SummaryLeaks(got); len(hits) != 0 {
+		t.Errorf("l73SummaryLeaks found %v in %q", hits, got)
+	}
+}
