@@ -76,7 +76,7 @@ func TestL80Remeasure(t *testing.T) {
 	// The harness and its evidence paths must be clean, untracked files
 	// included (review N4): an earlier batch's evidence is committed before
 	// the next batch.
-	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
+	if dirty, err := qualTreeDirty(root); err != nil || dirty != "" {
 		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
 	}
 	// The harness builds the port49d the arm runs (fix round 4): the

@@ -67,7 +67,7 @@ func TestQualify(t *testing.T) {
 		}
 		root = r
 	}
-	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
+	if dirty, err := qualTreeDirty(root); err != nil || dirty != "" {
 		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
 	}
 	bin := filepath.Join(root, "bin", "port49d")
@@ -648,7 +648,7 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	}
 	// The harness compiles the same table the offer is read from: its tree
 	// must be HEAD's too, untracked files included (review N4).
-	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
+	if dirty, err := qualTreeDirty(root); err != nil || dirty != "" {
 		q.t.Fatalf("INVALID: the harness tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
 	}
 	q.run.Port49d = vcs.recorded()

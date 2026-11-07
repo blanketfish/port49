@@ -334,3 +334,47 @@ func TestQualRunRecordsAShortRevisionThatPassesTheLeakCheck(t *testing.T) {
 		t.Errorf("run.json lacks vcs_modified: %s", b)
 	}
 }
+
+// The qualify and L80 dirty check is the binary's and the harness's
+// provenance: code, plus the run's own outputs (review I2, N4). Another
+// entry's notes and evidence are not read by the run.
+func TestQualTreeDirtyIgnoresOtherEntriesNotes(t *testing.T) {
+	dir, run := gitRepo(t)
+	for _, f := range []string{
+		"internal/a.go",
+		"tests/lab/qualify_test.go",
+		"tests/lab/results/L66-arista_eos.md",
+		"tests/lab/results/QUAL-x.md",
+	} {
+		writeFile(t, filepath.Join(dir, f), "base\n")
+	}
+	run("add", "-A")
+	run("commit", "-q", "-m", "base")
+	if d, err := qualTreeDirty(dir); err != nil || d != "" {
+		t.Fatalf("clean tree: %q %v", d, err)
+	}
+	for _, c := range []struct {
+		name  string
+		write string
+		dirty bool
+	}{
+		{"another entry's modified note", "tests/lab/results/L66-arista_eos.md", false},
+		{"another entry's untracked evidence directory", "tests/lab/evidence/L66-x/new.txt", false},
+		{"the qualify run's own modified note", "tests/lab/results/QUAL-x.md", true},
+		{"L80's untracked evidence directory", "tests/lab/evidence/L80-cisco_nxos/new.txt", true},
+		{"L80's untracked evidence file", "tests/lab/evidence/L80-x.json", true},
+		{"modified harness code", "tests/lab/qualify_test.go", true},
+		{"modified product code", "internal/a.go", true},
+	} {
+		run("reset", "-q", "--hard")
+		run("clean", "-qfd")
+		writeFile(t, filepath.Join(dir, c.write), "changed\n")
+		d, err := qualTreeDirty(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if (d != "") != c.dirty {
+			t.Errorf("%s: dirty=%q, want dirty %v", c.name, d, c.dirty)
+		}
+	}
+}
