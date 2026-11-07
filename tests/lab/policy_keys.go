@@ -6,3 +6,5 @@ package lab
 // lab_key. The harness sets PORT49_KEY_LAB for the daemons it starts
 // (harness_test.go startDaemonWith and proc.start).
 const labPolicyKeys = "keys:\n  lab_key:\n    current: {version: 1, secret_ref: env:PORT49_KEY_LAB}\n"
+
+const qualPolicyKeys = "keys:\n  k:\n    current: {version: 1, secret_ref: env:PORT49_KEY_RUN}\n"

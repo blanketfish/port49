@@ -92,7 +92,7 @@ subjects:
   - {name: qual_operator, identity: ["user:alice@slice.port49.test"], username: qual01, token_ttl: 60s}
 grants:
   - {subject: qual_operator, scope: qual_junos, roles: [l78], max_privilege: admin}
-`, s.Target, quoteAll(permits), quoteAll(l78Denies[:s.Deny]))
+%s`, s.Target, quoteAll(permits), quoteAll(l78Denies[:s.Deny]), qualPolicyKeys)
 }
 
 func quoteAll(xs []string) string {

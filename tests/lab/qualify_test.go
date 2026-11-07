@@ -246,6 +246,18 @@ func (q *qualEnv) config() string {
 	if err != nil {
 		q.t.Fatalf("INVALID: %v", err)
 	}
+	invPath := filepath.Join(priv, "inventory.yaml")
+	invRaw, err := os.ReadFile(invPath)
+	if err != nil {
+		q.t.Fatalf("INVALID: %v", err)
+	}
+	invText, err := qualInventory(string(invRaw))
+	if err != nil {
+		q.t.Fatalf("INVALID: %v", err)
+	}
+	if err := os.WriteFile(invPath, []byte(invText), 0o600); err != nil {
+		q.t.Fatalf("INVALID: %v", err)
+	}
 	if text, err = stagePrivateFiles(text); err != nil {
 		q.t.Fatalf("INVALID: %v", err)
 	}

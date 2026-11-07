@@ -17,6 +17,20 @@ import (
 	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
+// qualInventory is the lab inventory as the conformance run reads it: its one
+// `key_ref: lab_key` becomes `key_ref: k`, the key tests/qual/qual-policy.yaml
+// declares. The qual policy stays byte for byte what the mock loads, and the
+// mock's own inventory assigns k (internal/port49d/qual_test.go:263); a device
+// whose key_ref the policy's keys: block lacks is refused (decision 53
+// ruling 3).
+func qualInventory(inv string) (string, error) {
+	const from = "key_ref: lab_key"
+	if n := strings.Count(inv, from); n != 1 {
+		return "", fmt.Errorf("the lab inventory has %d `%s` entries, and the qualify run rewrites exactly one", n, from)
+	}
+	return strings.Replace(inv, from, "key_ref: k", 1), nil
+}
+
 type qualCell struct {
 	Name string
 	Rows []string

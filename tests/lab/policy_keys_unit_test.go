@@ -3,9 +3,11 @@
 package lab
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/blanketfish/port49/internal/admission"
@@ -109,5 +111,91 @@ func TestProjectionPolicyDeclaresTheLabKey(t *testing.T) {
 	}
 	for _, s := range projectionShapes130 {
 		assertPolicyAdmits(t, "1.3.0 "+s.name, projectionPolicy("1.3.0", s.roles), inv, want)
+	}
+}
+
+// qualInventoryForUnit is inventory-lab.yaml as the qualify run sees it.
+func qualInventoryForUnit(t *testing.T) admission.Inventory {
+	t.Helper()
+	raw, err := os.ReadFile("inventory-lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := qualInventory(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := admission.ParseFile([]byte(text), "inventory-lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inv
+}
+
+func TestTheQualPolicyAdmitsTheLabInventory(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "qual", "qual-policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := labRefusalsControl(t)
+	assertPolicyAdmits(t, "qual policy, rewritten inventory", string(raw), qualInventoryForUnit(t), want)
+
+	// The control that must fail: the unrewritten inventory assigns lab_key,
+	// which the qual policy does not declare. This is what Task 26 saw.
+	inv := labInventoryForUnit(t)
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := policy.Load(path, policy.Env{Devices: inv.Devices, InventoryKeyGroups: inv.KeyGroups})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range p.AdmissionRefusals() {
+		if r.Device.Name == "leaf1" && strings.Contains(r.Refused, "is assigned key_ref lab_key") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the unrewritten inventory should refuse leaf1 with %q, got %v", "is assigned key_ref lab_key", refusedWhy(p))
+	}
+}
+
+func TestQualPolicyKeysMatchesTheQualPolicy(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "qual", "qual-policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), qualPolicyKeys) {
+		t.Errorf("qualPolicyKeys %q is not a block of tests/qual/qual-policy.yaml", qualPolicyKeys)
+	}
+}
+
+func TestL78PolicyDeclaresTheQualKey(t *testing.T) {
+	inv := qualInventoryForUnit(t)
+	want := labRefusalsControl(t)
+	if len(l78Steps) == 0 {
+		t.Fatal("no l78Steps")
+	}
+	for i, s := range l78Steps {
+		assertPolicyAdmits(t, fmt.Sprintf("l78 step %d", i), l78Policy(s), inv, want)
+	}
+}
+
+func TestQualInventoryRewritesExactlyOneKeyRef(t *testing.T) {
+	if _, err := qualInventory("key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: other}\n"); err == nil {
+		t.Error("an inventory with no lab_key line should be an error")
+	}
+	two := "key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: lab_key}\n  - {match: {cidr: 11.0.0.0/8}, key_ref: lab_key}\n"
+	if _, err := qualInventory(two); err == nil || !strings.Contains(err.Error(), "2") {
+		t.Errorf("two lab_key lines should be an error naming the count, got %v", err)
+	}
+	got, err := qualInventory("key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: lab_key}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "key_ref: k}") || strings.Contains(got, "lab_key") {
+		t.Errorf("got %q", got)
 	}
 }
