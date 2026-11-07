@@ -23,8 +23,8 @@ every device. Two credentials avoid both.
 
 ## The token
 
-A token is an opaque handle, about 30 characters, shaped like `p49_xxxxxxxxxxxxxxxxxxxxxxxxxx` (the
-characters here are a stand-in, not a value). It carries no claims. The identity, the groups resolved
+A token is an opaque handle: exactly 30 letters and digits, with no prefix and no separator, like
+`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` (a stand-in, not a value). It carries no claims. The identity, the groups resolved
 from the directory at mint time and the device it is valid for all live in the store, which is why
 deleting a token ends it at once.
 
@@ -68,13 +68,10 @@ finds nothing and is judged on its own merits.
 A receipt is a sliding window, not a fixed one. Each presentation it answers extends it by
 `receipt_idle_ttl` (default 15 minutes), up to `receipt_max_age` (default 2 hours) from the first
 redemption. A presentation past either bound is a plain FAIL on the wire, exactly as a wrong password
-is, and the log says `token_spent`. Interactive logins present once and never slide; automation that
-re-presents the same credential, such as an API client keeping a session, does, with no flag to set.
-
-!!! note "Design and code differ"
-    The design document describes a fixed receipt window of about 30 seconds. The spec and the code
-    replaced it with the sliding window above. This page follows the code. The keys are in the
-    [port49d configuration reference](../reference/config/port49d.md).
+is, and the log says `token_spent`. Interactive logins present once and never slide; a client that
+re-presents the same credential does, with no flag to set. How many times a given client library
+authenticates is the client's choice, not the transport's. The keys are in the
+[port49d configuration reference](../reference/config/port49d.md).
 
 `token_spent` also covers a receipt whose context no longer exists (it was replaced or reclaimed), and
 a token brought back by a store restore. The device simply prompts again. See
@@ -113,6 +110,6 @@ can learn who it is talking to.
 
 !!! warning "Session control stops at the device"
     TACACS+ has no server-to-device disconnect. Everything above stops port49 from *authorizing*; it
-    does not close a connection. A platform that asks port49 only at login (Junos is the known case)
-    never asks again, so a ceiling or a revocation reaches a context nobody reads there. See
-    [Revocation](revocation.md).
+    does not close a connection. A platform that asks port49 only at login never asks again, so a ceiling
+    or a revocation reaches a context nobody reads there. Junos is one, unless its
+    `authorization-time-interval` is set. [Revocation](revocation.md) has what was measured.

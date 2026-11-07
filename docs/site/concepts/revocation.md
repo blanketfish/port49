@@ -49,13 +49,19 @@ what it reached and which live contexts it could not.
 
 ## Other things that revoke
 
-Revocation is not only an operator's act. Any of these marks the same state, and port49d answers the
-same `credential_revoked`:
+Revocation is not only an operator's act. Each of these marks the live context revoked, and its next
+authorization is denied `credential_revoked`:
 
 - a certificate appearing on a CRL or OCSP response;
-- an OIDC back-channel logout, by `sid` or `sub`, so an SSO sign-out reaches live router sessions;
-- a policy change that withdraws every grant on a device, or a principal's directory entry going away;
-- a subject's username changing.
+- an OIDC back-channel logout, by `sid` or `sub`;
+- the broker's periodic refresh finding that the principal now has no grant on the device
+  (for example, a policy change withdrew them);
+- the refresh finding that the directory no longer maps the principal: the entry is gone, ambiguous,
+  or renamed to a username another entry holds;
+- a subject's username changing, since the principal can no longer mint under the name the context is
+  keyed by.
+
+The `refresh` record before the denial says which of these it was.
 
 A certificate that cannot be checked at all, such as a stale CRL, is not revocation: it is
 `trust_domain_unresolved` at mint, and the broker setting `broker.certificate_status.on_unavailable`
@@ -75,11 +81,23 @@ workload anchor as the issuer.
     *next authorization request*. The TCP session stays up, a candidate configuration stays intact, and
     an in-progress commit is untouched: the operator is told no, not cut off.
 
-    A platform that asks port49 only once, at login, never asks again. On such a platform (Junos is the
-    known case, spec decision 21) a revocation reaches a context nobody reads, and the session lasts
-    until the device ends it. The decision log's `revoke` record lists the live contexts port49 could
-    not reach, so you know which devices still need a manual disconnect. `port49 explain` says so when
-    asked about such a platform.
+    A platform that asks port49 only at login asks nothing afterwards, so a revocation reaches a context
+    nobody reads and the session lasts until the device ends it. Junos asks only at login unless its
+    `authorization-time-interval` is set. With it set, Junos re-authorizes the open session once at the
+    interval, and a revoked principal is denied `credential_revoked` there. Measured on vJunos-router
+    23.4R2-S2.1 and vSRX3 21.4R3.15 with an interval of 15 minutes (L36, closed:
+    [vJunos-router](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md),
+    [vSRX](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md)).
+    The denial does not end the session: it stayed open, and its next command printed an error.
+
+    The decision log's `revoke` record lists the live contexts port49 could not reach, Junos contexts
+    included, so you know which devices still need a manual disconnect. `port49 policy test` says so
+    when a test names a platform that never asks about a command.
+
+!!! warning "Unmeasured"
+    Whether Junos re-authorizes more than once, so whether a revocation made after the first
+    re-authorization ever reaches the session, is unknown (L40, open). Do not rely on a revocation
+    reaching a Junos session before its device ends it.
 
 Two other limits are worth knowing.
 

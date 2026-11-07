@@ -19,41 +19,52 @@ token, a naming convention or a group never decides.
 ```yaml
 broker:
   identity:
+    issuance: {}   # an OIDC person's ID token is taken to issue a certificate
     humans:
       - type: x509
         trust_anchor_file: <people-ca.pem>
       - type: oidc
         issuer: https://login.example.com
         client_id: <client_id>
+        principal_claim: email
+        principal_domains: [example.com]
     machines:
       - type: x509
         trust_anchor_file: <workload-ca.pem>
         spiffe_trust_domains: [example.org]
       - type: k8s
         issuer: https://kube.example.com
-        cluster: <cluster_name>
-        jwks: <jwks_url>
+        cluster: us_east
+        jwks: https://kube.example.com/openid/v1/jwks
         audience: port49
         namespaces: [netops]
 ```
 
-(The values are placeholders; the full key list is in the reference.)
+The values are placeholders; the full key list is in the reference. `issuance: {}` turns on certificate
+issuance with its defaults; the broker refuses an OIDC human verifier without it, unless an x509 human verifier sits beside it and
+the verifier serves only as a per-login MFA proof.
 
 ## What follows from the rule
 
 - **A credential no verifier accepts is refused at mint.** The reason is `trust_domain_unresolved`.
   The same reason covers a certificate whose revocation status cannot be established when
-  `broker.certificate_status.on_unavailable` is `refuse`, and a certificate that ends at both
-  anchors. See [Reason codes](../reference/reason-codes.md) for the full meaning.
+  `broker.certificate_status.on_unavailable` is `refuse`. See
+  [Reason codes](../reference/reason-codes.md) for the full meaning.
 - **A credential two verifiers accept is refused.** There is no tie-break. A person's delegated token is
   never a machine's, and two issuers never give one principal.
+- **`principal_domains` bounds who a provider may name.** An OIDC human verifier lists the domains whose
+  people it may name (`user:<name>@<domain>`), and has no default. Another provider cannot name someone
+  in your domains, even with a claim that looks right. `principal_claim` likewise has no default: set it
+  to a claim only your provider's administrators can write.
 - **The same issuer may serve both lists with a different audience.** An identity provider that issues
   tokens to people and to applications uses one issuer for both. `client_id` names the public client
   whose ID token a person presents; `audience` names the API in the access token a service obtains.
   Both are checks on `aud`, and the list the token matched decides the domain.
 - **Certificate anchors may not overlap.** The handshake verifies against both anchors, and the one the
-  chain ends at is the domain. A chain that ends at both is refused, and two anchors where one signs
-  the other refuse the broker's start.
+  chain ends at is the domain. A chain that ends at both is refused at the TLS handshake, which leaves a
+  line in the broker's log and a count of `identity_refused` handshake failures, not a decision record.
+  Put the two anchors in unrelated hierarchies: the broker refuses to start if one anchor directly signs
+  the other, and refuses at a request whose chain shows a deeper overlap.
 - **A workload never authenticates with a directory password.** The password sign-in refuses a workload's
   entry, and the verifier's `filter` keeps a person-shaped service account out.
 - **Directory groups reach a workload only as a machine group.** A workload can be mapped to a directory
