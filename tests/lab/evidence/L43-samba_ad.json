@@ -1,51 +1,51 @@
 {"event":"mark","label":"L43 external"}
-{"event":"bind","mechanism":"external","result_code":1,"error":"LDAP Result Code 1 \"Operations Error\": bind external as CN=port49-broker,O=port49 lab: LDAP result 1","duration_ms":4.63}
+{"event":"bind","mechanism":"external","result_code":1,"error":"LDAP Result Code 1 \"Operations Error\": bind external as CN=port49-broker,O=port49 lab: LDAP result 1","duration_ms":6.406}
 {"event":"mark","label":"L43 simple over LDAPS"}
-{"event":"bind","mechanism":"simple","result_code":0,"duration_ms":7.616}
+{"event":"bind","mechanism":"simple","result_code":0,"duration_ms":40.569}
 {"event":"mark","label":"L43 gssapi, strong auth yes"}
-{"event":"bind","mechanism":"gssapi, strong auth yes","result_code":8,"error":"LDAP Result Code 8 \"Strong Auth Required\": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 8","duration_ms":29.899}
+{"event":"bind","mechanism":"gssapi, strong auth yes","result_code":8,"error":"LDAP Result Code 8 \"Strong Auth Required\": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 8","duration_ms":70.259}
 {"event":"mark","label":"L43 simple over plain LDAP"}
-{"event":"bind","mechanism":"simple over plain LDAP, by hand (ldap server require strong auth = yes)","result_code":8,"error":"LDAP Result Code 8 \"Strong Auth Required\": BindSimple: Transport encryption required.","duration_ms":2.252}
+{"event":"bind","mechanism":"simple over plain LDAP, by hand (ldap server require strong auth = yes)","result_code":8,"error":"LDAP Result Code 8 \"Strong Auth Required\": BindSimple: Transport encryption required.","duration_ms":34.217}
 {"event":"mark","label":"L43 gssapi, strong auth allow_sasl_over_tls"}
-{"event":"bind","mechanism":"gssapi, strong auth allow_sasl_over_tls","result_code":0,"duration_ms":70.488}
+{"event":"bind","mechanism":"gssapi, strong auth allow_sasl_over_tls","result_code":0,"duration_ms":103.336}
 {"event":"mark","label":"L43 simple over LDAPS, strong auth allow_sasl_over_tls"}
-{"event":"bind","mechanism":"simple, strong auth allow_sasl_over_tls","result_code":0,"duration_ms":42.225}
-{"event":"bind","mechanism":"simple over plain LDAP, by hand, strong auth allow_sasl_over_tls","result_code":8,"error":"LDAP Result Code 8 \"Strong Auth Required\": BindSimple: Transport encryption required.","duration_ms":3.232}
+{"event":"bind","mechanism":"simple, strong auth allow_sasl_over_tls","result_code":0,"duration_ms":9.841}
+{"event":"bind","mechanism":"simple over plain LDAP, by hand, strong auth allow_sasl_over_tls","result_code":8,"error":"LDAP Result Code 8 \"Strong Auth Required\": BindSimple: Transport encryption required.","duration_ms":3.648}
 {"event":"mark","label":"L43 a wrong password through the pool"}
-{"event":"bind","mechanism":"simple","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind simple as CN=port49,OU=Svc,DC=corp,DC=example,DC=com: LDAP result 49","duration_ms":37.958}
+{"event":"bind","mechanism":"simple","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind simple as CN=port49,OU=Svc,DC=corp,DC=example,DC=com: LDAP result 49","duration_ms":5.499}
 {"event":"mark","label":"L43 mapping san_email alice"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":1.023}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.603}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.597}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":1.352}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.371}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.49}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.264}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.253}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.703}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.237}
 {"event":"mark","label":"L43 mapping issuer_serial alice"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>7FF2C9DC1F34853A))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.438}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":32.741}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.967}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.869}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.372}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>A63D0F7AE7681C2F))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.537}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.291}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.286}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.525}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.268}
 {"event":"mark","label":"L43 mapping sid alice"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(objectSid=\\01\\05\\00\\00\\00\\00\\00\\05\\15\\00\\00\\00\\47\\f6\\0c\\61\\9f\\4e\\33\\8d\\d5\\37\\0a\\b7\\4f\\04\\00\\00))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.464}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.265}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.256}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.53}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.202}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(objectSid=\\01\\05\\00\\00\\00\\00\\00\\05\\15\\00\\00\\00\\a6\\b0\\43\\8a\\e1\\f5\\ee\\2a\\7a\\ef\\50\\61\\4f\\04\\00\\00))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.433}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.227}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.204}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.637}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.236}
 {"event":"mark","label":"L43 mapping san_email eve"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=eve@corp.example.com))","dns":["CN=eve,OU=Staff,DC=corp,DC=example,DC=com","CN=eve2,OU=Contractors,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":1.072}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=eve@corp.example.com))","dns":["CN=eve2,OU=Contractors,DC=corp,DC=example,DC=com","CN=eve,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.553}
 {"event":"mark","label":"L43 mapping mail collision: bob given alice's mail"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>7FF2C9DC1F34853A))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.527}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=bob,OU=Staff,DC=corp,DC=example,DC=com","CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.301}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=bob,OU=Staff,DC=corp,DC=example,DC=com","CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.305}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>A63D0F7AE7681C2F))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.458}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=bob,OU=Staff,DC=corp,DC=example,DC=com","CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.296}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=bob,OU=Staff,DC=corp,DC=example,DC=com","CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.319}
 {"event":"mark","label":"L43 mapping mail collision: bob's mail restored"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>7FF2C9DC1F34853A))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.825}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.403}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.364}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.717}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.273}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>A63D0F7AE7681C2F))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.879}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.247}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.218}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.611}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.249}
 {"event":"mark","label":"L43 shared group name"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.427}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.256}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.248}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.751}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com","CN=netops-oncall,OU=Users-Can-Create,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.556}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.436}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.276}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.245}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.812}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=Users-Can-Create,DC=corp,DC=example,DC=com","CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.236}
