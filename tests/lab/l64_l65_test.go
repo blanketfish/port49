@@ -821,6 +821,56 @@ type l64PyRun struct {
 	err     error
 }
 
+// l64HarnessErrors are the Python error classes of a driver that is itself wrong (a bad call, a missing name or
+// module): such a run never reached the device. A paramiko or netmiko error is the device's answer, and stays a
+// measurement.
+var l64HarnessErrors = []string{"TypeError", "AttributeError", "NameError", "KeyError", "ImportError",
+	"ModuleNotFoundError", "SyntaxError", "UnboundLocalError"}
+
+// l64DriverFault says why a Python run measured nothing, or "" when it reached the library and the device: an
+// import error, a harness error class, or no result line at all.
+func l64DriverFault(r l64PyRun) string {
+	switch {
+	case !r.parsed:
+		return fmt.Sprintf("the driver printed no result line (exit %d, error %v)", r.exit, r.err)
+	case r.d.Outcome == "import_error":
+		return "the driver could not import the library (" + r.d.ErrorClass + ")"
+	case r.d.Outcome == "error" && slices.Contains(l64HarnessErrors, r.d.ErrorClass):
+		return "the driver failed with " + r.d.ErrorClass + " before it reached the device"
+	}
+	return ""
+}
+
+// noteDriver marks the running cell INVALID when its driver run was a harness error.
+func (e *l64Env) noteDriver(r l64PyRun) {
+	if why := l64DriverFault(r); why != "" && e.invalid == "" {
+		e.invalid = why
+	}
+}
+
+// l64Writable is whether an entry's note may be written: an INVALID cell measured nothing, so the entry writes
+// no note and the test fails, as L66's does.
+func l64Writable(rs []l64Result, entry string) (bool, string) {
+	var bad []string
+	n := 0
+	for _, r := range rs {
+		if !strings.HasPrefix(r.id, entry) {
+			continue
+		}
+		n++
+		if r.outcome == "INVALID" {
+			bad = append(bad, r.id)
+		}
+	}
+	switch {
+	case n == 0:
+		return false, "no " + entry + " cell ran"
+	case len(bad) > 0:
+		return false, "INVALID cells: " + strings.Join(bad, ", ")
+	}
+	return true, ""
+}
+
 // pythonEnv is the driver's environment. The library finds a non-default agent through
 // PORT49_TEST_AGENT_SOCKET alone, which its CLI children inherit: Agent takes no socket
 // parameter (d97c52c6).
@@ -838,6 +888,7 @@ func (e *l64Env) python(ctx context.Context) l64PyRun {
 	r.recs = e.l.drainRecords(off, 6*time.Second)
 	r.packets = e.tacacsIn(from, time.Now())
 	r.other, r.redeems = l64OtherRecords(r.recs), l64Redeems(r.recs)
+	e.noteDriver(r)
 	return r
 }
 
@@ -1568,6 +1619,11 @@ func l64Tail(s string) string { return l53Tail(strings.TrimSpace(s), 8) }
 func l64WriteNotes(e *l64Env, versions string) {
 	t, l := e.t, e.l
 	for _, entry := range []string{"L64", "L65"} {
+		if ok, why := l64Writable(e.results, entry); !ok {
+			fmt.Fprintf(os.Stdout, "%s %s NO_NOTE %s\n", entry, l.p.name, why)
+			t.Errorf("%s: %s is INVALID, so no note is written (%s)", l.p.name, entry, why)
+			continue
+		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "Client versions in this run: %s.\n\n", versions)
 		fmt.Fprintf(&b, "%s\n\n", e.idleNote)
