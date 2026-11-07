@@ -50,25 +50,40 @@ func TestBootAndHostLinesAreSnakeCaseKeyValues(t *testing.T) {
 		phases[p] = true
 		phases[p+"_missed"] = true
 	}
+	// The host lines' phases, around a whole deploy.
+	hostPhases := map[string]bool{"deploy_start": true, "failed": true, "ready": true}
 	clock := bootClock{name: "cisco_nxos", start: time.Date(2026, 11, 7, 1, 2, 3, 0, time.UTC)}
 	key := regexp.MustCompile(`^[a-z0-9_]+$`)
-	for _, line := range []string{
-		clock.line(phaseSSHAuth, clock.start.Add(95*time.Second+300*time.Millisecond)),
-		clock.line(phaseTACACSSeen+"_missed", clock.start.Add(8*time.Minute)),
-		s.line("cisco_nxos", phaseDeployStart),
+	for _, c := range []struct {
+		line string
+		set  map[string]bool
+	}{
+		{clock.line(phaseSSHAuth, clock.start.Add(95*time.Second+300*time.Millisecond)), phases},
+		{clock.line(phaseTACACSSeen+"_missed", clock.start.Add(8*time.Minute)), phases},
+		{s.line("cisco_nxos", phaseDeployStart), hostPhases},
+		{s.line("cisco_nxos", phaseFailed), hostPhases},
+		{s.line("cisco_nxos", phaseReady), hostPhases},
 	} {
+		line := c.line
 		if !strings.HasPrefix(line, "lab: cisco_nxos: ") {
 			t.Errorf("line %q lacks the lab prefix", line)
 		}
+		sawPhase := false
 		for _, f := range strings.Fields(line)[3:] {
 			k, v, ok := strings.Cut(f, "=")
 			if !ok || !key.MatchString(k) {
 				t.Errorf("field %q of %q is not a snake_case key=value", f, line)
 				continue
 			}
-			if k == "phase" && !phases[v] {
-				t.Errorf("phase %q is outside the closed set", v)
+			if k == "phase" {
+				sawPhase = true
+				if !c.set[v] {
+					t.Errorf("phase %q is outside the closed set", v)
+				}
 			}
+		}
+		if !sawPhase {
+			t.Errorf("line %q has no phase", line)
 		}
 	}
 	if got := clock.line(phaseDeployDone, clock.start.Add(95*time.Second+600*time.Millisecond)); !strings.Contains(got, "since_deploy=1m36s") ||
