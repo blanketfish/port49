@@ -500,7 +500,7 @@ except Exception as e:
 
 conn = None
 try:
-    agent = port49.Agent(port49=os.environ["P49_BIN"], socket=os.environ["P49_SOCK"], timeout=90)
+    agent = port49.Agent(port49=os.environ["P49_BIN"], timeout=90)
     conn = connect(os.environ["P49_DEVICE"], agent=agent, ssh_config=os.environ["P49_SSHCONF"],
                    conn_timeout=30, auth_timeout=60, banner_timeout=60)
     out = conn.send_command(os.environ["P49_CMD"], read_timeout=60)
@@ -821,13 +821,19 @@ type l64PyRun struct {
 	err     error
 }
 
+// pythonEnv is the driver's environment. The library finds a non-default agent through
+// PORT49_TEST_AGENT_SOCKET alone, which its CLI children inherit: Agent takes no socket
+// parameter (d97c52c6).
+func (e *l64Env) pythonEnv() []string {
+	return append(e.env(), "P49_BIN="+filepath.Join(root, "bin", "port49"), "PORT49_TEST_AGENT_SOCKET="+e.sock,
+		"P49_SSHCONF="+e.cfgPath, "P49_DEVICE="+e.node, "P49_CMD=show version")
+}
+
 func (e *l64Env) python(ctx context.Context) l64PyRun {
 	off, from := e.l.mark(), time.Now()
-	env := append(e.env(), "P49_BIN="+filepath.Join(root, "bin", "port49"), "P49_SOCK="+e.sock,
-		"P49_SSHCONF="+e.cfgPath, "P49_DEVICE="+e.node, "P49_CMD=show version")
 	var r l64PyRun
 	var stdout string
-	stdout, r.stderr, r.exit, r.err = l64Run(ctx, env, e.home, venvPython, "-I", "-B", e.driverPath)
+	stdout, r.stderr, r.exit, r.err = l64Run(ctx, e.pythonEnv(), e.home, venvPython, "-I", "-B", e.driverPath)
 	r.d, r.parsed = l64ParseDriver(stdout)
 	r.recs = e.l.drainRecords(off, 6*time.Second)
 	r.packets = e.tacacsIn(from, time.Now())
