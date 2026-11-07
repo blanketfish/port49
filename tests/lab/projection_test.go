@@ -375,6 +375,14 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 	l.entryResult(t, entry, claim, b.String())
 }
 
+// projectionPolicy is the policy one shape runs under: set pinned, roles as
+// given, the slice operator granted them on every device.
+func projectionPolicy(set, roles string) string {
+	return "platform_set: " + set + "\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
+		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
+		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n" + labPolicyKeys
+}
+
 // projectionShape runs one shape and renders its section of the note.
 func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []admission.Device, name, roles string,
 	want string, netconfOff bool, probes []projectionProbe, rendered *[]string) string {
@@ -383,9 +391,7 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
 		t.Fatalf("%v", err)
 	}
-	body := "platform_set: " + set + "\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
-		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
-		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n"
+	body := projectionPolicy(set, roles)
 	path := filepath.Join(root, "tests", "lab", "logs", "projection-"+l16Slug(name)+".yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

@@ -547,7 +547,7 @@ func l66Policy(node string) string {
 		"  - {name: slice_operator, identity: [\"user:" + sliceEmail + "\"], username: slice01,\n" +
 		"     enable: token, token_ttl: 60s}\n" +
 		"grants:\n" +
-		"  - {subject: slice_operator, scope: this_node, roles: [network_admin], max_privilege: admin}\n"
+		"  - {subject: slice_operator, scope: this_node, roles: [network_admin], max_privilege: admin}\n" + labPolicyKeys
 }
 
 const l66MintFact = `"{{ lookup('port49.client.token', p49_name, field='all', socket=p49_socket, port49=p49_bin) }}"`
