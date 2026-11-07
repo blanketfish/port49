@@ -489,7 +489,7 @@ func (e *l88Env) cellE() {
 	for {
 		tries++
 		off := e.l.mark()
-		outs, err = e.l.loginWithin(user, secret, 60*time.Second, "show version", l88DenyCommand(e.l.p))
+		outs, err = e.l.l88LoginWithin(user, secret, 60*time.Second, "show version", l88DenyCommand(e.l.p))
 		recs = e.l.waitForRecords(off, 40*time.Second, func(rs []map[string]any) bool {
 			s, p := l88AccountCounts(rs, user)
 			return s > 0 && p > 0
@@ -601,7 +601,7 @@ func (e *l88Env) cellF() {
 	)
 	for {
 		tries++
-		outs, lerr = e.l.loginWithin(user, secret, 120*time.Second, "show version")
+		outs, lerr = e.l.l88LoginWithin(user, secret, 120*time.Second, "show version")
 		recs = e.l.waitForRecords(off, 15*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, user) != nil })
 		if redeemFor(recs, user) != nil || time.Since(t0) > 5*time.Minute {
 			break
@@ -855,7 +855,7 @@ func (e *l88Env) cellsCD(runC, runD bool) {
 			for time.Since(t0) < window {
 				at := time.Since(t0)
 				ts := time.Now()
-				outs, err := x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+				outs, err := x.l.l88LoginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
 				tr := try{at, time.Since(ts), err, l88Brief(firstOut(outs))}
 				tries = append(tries, tr)
 				if err == nil && first == nil {
@@ -908,7 +908,7 @@ func (e *l88Env) cellsCD(runC, runD bool) {
 		}
 		wentDark := len(x.l.errLinesSince(off, darkCloseText)) > 0
 		t0 := time.Now()
-		outs, err := x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+		outs, err := x.l.l88LoginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
 		took := time.Since(t0)
 		hang(false)
 		shown := l88Brief(firstOut(outs))
@@ -1049,8 +1049,8 @@ func (e *l88Env) cellF2() {
 		if hostMid == "" && at >= 150*time.Second {
 			hostMid = l88Sockets()
 		}
-		_, terr := e.l.loginWithin(user, secret, 20*time.Second, "show version")
-		_, berr := e.l.loginWithin(breakglassUser, breakglassPassword, 20*time.Second, "show version")
+		_, terr := e.l.l88LoginWithin(user, secret, 20*time.Second, "show version")
+		_, berr := e.l.l88LoginWithin(breakglassUser, breakglassPassword, 20*time.Second, "show version")
 		fmt.Fprintf(&b, "+%s: one-time-credential login: %s; break-glass login: %s\n", at.Round(time.Second),
 			e.n.redact(l88Err(terr)), e.n.redact(l88Err(berr)))
 		if berr == nil && bgFirst < 0 {
@@ -1324,7 +1324,7 @@ func (e *l88Env) cellF3() {
 			fmt.Fprintf(&b, "+%s: the break-glass session was closed\n", at.Round(time.Second))
 		}
 		off := e.l.mark()
-		_, terr := e.l.loginWithin(user, secret, 20*time.Second, "show version")
+		_, terr := e.l.l88LoginWithin(user, secret, 20*time.Second, "show version")
 		recs := e.l.waitForRecords(off, 5*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, user) != nil })
 		seen := redeemFor(recs, user) != nil
 		fmt.Fprintf(&b, "+%s: one-time-credential login: %s; port49 saw it: %v\n", at.Round(time.Second), e.n.redact(l88Err(terr)), seen)

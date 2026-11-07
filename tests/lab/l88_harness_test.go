@@ -764,3 +764,25 @@ func (e *l88Env) enrolSRLinux(le *l73Env) {
 	e.n.fact("SR Linux enrolment: the harness made the key and request, the lab intermediate signed it, and `system tls profile " +
 		profile + "` was loaded with the key, the leaf and intermediate, and the root as trust anchor (L73 never ran SR Linux)")
 }
+
+// l88LoginWithin is loginWithin for L88's logins. L88 ran its SR Linux logins
+// through a pty shell, and this keeps that path by name so L88's behavior is
+// unchanged. L76 (cell k) measured exec channels for a TACACS+ user on SR
+// Linux, which is what loginWithin uses.
+func (l *lab) l88LoginWithin(user, password string, per time.Duration, commands ...string) ([]string, error) {
+	if l.p.name != "nokia_srlinux" {
+		return l.loginWithin(user, password, per, commands...)
+	}
+	// The pty shell's prompt is redrawn before a command's output arrives, so the prompt
+	// ptyCommands waits for is the one that came before the output: each command's output is
+	// in the next command's slot (measured: L88 cell e). One trailing command takes the last
+	// output, and the slots shift back by one.
+	outs, err := l.ptyCommands(user, password, per, append(slices.Clone(commands), "echo l88-end")...)
+	if len(outs) > 0 {
+		outs = outs[1:]
+	}
+	if len(outs) > len(commands) {
+		outs = outs[:len(commands)]
+	}
+	return outs, err
+}

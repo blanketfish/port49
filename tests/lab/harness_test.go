@@ -1814,25 +1814,23 @@ func (e *notObserved) Error() string {
 // it are not run. Either way the error is a *notObserved naming each command
 // that did not finish; outs holds what arrived, one entry per command sent.
 func (l *lab) loginWithin(user, password string, per time.Duration, commands ...string) ([]string, error) {
-	if l.p.name == "nokia_srlinux" {
-		// SR Linux's sshd does not run an exec command in sr_cli (L76), so this is a pty shell. Its
-		// prompt is redrawn before a command's output arrives, so the prompt ptyCommands waits for
-		// is the one that came before the output: each command's output is in the next command's
-		// slot (measured: L88 cell e). One trailing command takes the last output, and the slots
-		// shift back by one.
-		outs, err := l.ptyCommands(user, password, per, append(slices.Clone(commands), "echo l88-end")...)
-		if len(outs) > 0 {
-			outs = outs[1:]
-		}
-		if len(outs) > len(commands) {
-			outs = outs[:len(commands)]
-		}
-		return outs, err
-	}
-	if l.p.name == "cisco_iosxe" {
+	switch loginPath(l.p.name) {
+	case "pty":
 		return l.ptyCommands(user, password, per, commands...)
+	default:
+		return l.loginWithinDial(l.p.addr+":22", user, password, 45*time.Second, per, commands...)
 	}
-	return l.loginWithinDial(l.p.addr+":22", user, password, 45*time.Second, per, commands...)
+}
+
+// loginPath is how a platform's logins run: "pty" for C8000V, which runs one
+// exec channel per connection, and "exec" for everything else. A TACACS+
+// user's exec channels run in sr_cli on SR Linux 26.7.2 (tests/lab/results/
+// L76-nokia_srlinux.md, cell k), so SR Linux is "exec".
+func loginPath(platform string) string {
+	if platform == "cisco_iosxe" {
+		return "pty"
+	}
+	return "exec"
 }
 
 // loginWithinDial is loginWithin against an explicit host:port with its own
