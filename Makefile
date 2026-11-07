@@ -4,9 +4,10 @@
 # environment says, so these are the four static binaries the image carries.
 STATIC_CMDS = port49d port49 port49-inventory port49-broker
 
-# What every binary prints for --version: the nearest tag, or the commit, marked -dirty when the
-# tree has changes. The release sets the same variable from the tag (.goreleaser.yaml).
-VERSION ?= $(shell git describe --tags --always --dirty)
+# What every binary prints for --version: the nearest tag without its v (as goreleaser's
+# {{.Version}} and the image's build argument give it), or the commit, marked -dirty when the tree
+# has changes; dev outside a git checkout.
+VERSION ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
 VERSION_LDFLAGS = -ldflags "-X github.com/blanketfish/port49/internal/version.Version=$(VERSION)"
 
 build:
@@ -446,7 +447,7 @@ lab:
 
 # The container image (plan 7f, Task 1): one peer shape, never required.
 image:
-	docker build --target port49 -t port49:dev .
+	docker build --target port49 --build-arg VERSION=$(VERSION) -t port49:dev .
 
 # The image's directory and binary modes (plan 12b, Task 5): builds, then reads the
 # exported filesystem. Behind the image tag so `go test ./...` never needs Docker.

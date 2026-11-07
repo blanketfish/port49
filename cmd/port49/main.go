@@ -43,6 +43,8 @@ import (
 )
 
 const usage = `usage:
+  port49 version
+               (prints the version; port49d, port49-broker and port49-inventory take --version)
   port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--touch-key REF] [--cert FILE --key FILE |
                --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser] [--sign-in] |
                --directory [--name NAME] [--sign-in]]
