@@ -34,13 +34,15 @@ func TestL65DriverPassesOnlyParametersAgentTakes(t *testing.T) {
 	if !slices.Contains(params, "port49") {
 		t.Fatalf("read Agent parameters %v", params)
 	}
-	call := regexp.MustCompile(`port49\.Agent\(([^)]*)\)`).FindStringSubmatch(l64DriverScript)
-	if call == nil {
+	calls := callArgs(l64DriverScript, "port49.Agent(")
+	if len(calls) == 0 {
 		t.Fatal("the driver builds no port49.Agent")
 	}
-	for _, kw := range regexp.MustCompile(`([a-z_0-9]+)=`).FindAllStringSubmatch(call[1], -1) {
-		if !slices.Contains(params, kw[1]) {
-			t.Errorf("the driver passes %s= to port49.Agent, which takes %v", kw[1], params)
+	for _, call := range calls {
+		for _, kw := range topLevelKeywords(call) {
+			if !slices.Contains(params, kw) {
+				t.Errorf("the driver passes %s= to port49.Agent, which takes %v", kw, params)
+			}
 		}
 	}
 }
@@ -137,5 +139,93 @@ func TestL65RunsNoteTheDriverAndTheNotesAreGated(t *testing.T) {
 	}
 	if !strings.Contains(body("func l64WriteNotes("), "l64Writable(e.results, entry)") {
 		t.Error("l64WriteNotes writes notes without asking l64Writable")
+	}
+}
+
+// callArgs returns the argument text of every call that starts with open
+// (for example "port49.Agent("), up to its matching close paren: a nested call
+// or a paren inside a string does not end it.
+func callArgs(text, open string) []string {
+	var out []string
+	for rest := text; ; {
+		i := strings.Index(rest, open)
+		if i < 0 {
+			return out
+		}
+		rest = rest[i+len(open):]
+		depth, quote := 1, byte(0)
+		end := -1
+		for j := 0; j < len(rest) && end < 0; j++ {
+			c := rest[j]
+			switch {
+			case quote != 0:
+				if c == quote {
+					quote = 0
+				}
+			case c == '\'' || c == '"':
+				quote = c
+			case c == '(':
+				depth++
+			case c == ')':
+				if depth--; depth == 0 {
+					end = j
+				}
+			}
+		}
+		if end < 0 {
+			return out
+		}
+		out = append(out, rest[:end])
+		rest = rest[end:]
+	}
+}
+
+// topLevelKeywords are the key= names of args that are not inside a nested call, a list or a string.
+func topLevelKeywords(args string) []string {
+	var keys []string
+	depth, quote, start := 0, byte(0), 0
+	flush := func(end int) {
+		if m := regexp.MustCompile(`^\s*([a-z_0-9]+)=`).FindStringSubmatch(args[start:end]); m != nil {
+			keys = append(keys, m[1])
+		}
+	}
+	for j := 0; j < len(args); j++ {
+		c := args[j]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(' || c == '[' || c == '{':
+			depth++
+		case c == ')' || c == ']' || c == '}':
+			depth--
+		case c == ',' && depth == 0:
+			flush(j)
+			start = j + 1
+		}
+	}
+	flush(len(args))
+	return keys
+}
+
+func TestCallArgsAndKeywordsHandleANestedCall(t *testing.T) {
+	text := `x = port49.Agent(port49=os.environ.get("P49_BIN", default=("a)", 1)), socket=s, timeout=90)
+y = port49.Agent(attempts=2)`
+	calls := callArgs(text, "port49.Agent(")
+	if len(calls) != 2 {
+		t.Fatalf("calls = %q, want 2", calls)
+	}
+	if got := topLevelKeywords(calls[0]); !slices.Equal(got, []string{"port49", "socket", "timeout"}) {
+		t.Errorf("keywords = %v: a nested call's default= is not the call's, and the call does not stop at the first )", got)
+	}
+	if got := topLevelKeywords(calls[1]); !slices.Equal(got, []string{"attempts"}) {
+		t.Errorf("second call keywords = %v", got)
+	}
+	lk := `{{ lookup('port49.client.token', p49_name, field=x|default('a', b=1), port49=p49_bin) }}`
+	if got := topLevelKeywords(callArgs(lk, "lookup(")[0]); !slices.Equal(got, []string{"field", "port49"}) {
+		t.Errorf("lookup keywords = %v", got)
 	}
 }

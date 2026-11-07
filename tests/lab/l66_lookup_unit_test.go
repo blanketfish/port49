@@ -5,7 +5,6 @@ package lab
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -45,16 +44,12 @@ func tokenLookupOptions(t *testing.T) []string {
 	return out
 }
 
-var lookupCall = regexp.MustCompile(`lookup\('port49\.client\.token'([^)]*)\)`)
-var lookupKey = regexp.MustCompile(`,\s*([a-z_0-9]+)=`)
-
-// lookupKeys are the key= options of every port49.client.token lookup in text.
+// lookupKeys are the key= options of every port49.client.token lookup in text, read from the call's own
+// arguments, so a nested call in one does not end it early.
 func lookupKeys(text string) []string {
 	var keys []string
-	for _, m := range lookupCall.FindAllStringSubmatch(text, -1) {
-		for _, k := range lookupKey.FindAllStringSubmatch(m[1], -1) {
-			keys = append(keys, k[1])
-		}
+	for _, args := range callArgs(text, "lookup('port49.client.token'") {
+		keys = append(keys, topLevelKeywords(args)...)
 	}
 	return keys
 }
