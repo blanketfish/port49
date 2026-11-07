@@ -102,6 +102,28 @@ func TestEveryPageHasATitleAndADescription(t *testing.T) {
 	}
 }
 
+// A run-together name in the first line (`docs-servequal`) would silently drop two targets from .PHONY.
+func TestTheMakefileDeclaresTheDocsTargetsPhony(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(b), "\n")
+	names, ok := strings.CutPrefix(first, ".PHONY:")
+	if !ok {
+		t.Fatalf("Makefile's first line is not .PHONY: %.60s", first)
+	}
+	phony := map[string]bool{}
+	for _, n := range strings.Fields(names) {
+		phony[n] = true
+	}
+	for _, want := range []string{"docs-build", "docs-serve", "qual", "requirements-release"} {
+		if !phony[want] {
+			t.Errorf("Makefile's .PHONY line does not name %s", want)
+		}
+	}
+}
+
 // navPaths walks the nav: a string is a page, a one-key map is a title over a page or a list of nav items.
 func navPaths(t *testing.T, n any, out *[]string) {
 	t.Helper()

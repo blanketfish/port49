@@ -965,6 +965,8 @@ appears to hang while the launcher applies its startup config. Retry the entry. 
 Read a hang from them: `ssh_auth` with no `tacacs_seen` is the config apply, and `mem_available_kb` at
 `failed` against `deploy_start` shows host pressure. Do not raise the timeout without them.
 
+<!-- --8<-- [end:regressions] -->
+
 **What a run needs beyond the base setup:**
 
 - `PORT49_LAB_ETCD_BIN` names a directory holding `etcd`, `etcdctl` and `etcdutl`, all v3.6.15
@@ -975,5 +977,3 @@ Read a hang from them: `ssh_auth` with no `tacacs_seen` is the config apply, and
 - Building `vrnetlab/cisco_iol` needs the image file copied into the build directory first (step 3's
   IOL-XE recipe); an `IMAGE=/mnt/images/...` path fails the Makefile's version regex.
 - cEOS 4.36.3M must be docker-imported from its tarball (`docker import ... ceos:4.36.3M`).
-
-<!-- --8<-- [end:regressions] -->
