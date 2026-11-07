@@ -203,6 +203,13 @@ func Pages(root string) (map[string]string, error) {
 		return nil, err
 	}
 	out[metricsPage] = MetricsPage(ms, as)
+	readme, err := os.ReadFile(filepath.Join(root, "deploy/alerts/README.md"))
+	if err != nil {
+		return nil, err
+	}
+	if out[alertsPage], err = AlertsPage(as, readme); err != nil {
+		return nil, err
+	}
 
 	reg, err := LabRegister(spec)
 	if err != nil {

@@ -71,7 +71,7 @@ func TestProcessParagraphLinksTheAlertsThatReadStartTime(t *testing.T) {
 	ms := []Metric{{Name: "process_start_time_seconds", Kind: "collector"}}
 	as := []Alert{{Name: "uses_it", Expr: "time() - process_start_time_seconds > 1"}, {Name: "not_it", Expr: "x"}}
 	page := MetricsPage(ms, as)
-	if !strings.Contains(page, "[uses_it](alerts.md)") || strings.Contains(page, "not_it") {
+	if !strings.Contains(page, "[uses_it](alerts.md#uses_it)") || strings.Contains(page, "not_it") {
 		t.Errorf("the process paragraph does not link exactly the alerts on process_start_time_seconds:\n%s", page)
 	}
 	if strings.Contains(page, "count that starts at 0") {
@@ -140,7 +140,7 @@ func TestMetricsPageLinksAlertsAndCollapsesProcessSeries(t *testing.T) {
 	for _, want := range []string{
 		Header, "## store", "## connections",
 		"| `port49_store_calls_total` | counter | `outcome` | Store calls. |  |",
-		"[port49_near_cap](alerts.md)",
+		"[port49_near_cap](alerts.md#port49_near_cap)",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q:\n%s", want, page)
@@ -158,7 +158,7 @@ func TestMetricsPageLinksAlertsAndCollapsesProcessSeries(t *testing.T) {
 func TestAlertMatchIsByWholeName(t *testing.T) {
 	ms := []Metric{{Name: "port49_store_calls", Kind: "counter", Help: "h"}}
 	as := []Alert{{Name: "a", Expr: "rate(port49_store_calls_total[5m]) > 0"}}
-	if strings.Contains(MetricsPage(ms, as), "[a](alerts.md)") {
+	if strings.Contains(MetricsPage(ms, as), "[a](alerts.md#a)") {
 		t.Error("alert on port49_store_calls_total linked to port49_store_calls")
 	}
 }

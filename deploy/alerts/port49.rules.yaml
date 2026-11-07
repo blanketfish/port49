@@ -12,18 +12,21 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "A port49d or broker target is not answering its scrape: up is 0 for it."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_target_down"
       - alert: port49_target_absent
         expr: "absent(up{job=\"port49d\"})"
         for: 5m
         labels: {severity: page}
         annotations:
           summary: "Prometheus has no up series for port49d: no port49d target exists at all, so every device has lost port49 and falls to local authentication, and no other port49d rule can fire."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_target_absent"
       - alert: port49_broker_target_absent
         expr: "absent(up{job=\"port49-broker\"})"
         for: 10m
         labels: {severity: ticket}
         annotations:
           summary: "Prometheus has no up series for the broker: no broker target exists at all, so no token can be minted and no other broker rule can fire."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_broker_target_absent"
   - name: port49_listener
     rules:
       - alert: port49_global_cap_shedding
@@ -31,12 +34,14 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "port49d reset TACACS+ connections at accept because the global connection cap was full; devices fall to local authentication."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_global_cap_shedding"
       - alert: port49_connections_near_cap
         expr: "sum by (instance) (port49_connections{state=\"open\"}) / on(instance) port49_connections_max > 0.8"
         for: 10m
         labels: {severity: ticket}
         annotations:
           summary: "A port49d is holding more than 80% of limits.max_connections open; raise the cap or add replicas before it sheds."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_connections_near_cap"
   - name: port49_keys_and_ca
     rules:
       - alert: port49_key_secret_files_changed
@@ -45,27 +50,32 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "A key version's secret file changed or cannot be read; the held secret stays in force until the next start."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_key_secret_files_changed"
       - alert: port49_issuing_ca_missing
         expr: "port49_issuing_ca_not_after_timestamp_seconds == 0 and on(instance) port49_issuing_ca_configured == 1"
         for: 5m
         labels: {severity: page}
         annotations:
           summary: "A broker is configured to issue certificates and has no usable issuing CA, so every OIDC sign-in is refused issuance_unavailable; run port49d init-issuer or restore the CA."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_issuing_ca_missing"
       - alert: port49_issuing_ca_expiring
         expr: "(port49_issuing_ca_not_after_timestamp_seconds - time() < 90 * 86400) and on(instance) (port49_issuing_ca_not_after_timestamp_seconds > 0) and on(instance) port49_issuing_ca_configured == 1"
         labels: {severity: ticket}
         annotations:
           summary: "The issuing CA expires within 90 days; make its successor and distribute the new bundle before sign-ins stop."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_issuing_ca_expiring"
       - alert: port49_key_retirement_within_7d
         expr: "(port49_key_version_devices > 0) and on(key_ref, version) (port49_key_retirement_seconds < 7 * 86400)"
         labels: {severity: ticket}
         annotations:
           summary: "A key version with devices still on it passes its retire_after within 7 days; move the devices (the decision log names them) before it does."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_key_retirement_within_7d"
       - alert: port49_key_retirement_within_1d
         expr: "(port49_key_version_devices > 0) and on(key_ref, version) (port49_key_retirement_seconds < 86400)"
         labels: {severity: page}
         annotations:
           summary: "A key version with devices still on it passes its retire_after within a day, or already has; those devices fail authentication once it does."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_key_retirement_within_1d"
   - name: port49_policy
     rules:
       - alert: port49_admin_touch_refused
@@ -73,51 +83,60 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "An admin call was refused its hardware-key touch proof: a stolen token or a broken key."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_admin_touch_refused"
       - alert: port49_policy_fail_closed_compositions
         expr: "port49_policy_fail_closed_compositions > 0"
         labels: {severity: ticket}
         annotations:
           summary: "The policy in force has compositions answered fail-closed: those users are denied all but the allows; port49 policy test names them."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_policy_fail_closed_compositions"
       - alert: port49_policy_file_refused
         expr: "port49_policy_file_refused == 1"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "The policy file on disk was refused or will not settle; an older policy is serving."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_policy_file_refused"
       - alert: port49_policy_refresh_pending
         expr: "port49_policy_refresh_pending == 1"
         for: 2m
         labels: {severity: ticket}
         annotations:
           summary: "A policy change has not yet reached every live login context."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_policy_refresh_pending"
       - alert: port49_policy_bundle_mismatch
         expr: "port49_policy_bundle_matches_runner == 0"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "A broker or port49d serves a policy bundle other than the runner's; its tokens or admissions carry another policy until it reloads."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_policy_bundle_mismatch"
       - alert: port49_broker_mint_gate_closed
         expr: "port49_broker_mint_gate_closed == 1"
         for: 1m
         labels: {severity: ticket}
         annotations:
           summary: "A broker mints nothing: its mint gate has been closed for over a minute; the store does not answer, or no runner judges its bundle."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_broker_mint_gate_closed"
       - alert: port49_devices_generic_platform
         expr: "port49_devices_generic_platform > 0"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "Admitted devices are served by the generic adapter: their platform has no adapter, and their commands are judged without its knowledge."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_devices_generic_platform"
       - alert: port49_context_refreshes_failed
         expr: "increase(port49_context_refreshes_total{outcome=\"failed\"}[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "A policy refresh could not carry a login context onto the policy in force: a context revoked for a compile fault, or one that would not open."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_context_refreshes_failed"
       - alert: port49_per_login_mfa_refused
         expr: "increase(port49_per_login_mfa_total{outcome=\"refused\"}[10m]) > 2"
         labels: {severity: page}
         annotations:
           summary: "A run of per-login MFA proofs did not verify: someone is trying another token or another person's sign-in."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_per_login_mfa_refused"
   - name: port49_store
     rules:
       - alert: port49_store_directory_unreachable
@@ -126,110 +145,130 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "This process cannot read the directory store: revocations and password sign-ins from other regions do not arrive."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_directory_unreachable"
       - alert: port49_store_directory_stale
         expr: "(time() - port49_store_directory_confirmed_timestamp_seconds > 60) and on(instance) port49_store_directory_confirmed_timestamp_seconds > 0"
         for: 1m
         labels: {severity: ticket}
         annotations:
           summary: "This process last confirmed its copy of the directory store over a minute ago, whatever the reason; its revocation marks may be stale."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_directory_stale"
       - alert: port49_store_logouts_pending
         expr: "port49_store_logouts_pending > 0"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "Back-channel logouts were accepted while the directory store did not answer and have not reached it."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_logouts_pending"
       - alert: port49_store_marks_feed_down
         expr: "port49_store_feed_up{feed=\"marks\"} == 0"
         for: 1m
         labels: {severity: page}
         annotations:
           summary: "The marks feed is down: revocation marks written elsewhere do not reach this process."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_marks_feed_down"
       - alert: port49_store_feed_down
         expr: "port49_store_feed_up{feed!=\"marks\"} == 0"
         for: 1m
         labels: {severity: ticket}
         annotations:
           summary: "A store feed other than marks is down (contexts, or a split broker's pins or logouts): this process misses other replicas' writes, and its directory copy is not confirmed."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_feed_down"
       - alert: port49_store_feed_legs_colocated
         expr: "port49_store_feed_legs_colocated == 1"
         for: 10m
         labels: {severity: ticket}
         annotations:
           summary: "Both legs of the {{ $labels.feed }} feed's watch are on one etcd member: port49 reaches only one etcd member for this feed, so check the other members; that member going dark stalls the feed."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_feed_legs_colocated"
       - alert: port49_store_circuit_open
         expr: "port49_store_circuit_open == 1"
         for: 1m
         labels: {severity: ticket}
         annotations:
           summary: "A store pool's circuit is open: its calls fail at once until a probe succeeds."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_circuit_open"
       - alert: port49_contexts_reindexed
         expr: "increase(port49_contexts_reindexed_total[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "Live login contexts were found missing from the index: an index record was deleted in the store."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_contexts_reindexed"
       - alert: port49_contexts_reindex_failures
         expr: "increase(port49_contexts_reindex_failures_total[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "A login context could not be re-indexed or judged; one sealed under a key port49d does not hold is denied, never revoked (check PORT49_ENC_V1)."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_contexts_reindex_failures"
       - alert: port49_store_calls_refused
         expr: "increase(port49_store_calls_total{outcome=\"refused\"}[10m]) > 0"
         labels: {severity: page}
         annotations:
           summary: "etcd's roles are refusing port49's store calls; port49d answers store_unavailable."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_calls_refused"
       - alert: port49_store_keyspace_unheld
         expr: "(sum(port49_store_keyspace_held) == 0) or (count(last_over_time(port49_store_keyspace_held[1d])) unless count(port49_store_keyspace_held))"
         for: 2m
         labels: {severity: ticket}
         annotations:
           summary: "No port49-broker replica holds the store keyspace: no runner is judging bundles, purging or refreshing contexts."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_keyspace_unheld"
       - alert: port49_store_client_cert_expiring
         expr: "port49_store_client_cert_expiry_timestamp_seconds - time() < 30 * 86400"
         labels: {severity: ticket}
         annotations:
           summary: "A component's etcd client certificate expires within 30 days."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_client_cert_expiring"
       - alert: port49_crypt_store_key_unknown
         expr: "port49_crypt_store_key_unknown == 1"
         labels: {severity: page}
         annotations:
           summary: "port49d started on a store last written under a current key its encryption window does not hold (a mis-set PORT49_ENC_V1)."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_crypt_store_key_unknown"
       - alert: port49_crypt_token_open_failures
         expr: "increase(port49_crypt_open_failures_total{record=\"token\"}[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "A stored token would not decrypt: a rotation may have retired a key while tokens it sealed were live."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_crypt_token_open_failures"
       - alert: port49_store_feed_rescans
         expr: "increase(port49_store_feed_rescans_total[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "A feed's watch was compacted and rescanned the store; the feed lagged."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_feed_rescans"
       - alert: port49_ledger_pending
         expr: "port49_ledger_pending > 0"
         for: 1m
         labels: {severity: ticket}
         annotations:
           summary: "The runner's ledger record is behind: a context put back at one would be taken after a restart."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_ledger_pending"
       - alert: port49_ledger_behind
         expr: "port49_ledger_behind == 1"
         for: 1m
         labels: {severity: ticket}
         annotations:
           summary: "The runner's ledger keeper runs with its context feed down; the record does not follow other processes' logins."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_ledger_behind"
       - alert: port49_store_health_failures_close
         expr: "port49_store_health_failures >= 5"
         labels: {severity: page}
         annotations:
           summary: "port49d closed its TACACS+ listeners: its store health checks failed close_after times in a row. Break-glass logins use local passwords until it reopens."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_health_failures_close"
       - alert: port49_store_health_check_failing
         expr: "increase(port49_store_health_checks_total{outcome=\"fail\"}[10m]) > 60"
         labels: {severity: ticket}
         annotations:
           summary: "port49d's store health checks are failing often, short of closing the listeners."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_health_check_failing"
       - alert: port49_context_cache_stale
         expr: "increase(port49_context_cache_lookups_total{outcome=\"stale\"}[5m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "A replica is answering commands from login contexts the store did not confirm; revocation does not reach them until the store answers or the listeners close."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_context_cache_stale"
   - name: port49_tls
     rules:
       - alert: port49_tls_handshake_failures
@@ -238,36 +277,43 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "RFC 9887 listener handshakes are failing; the outcome label says why."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_tls_handshake_failures"
       - alert: port49_tls_device_certificate_renewal_late
         expr: "port49_tls_device_certificate_lifetime_left_ratio < 0.33"
         labels: {severity: ticket}
         annotations:
           summary: "A device certificate is past two thirds of its own lifetime: its renewal is late. The ratio is the least over certificates verified in the last 24h, so it clears up to a day after the device renews."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_tls_device_certificate_renewal_late"
       - alert: port49_tls_server_certificate_renewal_late
         expr: "port49_tls_server_certificate_lifetime_left_ratio < 0.33"
         labels: {severity: ticket}
         annotations:
           summary: "The RFC 9887 listener's certificate is past two thirds of its own lifetime: its renewal is late."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_tls_server_certificate_renewal_late"
       - alert: port49_tls_server_certificate_expired
         expr: "port49_tls_server_certificate_lifetime_left_ratio < 0"
         labels: {severity: page}
         annotations:
           summary: "The RFC 9887 listener's certificate has expired; TLS devices cannot connect."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_tls_server_certificate_expired"
       - alert: port49_tls_cert_status_unavailable
         expr: "increase(port49_cert_status_unavailable_total{component=\"tls_listener\"}[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "The TLS listener could not establish a certificate's revocation status; with on_unavailable: refuse its devices are refused."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_tls_cert_status_unavailable"
       - alert: port49_crl_next_update_passed
         expr: "time() - port49_crl_next_update_timestamp_seconds{component=\"tls_listener\"} > -3600"
         labels: {severity: ticket}
         annotations:
           summary: "A CRL the TLS listener relies on passes its next update within an hour, or has."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_crl_next_update_passed"
       - alert: port49_inventory_transport_changed
         expr: "increase(port49_inventory_changes_total{kind=\"transport_changed\"}[1h]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "A sync changed a device's transport, which may be a downgrade from tls to tcp; port49 records it and does not block it."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_transport_changed"
   - name: port49_identity
     rules:
       - alert: port49_oidc_keys_stale
@@ -276,32 +322,38 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "An OIDC issuer's keys were never fetched since this process started, or last fetched over 12h ago, half of jwks_max_age at its default; tokens are refused once they are 24."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_oidc_keys_stale"
       - alert: port49_oidc_logouts_failing
         expr: "increase(port49_oidc_logouts_total{outcome=~\"store_error|partial\"}[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "OIDC back-channel logouts were not fully applied (store_error or partial); sessions may outlive their sign-out."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_oidc_logouts_failing"
       - alert: port49_oidc_tokens_unavailable
         expr: "increase(port49_oidc_tokens_total{outcome=\"unavailable\"}[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "Bearer tokens are refused because their issuer's keys are unavailable."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_oidc_tokens_unavailable"
       - alert: port49_workload_certificates_renewal_late
         expr: "sum(increase(port49_workload_certificates_renewal_late_total[1h])) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "Workload certificates are being presented with under a quarter of their validity left: their renewal is late."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_workload_certificates_renewal_late"
       - alert: port49_redemption_restore_unjudged
         expr: "port49_redemption_restore_unjudged == 1"
         for: 2m
         labels: {severity: page}
         annotations:
           summary: "port49d cannot read meta/witness, so it cannot tell whether its store was restored, and refuses every token login (store_unavailable) until it can; check the store and the daemon role's read of meta/witness; stopping port49d lets devices fall to break-glass"
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_redemption_restore_unjudged"
       - alert: port49_store_restore_detected
         expr: "(port49_store_restore_detected_timestamp_seconds > 0) and (time() - port49_store_restore_detected_timestamp_seconds < 86400)"
         labels: {severity: ticket}
         annotations:
           summary: "port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook"
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_restore_detected"
   - name: port49_directory
     rules:
       - alert: port49_directory_refresh_stale
@@ -310,45 +362,53 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "No scheduled directory refresh has verified every principal for over three refresh intervals; contexts keep their last verification and will deny context_stale at the ceiling."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_refresh_stale"
       - alert: port49_directory_refresh_half_ceiling
         expr: "(time() - max(last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 2 * 3600) and on() (time() - max(last_over_time(process_start_time_seconds[1d]) and on(instance) last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 2 * 3600)"
         for: 15m
         labels: {severity: page}
         annotations:
           summary: "No directory refresh has verified every principal for half of session.staleness_ceiling (4h at its default); at the ceiling every live session denies context_stale. Escapes: session.staleness_ceiling: 0s with a port49d restart, or stop port49d so break-glass applies."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_refresh_half_ceiling"
       - alert: port49_directory_lookups_ambiguous
         expr: "increase(port49_directory_lookups_total{outcome=\"ambiguous\"}[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "A directory lookup matched more than one principal and was refused identity_ambiguous."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_lookups_ambiguous"
       - alert: port49_directory_server_down
         expr: "port49_directory_server_up == 0"
         for: 10m
         labels: {severity: ticket}
         annotations:
           summary: "A directory server's breaker is open; queries go to another server, or fail if there is none."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_server_down"
       - alert: port49_directory_group_names_ambiguous
         expr: "port49_directory_group_names_ambiguous > 0"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "Group names match no one because two groups under groups_base_dn share them."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_group_names_ambiguous"
       - alert: port49_directory_enrollment_store_lost
         expr: "port49_directory_enrollment_store_ok == 0 or (port49_directory_password_configured == 1 unless on(instance) port49_directory_enrollment_store_ok)"
         for: 2m
         labels: {severity: page}
         annotations:
           summary: "The broker's password enrollment store is lost, not initialised, or was never reached; password sign-in is refused."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_enrollment_store_lost"
       - alert: port49_sign_ins_throttled
         expr: "increase(port49_sign_ins_total{outcome=\"throttled\"}[10m]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "Directory-password sign-ins are being throttled: failed attempts passed failures_per_principal or failures_per_source."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_sign_ins_throttled"
       - alert: port49_sign_ins_enrollment_store_lost
         expr: "increase(port49_sign_ins_total{outcome=\"enrollment_store_lost\"}[10m]) > 0"
         labels: {severity: page}
         annotations:
           summary: "A password sign-in was refused because the enrollment store is lost."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_sign_ins_enrollment_store_lost"
   - name: port49_accounting
     rules:
       - alert: port49_accounting_spool_drops
@@ -356,22 +416,26 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "The accounting spool discarded records; the stage label says where."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_accounting_spool_drops"
       - alert: port49_accounting_spool_disk_slow
         expr: "histogram_quantile(0.99, rate(port49_accounting_spool_sync_seconds_bucket[5m])) > 0.010"
         for: 10m
         labels: {severity: ticket}
         annotations:
           summary: "port49d's accounting spool disk cannot keep up; every accounting record waits on its fsync, so devices see slow or failed accounting. Move the spool directory to a disk with sustained fsync p99 under 10 ms."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_accounting_spool_disk_slow"
       - alert: port49_decision_log_write_failures
         expr: "increase(port49_decision_log_write_failures_total[10m]) > 0"
         labels: {severity: page}
         annotations:
           summary: "The decision log sink refused writes; decisions are not being recorded."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_decision_log_write_failures"
       - alert: port49_accounting_foreign
         expr: "increase(port49_accounting_attributions_total{attribution=\"foreign\"}[10m]) > 0"
         labels: {severity: page}
         annotations:
           summary: "Accounting records arrived for a session port49 never saw begin: a local fallback or console login on a device, or a device bypassing port49."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_accounting_foreign"
   - name: port49_inventory
     rules:
       - alert: port49_inventory_sync_failing
@@ -380,47 +444,55 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "The last inventory sync failed: a source, the policy file or the state directory did not answer."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_sync_failing"
       - alert: port49_inventory_sync_refused
         expr: "port49_inventory_sync_refused == 1"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "The last inventory sync was refused and an older bundle is published."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_sync_refused"
       - alert: port49_inventory_bundle_refused
         expr: "port49_inventory_bundle_refused == 1"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "port49d was given an inventory document it refused; the bundle in force keeps serving."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_bundle_refused"
       - alert: port49_inventory_mirror_behind
         expr: "port49_inventory_mirror_behind == 1"
         for: 10m
         labels: {severity: ticket}
         annotations:
           summary: "The inventory mirror's copy differs from the bundle published."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_mirror_behind"
       - alert: port49_inventory_persist_failed
         expr: "port49_inventory_persist_failed == 1"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "The inventory document in force could not be written to inventory.service.state_dir; a restart would start without it."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_persist_failed"
       - alert: port49_inventory_snapshot_stale
         expr: "port49_inventory_snapshot_age_seconds > 86400 or port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "The inventory snapshot in force was last confirmed over a day ago, or there is none; the fleet still authenticates on it, and nothing fails closed."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_snapshot_stale"
       - alert: port49_inventory_policy_mismatch
         expr: "port49_inventory_policy_mismatch == 1"
         for: 5m
         labels: {severity: ticket}
         annotations:
           summary: "The inventory service built the bundle in force against a policy other than port49d's own; port49d applies the inventory against its own policy."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_policy_mismatch"
       - alert: port49_inventory_privilege_changes
         expr: "increase(port49_inventory_changes_total{kind=~\"key_ref_changed|platform_changed|admission_changed|address_added|scope_joined|scope_left|device_added\"}[1h]) > 0"
         labels: {severity: ticket}
         annotations:
           summary: "A source-of-truth edit moved privilege: a device changed key or platform, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_inventory_privilege_changes"
   - name: etcd
     rules:
       - alert: etcd_no_leader
@@ -429,20 +501,24 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "An etcd member has no leader; a dark member costs up to 12 s, a lost quorum stops the store."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#etcd_no_leader"
       - alert: etcd_db_nearly_full
         expr: "etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes > 0.8"
         for: 10m
         labels: {severity: ticket}
         annotations:
           summary: "An etcd member's database is over 80% of its quota; at the quota etcd refuses writes."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#etcd_db_nearly_full"
       - alert: etcd_disk_slow
         expr: "histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])) > 0.010 or histogram_quantile(0.99, rate(etcd_disk_backend_commit_duration_seconds_bucket[5m])) > 0.025"
         for: 10m
         labels: {severity: ticket}
         annotations:
           summary: "etcd's disk cannot keep up; port49 store calls will time out in bursts. Move etcd to a disk with sustained fsync p99 under 10 ms (datacenter NVMe or a cloud SSD volume)."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#etcd_disk_slow"
       - alert: etcd_leader_changes
         expr: "increase(etcd_server_leader_changes_seen_total[1h]) > 3"
         labels: {severity: ticket}
         annotations:
           summary: "etcd changed leader more than 3 times in an hour: a flapping network or a slow disk."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#etcd_leader_changes"

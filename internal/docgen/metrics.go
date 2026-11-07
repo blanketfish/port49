@@ -215,8 +215,7 @@ func alertsOn(m Metric, as []Alert) []string {
 	var out []string
 	for _, a := range as {
 		if re.MatchString(a.Expr) {
-			// No fragment until the alerts page has one anchor per alert (plan 13 Task 11).
-			out = append(out, fmt.Sprintf("[%s](alerts.md)", a.Name))
+			out = append(out, fmt.Sprintf("[%s](alerts.md#%s)", a.Name, a.Name))
 		}
 	}
 	return out

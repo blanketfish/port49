@@ -13,17 +13,17 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_accounting_attributions_total` | counter | `attribution` | Accounting records accepted, by attribution. | [port49_accounting_foreign](alerts.md) |
+| `port49_accounting_attributions_total` | counter | `attribution` | Accounting records accepted, by attribution. | [port49_accounting_foreign](alerts.md#port49_accounting_foreign) |
 | `port49_accounting_spool_depth` | gauge |  | Accounting records waiting for the sink. |  |
-| `port49_accounting_spool_drops_total` | counter | `stage` | Accounting records discarded by the spool, by the stage that discarded them. | [port49_accounting_spool_drops](alerts.md) |
+| `port49_accounting_spool_drops_total` | counter | `stage` | Accounting records discarded by the spool, by the stage that discarded them. | [port49_accounting_spool_drops](alerts.md#port49_accounting_spool_drops) |
 | `port49_accounting_spool_quarantines_total` | counter |  | Unreadable spool files renamed aside for an operator. |  |
-| `port49_accounting_spool_sync_seconds` | histogram |  | Seconds one accounting spool group commit spent in fsync and close (plus the directory fsync of a new file); every record in the batch waits on it. | [port49_accounting_spool_disk_slow](alerts.md) |
+| `port49_accounting_spool_sync_seconds` | histogram |  | Seconds one accounting spool group commit spent in fsync and close (plus the directory fsync of a new file); every record in the batch waits on it. | [port49_accounting_spool_disk_slow](alerts.md#port49_accounting_spool_disk_slow) |
 
 ## admin
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_admin_touch_total` | counter | `outcome` | Admin-level calls by proof outcome (required, proved, refused, unavailable); alert on a run of refused: someone with a certificate or bearer is trying an admin call without the token. | [port49_admin_touch_refused](alerts.md) |
+| `port49_admin_touch_total` | counter | `outcome` | Admin-level calls by proof outcome (required, proved, refused, unavailable); alert on a run of refused: someone with a certificate or bearer is trying an admin call without the token. | [port49_admin_touch_refused](alerts.md#port49_admin_touch_refused) |
 
 ## authentication
 
@@ -46,7 +46,7 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 | `port49_broker_idempotency_refusals_total` | counter | `outcome` | Mint requests refused whole at their Idempotency-Key, by outcome. |  |
 | `port49_broker_item_errors_total` | counter | `error` | Mint items the broker could not decide, by API error code. |  |
 | `port49_broker_logouts_queue_full_total` | counter |  | Logouts from another region that found this runner's queue full; each one owes a pass over the whole logout set, which follows. |  |
-| `port49_broker_mint_gate_closed` | gauge |  | 1 while this broker waits to mark the bundle last judged in doubt for a swap, minting nothing under the swapped bundle, and from its start until it has seen a takeover done for the bundle it serves; 1 for longer than a minute is a store that does not answer, or refuses, the mark, or no runner that judges this broker's bundle. | [port49_broker_mint_gate_closed](alerts.md) |
+| `port49_broker_mint_gate_closed` | gauge |  | 1 while this broker waits to mark the bundle last judged in doubt for a swap, minting nothing under the swapped bundle, and from its start until it has seen a takeover done for the bundle it serves; 1 for longer than a minute is a store that does not answer, or refuses, the mark, or no runner that judges this broker's bundle. | [port49_broker_mint_gate_closed](alerts.md#port49_broker_mint_gate_closed) |
 | `port49_broker_tls_handshake_failures_total` | counter | `reason` | TLS handshakes the broker's listener did not complete, by reason. |  |
 
 ## ceiling
@@ -60,7 +60,7 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
 | `port49_cert_status_checks_total` | counter | `component`, `source`, `result` | Certificate status checks, by component, the source that decided and the result. |  |
-| `port49_cert_status_unavailable_total` | counter | `component` | Certificate status checks whose status could not be established. | [port49_tls_cert_status_unavailable](alerts.md) |
+| `port49_cert_status_unavailable_total` | counter | `component` | Certificate status checks whose status could not be established. | [port49_tls_cert_status_unavailable](alerts.md#port49_tls_cert_status_unavailable) |
 
 ## certificates
 
@@ -78,44 +78,44 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_connections` | gauge | `state` | Connections by state. | [port49_connections_near_cap](alerts.md) |
-| `port49_connections_max` | gauge |  | The global TACACS+ connection cap (limits.max_connections), across both listeners. | [port49_connections_near_cap](alerts.md) |
-| `port49_connections_shed_total` | counter | `reason` | TACACS+ connections reset at Accept because a cap was full, by reason (global_cap). | [port49_global_cap_shedding](alerts.md) |
+| `port49_connections` | gauge | `state` | Connections by state. | [port49_connections_near_cap](alerts.md#port49_connections_near_cap) |
+| `port49_connections_max` | gauge |  | The global TACACS+ connection cap (limits.max_connections), across both listeners. | [port49_connections_near_cap](alerts.md#port49_connections_near_cap) |
+| `port49_connections_shed_total` | counter | `reason` | TACACS+ connections reset at Accept because a cap was full, by reason (global_cap). | [port49_global_cap_shedding](alerts.md#port49_global_cap_shedding) |
 
 ## context
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
 | `port49_context_cache_entries` | gauge |  | Login contexts the context cache holds. |  |
-| `port49_context_cache_lookups_total` | counter | `outcome` | The context cache's reads by outcome: hit, miss, stale (served past its ttl because the store failed). | [port49_context_cache_stale](alerts.md) |
-| `port49_context_refreshes_total` | counter | `outcome` | Live login contexts a policy refresh visited, by outcome. | [port49_context_refreshes_failed](alerts.md) |
+| `port49_context_cache_lookups_total` | counter | `outcome` | The context cache's reads by outcome: hit, miss, stale (served past its ttl because the store failed). | [port49_context_cache_stale](alerts.md#port49_context_cache_stale) |
+| `port49_context_refreshes_total` | counter | `outcome` | Live login contexts a policy refresh visited, by outcome. | [port49_context_refreshes_failed](alerts.md#port49_context_refreshes_failed) |
 
 ## contexts
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_contexts_reindex_failures_total` | counter |  | Live login contexts the re-index could not re-index or judge, each left for its next pass. | [port49_contexts_reindex_failures](alerts.md) |
-| `port49_contexts_reindexed_total` | counter |  | Live login contexts found missing from the index and re-indexed, or revoked when they would not open. | [port49_contexts_reindexed](alerts.md) |
+| `port49_contexts_reindex_failures_total` | counter |  | Live login contexts the re-index could not re-index or judge, each left for its next pass. | [port49_contexts_reindex_failures](alerts.md#port49_contexts_reindex_failures) |
+| `port49_contexts_reindexed_total` | counter |  | Live login contexts found missing from the index and re-indexed, or revoked when they would not open. | [port49_contexts_reindexed](alerts.md#port49_contexts_reindexed) |
 
 ## crl
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
 | `port49_crl_loads_total` | counter | `component`, `crl`, `outcome` | Loads of a CRL source, by component and outcome: loaded, unchanged, failed or refused. |  |
-| `port49_crl_next_update_timestamp_seconds` | gauge | `component`, `crl` | The Unix time the CRL in force passes its next update. | [port49_crl_next_update_passed](alerts.md) |
+| `port49_crl_next_update_timestamp_seconds` | gauge | `component`, `crl` | The Unix time the CRL in force passes its next update. | [port49_crl_next_update_passed](alerts.md#port49_crl_next_update_passed) |
 
 ## crypt
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_crypt_open_failures_total` | counter | `record` | Stored records that would not decrypt, by record kind. | [port49_crypt_token_open_failures](alerts.md) |
-| `port49_crypt_store_key_unknown` | gauge |  | 1 when port49d started on a store last written under a current key its encryption window does not hold. | [port49_crypt_store_key_unknown](alerts.md) |
+| `port49_crypt_open_failures_total` | counter | `record` | Stored records that would not decrypt, by record kind. | [port49_crypt_token_open_failures](alerts.md#port49_crypt_token_open_failures) |
+| `port49_crypt_store_key_unknown` | gauge |  | 1 when port49d started on a store last written under a current key its encryption window does not hold. | [port49_crypt_store_key_unknown](alerts.md#port49_crypt_store_key_unknown) |
 
 ## decision
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_decision_log_write_failures_total` | counter |  | Writes the decision log sink refused. A record the accounting spool retries counts once per attempt. | [port49_decision_log_write_failures](alerts.md) |
+| `port49_decision_log_write_failures_total` | counter |  | Writes the decision log sink refused. A record the accounting spool retries counts once per attempt. | [port49_decision_log_write_failures](alerts.md#port49_decision_log_write_failures) |
 
 ## decisions
 
@@ -129,7 +129,7 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 |---|---|---|---|---|
 | `port49_devices_admission_refused` | gauge |  | Inventory devices the bundle in force refuses admission. |  |
 | `port49_devices_by_transport` | gauge | `transport` | Admitted devices by transport. |  |
-| `port49_devices_generic_platform` | gauge |  | Admitted devices the bundle in force serves with the generic adapter: their platform has no adapter. | [port49_devices_generic_platform](alerts.md) |
+| `port49_devices_generic_platform` | gauge |  | Admitted devices the bundle in force serves with the generic adapter: their platform has no adapter. | [port49_devices_generic_platform](alerts.md#port49_devices_generic_platform) |
 | `port49_devices_quarantined` | gauge |  | Inventory devices the loaded policy quarantines now. |  |
 
 ## directory
@@ -137,16 +137,16 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
 | `port49_directory_bind_holdoff_seconds` | gauge |  | Seconds left in the hold-off after a directory server refused the broker's bind, during which no unbound server is dialled; 0 when clear. |  |
-| `port49_directory_enrollment_store_ok` | gauge |  | 1 when the broker's enrollment store opened with its creation mark, 0 when it is lost or not yet initialised and password sign-in is refused (decision 47 D7); absent without a directory_password verifier, and also until the enrollment store first answers (a broker that has never reached it): alert on 0 and on absent(). | [port49_directory_enrollment_store_lost](alerts.md) |
-| `port49_directory_group_names_ambiguous` | gauge |  | Group names that match no one because two groups under groups_base_dn share them, seen in the last hour. | [port49_directory_group_names_ambiguous](alerts.md) |
-| `port49_directory_lookups_total` | counter | `outcome` | Directory resolutions by outcome: fresh, grace, unavailable, unmapped, ambiguous, collision. | [port49_directory_lookups_ambiguous](alerts.md) |
-| `port49_directory_password_configured` | gauge |  | 1 when this broker has a directory_password verifier; alert on port49_directory_enrollment_store_ok being 0 or absent where this is 1. | [port49_directory_enrollment_store_lost](alerts.md) |
+| `port49_directory_enrollment_store_ok` | gauge |  | 1 when the broker's enrollment store opened with its creation mark, 0 when it is lost or not yet initialised and password sign-in is refused (decision 47 D7); absent without a directory_password verifier, and also until the enrollment store first answers (a broker that has never reached it): alert on 0 and on absent(). | [port49_directory_enrollment_store_lost](alerts.md#port49_directory_enrollment_store_lost) |
+| `port49_directory_group_names_ambiguous` | gauge |  | Group names that match no one because two groups under groups_base_dn share them, seen in the last hour. | [port49_directory_group_names_ambiguous](alerts.md#port49_directory_group_names_ambiguous) |
+| `port49_directory_lookups_total` | counter | `outcome` | Directory resolutions by outcome: fresh, grace, unavailable, unmapped, ambiguous, collision. | [port49_directory_lookups_ambiguous](alerts.md#port49_directory_lookups_ambiguous) |
+| `port49_directory_password_configured` | gauge |  | 1 when this broker has a directory_password verifier; alert on port49_directory_enrollment_store_ok being 0 or absent where this is 1. | [port49_directory_enrollment_store_lost](alerts.md#port49_directory_enrollment_store_lost) |
 | `port49_directory_prewarm_last_success_timestamp_seconds` | gauge |  | The Unix time the last pre-warm pass finished; 0 before one has. |  |
 | `port49_directory_prewarm_principals` | gauge |  | People and workloads together that the last pre-warm pass verified and stored. |  |
 | `port49_directory_queries_total` | counter | `server`, `outcome` | Directory queries by server (host:port) and outcome: ok, fault (the server's), error (the query's answer), refused (the server refused the dial or bind without a fault). |  |
-| `port49_directory_refresh_last_complete_timestamp_seconds` | gauge |  | The Unix time of the last scheduled refresh that verified every principal; 0 before one has, absent where no scheduled refresh runs. | [port49_directory_refresh_stale](alerts.md), [port49_directory_refresh_half_ceiling](alerts.md) |
+| `port49_directory_refresh_last_complete_timestamp_seconds` | gauge |  | The Unix time of the last scheduled refresh that verified every principal; 0 before one has, absent where no scheduled refresh runs. | [port49_directory_refresh_stale](alerts.md#port49_directory_refresh_stale), [port49_directory_refresh_half_ceiling](alerts.md#port49_directory_refresh_half_ceiling) |
 | `port49_directory_selected` | gauge | `server` | 1 for the directory server queries are sent to (sticky selection). |  |
-| `port49_directory_server_up` | gauge | `server` | 1 while the directory server's breaker is closed. | [port49_directory_server_down](alerts.md) |
+| `port49_directory_server_up` | gauge | `server` | 1 while the directory server's breaker is closed. | [port49_directory_server_down](alerts.md#port49_directory_server_down) |
 | `port49_directory_site_crossings_total` | counter |  | Selections that crossed sites: consistency events, membership read there may lag replication (design §10). |  |
 | `port49_directory_walks_truncated_total` | counter |  | Nested-group walks that ended at max_depth or the node bound with groups unconfirmed; those groups are not granted. |  |
 
@@ -155,28 +155,28 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
 | `port49_inventory_api_refused_total` | counter | `reason` | API requests refused, by reason (untrusted, forbidden, bad_path). |  |
-| `port49_inventory_bundle_refused` | gauge |  | 1 while a document port49d was given did not open or was refused; the bundle in force keeps serving. | [port49_inventory_bundle_refused](alerts.md) |
+| `port49_inventory_bundle_refused` | gauge |  | 1 while a document port49d was given did not open or was refused; the bundle in force keeps serving. | [port49_inventory_bundle_refused](alerts.md#port49_inventory_bundle_refused) |
 | `port49_inventory_bundle_sequence` | gauge |  | The inventory service's sequence of the document in force; 0 with inventory_file. |  |
-| `port49_inventory_changes_total` | counter | `kind` | Security-relevant changes a bundle swap made, by kind. | [port49_inventory_transport_changed](alerts.md), [port49_inventory_privilege_changes](alerts.md) |
+| `port49_inventory_changes_total` | counter | `kind` | Security-relevant changes a bundle swap made, by kind. | [port49_inventory_transport_changed](alerts.md#port49_inventory_transport_changed), [port49_inventory_privilege_changes](alerts.md#port49_inventory_privilege_changes) |
 | `port49_inventory_devices` | gauge |  | Devices in the bundle published. |  |
 | `port49_inventory_devices_left_out` | gauge |  | Devices the last sync left out: a name or text that cannot reach a line safely. |  |
 | `port49_inventory_fetches_total` | counter | `outcome` | Asks of the inventory service, by outcome: unchanged, refused (the service confirmed a document port49d refused), received, invalid or failed. |  |
 | `port49_inventory_file_refused` | gauge |  | 1 while the inventory file on disk is one port49d refused, or has not stopped changing. |  |
 | `port49_inventory_generic_platform_devices` | gauge |  | Devices in the last good sync whose platform has no adapter in the policy. |  |
 | `port49_inventory_last_good_sync_timestamp_seconds` | gauge |  | When a sync last ended published or unchanged. |  |
-| `port49_inventory_mirror_behind` | gauge |  | 1 while the mirror's copy differs from the bundle published. | [port49_inventory_mirror_behind](alerts.md) |
+| `port49_inventory_mirror_behind` | gauge |  | 1 while the mirror's copy differs from the bundle published. | [port49_inventory_mirror_behind](alerts.md#port49_inventory_mirror_behind) |
 | `port49_inventory_mirror_unreadable` | gauge |  | 1 when the start could not read mirror_dir's copy: it hung past the deadline, or the read failed; it holds until the next start. |  |
 | `port49_inventory_mirror_write_failures_total` | counter |  | Writes of the mirror's copy that failed. |  |
-| `port49_inventory_persist_failed` | gauge |  | 1 while the document in force could not be written to inventory.service.state_dir. | [port49_inventory_persist_failed](alerts.md) |
-| `port49_inventory_policy_mismatch` | gauge |  | 1 while the inventory service built the document in force against a policy other than the one in force. | [port49_inventory_policy_mismatch](alerts.md) |
+| `port49_inventory_persist_failed` | gauge |  | 1 while the document in force could not be written to inventory.service.state_dir. | [port49_inventory_persist_failed](alerts.md#port49_inventory_persist_failed) |
+| `port49_inventory_policy_mismatch` | gauge |  | 1 while the inventory service built the document in force against a policy other than the one in force. | [port49_inventory_policy_mismatch](alerts.md#port49_inventory_policy_mismatch) |
 | `port49_inventory_published_sequence` | gauge |  | The sequence of the bundle published. |  |
 | `port49_inventory_published_timestamp_seconds` | gauge |  | When the bundle published was published. |  |
 | `port49_inventory_reloads_total` | counter | `outcome` | Attempts to put a changed inventory file in force, by outcome. |  |
-| `port49_inventory_snapshot_age_seconds` | gauge |  | Seconds since the inventory snapshot in force was last confirmed or loaded; NaN while there is none, so alert on port49_inventory_snapshot_age_seconds > N or port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds. | [port49_inventory_snapshot_stale](alerts.md) |
+| `port49_inventory_snapshot_age_seconds` | gauge |  | Seconds since the inventory snapshot in force was last confirmed or loaded; NaN while there is none, so alert on port49_inventory_snapshot_age_seconds > N or port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds. | [port49_inventory_snapshot_stale](alerts.md#port49_inventory_snapshot_stale) |
 | `port49_inventory_source_errors_total` | counter | `source` | Fetches a source did not answer, by source. |  |
 | `port49_inventory_source_hung` | gauge | `source` | 1 while a source's fetch, abandoned past sync_timeout, has not returned. |  |
-| `port49_inventory_sync_failing` | gauge |  | 1 while the last sync failed: a source, the policy file or the state directory did not answer. | [port49_inventory_sync_failing](alerts.md) |
-| `port49_inventory_sync_refused` | gauge |  | 1 while the last sync was refused and an older bundle is published. | [port49_inventory_sync_refused](alerts.md) |
+| `port49_inventory_sync_failing` | gauge |  | 1 while the last sync failed: a source, the policy file or the state directory did not answer. | [port49_inventory_sync_failing](alerts.md#port49_inventory_sync_failing) |
+| `port49_inventory_sync_refused` | gauge |  | 1 while the last sync was refused and an older bundle is published. | [port49_inventory_sync_refused](alerts.md#port49_inventory_sync_refused) |
 | `port49_inventory_syncs_total` | counter | `trigger`, `outcome` | Syncs, by trigger and outcome. |  |
 | `port49_inventory_webhooks_total` | counter | `source`, `outcome` | Webhook deliveries, by source and outcome. |  |
 
@@ -184,55 +184,55 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_issuing_ca_configured` | gauge |  | 1 when this broker is configured to issue certificates; alert on port49_issuing_ca_not_after_timestamp_seconds == 0 where this is 1. | [port49_issuing_ca_missing](alerts.md), [port49_issuing_ca_expiring](alerts.md) |
-| `port49_issuing_ca_not_after_timestamp_seconds` | gauge |  | The Unix time the issuing CA in use expires; 0 when none is loaded. | [port49_issuing_ca_missing](alerts.md), [port49_issuing_ca_expiring](alerts.md) |
+| `port49_issuing_ca_configured` | gauge |  | 1 when this broker is configured to issue certificates; alert on port49_issuing_ca_not_after_timestamp_seconds == 0 where this is 1. | [port49_issuing_ca_missing](alerts.md#port49_issuing_ca_missing), [port49_issuing_ca_expiring](alerts.md#port49_issuing_ca_expiring) |
+| `port49_issuing_ca_not_after_timestamp_seconds` | gauge |  | The Unix time the issuing CA in use expires; 0 when none is loaded. | [port49_issuing_ca_missing](alerts.md#port49_issuing_ca_missing), [port49_issuing_ca_expiring](alerts.md#port49_issuing_ca_expiring) |
 
 ## key
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_key_retirement_seconds` | gauge | `key_ref`, `version` | Seconds until a key version's retire_after passes; negative once it has. | [port49_key_retirement_within_7d](alerts.md), [port49_key_retirement_within_1d](alerts.md) |
-| `port49_key_secret_files_changed` | gauge |  | Key versions whose held file: secret has changed or can no longer be read (spec §12); the held secret stays in force. | [port49_key_secret_files_changed](alerts.md) |
+| `port49_key_retirement_seconds` | gauge | `key_ref`, `version` | Seconds until a key version's retire_after passes; negative once it has. | [port49_key_retirement_within_7d](alerts.md#port49_key_retirement_within_7d), [port49_key_retirement_within_1d](alerts.md#port49_key_retirement_within_1d) |
+| `port49_key_secret_files_changed` | gauge |  | Key versions whose held file: secret has changed or can no longer be read (spec §12); the held secret stays in force. | [port49_key_secret_files_changed](alerts.md#port49_key_secret_files_changed) |
 | `port49_key_validations_total` | counter | `key_ref`, `version`, `outcome` | Key trial outcomes by key_ref and version. |  |
-| `port49_key_version_devices` | gauge | `key_ref`, `version` | Devices whose latest validated connection since start used this key version. | [port49_key_retirement_within_7d](alerts.md), [port49_key_retirement_within_1d](alerts.md) |
+| `port49_key_version_devices` | gauge | `key_ref`, `version` | Devices whose latest validated connection since start used this key version. | [port49_key_retirement_within_7d](alerts.md#port49_key_retirement_within_7d), [port49_key_retirement_within_1d](alerts.md#port49_key_retirement_within_1d) |
 
 ## ledger
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_ledger_behind` | gauge |  | 1 while the ledger record's keeper runs with its context feed down: the record does not follow other processes' logins, whatever port49_ledger_pending says. | [port49_ledger_behind](alerts.md) |
-| `port49_ledger_pending` | gauge |  | Context keys whose mark the ledger record does not yet hold; above 0 for a minute, a context put back at one would be taken after a restart. | [port49_ledger_pending](alerts.md) |
+| `port49_ledger_behind` | gauge |  | 1 while the ledger record's keeper runs with its context feed down: the record does not follow other processes' logins, whatever port49_ledger_pending says. | [port49_ledger_behind](alerts.md#port49_ledger_behind) |
+| `port49_ledger_pending` | gauge |  | Context keys whose mark the ledger record does not yet hold; above 0 for a minute, a context put back at one would be taken after a restart. | [port49_ledger_pending](alerts.md#port49_ledger_pending) |
 
 ## oidc
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
 | `port49_oidc_keys_fetch_failures_total` | counter | `issuer` | OIDC or cluster discovery or JWKS fetches that failed, by configured issuer. |  |
-| `port49_oidc_keys_last_success_timestamp_seconds` | gauge | `issuer` | Unix time the OIDC or cluster issuer's held keys were fetched (restored included), 0 before any. | [port49_oidc_keys_stale](alerts.md) |
-| `port49_oidc_logouts_total` | counter | `outcome` | OIDC back-channel logouts by outcome: applied, nothing, replayed, invalid, unavailable, store_error, partial. | [port49_oidc_logouts_failing](alerts.md) |
-| `port49_oidc_tokens_total` | counter | `issuer`, `outcome` | OIDC or cluster bearer tokens by configured issuer and outcome: accepted, invalid, expired, unavailable, unmapped, logged_out. | [port49_oidc_tokens_unavailable](alerts.md) |
+| `port49_oidc_keys_last_success_timestamp_seconds` | gauge | `issuer` | Unix time the OIDC or cluster issuer's held keys were fetched (restored included), 0 before any. | [port49_oidc_keys_stale](alerts.md#port49_oidc_keys_stale) |
+| `port49_oidc_logouts_total` | counter | `outcome` | OIDC back-channel logouts by outcome: applied, nothing, replayed, invalid, unavailable, store_error, partial. | [port49_oidc_logouts_failing](alerts.md#port49_oidc_logouts_failing) |
+| `port49_oidc_tokens_total` | counter | `issuer`, `outcome` | OIDC or cluster bearer tokens by configured issuer and outcome: accepted, invalid, expired, unavailable, unmapped, logged_out. | [port49_oidc_tokens_unavailable](alerts.md#port49_oidc_tokens_unavailable) |
 
 ## per
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_per_login_mfa_total` | counter | `method`, `outcome` | Per-login MFA requirements and proofs by method (hardware_key_touch, idp_mfa, none) and outcome (required, proved, refused, reused, unavailable); alert on a run of refused. | [port49_per_login_mfa_refused](alerts.md) |
+| `port49_per_login_mfa_total` | counter | `method`, `outcome` | Per-login MFA requirements and proofs by method (hardware_key_touch, idp_mfa, none) and outcome (required, proved, refused, reused, unavailable); alert on a run of refused. | [port49_per_login_mfa_refused](alerts.md#port49_per_login_mfa_refused) |
 
 ## policy
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_policy_bundle_matches_runner` | gauge |  | 1 while this broker serves the bundle the runner serves, or this port49d the bundle the runner last judged; 0 on a broker is a replica whose policy file differs: its tokens and the contexts they make carry another policy until it reloads; 0 on a port49d past the runner's settle pass is a policy file that differs from the brokers', for admission, quarantine and redaction. | [port49_policy_bundle_mismatch](alerts.md) |
-| `port49_policy_fail_closed_compositions` | gauge |  | Compositions answered fail-closed under the policy in force now: those users are denied all but the allows. `port49 policy test` names them. | [port49_policy_fail_closed_compositions](alerts.md) |
-| `port49_policy_file_refused` | gauge |  | 1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving. | [port49_policy_file_refused](alerts.md) |
-| `port49_policy_refresh_pending` | gauge |  | 1 from a policy swap or grant expiry until its settle pass has carried it into every live login context. | [port49_policy_refresh_pending](alerts.md) |
+| `port49_policy_bundle_matches_runner` | gauge |  | 1 while this broker serves the bundle the runner serves, or this port49d the bundle the runner last judged; 0 on a broker is a replica whose policy file differs: its tokens and the contexts they make carry another policy until it reloads; 0 on a port49d past the runner's settle pass is a policy file that differs from the brokers', for admission, quarantine and redaction. | [port49_policy_bundle_mismatch](alerts.md#port49_policy_bundle_mismatch) |
+| `port49_policy_fail_closed_compositions` | gauge |  | Compositions answered fail-closed under the policy in force now: those users are denied all but the allows. `port49 policy test` names them. | [port49_policy_fail_closed_compositions](alerts.md#port49_policy_fail_closed_compositions) |
+| `port49_policy_file_refused` | gauge |  | 1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving. | [port49_policy_file_refused](alerts.md#port49_policy_file_refused) |
+| `port49_policy_refresh_pending` | gauge |  | 1 from a policy swap or grant expiry until its settle pass has carried it into every live login context. | [port49_policy_refresh_pending](alerts.md#port49_policy_refresh_pending) |
 | `port49_policy_reloads_total` | counter | `outcome` | Attempts to put a changed policy file in force, by outcome. |  |
 
 ## redemption
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_redemption_restore_unjudged` | gauge |  | 1 while this port49d refuses every token redemption store_unavailable because its last read of meta/witness failed, so it cannot tell whether its store was restored; 0 otherwise. | [port49_redemption_restore_unjudged](alerts.md) |
+| `port49_redemption_restore_unjudged` | gauge |  | 1 while this port49d refuses every token redemption store_unavailable because its last read of meta/witness failed, so it cannot tell whether its store was restored; 0 otherwise. | [port49_redemption_restore_unjudged](alerts.md#port49_redemption_restore_unjudged) |
 | `port49_redemption_restored_refused_total` | counter |  | Token redemptions refused token_spent because the token's store revision is at or below this port49d's restore floor: an etcd restore brought it back. |  |
 
 ## request
@@ -265,39 +265,39 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_sign_ins_total` | counter | `outcome` | Directory-password sign-ins by outcome: issued, refused, throttled, enrollment_started, enrolled, enrollment_closed, enrollment_store_lost, directory_unavailable, store_unavailable; alert on a rise of throttled, on any enrollment_store_lost, and on enrolled outside a rollout. | [port49_sign_ins_throttled](alerts.md), [port49_sign_ins_enrollment_store_lost](alerts.md) |
+| `port49_sign_ins_total` | counter | `outcome` | Directory-password sign-ins by outcome: issued, refused, throttled, enrollment_started, enrolled, enrollment_closed, enrollment_store_lost, directory_unavailable, store_unavailable; alert on a rise of throttled, on any enrollment_store_lost, and on enrolled outside a rollout. | [port49_sign_ins_throttled](alerts.md#port49_sign_ins_throttled), [port49_sign_ins_enrollment_store_lost](alerts.md#port49_sign_ins_enrollment_store_lost) |
 
 ## store
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
 | `port49_store_call_seconds` | histogram | `component`, `pool` | Store call latency through the guard, by component and pool. |  |
-| `port49_store_calls_total` | counter | `component`, `pool`, `outcome` | Store calls through the guard, by component, pool and outcome. | [port49_store_calls_refused](alerts.md) |
-| `port49_store_circuit_open` | gauge | `component`, `pool` | 1 while a pool's circuit is open: its calls fail at once until a probe succeeds. | [port49_store_circuit_open](alerts.md) |
-| `port49_store_client_cert_expiry_timestamp_seconds` | gauge | `component` | When each component's etcd client certificate expires, in Unix seconds. | [port49_store_client_cert_expiring](alerts.md) |
-| `port49_store_directory_confirmed_timestamp_seconds` | gauge |  | When this process last confirmed its copy of the directory store (a read answered while its marks feed ran), in Unix seconds; 0 before one has, absent on the memory backend. | [port49_store_directory_stale](alerts.md) |
-| `port49_store_directory_reachable` | gauge |  | 1 while this process's reads of the directory store answer; absent on the memory backend, which has no store to reach. | [port49_store_directory_unreachable](alerts.md) |
+| `port49_store_calls_total` | counter | `component`, `pool`, `outcome` | Store calls through the guard, by component, pool and outcome. | [port49_store_calls_refused](alerts.md#port49_store_calls_refused) |
+| `port49_store_circuit_open` | gauge | `component`, `pool` | 1 while a pool's circuit is open: its calls fail at once until a probe succeeds. | [port49_store_circuit_open](alerts.md#port49_store_circuit_open) |
+| `port49_store_client_cert_expiry_timestamp_seconds` | gauge | `component` | When each component's etcd client certificate expires, in Unix seconds. | [port49_store_client_cert_expiring](alerts.md#port49_store_client_cert_expiring) |
+| `port49_store_directory_confirmed_timestamp_seconds` | gauge |  | When this process last confirmed its copy of the directory store (a read answered while its marks feed ran), in Unix seconds; 0 before one has, absent on the memory backend. | [port49_store_directory_stale](alerts.md#port49_store_directory_stale) |
+| `port49_store_directory_reachable` | gauge |  | 1 while this process's reads of the directory store answer; absent on the memory backend, which has no store to reach. | [port49_store_directory_unreachable](alerts.md#port49_store_directory_unreachable) |
 | `port49_store_fast_fail_total` | counter | `reason` | Store calls the etcd client refused within 20 ms while the caller still waited, by reason (no_leader, leader_changed, no_connection, other); counted once per hedged copy; a call the guard refuses is port49_store_calls_total outcome circuit_open or saturated. |  |
-| `port49_store_feed_legs_colocated` | gauge | `feed` | 1 while both legs of a feed's watch are on one etcd member, so that member going dark would stall the feed until a leg is moved; by feed (contexts or marks). | [port49_store_feed_legs_colocated](alerts.md) |
-| `port49_store_feed_rescans_total` | counter | `feed` | Rescans of the store after a feed's watch was compacted, by feed. | [port49_store_feed_rescans](alerts.md) |
-| `port49_store_feed_up` | gauge | `feed` | 1 while a feed's watch on the store runs, by feed (contexts or marks). | [port49_store_marks_feed_down](alerts.md), [port49_store_feed_down](alerts.md) |
+| `port49_store_feed_legs_colocated` | gauge | `feed` | 1 while both legs of a feed's watch are on one etcd member, so that member going dark would stall the feed until a leg is moved; by feed (contexts or marks). | [port49_store_feed_legs_colocated](alerts.md#port49_store_feed_legs_colocated) |
+| `port49_store_feed_rescans_total` | counter | `feed` | Rescans of the store after a feed's watch was compacted, by feed. | [port49_store_feed_rescans](alerts.md#port49_store_feed_rescans) |
+| `port49_store_feed_up` | gauge | `feed` | 1 while a feed's watch on the store runs, by feed (contexts or marks). | [port49_store_marks_feed_down](alerts.md#port49_store_marks_feed_down), [port49_store_feed_down](alerts.md#port49_store_feed_down) |
 | `port49_store_fence_timeouts_total` | counter |  | Context reads and store health checks denied because this process's context feed had not delivered the record's revision by the deadline. |  |
-| `port49_store_health_checks_total` | counter | `outcome` | port49d's store health checks, by outcome (pass, fail). | [port49_store_health_check_failing](alerts.md) |
-| `port49_store_health_failures` | gauge |  | port49d's failed store health checks in a row; at the session store's etcd.health.close_after every listener closes. | [port49_store_health_failures_close](alerts.md) |
+| `port49_store_health_checks_total` | counter | `outcome` | port49d's store health checks, by outcome (pass, fail). | [port49_store_health_check_failing](alerts.md#port49_store_health_check_failing) |
+| `port49_store_health_failures` | gauge |  | port49d's failed store health checks in a row; at the session store's etcd.health.close_after every listener closes. | [port49_store_health_failures_close](alerts.md#port49_store_health_failures_close) |
 | `port49_store_index_records_undecodable_total` | counter |  | etcd index records that would not decode, or index entries whose key would not parse, each time one was skipped, taken unread, written over, or deleted. |  |
-| `port49_store_keyspace_held` | gauge |  | 1 while this port49d holds its keyspace on etcd; absent where no runner starts (the memory backend). | [port49_store_keyspace_unheld](alerts.md) |
-| `port49_store_logouts_pending` | gauge |  | Back-channel logouts accepted while the directory store did not answer and not yet forwarded to it. | [port49_store_logouts_pending](alerts.md) |
+| `port49_store_keyspace_held` | gauge |  | 1 while this port49d holds its keyspace on etcd; absent where no runner starts (the memory backend). | [port49_store_keyspace_unheld](alerts.md#port49_store_keyspace_unheld) |
+| `port49_store_logouts_pending` | gauge |  | Back-channel logouts accepted while the directory store did not answer and not yet forwarded to it. | [port49_store_logouts_pending](alerts.md#port49_store_logouts_pending) |
 | `port49_store_member_suspect_total` | counter |  | Times the etcd client stopped choosing a member for a while because a call on it timed out; a climb with a member paused or cut off, flat otherwise. |  |
 | `port49_store_operations_total` | counter | `op`, `outcome` | Store operations by op and outcome. |  |
-| `port49_store_restore_detected_timestamp_seconds` | gauge |  | The Unix time this port49d last found its session store restored from a snapshot, 0 if never: meta/witness or the store's revision fell below what it had read. | [port49_store_restore_detected](alerts.md) |
+| `port49_store_restore_detected_timestamp_seconds` | gauge |  | The Unix time this port49d last found its session store restored from a snapshot, 0 if never: meta/witness or the store's revision fell below what it had read. | [port49_store_restore_detected](alerts.md#port49_store_restore_detected) |
 
 ## tls
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_tls_device_certificate_lifetime_left_ratio` | gauge |  | The least fraction of its own lifetime a device certificate verified in the last 24h has left; 1 with none. | [port49_tls_device_certificate_renewal_late](alerts.md) |
-| `port49_tls_handshakes_total` | counter | `outcome` | RFC 9887 listener handshakes by outcome. | [port49_tls_handshake_failures](alerts.md) |
-| `port49_tls_server_certificate_lifetime_left_ratio` | gauge |  | The fraction of its own lifetime the RFC 9887 listener's certificate has left, below 0 once expired; 1 with no listener. | [port49_tls_server_certificate_renewal_late](alerts.md), [port49_tls_server_certificate_expired](alerts.md) |
+| `port49_tls_device_certificate_lifetime_left_ratio` | gauge |  | The least fraction of its own lifetime a device certificate verified in the last 24h has left; 1 with none. | [port49_tls_device_certificate_renewal_late](alerts.md#port49_tls_device_certificate_renewal_late) |
+| `port49_tls_handshakes_total` | counter | `outcome` | RFC 9887 listener handshakes by outcome. | [port49_tls_handshake_failures](alerts.md#port49_tls_handshake_failures) |
+| `port49_tls_server_certificate_lifetime_left_ratio` | gauge |  | The fraction of its own lifetime the RFC 9887 listener's certificate has left, below 0 once expired; 1 with no listener. | [port49_tls_server_certificate_renewal_late](alerts.md#port49_tls_server_certificate_renewal_late), [port49_tls_server_certificate_expired](alerts.md#port49_tls_server_certificate_expired) |
 
 ## tokens
 
@@ -315,8 +315,8 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_workload_certificates_renewal_late_total` | counter |  | Workload certificates presented with under a quarter of their validity left, once per certificate per 24h on this replica; alert on its increase. | [port49_workload_certificates_renewal_late](alerts.md) |
+| `port49_workload_certificates_renewal_late_total` | counter |  | Workload certificates presented with under a quarter of their validity left, once per certificate per 24h on this replica; alert on its increase. | [port49_workload_certificates_renewal_late](alerts.md#port49_workload_certificates_renewal_late) |
 
 ## process
 
-The standard Prometheus process collector adds the `process_*` series (CPU time, open file descriptors, memory, start time). `process_start_time_seconds` is read by [port49_directory_refresh_stale](alerts.md) and [port49_directory_refresh_half_ceiling](alerts.md), which gate a refresh timestamp on uptime so that a fresh start does not fire them.
+The standard Prometheus process collector adds the `process_*` series (CPU time, open file descriptors, memory, start time). `process_start_time_seconds` is read by [port49_directory_refresh_stale](alerts.md#port49_directory_refresh_stale) and [port49_directory_refresh_half_ceiling](alerts.md#port49_directory_refresh_half_ceiling), which gate a refresh timestamp on uptime so that a fresh start does not fire them.

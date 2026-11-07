@@ -242,6 +242,79 @@ func TestEveryAlertHasAPromtoolCase(t *testing.T) {
 	}
 }
 
+// runbookURL is where the docs site explains an alert: site_url from mkdocs.yml, the alerts page, the
+// alert's anchor.
+func runbookURL(t *testing.T, alert string) string {
+	t.Helper()
+	var mk struct {
+		SiteURL string `yaml:"site_url"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, "mkdocs.yml")), &mk); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(mk.SiteURL, "https://") || !strings.HasSuffix(mk.SiteURL, "/") {
+		t.Fatalf("mkdocs.yml site_url = %q, want an https URL ending in /", mk.SiteURL)
+	}
+	return mk.SiteURL + "reference/alerts/#" + alert
+}
+
+func TestEveryRuleHasARunbookURL(t *testing.T) {
+	for _, r := range allRules(t) {
+		if got, want := r.Annotations["runbook_url"], runbookURL(t, r.Alert); got != want {
+			t.Errorf("%s: runbook_url = %q, want %q", r.Alert, got, want)
+		}
+	}
+}
+
+// The URL's fragment must be an anchor the generated alerts page really has.
+func TestEveryRunbookAnchorExists(t *testing.T) {
+	as, err := docgen.Alerts([]byte(read(t, "deploy/alerts/port49.rules.yaml")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := docgen.AlertsPage(as, []byte(read(t, "deploy/alerts/README.md")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range allRules(t) {
+		_, frag, _ := strings.Cut(r.Annotations["runbook_url"], "#")
+		if frag == "" || !strings.Contains(page, "{#"+frag+"}") {
+			t.Errorf("%s: runbook_url %q names an anchor the alerts page lacks", r.Alert, r.Annotations["runbook_url"])
+		}
+	}
+}
+
+// promtool compares annotations exactly, so each expected alert carries the runbook too.
+func TestEveryExpectedAnnotationCarriesTheRunbook(t *testing.T) {
+	var f struct {
+		Tests []struct {
+			Alerts []struct {
+				Alertname string `yaml:"alertname"`
+				Exp       []struct {
+					Annotations map[string]string `yaml:"exp_annotations"`
+				} `yaml:"exp_alerts"`
+			} `yaml:"alert_rule_test"`
+		} `yaml:"tests"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, "deploy/alerts/port49.rules.test.yaml")), &f); err != nil {
+		t.Fatal(err)
+	}
+	blocks := 0
+	for _, tc := range f.Tests {
+		for _, a := range tc.Alerts {
+			for _, e := range a.Exp {
+				blocks++
+				if got, want := e.Annotations["runbook_url"], runbookURL(t, a.Alertname); got != want {
+					t.Errorf("%s: exp_annotations runbook_url = %q, want %q", a.Alertname, got, want)
+				}
+			}
+		}
+	}
+	if blocks == 0 {
+		t.Error("no exp_annotations block found")
+	}
+}
+
 // One recorder serves the alert checks and the metrics reference: RegisteredNames is the names of docgen.Metrics.
 func TestRegisteredNamesIsMetrics(t *testing.T) {
 	ms, err := docgen.Metrics()
