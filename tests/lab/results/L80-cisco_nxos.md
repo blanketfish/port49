@@ -4,9 +4,9 @@
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.6(2)F (`vrnetlab/cisco_n9kv:9300v64-10.6.2.F`)
 - **Topology:** `tests/lab/topologies/nxos106.clab.yml`
-- **Capture:** `tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.pcap` — 1202 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.pcap` — 1198 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `d4c3f37eec3e8920f8f0468b46589f9f56e159be-dirty`, `PORT49_LAB_PLATFORMS=nxos106`, `-run ^TestQualify$`
+- **Run:** commit `6340e76ca38d4fbbd6bf5a63f69e1954ba7ef82c-dirty`, `PORT49_LAB_PLATFORMS=nxos106`, `-run ^TestQualify$`
 
 ## Claim
 
