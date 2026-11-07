@@ -81,7 +81,7 @@ func TestL87AndL88KeepSRLinuxsPtyPath(t *testing.T) {
 	if j := strings.Index(body, "\n}\n"); j >= 0 {
 		body = body[:j]
 	}
-	for _, want := range []string{"nokia_srlinux", "ptyCommands", "echo l88-end"} {
+	for _, want := range []string{"nokia_srlinux", "l.ptyCommands(", "echo l88-end"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("l88LoginWithin lacks %q", want)
 		}
