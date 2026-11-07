@@ -11,6 +11,7 @@ func init() {
 		"port49_key_secret_files_changed", "single_device", "init-issuer", "rotate-issuer",
 		"forget-issuer", "encryption.previous", "port49 keys status", "port49_key_version_devices",
 		"every 30 seconds", "Directory pins are never re-sealed", "ErrUnknownKey", "held_refused",
+		"A store that holds pins can rotate once", "record=\"membership\"", "port49 directory forget",
 		"Always give a new key a new id", "issuance: this broker's issuing CA", "reference/config/port49d.md",
 	)
 }

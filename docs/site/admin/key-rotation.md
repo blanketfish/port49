@@ -143,8 +143,11 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   after step 2 finished everywhere for the **largest** of: `session.max_session_age_default` plus
   `session.grace_window` (port49d.yaml; 12 hours plus 10 minutes by default, and a policy role can only
   lower it), `receipt_max_age` (2 hours by default), `session.staleness_ceiling` (4 hours by default, the
-  age of the snapshots a stopped process is read from), and the token life (20 minutes at most). Tokens are
-  also purged at every start on etcd. Records still under the old key after step 3 do not open: a token is dropped
+  age of the snapshots a stopped process is read from), 20 minutes (a token lives at most 15, and the
+  idempotency records that carry minted tokens are kept under 20), and the **directory membership lease**,
+  `max(broker.directory.grace, 24 hours)`. Every verify reads a principal's membership record before it
+  rewrites it, so a record sealed under the old key keeps failing, for that principal, until its lease runs
+  out; this holds on a single shared store as well as on a split. Tokens are also purged at every start on etcd. Records still under the old key after step 3 do not open: a token is dropped
   from the candidates and counted in `port49_crypt_open_failures_total{record="token"}`, a session's context is
   denied `store_unavailable`, and a second factor is never treated as "not enrolled". For that second factor an
   operator runs `port49 directory reset-second-factor`.
@@ -153,16 +156,33 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   expiry, and an unchanged pin is never written again, so a pin sealed under the old key stays sealed under
   it. Drop that key and reading the pin fails with an unknown-key error (`ErrUnknownKey`). That failure is
   not "not found" and not "unavailable", so the pin write for that principal fails too, and a broker on
-  the split cannot mint or refresh for anyone pinned before the rotation. The broker's hourly check says
-  `... pins sealed under that key fail here until it holds it`. The cure is to put the old key back as
-  `previous` and restart. A single shared store with no separate directory holds no directory pins; the
-  rest of this list still applies to it.
-- **Backups and exports keep the key they were sealed under.** An etcd snapshot, a Velero backup, and a
-  `port49-broker export-enrollments` file are sealed under whichever key was current when they were taken.
+  the split cannot mint or refresh for anyone pinned before the rotation. The hourly directory check
+  does **not** warn about this, because the recorded current key is the new one and is held. What you see:
+  the broker's scheduled refresh line `broker: refresh: the directory failed for <principal> (crypt: opening
+  membership: ...); its contexts are left unstamped and unrevoked`, the counter
+  `port49_crypt_open_failures_total{record="membership"}` rising, and bind, mint and refresh failing for
+  the pinned principals. Sessions already open are, by my reading of the code, left as they are until
+  `session.staleness_ceiling` (4 hours by default) and then denied `context_stale`; I did not measure that.
+  The cure is to put the old key back as `previous` and restart; nothing was deleted.
+- **A store that holds pins can rotate once.** There is one `previous` slot. A second rotation's step 1
+  must put the newer key in it, which drops the first key and strands the pins sealed under it, exactly as
+  step 3 would. If you must rotate again anyway (a key you believe is exposed), the way out for each
+  stranded principal is `port49 directory forget <principal>`. It does not need to open the record: it
+  deletes the pin, and the person's next verification pins whatever entry the directory then gives them.
+  The cost is the pin's protection: a pin exists so a principal cannot silently move to another directory
+  entry, so confirm each is the same person first, as on [Stores](../operate/stores.md), and a forget is an
+  admin-level call that takes a security-key press. Do this for every pinned principal; there is no
+  bulk form, and no re-seal is planned here.
+- **Backups and exports need every key that sealed their records.** An etcd snapshot and a Velero backup
+  are the raw stores, and each record in them keeps the key that was current when that record was written.
+  An enrollment export (`port49-broker export-enrollments`) keeps each record's seal too, and seals only
+  its envelope under the key current at export time. So a backup taken between steps 2 and 3 needs both
+  keys, and any backup needs every key that was current while its records were written.
   `port49 directory import` refuses a file sealed under a key the broker does not hold and tells you to set
-  that key as `previous`. Keep the old key file, offline, for as long as any backup taken under it is kept;
-  restoring one without it loses every second factor and pin in it, and each enrolled person must then run
-  through `port49 directory reset-second-factor`.
+  that key as `previous`. Keep every old key file, offline, as long as any backup that holds its records is
+  kept; restoring without it loses the second factors and pins sealed under it, and each enrolled person must
+  then run `port49 directory reset-second-factor`. Velero also stores the encryption Secret in the bucket, so
+  a Velero restore brings back the key its backup was taken with, and that bucket must be guarded like the key.
 
 If a process starts without a key the store was last written under, what you see depends on the store:
 
@@ -243,7 +263,8 @@ another CA. The current fingerprint is the one a broker's start line prints.
    stays on this broker. This broker loads the CA only at its start, so restart it too before it promotes.
 2. **Promote.** Run `rotate-issuer` again on the same broker. The current certificate becomes
    `issuing-ca-previous.pem`, the staged pair becomes current. Copy `issuing-ca.pem`, `issuing-ca.key` and
-   `issuing-ca-previous.pem` to every other broker, remove the staged `issuing-ca-next.pem` there, and restart each.
+   `issuing-ca-previous.pem` to every other broker, remove the staged `issuing-ca-next.pem` there, and restart each,
+   and restart this one too, which holds the old CA in memory until it does.
    Each issues with the new CA and still trusts the previous one.
 3. **Retire.** After `certificate_lifetime` has passed since the promotion, remove
    `issuing-ca-previous.pem` from every broker and restart each.
