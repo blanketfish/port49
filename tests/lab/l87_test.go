@@ -93,7 +93,7 @@ func (e *l88Env) l87Login(user, secret string, cmds ...string) (outs []string, e
 	start := time.Now()
 	for {
 		off := e.l.mark()
-		outs, err = e.l.loginWithin(user, secret, 60*time.Second, cmds...)
+		outs, err = e.l.l88LoginWithin(user, secret, 60*time.Second, cmds...)
 		recs = e.l.waitForRecords(off, 15*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, user) != nil })
 		if redeemFor(recs, user) != nil || time.Since(start) > 2*time.Minute {
 			return outs, err, recs, time.Since(start)
@@ -174,7 +174,7 @@ func (e *l88Env) l87A(f l87Faults) {
 	f.set(e.t, "store_unavailable")
 	off := e.l.mark()
 	t0 := time.Now()
-	outs, err := e.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+	outs, err := e.l.l88LoginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
 	bgTook := time.Since(t0)
 	bgRecs := e.l.waitForRecords(off, 10*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "redeem")) > 0 })
 	bgReasons := l87Redeems(bgRecs, breakglassUser)
@@ -263,7 +263,7 @@ func (e *l88Env) l87B() {
 
 		recMark := x.l.mark()
 		t0 := time.Now()
-		outs, err := x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+		outs, err := x.l.l88LoginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
 		took := time.Since(t0)
 		recs := x.l.recordsSince(recMark)
 		resume()
