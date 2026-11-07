@@ -302,6 +302,11 @@ func argsIdent(e ast.Expr) bool {
 	return ok && id.Name == "args"
 }
 
+// refusedSubcommands are the words port49 dispatches only to refuse them: `port49 directory
+// init-enrollments` and `export` run on the broker host as `port49-broker`, and cmd/port49/directory.go
+// prints that and exits 2.
+var refusedSubcommands = map[string][]string{"directory": {"init-enrollments", "export"}}
+
 func portDispatch(t *testing.T) dispatch {
 	t.Helper()
 	funcs, _ := parseDir(t, "cmd/port49")
@@ -344,6 +349,17 @@ func portDispatch(t *testing.T) dispatch {
 	}
 	if len(d.top) < 10 {
 		t.Fatalf("found %d top-level port49 commands: the scan is broken", len(d.top))
+	}
+	// A refused word is a case label in the source (it has a clause that prints where the command
+	// runs and exits 2) but not a command. Each must still be one, so a refusal that is removed or
+	// renamed fails here instead of leaving a stale entry.
+	for top, subs := range refusedSubcommands {
+		for _, sub := range subs {
+			if !d.sub[top][sub] {
+				t.Errorf("port49 %s %s is listed as refused, but the source has no case for it", top, sub)
+			}
+			delete(d.sub[top], sub)
+		}
 	}
 	return d
 }
@@ -465,6 +481,12 @@ func TestTheCommandScanReadsTheDispatch(t *testing.T) {
 	for _, bad := range []string{"trust", "start"} {
 		if port.top[bad] {
 			t.Errorf("the scan finds port49 %s", bad)
+		}
+	}
+	// The CLI refuses these two (they run on the broker host), though its source has them as case labels.
+	for _, sub := range []string{"init-enrollments", "export"} {
+		if port.sub["directory"][sub] {
+			t.Errorf("the scan accepts port49 directory %s, which the CLI refuses", sub)
 		}
 	}
 	if port.sub["policy"]["lint"] {
