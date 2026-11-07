@@ -32,10 +32,12 @@ Bring the whole stack up the first time, or run `docker compose build` first: on
 The trial PKI protects nothing real. TACACS+ is published on `127.0.0.1:49`, the broker on
 `127.0.0.1:8443`, and each component's metrics on `127.0.0.1:9049` and `127.0.0.1:9050`.
 
-**Ready is not "running".** The stack has no healthchecks (planned with plan 13), so
-`docker compose ps` showing `running` says only that the process started. Check readiness from
-the host with `curl 127.0.0.1:9049/readyz` (port49d) and `curl 127.0.0.1:9050/readyz` (the
-broker), on the metrics ports; a `200` is ready, anything else or no answer is not.
+**Ready is not "running".** `port49d` and `port49-broker` each have a healthcheck that runs
+`healthcheck --ready`, which probes `/readyz`, every ten seconds (the first thirty are a grace
+period). `docker compose ps` shows `healthy` only when it passes; `running` alone says the process
+started. You can ask the same question from the host with `curl 127.0.0.1:9049/readyz` (port49d) and
+`curl 127.0.0.1:9050/readyz` (the broker), on the metrics ports; a `200` is ready, anything else or no
+answer is not.
 
 Inputs, each an environment variable with a default: `PORT49_COMPOSE_LOCAL` (`./local`),
 `PORT49_COMPOSE_CONFIG` (`./config`), `PORT49_COMPOSE_SUBNET` (`172.30.49.0/24`),
@@ -362,7 +364,3 @@ port49d's accounting spool directory needs the same, under 10 ms (port49's alert
 ## Backups
 
 Each etcd data volume and `broker-state` (design §13's runbook).
-
-## Not here yet
-
-Plan 13's install page and etcd sizing.

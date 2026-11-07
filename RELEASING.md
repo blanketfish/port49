@@ -8,6 +8,14 @@ only downloads. The GitHub release stays a draft until every publisher has finis
 Nothing publishes until a tag is pushed. Do the one-time setup below first; it is what makes a tag
 without approval harmless.
 
+## Versioning
+
+port49 uses SemVer. `v0.1.0` is the beta. In 0.x, configuration may break between releases, and every
+such change gets a loud release note. `1.0.0` is the compatibility promise. There is one version across
+every artifact (packages, image, chart, Python package, Galaxy collection), and bumps come from
+Conventional Commits. Tags are pushed by hand and carry no pre-release suffix unless it maps to a valid
+PEP 440 version. The docs site states the same on its Versions page.
+
 ## One-time setup, before the first tag
 
 1. **PyPI trusted publisher.** Project `port49`, repository `blanketfish/port49`, workflow

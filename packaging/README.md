@@ -38,7 +38,8 @@ management's to set. `~/.port49/config.yaml` overrides it, and a flag overrides 
 ## The Python library on an `.rpm`
 
 An `.rpm` has no version-independent site-packages path, so the `port49` rpm does not carry the
-library. Run `pip install port49` after installing it.
+library. After installing it, run `pip install port49==<version>`, the version `port49 --version`
+prints (the package exists from the first release, `v0.1.0`; install from the tree before that).
 
 ## After install
 

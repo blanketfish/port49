@@ -11,8 +11,11 @@ pip install ./clients/python                                   # on the controll
 ansible-galaxy collection install ./clients/ansible/ansible_collections/port49/client
 ```
 
-Install the library from the tree, not by name from PyPI: the name is not the project's. Where
-ansible-core lives in a pipx venv, `pipx inject ansible-core ./clients/python`.
+Install the library and collection from the tree, as above, to match a checkout. From the first
+release (`v0.1.0`) on, this project also publishes them as `port49` on PyPI and `port49.client` on
+Galaxy: install the version `port49 --version` prints (`pip install port49==<version>`,
+`ansible-galaxy collection install port49.client:==<version>`). No other package name is port49's.
+Where ansible-core lives in a pipx venv, `pipx inject ansible-core ./clients/python`.
 
 `port49` must be on the controller's `PATH` (or pass `port49=/opt/port49/bin/port49`), and
 `port49 login` must have started an agent. Needs ansible-core 2.16 or later.

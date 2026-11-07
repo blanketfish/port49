@@ -16,14 +16,14 @@ both.
 
 | Build | Where you get it | Hardware keys |
 |---|---|---|
-| Client | the `port49` package and archive, for Linux and macOS (amd64 and arm64) | PKCS#11 keys (a YubiKey or a smartcard), the TPM and file keys |
-| Static | the `port49-server` package and the container image | the TPM and file keys only |
+| Client | the `port49` package and archive, for Linux and macOS (amd64 and arm64) | PKCS#11 keys (a YubiKey or a smartcard), the TPM (Linux) and file keys |
+| Static | the `port49-server` package and archive, and the container image | the TPM (Linux) and file keys only |
 
 Run `port49 login` from the client build if your key lives on a YubiKey or a smartcard. The client build
 loads the system's PKCS#11 library at run time, so it needs the system's dynamic loader, which every desktop
 Linux and macOS has. The static build has no such loader dependency, which suits a server or a
-container. Given a `pkcs11:` key, it refuses and says it was built without PKCS#11 support and that you
-should use the client release. Nothing else about it changes. See [Hardware keys](../hardware-keys.md) for
+container. It will not use a `pkcs11:` key: a key store set to `pkcs11` is refused, and `auto` passes
+over the key and says so. Nothing else about it changes. See [Hardware keys](../hardware-keys.md) for
 setting a key up.
 
 Check which one you have, and its version:
@@ -54,7 +54,7 @@ in your config, then a probe of the system paths where a package installs it.
 
 If no module is found, the command says so and exits with status 2: `no libykcs11 found; install
 yubico-piv-tool or pass --module` on Linux, and on macOS `no libykcs11 is probed on macOS: pass
---module PATH`.
+--module PATH, the libykcs11.dylib of your yubico-piv-tool install`.
 
 ## The Python library
 

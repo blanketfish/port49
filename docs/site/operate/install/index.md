@@ -31,7 +31,8 @@ Each shape page states these four again, in its own terms.
 3. **`broker.state_dir` survives a restart.** It holds the revocation marks, the witness and the issuing
    CA. Put it on a volume that is kept, and back it up with the host.
 4. **etcd is port49's own cluster, on a disk that keeps up.** etcd needs sustained WAL fsync p99
-   under 10 ms. A slow disk pushes port49's store calls past their timeout in bursts, and the
+   under 10 ms, and a member at etcd 3.4.24, 3.5.8 or 3.6 or later: `port49d` refuses an older one and
+   says which. A slow disk pushes port49's store calls past their timeout in bursts, and the
    `etcd_disk_slow` alert fires after ten minutes of it.
 
 ## Install the binaries 0755
@@ -46,16 +47,34 @@ process, and `ssh` then sends the device an empty password, so the login fails.
 `port49d` needs no file capability to bind port 49. The systemd unit grants `CAP_NET_BIND_SERVICE` as an
 ambient capability instead.
 
-## First install: `port49d init-revocations`
+## First-install steps
 
-A `port49d` that holds its broker in process (`broker.revocations_file` is set) never creates the
-revocations file itself: a missing file, or one that does not load, refuses every start, so that a
-lost file cannot silently forget every revoke. Run this once per install, before the first start:
+On etcd (every shape in the table above), run these once, in this order. The shape pages give the
+details for each in that shape.
+
+1. **`port49d store-roles`** prints the `etcdctl` commands that create port49's two etcd roles. Run
+   them as etcd's root, once per cluster. After a port49 upgrade that changes the roles, apply them
+   again by hand; it is never done for you. The Compose stack runs this for you on its trial PKI.
+2. **`port49-broker init-issuer`**, on one broker only, when the broker issues certificates
+   (`broker.identity.issuance` is set). It refuses a broker without that block. Every further broker on
+   the same etcd then gets a copy of the same CA, or it refuses to start.
+3. **`init-enrollments`**, only if you use directory password sign-in, before the broker's first start. A
+   broker already running finds the new store within 30 seconds, and until then its sign-ins answer
+   `enrollment_store_lost`.
+
+None of these belongs in a unit's `ExecStartPre=`: they refuse when anything is already there, and a
+unit must never initialize.
+
+### The memory-store trial: `port49d init-revocations`
+
+`broker.revocations_file` is used only by a single-process trial, where `port49d` holds its broker in
+process on the memory store. There, `port49d` never creates the revocations file itself: a missing file,
+or one that does not load, refuses every start, so that a lost file cannot silently forget a revoke.
+Run this once, before the first start:
 
 ```sh
 port49d init-revocations --config /etc/port49/port49d.yaml
 ```
 
-It refuses when a file is already there, so a second run changes nothing. It is a first-install step
-and does not belong in a unit's `ExecStartPre=`. The shape pages cover the other one-time steps
-(`port49-broker init-issuer`, and `init-enrollments` for directory password sign-in).
+It refuses when the file is already there, so a second run changes nothing. An etcd install does not set
+`broker.revocations_file` and does not run this command.

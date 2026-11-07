@@ -11,7 +11,7 @@ port49 uses [Semantic Versioning](https://semver.org/).
 |---|---|
 | `v0.1.0` | The beta. |
 | `0.x` | Configuration may break between releases. Every such change is called out loudly in the release notes. Read them before you upgrade. |
-| `1.0.0` | The compatibility promise. Before it, nothing is promised; from it, the SemVer rules hold. |
+| `1.0.0` | The compatibility promise. Before it, configuration may break between releases, always with a release note; from it, the SemVer rules hold. |
 
 Release tags look like `v0.1.0`. A tag carries no pre-release suffix, unless the suffix maps to a valid
 Python (PEP 440) version, because the Python package is released from the same tag.
@@ -37,8 +37,9 @@ port49-inventory --version
 
 `port49 version` prints the same line as `port49 --version`. The line is the binary's name and the
 version, such as `port49d 0.1.0`. A release build prints the version without the tag's leading `v`. The
-container image prints the same string as the package. A binary built from source without a release
-stamp prints the word `dev` in place of the version.
+container image prints the same string as the package. A binary built from source with `make build`
+prints what `git describe` gives for the checkout, without the `v` and marked `-dirty` when the tree has
+changes. A plain `go build` stamps nothing and prints the word `dev` in place of the version.
 
 Quote that line in a bug report.
 
