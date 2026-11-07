@@ -27,6 +27,7 @@ import (
 	"github.com/blanketfish/port49/internal/config"
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/healthcheck"
 	"github.com/blanketfish/port49/internal/inventory"
 	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/printsafe"
@@ -52,6 +53,9 @@ var brokerSubcommands = map[string]func(args []string) int{
 		return enrollmentsCmd("port49-broker", "export-enrollments", a, os.Stdout, os.Stderr)
 	},
 	"forget-issuer": func(a []string) int { return forgetIssuer(a, os.Stdout, os.Stderr) },
+	"healthcheck": func(a []string) int {
+		return healthcheck.Command("port49-broker", "/etc/port49/port49-broker.yaml", ":9050", a, os.Stderr)
+	},
 	"init-issuer": func(a []string) int {
 		return issuerCmd("port49-broker", "init-issuer", "/etc/port49/port49-broker.yaml", config.LoadBroker, a,
 			os.Stdout, os.Stderr)

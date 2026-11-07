@@ -54,6 +54,7 @@ import (
 	"github.com/blanketfish/port49/internal/decision"
 	"github.com/blanketfish/port49/internal/devicecert"
 	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/healthcheck"
 	"github.com/blanketfish/port49/internal/inventory"
 	"github.com/blanketfish/port49/internal/keyfile"
 	"github.com/blanketfish/port49/internal/keyring"
@@ -77,6 +78,9 @@ var daemonSubcommands = map[string]func(args []string) int{
 	"init-enrollments": func(a []string) int { return enrollmentsCmd("port49d", "init-enrollments", a, os.Stdout, os.Stderr) },
 	"export-enrollments": func(a []string) int {
 		return enrollmentsCmd("port49d", "export-enrollments", a, os.Stdout, os.Stderr)
+	},
+	"healthcheck": func(a []string) int {
+		return healthcheck.Command("port49d", "/etc/port49/port49d.yaml", ":9049", a, os.Stderr)
 	},
 	"keys-diagnose": func(a []string) int { return keysDiagnoseCmd(a, os.Stdin, os.Stdout, os.Stderr) },
 	"store-roles":   func(a []string) int { return storeRolesCmd(a, os.Stdout, os.Stderr) },

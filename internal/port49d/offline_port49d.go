@@ -19,6 +19,7 @@ import (
 	"github.com/blanketfish/port49/internal/config"
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/healthcheck"
 	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/session"
 	"github.com/blanketfish/port49/internal/store"
@@ -147,14 +148,13 @@ func daemonAnswering(ctx context.Context, listen string) error {
 
 // answeringOn is daemonAnswering for the process proc, which owns what.
 func answeringOn(ctx context.Context, listen, proc, owns string) error {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil || port == "0" {
+	if _, port, err := net.SplitHostPort(listen); err != nil || port == "0" {
 		return nil
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
+	addr, err := healthcheck.DialAddr(listen)
+	if err != nil {
+		return nil
 	}
-	addr := net.JoinHostPort(host, port)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/readyz", nil)
