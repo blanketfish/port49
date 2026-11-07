@@ -825,7 +825,17 @@ type l64PyRun struct {
 // module): such a run never reached the device. A paramiko or netmiko error is the device's answer, and stays a
 // measurement.
 var l64HarnessErrors = []string{"TypeError", "AttributeError", "NameError", "KeyError", "ImportError",
-	"ModuleNotFoundError", "SyntaxError", "UnboundLocalError"}
+	"ModuleNotFoundError", "SyntaxError", "UnboundLocalError", "ValueError", "RuntimeError", "AssertionError",
+	"IndexError", "LookupError", "OSError", "FileNotFoundError", "PermissionError"}
+
+// l64HarnessPort49 are the port49 library errors that are about the harness or the lab, not about the device:
+// no agent, no CLI, a session that ended, a broker that was briefly unavailable. A Denied, a BrokerRefused or
+// a plain Port49Error is something a cell can observe, so it stays a measurement.
+var l64HarnessPort49 = []string{"NoAgent", "NotInstalled", "SessionOver", "Temporary"}
+
+// l64HarnessHostKeyCodes are the HostKeyError codes the library raises before it contacts the device, from the
+// harness's own ssh_config or known_hosts.
+var l64HarnessHostKeyCodes = []string{"ssh_config_unread", "known_hosts_unread", "host_key_uncheckable", "host_keys_not_kept"}
 
 // l64DriverFault says why a Python run measured nothing, or "" when it reached the library and the device: an
 // import error, a harness error class, or no result line at all.
@@ -837,6 +847,10 @@ func l64DriverFault(r l64PyRun) string {
 		return "the driver could not import the library (" + r.d.ErrorClass + ")"
 	case r.d.Outcome == "error" && slices.Contains(l64HarnessErrors, r.d.ErrorClass):
 		return "the driver failed with " + r.d.ErrorClass + " before it reached the device"
+	case r.d.Outcome == "port49_error" && slices.Contains(l64HarnessPort49, r.d.ErrorClass):
+		return "the library raised " + r.d.ErrorClass + ", which is the harness's or the lab's, not the device's"
+	case r.d.Outcome == "port49_error" && r.d.ErrorClass == "HostKeyError" && slices.Contains(l64HarnessHostKeyCodes, r.d.Code):
+		return "the library refused with " + r.d.Code + " before it contacted the device"
 	}
 	return ""
 }

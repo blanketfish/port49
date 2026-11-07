@@ -71,7 +71,22 @@ func TestL65DriverFaultsAreHarnessErrors(t *testing.T) {
 		{"no result line", l64PyRun{exit: 1}, true},
 		{"connected", l64PyRun{parsed: true, d: l64Driver{Outcome: "connected"}}, false},
 		{"the host key the device presented was refused", l64PyRun{parsed: true, d: l64Driver{Outcome: "error", ErrorClass: "BadHostKeyException"}}, false},
-		{"a port49 refusal", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "Port49Error"}}, false},
+		{"a policy denial", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "Denied"}}, false},
+		{"the broker refused", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "BrokerRefused"}}, false},
+		{"a plain port49 error", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "Port49Error"}}, false},
+		{"a device host key refusal", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "HostKeyError", Code: "host_key_changed"}}, false},
+		{"no agent", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "NoAgent", Code: "no_agent"}}, true},
+		{"port49 not installed", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "NotInstalled"}}, true},
+		{"session over", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "SessionOver"}}, true},
+		{"temporary", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "Temporary"}}, true},
+		{"an OSError", l64PyRun{parsed: true, d: l64Driver{Outcome: "error", ErrorClass: "OSError"}}, true},
+		{"a ValueError", l64PyRun{parsed: true, d: l64Driver{Outcome: "error", ErrorClass: "ValueError"}}, true},
+		{"a RuntimeError", l64PyRun{parsed: true, d: l64Driver{Outcome: "error", ErrorClass: "RuntimeError"}}, true},
+		{"an unreadable ssh_config", l64PyRun{parsed: true, d: l64Driver{Outcome: "error", ErrorClass: "FileNotFoundError"}}, true},
+		{"the library's own config codes", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "HostKeyError", Code: "ssh_config_unread"}}, true},
+		{"known_hosts unread", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "HostKeyError", Code: "known_hosts_unread"}}, true},
+		{"host key uncheckable", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "HostKeyError", Code: "host_key_uncheckable"}}, true},
+		{"host keys not kept", l64PyRun{parsed: true, d: l64Driver{Outcome: "port49_error", ErrorClass: "HostKeyError", Code: "host_keys_not_kept"}}, true},
 	} {
 		if got := l64DriverFault(c.r) != ""; got != c.fault {
 			t.Errorf("%s: fault = %v, want %v", c.name, got, c.fault)
