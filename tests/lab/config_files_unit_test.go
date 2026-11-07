@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/directory"
 	"github.com/blanketfish/port49/internal/fence"
 	"github.com/blanketfish/port49/internal/keyfile"
 	"github.com/blanketfish/port49/internal/policy"
@@ -354,4 +355,46 @@ func TestTheSplitBrokerConfigIsStagedOutsideTheTree(t *testing.T) {
 		}
 	}
 	assertFencedFilesReadable(t, "split broker", br)
+}
+
+// The directory bind's certificate, key, keytab and krb5.conf are read in process through the fence,
+// so the lab hands over private copies (#47).
+func TestTheDirectoryBindFilesAreStagedOutsideTheTree(t *testing.T) {
+	r := labTree(t)
+	pki := filepath.Join(r, "tests", "lab", "logs", "directory", "pki")
+	if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cert, key := filepath.Join(pki, testpki.LabServerCert), filepath.Join(pki, testpki.LabServerKey)
+	kt, krb := filepath.Join(pki, "port49.keytab"), filepath.Join(pki, "krb5.conf")
+	if err := os.WriteFile(kt, []byte{0x05, 0x02, 0x00, 0x00}, 0o600); err != nil { // bytes only: never printed or loaded
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(krb, []byte("[libdefaults]\n default_realm = EXAMPLE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l := &labDir{d: &directories{pki: &dirPKI{brokerCert: cert, brokerKey: key}}, keytabFile: kt, krb5File: krb}
+
+	// Control: the in-tree pair is refused, which is the lab's refusal.
+	if _, err := directory.LoadCredentials(directory.Bind{Mechanism: "external", TLSCertFile: cert, TLSKeyFile: key}, nil); err == nil {
+		t.Fatal("the control: the in-tree key was loaded; the fixture proves nothing")
+	}
+	b := l.bindExternal()
+	if _, err := directory.LoadCredentials(b, nil); err != nil {
+		t.Fatalf("the staged pair is refused: %v", err)
+	}
+	for _, p := range []string{b.TLSCertFile, b.TLSKeyFile} {
+		if _, in := underRoot(p); in {
+			t.Errorf("the external bind names %s, inside the tree", p)
+		}
+	}
+	g := l.bindGSSAPI()
+	for _, p := range []string{g.KeytabFile, g.KRB5Conf} {
+		if _, in := underRoot(p); in {
+			t.Errorf("the gssapi bind names %s, inside the tree", p)
+		}
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("the gssapi bind names %s, which does not exist: %v", p, err)
+		}
+	}
 }

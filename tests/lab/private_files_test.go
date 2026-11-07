@@ -116,3 +116,17 @@ func (p *dirPKI) privateCA() string {
 	}
 	return dst
 }
+
+// privateBroker is the broker's client certificate and key for the directory's EXTERNAL bind as this process
+// loads them (directory.LoadCredentials reads the pair through the fence): private copies. It panics with the
+// path, never the content.
+func (p *dirPKI) privateBroker() (cert, key string) {
+	var err error
+	if cert, err = labPrivateCopy(p.brokerCert); err != nil {
+		panic(fmt.Sprintf("the directory bind certificate %s cannot be staged: %v", p.brokerCert, err))
+	}
+	if key, err = labPrivateCopy(p.brokerKey); err != nil {
+		panic(fmt.Sprintf("the directory bind key %s cannot be staged: %v", p.brokerKey, err))
+	}
+	return cert, key
+}

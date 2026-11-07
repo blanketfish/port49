@@ -596,11 +596,26 @@ func (l *labDir) viaStartTLS() *labDir {
 }
 
 func (l *labDir) bindExternal() directory.Bind {
-	return directory.Bind{Mechanism: "external", TLSCertFile: l.d.pki.brokerCert, TLSKeyFile: l.d.pki.brokerKey}
+	cert, key := l.d.pki.privateBroker()
+	return directory.Bind{Mechanism: "external", TLSCertFile: cert, TLSKeyFile: key}
+}
+
+// privateKerberos is the broker's keytab and the client krb5.conf as this process loads them: private
+// copies, made by path (the keytab is never read into a string, a log or a note).
+func (l *labDir) privateKerberos() (keytab, krb5 string) {
+	var err error
+	if keytab, err = labPrivateCopy(l.keytabFile); err != nil {
+		panic(fmt.Sprintf("the keytab %s cannot be staged: %v", l.keytabFile, err))
+	}
+	if krb5, err = labPrivateCopy(l.krb5File); err != nil {
+		panic(fmt.Sprintf("the krb5.conf %s cannot be staged: %v", l.krb5File, err))
+	}
+	return keytab, krb5
 }
 
 func (l *labDir) bindGSSAPI() directory.Bind {
-	return directory.Bind{Mechanism: "gssapi", KeytabFile: l.keytabFile, Principal: "port49@" + dirRealm, KRB5Conf: l.krb5File}
+	keytab, krb5 := l.privateKerberos()
+	return directory.Bind{Mechanism: "gssapi", KeytabFile: keytab, Principal: "port49@" + dirRealm, KRB5Conf: krb5}
 }
 
 // sanEmail is the weak mapping pinned to the users CA.
