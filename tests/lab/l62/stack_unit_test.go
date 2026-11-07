@@ -5,6 +5,7 @@ package l62
 import (
 	"bytes"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/testpki"
 )
 
@@ -278,5 +281,23 @@ func TestL62UnitHoldEndsOnEnterOrStop(t *testing.T) {
 	go func() { time.Sleep(50 * time.Millisecond); close(stop2) }()
 	if got := holdUntil(pr, stop2); got != "stop" {
 		t.Errorf("signal: %q", got)
+	}
+}
+
+func TestL62UnitPolicyDeclaresItsKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(policyYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dev := admission.Device{Name: "l62-device", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.30.49.10")}}
+	p, err := policy.Load(path, policy.Env{Devices: []admission.Device{dev}})
+	if err != nil {
+		t.Fatalf("the policy does not load: %v", err)
+	}
+	if !p.KeysDeclared() {
+		t.Error("port49-broker refuses a policy with no keys: block (decision 53 ruling 3)")
+	}
+	for _, r := range p.AdmissionRefusals() {
+		t.Errorf("%s is refused: %s", r.Device.Name, r.Refused)
 	}
 }

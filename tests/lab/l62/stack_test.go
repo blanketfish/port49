@@ -73,6 +73,9 @@ subjects:
 grants:
   - {subject: oidc_alice, scope: all_devices, roles: [network_admin], max_privilege: admin}
 key_groups: [{match: {cidr: 172.30.49.0/24}, key_ref: k}]
+keys:
+  k:
+    current: {version: 1, secret_ref: file:/run/port49/keys/tacacs_v1}
 `
 
 // rewriteBrokerConfig turns deploy/compose's port49-broker.yaml (certificate
