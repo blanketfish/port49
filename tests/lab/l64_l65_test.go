@@ -447,6 +447,11 @@ func l64GradeSSHRefusal(r l64Stderr, exit, packets int, other []string) (bool, s
 	return true, ""
 }
 
+// l64WantChanged is the code L65 (c) and (d) must see: a replaced key is host_key_changed. Every platform
+// measured it (the L65 notes before 719721c7), and the codes the library raises before it contacts the device
+// (ssh_config_unread, known_hosts_unread, host_key_uncheckable, host_keys_not_kept) are not that refusal.
+const l64WantChanged = "host_key_changed"
+
 // l64GradePyRefusal reads the L65 (c), (d) and (f) claim: a HostKeyError (of the code wantCode, if one is
 // named), no TACACS+ packet, no record but mint and blob.
 func l64GradePyRefusal(d l64Driver, wantCode string, packets int, other []string) (bool, string) {
@@ -1488,12 +1493,12 @@ func runL64L65(e *l64Env, versions string) {
 	// L65 (c) and (d): the same replacements, through connect.
 	e.replaced("L65c", false, func(ctx context.Context, typ string) (bool, string) {
 		r := e.python(ctx)
-		ok, why := l64GradePyRefusal(r.d, "", r.packets, r.other)
+		ok, why := l64GradePyRefusal(r.d, l64WantChanged, r.packets, r.other)
 		return ok, fmt.Sprintf("`connect(%s)` against an entry replaced by a fresh `%s` key: %s; %s. %s", node, typ, r.said(), r.counts(), why)
 	})
 	e.replaced("L65d", true, func(ctx context.Context, typ string) (bool, string) {
 		r := e.python(ctx)
-		ok, why := l64GradePyRefusal(r.d, "", r.packets, r.other)
+		ok, why := l64GradePyRefusal(r.d, l64WantChanged, r.packets, r.other)
 		return ok, fmt.Sprintf("`connect(%s)` against an entry replaced by a `%s` key, a type other than the filed `%s`: %s; %s. %s",
 			node, typ, e.filedType, r.said(), r.counts(), why)
 	})

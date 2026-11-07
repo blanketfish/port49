@@ -244,3 +244,26 @@ y = port49.Agent(attempts=2)`
 		t.Errorf("lookup keywords = %v", got)
 	}
 }
+
+// L65 (c) and (d) pin the refusal's code: every platform measured host_key_changed (the notes before
+// 719721c7), and a code the library raises before it contacts the device must never pass as the refusal.
+func TestL65ReplacedKeyCellsPinTheirCode(t *testing.T) {
+	b, err := os.ReadFile("l64_l65_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `l64GradePyRefusal(r.d, "",`) {
+		t.Error(`a cell grades its refusal with wantCode "": c and d must pin l64WantChanged`)
+	}
+	if n := strings.Count(string(b), "l64GradePyRefusal(r.d, l64WantChanged,"); n != 2 {
+		t.Errorf("%d cells pin l64WantChanged, want 2 (L65c and L65d)", n)
+	}
+	d := l64Driver{Outcome: "port49_error", ErrorClass: "HostKeyError", Code: "host_keys_not_kept"}
+	if ok, _ := l64GradePyRefusal(d, l64WantChanged, 0, nil); ok {
+		t.Error("host_keys_not_kept passed as a replaced key's refusal")
+	}
+	d.Code = "host_key_changed"
+	if ok, why := l64GradePyRefusal(d, l64WantChanged, 0, nil); !ok {
+		t.Errorf("host_key_changed: %s", why)
+	}
+}
