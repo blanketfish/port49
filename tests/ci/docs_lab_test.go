@@ -174,7 +174,7 @@ func checkOpenEntries(file string, text string, reg map[string]docgen.LabRow, un
 			switch {
 			case !ok:
 				out = append(out, labFinding{file, skipped + i + 1, "unknown_lab_id"})
-			case row.Open && !inWarn && !citesNote(noteNames(resultsNote, line), id, platforms, universe, results):
+			case row.Open && !inWarn && !citesNote(noteNames(markdownLink, line), id, platforms, universe, results):
 				out = append(out, labFinding{file, skipped + i + 1, "open_entry_asserted"})
 			case !row.Open && inWarn:
 				out = append(out, labFinding{file, skipped + i + 1, "closed_entry_unmeasured"})
@@ -298,6 +298,7 @@ type claim struct {
 }
 
 var (
+	heading    = regexp.MustCompile(`^#{1,6} `)
 	listItem   = regexp.MustCompile(`^\s*([-*+]|[0-9]+[.)])\s+`)
 	tableSep   = regexp.MustCompile(`^\|?\s*:?-{3,}`)
 	evidenceH2 = map[string]bool{"What the lab measured": true, "Traps": true}
@@ -357,19 +358,24 @@ func claimsOf(body string, skipped int) (claims []claim, bad []labFinding) {
 			flush()
 			inScope = evidenceH2[strings.TrimSpace(strings.TrimPrefix(raw, "## "))]
 			continue
-		case strings.HasPrefix(raw, "#"):
+		case heading.MatchString(raw):
 			flush()
+			continue
+		case pendingOpen.MatchString(raw):
+			// counted across the whole page, in the checked sections or not
+			flush()
+			pendingCount++
+			if inScope {
+				pending = &claim{Line: n}
+			} else if pendingCount > 1 {
+				bad = append(bad, labFinding{file, n, "second_rerun_note"})
+			}
 			continue
 		case !inScope:
 			continue
 		case warnOpen.MatchString(raw):
 			flush()
 			skipIndent = true
-			continue
-		case pendingOpen.MatchString(raw):
-			flush()
-			pendingCount++
-			pending = &claim{Line: n}
 			continue
 		case admonition.MatchString(raw):
 			flush()
@@ -564,6 +570,14 @@ func builtBlocks(doc []byte) ([]builtBlock, error) {
 			}
 			return
 		}
+		if n.Data == "td" || n.Data == "th" {
+			// the row is the block, so an ID cell and the note cell beside it are one sentence
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				walk(c, unmeasured)
+			}
+			cur.WriteString(" | ")
+			return
+		}
 		if inlineTags[n.Data] {
 			for c := n.FirstChild; c != nil; c = c.NextSibling {
 				walk(c, unmeasured)
@@ -726,13 +740,7 @@ func checkBuiltSite(t *testing.T, siteRoot, docs string, reg map[string]docgen.L
 }
 
 func TestTheBuiltSiteCitesOpenEntriesAsUnmeasured(t *testing.T) {
-	dir := os.Getenv("PORT49_DOCS_SITE")
-	if dir == "" {
-		t.Skip("PORT49_DOCS_SITE is not set; make docs-build and the docs workflow set it")
-	}
-	if _, err := os.Stat(dir); err != nil && !filepath.IsAbs(dir) {
-		dir = filepath.Join(repoRoot, dir)
-	}
+	dir := builtSiteDir(t)
 	reg := loadRegister(t, specPath)
 	findings, pages := checkBuiltSite(t, dir, docsRoot, reg, siteUniverse(t), resultsDir)
 	if pages == 0 {

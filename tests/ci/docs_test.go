@@ -19,6 +19,21 @@ const (
 	docsSnippets = "_snippets"
 )
 
+// builtSiteDir is the built site the tests under PORT49_DOCS_SITE read. The variable is relative to the
+// repository root (docs.yml sets PORT49_DOCS_SITE=site), but go test runs in tests/ci. It skips when the
+// variable is unset.
+func builtSiteDir(t *testing.T) string {
+	t.Helper()
+	dir := os.Getenv("PORT49_DOCS_SITE")
+	if dir == "" {
+		t.Skip("PORT49_DOCS_SITE is not set; make docs-build and the docs workflow set it")
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(repoRoot, dir)
+	}
+	return dir
+}
+
 // sitePages returns every .md under docs/site, slash-separated and relative to it, less the snippets.
 func sitePages(t *testing.T) []string {
 	t.Helper()

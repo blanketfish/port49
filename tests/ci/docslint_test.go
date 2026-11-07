@@ -69,10 +69,7 @@ func TestThePagesPassTheLint(t *testing.T) {
 }
 
 func TestTheBuiltSitePassesTheLint(t *testing.T) {
-	dir := os.Getenv("PORT49_DOCS_SITE")
-	if dir == "" {
-		t.Skip("PORT49_DOCS_SITE is not set; make docs-build and the docs workflow set it")
-	}
+	dir := builtSiteDir(t)
 	site, err := BuiltSite(dir)
 	if err != nil {
 		t.Fatal(err)

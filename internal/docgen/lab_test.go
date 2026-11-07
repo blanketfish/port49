@@ -34,12 +34,18 @@ func TestLabRegisterSplitsEscapedPipes(t *testing.T) {
 		"| ID | Claim | Platforms | Status |\n|---|---|---|---|\n" +
 		"| **L7** | A claim with a `a \\| b` pipe in it | all | closed — measured 2026-01-01; `tests/lab/results/L7-x.md` |\n" +
 		"| **L8** | Another \\| pipe | all | **closed** — measured |\n" +
-		"| **L9a** | Plain | all | open — measure it |\n\n## 16. After\n\n| **L10** | y | open |\n")
+		"| **L9a** | Plain | all | open — measure it |\n" +
+		"| **L11** | x | all | closed \\| still closed here |\n" +
+		"| **L12** | x | all | open — not yet \\| closed — later |\n\n## 16. After\n\n| **L10** | y | open |\n")
 	reg, err := LabRegister(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"L7": false, "L8": false, "L9a": true}
+	// The pipe sits in the Status cell: a split that ignores the backslash changes the last cell.
+	if got := splitCells("| **L12** | x | all | open — not yet \\| closed — later |"); len(got) != 4 {
+		t.Errorf("a row with an escaped pipe split into %d cells %q, want 4", len(got), got)
+	}
+	want := map[string]bool{"L7": false, "L8": false, "L9a": true, "L11": false, "L12": true}
 	if len(reg) != len(want) {
 		t.Errorf("got %d rows %v, want %d", len(reg), reg, len(want))
 	}
