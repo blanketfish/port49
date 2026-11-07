@@ -346,7 +346,7 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 	var rendered []string
 	for _, shape := range shapes {
 		fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
-		b.WriteString(l.projectionShape(t, v, port49, pki, inv.Devices, shape.name, shape.roles, shape.want,
+		b.WriteString(l.projectionShape(t, v, port49, pki, inv, shape.name, shape.roles, shape.want,
 			netconfOff, probes, &rendered))
 	}
 	b.WriteString("\n### the commit checker (L9)\n\n")
@@ -383,8 +383,15 @@ func projectionPolicy(set, roles string) string {
 		", enable: none, token_ttl: 60s}\ngrants:\n  - {subject: slice_operator, scope: all_devices, roles: [r]}\n" + labPolicyKeys
 }
 
+// loadProjectionPolicy loads a projection shape's policy as port49d does: with the inventory's devices and its
+// key groups, which the policy file does not carry. Without them no device matches a key group and every
+// resolve is refused.
+func loadProjectionPolicy(path string, inv admission.Inventory) (*policy.Policy, error) {
+	return policy.Load(path, policy.Env{Devices: inv.Devices, InventoryKeyGroups: inv.KeyGroups})
+}
+
 // projectionShape runs one shape and renders its section of the note.
-func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []admission.Device, name, roles string,
+func (l *lab) projectionShape(t *testing.T, set, port49, pki string, inv admission.Inventory, name, roles string,
 	want string, netconfOff bool, probes []projectionProbe, rendered *[]string) string {
 	t.Helper()
 	// The lab's rules before each row: the STOP sentinel and the disk floor.
@@ -396,7 +403,7 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pol, err := policy.Load(path, policy.Env{Devices: devices})
+	pol, err := loadProjectionPolicy(path, inv)
 	if err != nil {
 		t.Fatalf("%s: the shape's policy does not load: %v", name, err)
 	}

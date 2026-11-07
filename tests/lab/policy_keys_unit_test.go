@@ -3,12 +3,14 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blanketfish/port49/internal/admission"
 	"github.com/blanketfish/port49/internal/policy"
@@ -307,5 +309,30 @@ func TestQualConfigRewritesThePrivateInventory(t *testing.T) {
 	p, r := strings.Index(body, "privatePolicy("), strings.Index(body, "qualPrivateInventory(priv)")
 	if r < 0 || p < 0 || r < p {
 		t.Errorf("config must call qualPrivateInventory(priv) after privatePolicy (positions %d, %d)", r, p)
+	}
+}
+
+// projectionShape loads its policy through loadProjectionPolicy with the inventory's devices and key groups.
+// Without the key groups no device matches one, and the first shape's resolve fails with "admission refuses the
+// device" (vjunos, 2026-11-07).
+func TestProjectionPolicyLoadedWithTheInventoryAdmitsTheLabNodes(t *testing.T) {
+	inv := labInventoryForUnit(t)
+	path := filepath.Join(t.TempDir(), "projection.yaml")
+	roles := "  - {name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show configuration **\"]}"
+	if err := os.WriteFile(path, []byte(projectionPolicy("1.2.0", roles)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol, err := loadProjectionPolicy(path, inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"leaf1", "srx1", "vsrx1", "nx1", "xe1"} {
+		device, ok := pol.Device(name)
+		if !ok {
+			t.Fatalf("%s is not in the inventory", name)
+		}
+		if _, err := pol.ResolveSubject("slice_operator", device, time.Now()); errors.Is(err, policy.ErrDeviceRefused) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
