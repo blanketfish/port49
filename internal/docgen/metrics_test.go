@@ -109,7 +109,7 @@ func TestMetricsPageLinksAlertsAndCollapsesProcessSeries(t *testing.T) {
 	for _, want := range []string{
 		Header, "## store", "## connections",
 		"| `port49_store_calls_total` | counter | `outcome` | Store calls. |  |",
-		"[port49_near_cap](alerts.md#port49_near_cap)",
+		"[port49_near_cap](alerts.md)",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q:\n%s", want, page)
@@ -127,7 +127,7 @@ func TestMetricsPageLinksAlertsAndCollapsesProcessSeries(t *testing.T) {
 func TestAlertMatchIsByWholeName(t *testing.T) {
 	ms := []Metric{{Name: "port49_store_calls", Kind: "counter", Help: "h"}}
 	as := []Alert{{Name: "a", Expr: "rate(port49_store_calls_total[5m]) > 0"}}
-	if strings.Contains(MetricsPage(ms, as), "alerts.md#a") {
+	if strings.Contains(MetricsPage(ms, as), "[a](alerts.md)") {
 		t.Error("alert on port49_store_calls_total linked to port49_store_calls")
 	}
 }
