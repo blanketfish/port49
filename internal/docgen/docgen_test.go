@@ -131,8 +131,36 @@ func TestSchemasDecodeTheShippedExamples(t *testing.T) {
 			}
 		}
 	}
-	if checked < 10 {
+	// Files whose name is not their schema's.
+	for _, f := range []struct{ schema, path string }{
+		{"policy.yaml", "deploy/device-aaa/policy-platforms.yaml"},
+		{"config.yaml", "packaging/client/config.yaml"},
+	} {
+		for _, s := range Schemas() {
+			if s.File != f.schema {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(f.path)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			checked++
+			if err := s.Decode(raw); err != nil {
+				t.Errorf("%s does not decode as %s: %v", f.path, f.schema, err)
+			}
+		}
+	}
+	if checked < 12 {
 		t.Errorf("decoded only %d shipped files; the deploy trees moved", checked)
+	}
+}
+
+// The loader spells two refusals `keys:` and `policy:`; the reference table names keys, not error text.
+func TestTheBrokerRefusalTableNamesKeysWithoutColons(t *testing.T) {
+	for _, line := range strings.Split(BrokerSection(), "\n") {
+		if strings.HasPrefix(line, "| `") && strings.Contains(strings.SplitN(line, "|", 3)[1], ":`") {
+			t.Errorf("a refused key is written with a colon: %s", line)
+		}
 	}
 }
 

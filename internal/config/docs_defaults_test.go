@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,7 +50,28 @@ func TestTheDocsDescribeTheseDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for key, want := range map[string]string{
+	// The broker's defaults come from a config with a broker block and an identity block, whose human
+	// OIDC verifier gets the empty issuance block it needs (brokerWithIdentity).
+	bc, err := loadWith(t, brokerWithIdentity(twoLists))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, id := bc.Broker, bc.Broker.Identity
+
+	want := map[string]string{
+		"inventory.max_removed_percent":                 strconv.Itoa(bc.MaxRemovedPercent),
+		"broker.batch_max":                              strconv.Itoa(b.BatchMax),
+		"broker.policy_watch_interval":                  shown(b.PolicyWatchInterval),
+		"broker.max_conns_per_principal":                strconv.Itoa(b.MaxConnsPerPrincipal),
+		"broker.max_pending_conns_per_source":           strconv.Itoa(b.MaxPendingConnsPerSource),
+		"broker.refresh_interval":                       shown(b.RefreshInterval),
+		"broker.identity.clock_skew":                    shown(id.Timing.ClockSkew),
+		"broker.identity.max_token_age":                 shown(id.Timing.MaxTokenAge),
+		"broker.identity.jwks_refresh_interval":         shown(id.Timing.JWKSRefresh),
+		"broker.identity.jwks_max_age":                  shown(id.Timing.JWKSMaxAge),
+		"broker.identity.issuance.certificate_lifetime": shown(id.Issuance.CertificateLifetime),
+	}
+	for key, v := range map[string]string{
 		"listen":                          c.Listen,
 		"metrics_listen":                  c.MetricsListen,
 		"limits.per_nas_connections":      strconv.Itoa(c.Limits.PerNASConnections),
@@ -72,13 +94,21 @@ func TestTheDocsDescribeTheseDefaults(t *testing.T) {
 		"session.staleness_ceiling":       shown(c.Session.StalenessCeiling),
 		"token.candidate_cap":             strconv.Itoa(c.Token.CandidateCap),
 	} {
+		want[key] = v
+	}
+	keys := make([]string, 0, len(want))
+	for k := range want {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
 		d, ok := desc[key]
 		if !ok {
 			t.Errorf("%s has no description", key)
 			continue
 		}
-		if !strings.Contains(d, "Default `"+want+"`") {
-			t.Errorf("%s: the loader's default is %q, and the description does not say Default `%s`", key, want, want)
+		if !strings.Contains(d, "Default `"+want[key]+"`") {
+			t.Errorf("%s: the loader's default is %q, and the description does not say Default `%s`", key, want[key], want[key])
 		}
 	}
 }

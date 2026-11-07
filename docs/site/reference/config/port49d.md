@@ -259,7 +259,7 @@ port49d reads `port49d.yaml` once, at start, and `port49-broker.yaml` is the sam
 | `lab.session_attributes` | list of string | Test lab only; leave it out in production. Attributes attached to a permitted session authorization reply of a seeded context. Not accepted in `port49-broker.yaml`. Needs a restart. |
 | `lab.command_attributes` | list of string | Test lab only. Attributes attached to a permitted per-command authorization reply, a separate list from `session_attributes` because the lab asks the same question of each reply separately. Not accepted in `port49-broker.yaml`. Needs a restart. |
 | `lab.deny_prefixes` | list of string | Test lab only. Commands the lab denies by prefix, matched on a token boundary: `show` denies `show version` but not `shower`. Not accepted in `port49-broker.yaml`. Needs a restart. |
-| `lab.fault_file` | string | Test lab only. A file naming the fault in force, re-read on every request; absent means no fault. Not accepted in `port49-broker.yaml`. Needs a restart. |
+| `lab.fault_file` | string | Test lab only. A file naming the fault in force. Its contents are read each time the switch is checked, so editing it takes effect at once; an absent file means no fault. Not accepted in `port49-broker.yaml`. The path itself needs a restart. |
 | `lab.seed_token_file` | string | Test lab only. Where port49d writes the token pairs it mints for `seed_tokens`, one JSON object per line, mode 0600. Required when `seed_tokens` is non-empty. Needs a restart. |
 | `lab.seed_tokens.[].nas` | string | Test lab only. The device address the seeded token is for. Required. |
 | `lab.seed_tokens.[].username` | string | Test lab only. The username the seeded token is for. Required. |
@@ -360,14 +360,14 @@ port49d reads `port49d.yaml` once, at start, and `port49-broker.yaml` is the sam
 |---|---|
 | `listen` | port49-broker never speaks TACACS+; that is port49d's |
 | `tls_listener` | port49-broker never speaks TACACS+; that is port49d's |
-| `keys:` | device keys are the policy file's keys: block |
+| `keys` | device keys are the policy file's keys: block |
 | `key_secret_refs` | port49-broker reads key names, never a key's secret |
 | `accounting` | accounting is port49d's |
 | `limits` | TACACS+ limits are port49d's |
 | `receipt_idle_ttl` | receipts are port49d's |
 | `receipt_max_age` | receipts are port49d's |
 | `platforms` | session services are port49d's |
-| `policy:` | port49-broker's policy is broker.policy_file |
+| `policy` | port49-broker's policy is broker.policy_file |
 | `broker.revocations_file` | on etcd the store keeps the marks (decision 36); remove it |
 | `stores.directory.etcd.daemon` | the daemon's etcd identity is port49d's alone |
 | `stores.session.etcd.daemon` | the daemon's etcd identity is port49d's alone |

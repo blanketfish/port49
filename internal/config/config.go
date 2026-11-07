@@ -801,52 +801,9 @@ func load(path string, role Role) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// Before the strict decode, because KnownFields(true) refuses `secret:` and
-	// `kind:` under a seed with "field secret not found in type
-	// config.SeedToken" — true, and no help at all to an operator whose lab
-	// logins stopped working. staleSeedKeys names the replacement instead.
-	if err := staleSeedKeys(raw); err != nil {
+	f, err := decodeChecked(raw, role, path)
+	if err != nil {
 		return Config{}, err
-	}
-	// KnownFields: this file is read once, at start, and every key in it
-	// changes how the daemon answers devices. Silently ignoring an unknown one
-	// turns `per_nas_conections: 4` into the default 32 and `retire:` into a
-	// dropped key version — both invisible until a device is affected by them.
-	var f fileConfig
-	if err := decodeFile(raw, &f); err != nil {
-		return Config{}, fmt.Errorf("config: %s: %w", path, err)
-	}
-	// `tls_listener:` with nothing under it decodes to nil, the same as no
-	// block: an operator who wrote the key meant a listener, so it is said.
-	var tlsKey struct {
-		TLSListener yaml.Node `yaml:"tls_listener"`
-	}
-	if err := yaml.Unmarshal(raw, &tlsKey); err == nil && tlsKey.TLSListener.Kind == yaml.ScalarNode &&
-		tlsKey.TLSListener.Tag == "!!null" {
-		if role == RoleBroker {
-			f.TLSListener = &tlsListenerYAML{} // brokerRefusals says it is port49d's
-		} else {
-			return Config{}, errors.New("config: tls_listener is empty: name cert_file, key_file, client_ca_file and " +
-				"certificate_status, or remove the key")
-		}
-	}
-	switch role {
-	case RoleBroker:
-		if err := brokerRefusals(f); err != nil {
-			return Config{}, err
-		}
-	default:
-		// Each is port49-broker.yaml's, and would be ignored here.
-		if f.Broker != nil && f.Broker.StateDir != "" {
-			return Config{}, errors.New("config: broker.state_dir is port49-broker.yaml's: the in-process broker " +
-				"keeps its CRLs beside broker.revocations_file; remove it (plan 7e)")
-		}
-	}
-
-	if f.ReceiptTTL != 0 {
-		return Config{}, fmt.Errorf("config: receipt_ttl was replaced by receipt_idle_ttl (default 15m) " +
-			"and receipt_max_age (default 2h) when the receipt became a sliding window (spec §13, decision 15); " +
-			"remove the key and set those")
 	}
 
 	c := Config{
@@ -1899,36 +1856,70 @@ func FileSchema() any { return fileConfig{} }
 // the stale lab seed keys, receipt_ttl and, under the daemon's role, broker.state_dir. It reads no
 // secret and no inventory, so it is what the docs check runs a config example through.
 func DecodeStrict(raw []byte) error {
-	f, err := decodeStrict(raw)
-	if err != nil {
-		return err
-	}
-	if f.Broker != nil && f.Broker.StateDir != "" {
-		return errors.New("config: broker.state_dir is port49-broker.yaml's: the in-process broker " +
-			"keeps its CRLs beside broker.revocations_file; remove it (plan 7e)")
-	}
-	return nil
+	_, err := decodeChecked(raw, RoleDaemon, "")
+	return err
 }
 
 // DecodeStrictBroker is DecodeStrict under the broker's role: it refuses what brokerRefusals refuses.
 func DecodeStrictBroker(raw []byte) error {
-	f, err := decodeStrict(raw)
-	if err != nil {
-		return err
-	}
-	return brokerRefusals(f)
+	_, err := decodeChecked(raw, RoleBroker, "")
+	return err
 }
 
-func decodeStrict(raw []byte) (fileConfig, error) {
+// decodeChecked is every refusal of load that needs only the file's bytes, in load's order: a lab seed
+// key that was replaced, an unknown key or second document, an empty tls_listener, what the role may not
+// name, and receipt_ttl. load and the two Decode functions call it, so they cannot drift. path names the
+// file in a decode error; "" leaves it out.
+func decodeChecked(raw []byte, role Role, path string) (fileConfig, error) {
 	var f fileConfig
+	// Before the strict decode, because KnownFields(true) refuses `secret:` and
+	// `kind:` under a seed with "field secret not found in type
+	// config.SeedToken" — true, and no help at all to an operator whose lab
+	// logins stopped working. staleSeedKeys names the replacement instead.
 	if err := staleSeedKeys(raw); err != nil {
 		return f, err
 	}
+	// KnownFields: this file is read once, at start, and every key in it
+	// changes how the daemon answers devices. Silently ignoring an unknown one
+	// turns `per_nas_conections: 4` into the default 32 and `retire:` into a
+	// dropped key version — both invisible until a device is affected by them.
 	if err := decodeFile(raw, &f); err != nil {
-		return f, fmt.Errorf("config: %w", err)
+		if path == "" {
+			return f, fmt.Errorf("config: %w", err)
+		}
+		return f, fmt.Errorf("config: %s: %w", path, err)
 	}
+	// `tls_listener:` with nothing under it decodes to nil, the same as no
+	// block: an operator who wrote the key meant a listener, so it is said.
+	var tlsKey struct {
+		TLSListener yaml.Node `yaml:"tls_listener"`
+	}
+	if err := yaml.Unmarshal(raw, &tlsKey); err == nil && tlsKey.TLSListener.Kind == yaml.ScalarNode &&
+		tlsKey.TLSListener.Tag == "!!null" {
+		if role == RoleBroker {
+			f.TLSListener = &tlsListenerYAML{} // brokerRefusals says it is port49d's
+		} else {
+			return f, errors.New("config: tls_listener is empty: name cert_file, key_file, client_ca_file and " +
+				"certificate_status, or remove the key")
+		}
+	}
+	switch role {
+	case RoleBroker:
+		if err := brokerRefusals(f); err != nil {
+			return f, err
+		}
+	default:
+		// Each is port49-broker.yaml's, and would be ignored here.
+		if f.Broker != nil && f.Broker.StateDir != "" {
+			return f, errors.New("config: broker.state_dir is port49-broker.yaml's: the in-process broker " +
+				"keeps its CRLs beside broker.revocations_file; remove it (plan 7e)")
+		}
+	}
+
 	if f.ReceiptTTL != 0 {
-		return f, errors.New("config: receipt_ttl was replaced by receipt_idle_ttl and receipt_max_age")
+		return f, fmt.Errorf("config: receipt_ttl was replaced by receipt_idle_ttl (default 15m) " +
+			"and receipt_max_age (default 2h) when the receipt became a sliding window (spec §13, decision 15); " +
+			"remove the key and set those")
 	}
 	return f, nil
 }

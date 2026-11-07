@@ -150,7 +150,8 @@ func BrokerSection() string {
 		"their own block rather than by this table; the entries above mark them \"port49d.yaml only\".\n\n" +
 		"| Refused key | Why |\n|---|---|\n")
 	for _, r := range config.BrokerRefusals() {
-		fmt.Fprintf(&b, "| `%s` | %s |\n", r.Key, cell(r.Why))
+		// The loader spells a block it refuses `keys:`; the table names the key.
+		fmt.Fprintf(&b, "| `%s` | %s |\n", strings.TrimSuffix(r.Key, ":"), cell(r.Why))
 	}
 	return b.String()
 }

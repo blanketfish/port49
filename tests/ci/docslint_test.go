@@ -610,6 +610,35 @@ func TestTheExampleScannerFindsTitledBlocks(t *testing.T) {
 	}
 }
 
+// The titles port49d.yaml and port49-broker.yaml are two files of one schema, told apart by the role
+// each is read under. These fixtures go through decodeExample, so they prove Schemas wires each title
+// to its own role's decode, not only that the decodes refuse.
+func TestTheConfigExamplesAreHeldToTheirFilesRole(t *testing.T) {
+	for _, tc := range []struct {
+		file, body string
+		ok         bool
+	}{
+		// Split, so the repository's scan for a config that still sets the removed key (adminsocket_test.go)
+		// does not read the fixture as one.
+		{"port49d.yaml", "admin_" + "socket: /run/x\n", false},
+		{"port49-broker.yaml", "admin_" + "socket: /run/x\n", false},
+		{"port49-broker.yaml", "listen: \":49\"\n", false},
+		{"port49d.yaml", "broker:\n  state_dir: /x\n", false},
+		{"port49d.yaml", "tls_listener:\n", false},
+		{"port49-broker.yaml", "tls_listener:\n", false},
+		{"port49d.yaml", "listen: \":49\"\n", true},
+		{"port49-broker.yaml", "broker:\n  state_dir: /x\n", true},
+	} {
+		err := decodeExample(configExample{File: tc.file, Body: []byte(tc.body)})
+		switch {
+		case tc.ok && err != nil:
+			t.Errorf("%s: %q was refused: %v", tc.file, tc.body, err)
+		case !tc.ok && err == nil:
+			t.Errorf("%s: %q was accepted", tc.file, tc.body)
+		}
+	}
+}
+
 func TestEveryConfigExampleDecodes(t *testing.T) {
 	pages, err := DocSources(repoRoot)
 	if err != nil {

@@ -211,7 +211,7 @@ broker.refresh_interval: "How often the broker re-verifies every live principal 
 lab.session_attributes: "Test lab only; leave it out in production. Attributes attached to a permitted session authorization reply of a seeded context. Not accepted in `port49-broker.yaml`. Needs a restart."
 lab.command_attributes: "Test lab only. Attributes attached to a permitted per-command authorization reply, a separate list from `session_attributes` because the lab asks the same question of each reply separately. Not accepted in `port49-broker.yaml`. Needs a restart."
 lab.deny_prefixes: "Test lab only. Commands the lab denies by prefix, matched on a token boundary: `show` denies `show version` but not `shower`. Not accepted in `port49-broker.yaml`. Needs a restart."
-lab.fault_file: "Test lab only. A file naming the fault in force, re-read on every request; absent means no fault. Not accepted in `port49-broker.yaml`. Needs a restart."
+lab.fault_file: "Test lab only. A file naming the fault in force. Its contents are read each time the switch is checked, so editing it takes effect at once; an absent file means no fault. Not accepted in `port49-broker.yaml`. The path itself needs a restart."
 lab.seed_token_file: "Test lab only. Where port49d writes the token pairs it mints for `seed_tokens`, one JSON object per line, mode 0600. Required when `seed_tokens` is non-empty. Needs a restart."
 lab.seed_tokens.[].nas: "Test lab only. The device address the seeded token is for. Required."
 lab.seed_tokens.[].username: "Test lab only. The username the seeded token is for. Required."
