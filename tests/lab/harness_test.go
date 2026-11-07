@@ -535,13 +535,18 @@ func (l *lab) deploy() {
 	}
 	fmt.Fprintf(os.Stderr, "lab: %s: deploying %s\n", l.p.name, l.p.topo)
 	start := time.Now()
-	if err := l.up(); err != nil {
+	clock := bootClock{name: l.p.name, start: start}
+	clock.log(phaseDeployStart)
+	logHostSample(l.p.name, phaseDeployStart)
+	if err := l.up(clock); err != nil {
 		l.err = err
 		fmt.Fprintf(os.Stderr, "lab: %s: setup failed after %v: %v\n", l.p.name, time.Since(start).Round(time.Second), err)
+		logHostSample(l.p.name, phaseFailed)
 		l.diagnose()
 		return
 	}
 	fmt.Fprintf(os.Stderr, "lab: %s: ready after %v\n", l.p.name, time.Since(start).Round(time.Second))
+	logHostSample(l.p.name, phaseReady)
 }
 
 // platformSelection reads PORT49_LAB_PLATFORMS once and says both which
@@ -708,7 +713,7 @@ func (l *lab) checkStartupConfigASCII() error {
 	return nil
 }
 
-func (l *lab) up() error {
+func (l *lab) up(clock bootClock) error {
 	if err := l.checkStartupConfigASCII(); err != nil {
 		return err
 	}
@@ -718,6 +723,7 @@ func (l *lab) up() error {
 		return fmt.Errorf("containerlab deploy: %w\n%s", err, out)
 	}
 	l.deployed = true
+	clock.log(phaseDeployDone)
 
 	// Readiness is the device serving SSH authentication, proved by a breakglass
 	// login or by an authentication rejection — see waitDeviceReady for why a
@@ -733,6 +739,9 @@ func (l *lab) up() error {
 	deadline := time.Now().Add(l.p.boot)
 	if err := waitSSH(l.p.addr, min(2*time.Minute, time.Until(deadline))); err != nil {
 		fmt.Fprintf(os.Stderr, "lab: %s: no SSH banner yet (%v); still waiting for authentication\n", l.p.name, err)
+		clock.log(phaseSSHBanner + "_missed")
+	} else {
+		clock.log(phaseSSHBanner)
 	}
 	// The gate gets the whole remaining boot budget, and the reason is a run
 	// that was thrown away. It used to be capped at 8 minutes, on the theory
@@ -749,6 +758,9 @@ func (l *lab) up() error {
 		// against a device in this state carries the caveat.
 		l.configWarn = err.Error()
 		fmt.Fprintf(os.Stderr, "lab: %s: WARNING: %v\n", l.p.name, err)
+		clock.log(phaseSSHAuth + "_missed")
+	} else {
+		clock.log(phaseSSHAuth)
 	}
 
 	// An L71 help cell needs only the break-glass CLI: the image has no
@@ -769,7 +781,12 @@ func (l *lab) up() error {
 	// The gate that actually decides. See waitTACACSReady: everything above
 	// proves sshd is serving, and nothing above proves the device is using
 	// TACACS+ yet.
-	return l.waitTACACSReady(tacacsReadyBudget)
+	if err := l.waitTACACSReady(tacacsReadyBudget); err != nil {
+		clock.log(phaseTACACSSeen + "_missed")
+		return err
+	}
+	clock.log(phaseTACACSSeen)
+	return nil
 }
 
 // tacacsReadyBudget is how long a device is given, after its SSH authentication
