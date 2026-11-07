@@ -244,3 +244,68 @@ func TestL28StatusArgsNameNoRemovedFlag(t *testing.T) {
 		}
 	}
 }
+
+// The qualify run's private inventory is the lab inventory with its one
+// key_ref rewritten to the qual policy's k, whatever device the run is on.
+func TestQualPrivateInventoryAssignsEveryDeviceTheQualKey(t *testing.T) {
+	priv := filepath.Join(t.TempDir(), "priv")
+	pol, err := filepath.Abs(filepath.Join("..", "qual", "qual-policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	invSrc, err := filepath.Abs("inventory-lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := "# qual\n  policy_file: " + pol + "\ninventory_file: " + invSrc + "\n"
+	if _, err := privatePolicy(cfg, priv); err != nil {
+		t.Fatal(err)
+	}
+	if err := qualPrivateInventory(priv); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(priv, "inventory.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "key_ref: lab_key") || !strings.Contains(string(raw), "key_ref: k") {
+		t.Errorf("the private inventory still assigns lab_key, or never assigns k")
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("private inventory mode: %v %v, want 0600", fi, err)
+	}
+	// And it is the inventory the qual policy admits.
+	inv, err := admission.ParseFile(raw, "inventory.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	praw, err := os.ReadFile(filepath.Join("..", "qual", "qual-policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPolicyAdmits(t, "qual policy, private inventory", string(praw), inv, labRefusalsControl(t))
+}
+
+// (*qualEnv).config is device-only, so the unit tests cannot call it; this
+// holds its call to qualPrivateInventory, after privatePolicy has copied the
+// inventory.
+func TestQualConfigRewritesThePrivateInventory(t *testing.T) {
+	b, err := os.ReadFile("qualify_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	i := strings.Index(s, "func (q *qualEnv) config(")
+	if i < 0 {
+		t.Fatal("(*qualEnv).config not found")
+	}
+	body := s[i:]
+	if j := strings.Index(body, "\n}\n"); j >= 0 {
+		body = body[:j]
+	}
+	p, r := strings.Index(body, "privatePolicy("), strings.Index(body, "qualPrivateInventory(priv)")
+	if r < 0 || p < 0 || r < p {
+		t.Errorf("config must call qualPrivateInventory(priv) after privatePolicy (positions %d, %d)", r, p)
+	}
+}

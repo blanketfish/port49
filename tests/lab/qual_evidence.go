@@ -31,6 +31,21 @@ func qualInventory(inv string) (string, error) {
 	return strings.Replace(inv, from, "key_ref: k", 1), nil
 }
 
+// qualPrivateInventory rewrites the private inventory.yaml in priv (what
+// privatePolicy copied) through qualInventory, at 0600.
+func qualPrivateInventory(priv string) error {
+	path := filepath.Join(priv, "inventory.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	text, err := qualInventory(string(raw))
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(text), 0o600)
+}
+
 type qualCell struct {
 	Name string
 	Rows []string
