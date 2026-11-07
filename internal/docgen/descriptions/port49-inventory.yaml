@@ -18,7 +18,7 @@ client_ca_file: "Required. The CA that issues the certificates of readers and sy
 readers: "Identities that may read the bundle: `user:<email>` in lowercase or a certificate's URI SAN such as `spiffe://...`. `readers` or `syncers` must name someone."
 syncers: "Identities that may read the bundle and start a sync (`POST /v1/sync`). Same form as `readers`."
 signing_key_file: "Required. The private key that signs the bundle."
-verify_key_files: "Further public keys the service accepts for its own state directory and mirror: the old signing key's during a rotation, so the sequence and the bound survive it. The service's own public key is always accepted. Re-read on SIGHUP."
+verify_key_files: "Further public keys the service accepts for its own state directory and mirror: the old signing key's during a rotation, so the sequence and the bound survive it. The service's own public key is always accepted. Read once, at start, so a change needs a restart: SIGHUP starts a sync and does not re-read it."
 sync_timeout: "How long one sync may run before it is cut off. Default `5m`; `10s` to `1h`."
 policy_file: "Required. The policy file the service validates a bundle against before serving it."
 state_dir: "Required. Where the service keeps its state. Must not contain or be inside `mirror_dir`."

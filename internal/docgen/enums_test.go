@@ -78,6 +78,19 @@ func enumKeys() []enumKey {
 				return policyBody(t, "scopes:\n  - {name: s, match: {site: x}, on_missing: "+v+"}\n")
 			}},
 		{file: "policy.yaml", key: "subjects.[].enable", accept: []string{"none", "auto", "token"}, loads: enable},
+		{file: "policy.yaml", key: "tests.[].expect", accept: []string{"permit", "deny"},
+			loads: func(t *testing.T, v string) bool {
+				return policyBody(t, "subjects:\n  - {name: a, group: g}\ntests:\n  - {subject: a, device: d, command: show version, expect: "+v+"}\n")
+			}},
+		{file: "policy.yaml", key: "tests.[].enable", accept: []string{"none", "auto", "token"},
+			others: []string{"auto"},
+			loads: func(t *testing.T, v string) bool {
+				return policyBody(t, "subjects:\n  - {name: a, group: g}\ntests:\n  - {subject: a, device: d, enable: "+v+"}\n")
+			}},
+		{file: "policy.yaml", key: "subjects.[].api",
+			accept: []string{policy.RightRevokeOthers, policy.RightExplainOthers, policy.RightLiftRevocations,
+				policy.RightForgetPrincipals, policy.RightResetSecondFactor, policy.RightUnlockSignIn,
+				policy.RightImportEnrollments, policy.RightSync, policy.RightKeysShow, policy.RightReplay}},
 		{file: "policy.yaml", key: "defaults.per_login_mfa.accept", accept: mfa,
 			others: []string{"per_login_mfa"}, loads: mfaLoads},
 		{file: "config.yaml", key: "method", accept: []string{"x509", "oidc", "directory"}, loads: userconfigKey("method")},

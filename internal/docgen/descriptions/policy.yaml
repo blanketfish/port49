@@ -123,7 +123,7 @@ defaults.per_login_mfa.applies_to_machines: &mfa_machines "Set `true` to require
 "key_groups.[].key_ref": "The key (a name under `keys:`) that devices in the group are admitted under. Required. It names the key and never holds it."
 
 "keys.<name>.current.version": &key_version "Version number, `1` or greater and unique within the key. The key name is lowercase letters, digits and `_`, starting with a letter."
-"keys.<name>.current.secret_ref": &key_ref "Where the shared secret is read from: `env:NAME` or `file:/absolute/path`. Required. The secret itself never appears in this file."
+"keys.<name>.current.secret_ref": &key_ref "Where the shared secret is read from: `env:NAME` or `file:/absolute/path`. Required. The secret itself never appears in this file. port49d reads each version's secret once, when the version comes into force (at start, or in a policy reload that adds it); later reads, at SIGHUP and every 30s, only report a file that has changed or can no longer be read, and port49d keeps the secret it read. A changed secret goes in a new file under a new version."
 "keys.<name>.current.retire_after": &key_retire "Not allowed on the current version or a retired one. On an `accept` version, the last day (UTC, `YYYY-MM-DD`) it still admits; it is refused from midnight after that day."
 "keys.<name>.accept.[].version": *key_version
 "keys.<name>.accept.[].secret_ref": *key_ref

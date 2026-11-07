@@ -1853,8 +1853,9 @@ func FileSchema() any { return fileConfig{} }
 
 // DecodeStrict is Load's decode of a port49d.yaml's bytes and the refusals that need no other file: an
 // unknown key, a second document, the keys decision 53 removed (admin_socket, secret_env, key_refs),
-// the stale lab seed keys, receipt_ttl and, under the daemon's role, broker.state_dir. It reads no
-// secret and no inventory, so it is what the docs check runs a config example through.
+// the stale lab seed keys, an empty tls_listener, receipt_ttl and, under the daemon's role,
+// broker.state_dir. It reads no secret and no inventory, so it is what the docs check runs a config
+// example through.
 func DecodeStrict(raw []byte) error {
 	_, err := decodeChecked(raw, RoleDaemon, "")
 	return err
