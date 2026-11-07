@@ -72,7 +72,7 @@
 - [Reason codes](https://blanketfish.github.io/port49/reference/reason-codes/): The closed list of reason codes a decision can carry, and what each means.
 - [Decision log](https://blanketfish.github.io/port49/reference/decision-log/): The fields of the decision log, one line per decision, and how to query it.
 - [Metrics](https://blanketfish.github.io/port49/reference/metrics/): Every metric port49 exports, with its type, labels and meaning.
-- [Alerts](https://blanketfish.github.io/port49/reference/alerts/): Every shipped alert rule, what fires it and what to do about it.
+- [Alerts](https://blanketfish.github.io/port49/reference/alerts/): Every shipped alert rule: its severity, its expression and why its threshold is what it is.
 
 ## Contributing
 

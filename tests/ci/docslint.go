@@ -83,6 +83,15 @@ type lintRule struct {
 
 var labResultPath = regexp.MustCompile(`tests/lab/results/[A-Za-z0-9._/-]+`)
 
+// labNoteExists reports whether m, a match of labResultPath, names a file in the repository. A trailing
+// dot or dash is the sentence's, not the path's. Only an existing note's file name may carry a host name
+// past the lint: an invented path must not.
+func labNoteExists(m string) bool {
+	_, self, _, _ := runtime.Caller(0)
+	info, err := os.Stat(filepath.Join(filepath.Dir(self), "..", "..", filepath.FromSlash(strings.TrimRight(m, ".-"))))
+	return err == nil && info.Mode().IsRegular()
+}
+
 var lintRules = []lintRule{
 	{"token_shaped", regexp.MustCompile(`[0-9A-Za-z]{20,}`), func(m string) bool {
 		// A device token is 30 base62 characters. A placeholder (all x, X or 0) is allowed; a run
@@ -147,8 +156,13 @@ func LintText(name string, text []byte) []Finding {
 	for _, r := range lintRules {
 		src := s
 		if r.name == "lab_host" {
-			// A results note's file name (load-beehive-gates.md) is a path, not a host.
-			src = labResultPath.ReplaceAllStringFunc(s, func(m string) string { return strings.Repeat(" ", len(m)) })
+			// An existing results note's file name (load-beehive-gates.md) is a path, not a host.
+			src = labResultPath.ReplaceAllStringFunc(s, func(m string) string {
+				if !labNoteExists(m) {
+					return m
+				}
+				return strings.Repeat(" ", len(m))
+			})
 		}
 		for _, m := range r.re.FindAllStringIndex(src, -1) {
 			if r.ok == nil || !r.ok(src[m[0]:m[1]]) {

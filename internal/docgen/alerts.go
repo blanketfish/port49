@@ -19,7 +19,8 @@ var readmeAlertRow = regexp.MustCompile("^\\| (.*?) \\| `([a-z0-9_]+)` \\| (?:pa
 
 // AlertsPage is the reference page for the shipped alert rules: the README's introduction, then one
 // section per rule in the file's order, anchored by the alert's name so a rule's runbook_url can name it.
-// It fails, naming them all, if a rule has no row in the README or the README has no intro section.
+// It fails, naming them all, if a rule has no row in the README, and fails if the README lacks its intro
+// section, its "## The rules" or "## Notes" heading, or its table.
 func AlertsPage(as []Alert, readme []byte) (string, error) {
 	text := string(readme)
 	start := strings.Index(text, introStart)
@@ -28,6 +29,24 @@ func AlertsPage(as []Alert, readme []byte) (string, error) {
 		return "", fmt.Errorf("deploy/alerts/README.md has no intro section between %s and %s", introStart, introEnd)
 	}
 	intro := strings.TrimSpace(text[start+len(introStart) : end])
+
+	// The guidance the README holds outside the table: the text between "## The rules" and the table, and
+	// the Notes section to its end or the next "## " heading. Both reach the page whole.
+	const rulesHeading, notesHeading = "\n## The rules\n", "\n## Notes\n"
+	ri, ni := strings.Index(text, rulesHeading), strings.Index(text, notesHeading)
+	if ri < 0 || ni < 0 {
+		return "", fmt.Errorf("deploy/alerts/README.md needs a \"## The rules\" and a \"## Notes\" heading")
+	}
+	table := strings.Index(text[ri:], "\n| Statement")
+	if table < 0 {
+		return "", fmt.Errorf("deploy/alerts/README.md: no table (a line starting \"| Statement\") after \"## The rules\"")
+	}
+	thresholds := strings.TrimSpace(text[ri+len(rulesHeading) : ri+table])
+	notes := text[ni+len(notesHeading):]
+	if next := strings.Index(notes, "\n## "); next >= 0 {
+		notes = notes[:next]
+	}
+	notes = strings.TrimSpace(notes)
 
 	type row struct{ statement, why string }
 	rows := map[string]row{}
@@ -49,8 +68,10 @@ func AlertsPage(as []Alert, readme []byte) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "---\ntitle: Alerts\ndescription: %s\n---\n\n%s\n\n# Alerts\n\n%s\n\n"+
 		"Each alert below carries a `runbook_url` annotation that points at its section here. "+
-		"The metrics each rule reads are in the [metrics reference](metrics.md).\n",
-		jsonString("Every shipped alert rule, what fires it and what to do about it."), Header, intro)
+		"The metrics each rule reads are in the [metrics reference](metrics.md).\n\n"+
+		"## Thresholds and defaults\n\n%s\n\n## Notes\n\n%s\n\n## The rules\n",
+		jsonString("Every shipped alert rule: its severity, its expression and why its threshold is what it is."),
+		Header, intro, thresholds, notes)
 	for _, a := range as {
 		r := rows[a.Name]
 		forDur := a.For
@@ -58,7 +79,7 @@ func AlertsPage(as []Alert, readme []byte) (string, error) {
 			forDur = "none"
 		}
 		fmt.Fprintf(&b, "\n### %s {#%s}\n\n**Severity:** %s. **For:** %s.\n\n%s\n\n```promql\n%s\n```\n\n"+
-			"**What it answers:** %s\n\n**Why this threshold, and what to do:** %s\n",
+			"**Source:** %s\n\n**Why this threshold:** %s\n",
 			a.Name, a.Name, a.Severity, forDur, strings.TrimSpace(a.Summary), strings.TrimSpace(a.Expr),
 			strings.TrimSpace(r.statement), strings.TrimSpace(r.why))
 	}

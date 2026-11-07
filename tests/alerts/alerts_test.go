@@ -242,6 +242,31 @@ func TestEveryAlertHasAPromtoolCase(t *testing.T) {
 	}
 }
 
+// The README states hold_ttl's default in prose ("`hold_ttl` 15s", "the 15s `hold_ttl` default"). Each
+// statement must be the default the code applies, which is read from config.go rather than copied here.
+func TestReadmeHoldTTLDefaultIsTheCodes(t *testing.T) {
+	m := regexp.MustCompile(`etcd\.hold_ttl", &e\.HoldTTL, (\d+) \* time\.Second`).FindStringSubmatch(read(t, "internal/config/config.go"))
+	if m == nil {
+		t.Fatal("internal/config/config.go: the hold_ttl default row was not found")
+	}
+	readme := read(t, "deploy/alerts/README.md")
+	n := 0
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile("`hold_ttl` (\\d+)s"),
+		regexp.MustCompile("(\\d+)s `hold_ttl` default"),
+	} {
+		for _, s := range re.FindAllStringSubmatch(readme, -1) {
+			n++
+			if s[1] != m[1] {
+				t.Errorf("the README says a hold_ttl default of %ss (%q); config.go applies %ss", s[1], s[0], m[1])
+			}
+		}
+	}
+	if n == 0 {
+		t.Error("the README states no hold_ttl default in either form")
+	}
+}
+
 // runbookURL is where the docs site explains an alert: site_url from mkdocs.yml, the alerts page, the
 // alert's anchor.
 func runbookURL(t *testing.T, alert string) string {

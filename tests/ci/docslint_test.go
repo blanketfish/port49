@@ -56,6 +56,18 @@ func TestEachLintRuleCatchesItsFixture(t *testing.T) {
 	report(t, LintText("clean.md", fixture(t, "clean")))
 }
 
+// A results note's path carries a host name past the lint only when the note exists in the repository.
+func TestLabResultPathExemptionNeedsTheNoteToExist(t *testing.T) {
+	existing := "see tests/lab/results/load-beehive-ram.md."
+	if fs := LintText("a.md", []byte(existing)); len(fs) != 0 {
+		t.Errorf("a path to an existing note: got findings %v", fs)
+	}
+	invented := "see tests/lab/results/load-beehive-invented.md."
+	if fs := LintText("a.md", []byte(invented)); len(fs) != 1 || fs[0].Rule != "lab_host" {
+		t.Errorf("a path to a note that does not exist: got %v, want one lab_host", fs)
+	}
+}
+
 func TestThePagesPassTheLint(t *testing.T) {
 	pages, err := DocSources(repoRoot)
 	if err != nil {
