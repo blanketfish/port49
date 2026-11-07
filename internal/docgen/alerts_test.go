@@ -53,6 +53,17 @@ func TestAlertsPageHasOneAnchoredSectionPerRuleInOrder(t *testing.T) {
 	}
 }
 
+// An operator reaches the reference from a fired alert's runbook_url; the way back is the 3am index.
+func TestAlertsPageLinksBackToTheTroubleshootingIndex(t *testing.T) {
+	page, err := AlertsPage([]Alert{{Name: "first_alert"}}, []byte(fakeReadme))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[3am index](../operate/troubleshooting/index.md#an-alert-fired)"; !strings.Contains(page, want) {
+		t.Errorf("the page does not link back to the index with %q:\n%s", want, page)
+	}
+}
+
 // The guidance the README holds outside the table (its text above the table and its Notes) reaches the page
 // whole, so an edit to the README cannot drop it.
 func TestAlertsPageCarriesTheReadmesGuidance(t *testing.T) {

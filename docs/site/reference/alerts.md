@@ -29,7 +29,7 @@ No expression names a device, and none groups by one: the series carry no device
 §15), and the decision log answers "which devices". The labels used are bounded: `instance`,
 `key_ref`, `version`, `server`, `issuer`, `outcome`, `feed`, `pool`, `component`.
 
-Each alert below carries a `runbook_url` annotation that points at its section here. The metrics each rule reads are in the [metrics reference](metrics.md).
+Each alert below carries a `runbook_url` annotation that points at its section here. The metrics each rule reads are in the [metrics reference](metrics.md). An alert that has just fired: start at the [3am index](../operate/troubleshooting/index.md#an-alert-fired), which gives a short do and don't for each family of alerts.
 
 ## Thresholds and defaults
 

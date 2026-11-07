@@ -21,7 +21,7 @@
 
 ## Operate
 
-- [Install](https://blanketfish.github.io/port49/operate/install/): Choosing between the systemd, container and Helm shapes of a port49 deployment.
+- [Install](https://blanketfish.github.io/port49/operate/install/): Choosing between the systemd, container and Helm shapes of a port49 deployment, and what every shape needs.
 - [systemd](https://blanketfish.github.io/port49/operate/install/systemd/): Installing port49d and the broker from the packages and running them under systemd.
 - [Containers](https://blanketfish.github.io/port49/operate/install/container/): Running port49d, the broker and etcd as containers with Compose.
 - [Helm](https://blanketfish.github.io/port49/operate/install/helm/): Deploying port49 to Kubernetes with the Helm chart.
@@ -29,12 +29,12 @@
 - [Broker and agent](https://blanketfish.github.io/port49/operate/broker-and-agent/): What the broker and the agent each do, and where each runs.
 - [Signing in](https://blanketfish.github.io/port49/operate/login/): How a person signs in to port49 and gets a token for a device login.
 - [Hardware keys](https://blanketfish.github.io/port49/operate/hardware-keys/): Requiring a hardware key at sign-in and at each device login.
-- [Stores](https://blanketfish.github.io/port49/operate/stores/): The directory and session stores port49 keeps state in, and what happens when one is down.
-- [TLS](https://blanketfish.github.io/port49/operate/tls/): Running TACACS+ over TLS on port 300 and the certificates it needs.
+- [Stores](https://blanketfish.github.io/port49/operate/stores/): The directory and session stores port49 keeps state in, the single-site and multi-region recipes, and what each looks like when a store is down.
+- [TLS](https://blanketfish.github.io/port49/operate/tls/): Running TACACS+ over TLS (RFC 9887) on port 300, the certificates it needs, and what an operator sees when one is wrong.
 - [Secrets](https://blanketfish.github.io/port49/operate/secrets/): Where port49's secrets live, who may read them, and how they are rotated.
 - [Backup and restore](https://blanketfish.github.io/port49/operate/backup-and-restore/): What to back up, how to restore it, and what a restore does to live sessions.
 - [Monitoring](https://blanketfish.github.io/port49/operate/monitoring/): The metrics, alerts and logs that show whether port49 is healthy.
-- [Versions](https://blanketfish.github.io/port49/operate/versions/): Which versions of port49 and its dependencies work together, and how to upgrade.
+- [Versions](https://blanketfish.github.io/port49/operate/versions/): How port49 numbers its releases, what 0.x and 1.0.0 promise, and how to read the version of a running binary.
 - [Troubleshooting](https://blanketfish.github.io/port49/operate/troubleshooting/): Where to start when port49 or a device login is not working.
 - [Failure matrix](https://blanketfish.github.io/port49/operate/troubleshooting/failure-matrix/): What a device login does when each part of port49 is down.
 - [When it will not start](https://blanketfish.github.io/port49/operate/troubleshooting/will-not-start/): The refusals port49d prints at start, what each means and how to fix it.

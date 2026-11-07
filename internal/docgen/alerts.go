@@ -68,7 +68,9 @@ func AlertsPage(as []Alert, readme []byte) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "---\ntitle: Alerts\ndescription: %s\n---\n\n%s\n\n# Alerts\n\n%s\n\n"+
 		"Each alert below carries a `runbook_url` annotation that points at its section here. "+
-		"The metrics each rule reads are in the [metrics reference](metrics.md).\n\n"+
+		"The metrics each rule reads are in the [metrics reference](metrics.md). "+
+		"An alert that has just fired: start at the [3am index](../operate/troubleshooting/index.md#an-alert-fired), "+
+		"which gives a short do and don't for each family of alerts.\n\n"+
 		"## Thresholds and defaults\n\n%s\n\n## Notes\n\n%s\n\n## The rules\n",
 		jsonString("Every shipped alert rule: its severity, its expression and why its threshold is what it is."),
 		Header, intro, thresholds, notes)
