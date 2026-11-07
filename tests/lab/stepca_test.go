@@ -738,8 +738,12 @@ func workloadHarnessFault(exit int, stderr string) string {
 		return "the file fence refused the workload's files"
 	case exit == 2:
 		return "exit 2 is a usage or configuration error"
-	case exit == 64 || strings.Contains(stderr, "flag provided but not defined"):
+	case strings.Contains(stderr, "flag provided but not defined"):
 		return "a usage error"
+	case exit == 75:
+		return "the broker did not answer (EX_TEMPFAIL)"
+	case strings.Contains(stderr, "does not verify against --broker-ca"):
+		return "the broker's certificate does not verify against the lab CA"
 	case exit < 0:
 		return "the command did not run"
 	}

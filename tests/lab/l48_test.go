@@ -861,6 +861,9 @@ func TestL48StepCA(t *testing.T) {
 	})
 
 	r.cell1Issue()
+	if len(r.invalid) > 0 {
+		t.Fatalf("INVALID, no note written: %s", strings.Join(r.invalid, "; "))
+	}
 	r.cell2Renew()
 	r.cell3Daemon()
 	r.cell4CADown()
