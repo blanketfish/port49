@@ -145,7 +145,7 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   lower it), `receipt_max_age` (2 hours by default), `session.staleness_ceiling` (4 hours by default, the
   age of the snapshots a stopped process is read from), 20 minutes (a token lives at most 15, and the
   idempotency records that carry minted tokens are kept under 20), and the **directory membership lease**,
-  `max(broker.directory.grace, 24 hours)`. Every verify reads a principal's membership record before it
+  (24 hours: `broker.directory.grace` is capped at 24 hours, and the lease is the larger of the two). Every verify reads a principal's membership record before it
   rewrites it, so a record sealed under the old key keeps failing, for that principal, until its lease runs
   out; this holds on a single shared store as well as on a split. Tokens are also purged at every start on etcd. Records still under the old key after step 3 do not open: a token is dropped
   from the candidates and counted in `port49_crypt_open_failures_total{record="token"}`, a session's context is
@@ -170,9 +170,16 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   stranded principal is `port49 directory forget <principal>`. It does not need to open the record: it
   deletes the pin, and the person's next verification pins whatever entry the directory then gives them.
   The cost is the pin's protection: a pin exists so a principal cannot silently move to another directory
-  entry, so confirm each is the same person first, as on [Stores](../operate/stores.md), and a forget is an
-  admin-level call that takes a security-key press. Do this for every pinned principal; there is no
-  bulk form, and no re-seal is planned here.
+  entry, so confirm each is the same person first, as on [Stores](../operate/stores.md). A forget needs the
+  `forget_principals` right, and each use takes a security-key press. Do it for every pinned principal;
+  there is no bulk form. This region's own session copy of the record, sealed under the dropped key, is
+  deleted by the forget only if it opens; otherwise it keeps failing until its 24-hour lease ends.
+  **The admin has to be able to open their own pin.** The forget call first resolves the caller's own
+  membership, to check the right, and an admin whose own pin is sealed under the dropped key is refused
+  there. There is no offline forget on `port49-broker`. Before a second rotation, confirm that at least one
+  admin's own pin still opens: an admin first pinned after the earlier rotation's step 2, or one whose pin
+  has been rewritten since. If none does, do not rotate; if every admin is stranded, put the dropped key back
+  as `previous`, which opens every pin again.
 - **Backups and exports need every key that sealed their records.** An etcd snapshot and a Velero backup
   are the raw stores, and each record in them keeps the key that was current when that record was written.
   An enrollment export (`port49-broker export-enrollments`) keeps each record's seal too, and seals only
