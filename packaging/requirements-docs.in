@@ -1,0 +1,6 @@
+# The inputs of packaging/requirements-docs.txt, which `make docs-build` and the docs job install with
+# --require-hashes. Versions are exact; MkDocs has 2.0.dev* releases, so never compile with --pre.
+# Regenerate (never hand-edit the .txt) with `make requirements-release`: the docs file is compiled under
+# Python 3.13, the docs job's.
+mkdocs==1.6.1
+mkdocs-material==9.8.0

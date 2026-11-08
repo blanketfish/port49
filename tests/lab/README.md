@@ -924,14 +924,15 @@ there was no output to read.
 Every evidence file passes a leak gate before any is written; a failure names the file and the kind
 of content, never the content.
 
-## Regressions (plan 11b)
+<!-- --8<-- [start:regressions] -->
+## The lab regression run
 
 `make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
 notes. Each entry's `measured_minutes` is its wall time in a full run (the first, commit `2c680dbf`,
-2026-10-19/20, then the L35, L37, L66, L79, L80 and L90 entries, and XRd's L73): the manifest sums to 745.7 minutes. A clean
+2026-10-19/20, then the [L35](https://blanketfish.github.io/port49/reference/lab-register/#l35), [L37](https://blanketfish.github.io/port49/reference/lab-register/#l37), [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66), [L79](https://blanketfish.github.io/port49/reference/lab-register/#l79), [L80](https://blanketfish.github.io/port49/reference/lab-register/#l80) and [L90](https://blanketfish.github.io/port49/reference/lab-register/#l90) entries, and XRd's [L73](https://blanketfish.github.io/port49/reference/lab-register/#l73)): the manifest sums to 745.7 minutes. A clean
 full run is about 12 h plus NX-OS boot hangs (below), so routine use needs a subset:
-`make lab-regress LAB_REGRESS_ARGS=-only=L35,L37`. The slowest are L34 (103 min), L36 (67) and
-L22 (44).
+`make lab-regress LAB_REGRESS_ARGS=-only=L35,L37`. The slowest are [L34](https://blanketfish.github.io/port49/reference/lab-register/#l34) (103 min), [L36](https://blanketfish.github.io/port49/reference/lab-register/#l36) (67) and
+[L22](https://blanketfish.github.io/port49/reference/lab-register/#l22) (44).
 
 Runs before the 2026-10-20 rebase name the rebased twin of the commit they ran (`2c680dbf` for the
 first full run); the tree differs by PR #29's client and spec changes only. The vJunos 23.4R2-S2.1
@@ -940,17 +941,17 @@ only two stray pcaps were dropped.
 
 The first run passed 58 of 66 entries. Of the 8 that failed, all are resolved:
 
-- **L35, L37**: the test expected plan 7e's circuit-open line; port49d now goes dark on decision 37's
+- **[L35](https://blanketfish.github.io/port49/reference/lab-register/#l35), [L37](https://blanketfish.github.io/port49/reference/lab-register/#l37)**: the test expected plan 7e's circuit-open line; port49d now goes dark on decision 37's
   health checks (about 5 s). The verdict was fixed and both passed on the rerun.
-- **L66 (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29, and L66
+- **[L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29, and [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66)
   passed on the rerun.
-- **L29-reload on vjunos**: no connection open across the change was reset in the refused/rekeyed
+- **[L29](https://blanketfish.github.io/port49/reference/lab-register/#l29)-reload on vjunos**: no connection open across the change was reset in the refused/rekeyed
   phase. Junos sends nothing on a held connection, so the phase can fail its premise; a device
   flake, so retry the entry.
 
-**L80** (`L80-nxos106`) is a regress entry: it re-measures a security fact (a command port49 denies runs
+**[L80](https://blanketfish.github.io/port49/reference/lab-register/#l80)** (`L80-nxos106`) is a regress entry: it re-measures a security fact (a command port49 denies runs
 over NX-OS 10.6's per-request TLS), and a run that observes nothing is INVALID. A flipped outcome shows as
-changed lines in the note diff, and a run that observes nothing writes no L80 note. `lab-regress` reports
+changed lines in the note diff, and a run that observes nothing writes no [L80](https://blanketfish.github.io/port49/reference/lab-register/#l80) note. `lab-regress` reports
 note changes and does not fail on them. It does fail an entry whose listed note the run did not rewrite
 (its mtime is before the entry started): notediff masks the header lines a rerun changes, so an untouched
 note would otherwise read "unchanged".
@@ -967,10 +968,11 @@ Read a hang from them: `ssh_auth` with no `tacacs_seen` is the config apply, and
 **What a run needs beyond the base setup:**
 
 - `PORT49_LAB_ETCD_BIN` names a directory holding `etcd`, `etcdctl` and `etcdutl`, all v3.6.15
-  (on beehive, `/mnt/images/etcd-v3.6.15`). L35-restore needs `etcdutl`.
-- L66 needs `tests/lab/l66/.collections`, which is git-ignored, so a fresh worktree lacks it. Create it
-  with `$HOME/lab-venv/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
-  the L66 preflight prints the exact command with the collection names.
+  (for example `/mnt/images/etcd-v3.6.15` on the lab host). [L35](https://blanketfish.github.io/port49/reference/lab-register/#l35)-restore needs `etcdutl`.
+- [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) needs `tests/lab/l66/.collections`, which is git-ignored, so a fresh worktree lacks it. Create it
+  with `<venv>/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
+  the [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) preflight prints the exact command with the collection names.
+<!-- --8<-- [end:regressions] -->
 - Building `vrnetlab/cisco_iol` needs the image file copied into the build directory first (step 3's
   IOL-XE recipe); an `IMAGE=/mnt/images/...` path fails the Makefile's version regex.
 - cEOS 4.36.3M must be docker-imported from its tarball (`docker import ... ceos:4.36.3M`).

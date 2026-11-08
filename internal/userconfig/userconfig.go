@@ -348,6 +348,32 @@ func options(opts []Option) loadOptions {
 	return o
 }
 
+// FileSchema is the zero value of the type parse strict-decodes config.yaml into. It exists for the docs
+// generator (internal/docgen), which reads the schema from its fields.
+func FileSchema() any { return File{} }
+
+// DecodeStrict is parse's decode of a config.yaml's bytes without the checks on what it decoded and
+// without reading the file: an unknown key and a second document are refused.
+func DecodeStrict(raw []byte) error {
+	_, err := decodeFile(raw, "config.yaml")
+	return err
+}
+
+// decodeFile is parse's strict decode; path names the file in an error.
+func decodeFile(raw []byte, path string) (File, error) {
+	var f File
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
+		return File{}, fmt.Errorf("%s: %w", path, err)
+	}
+	var extra yaml.Node
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return File{}, fmt.Errorf("%s holds a second YAML document; port49 reads one", path)
+	}
+	return f, nil
+}
+
 // parse reads and checks one config file, resolving its paths, and reads no
 // CA. With rootOnly the file must be root's (SystemOwner).
 func parse(path, what string, rootOnly bool) (f File, ok bool, err error) {
@@ -358,14 +384,8 @@ func parse(path, what string, rootOnly bool) (f File, ok bool, err error) {
 	if err != nil {
 		return File{}, false, err
 	}
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
-		return File{}, false, fmt.Errorf("%s: %w", path, err)
-	}
-	var extra yaml.Node
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		return File{}, false, fmt.Errorf("%s holds a second YAML document; port49 reads one", path)
+	if f, err = decodeFile(raw, path); err != nil {
+		return File{}, false, err
 	}
 	base := filepath.Dir(path)
 	switch f.Method {

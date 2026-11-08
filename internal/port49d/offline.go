@@ -23,6 +23,7 @@ import (
 	"github.com/blanketfish/port49/internal/config"
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/healthcheck"
 	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/printsafe"
 	"github.com/blanketfish/port49/internal/session"
@@ -114,7 +115,11 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 		// A running broker owns its marks and its replica's state: with one up the revocation goes through
 		// its API (the same refusal port49d's form makes). The listener is read from the file alone, so a
 		// config that fails to load for another reason does not hide this line.
-		if err := answeringOn(ctx, offlineMetricsListenOf(*cfgPath), "port49-broker", "broker.state_dir"); err != nil {
+		listen, lerr := offlineMetricsListenOf(*cfgPath)
+		if lerr != nil {
+			listen = ":9050"
+		}
+		if err := answeringOn(ctx, listen, "port49-broker", "broker.state_dir"); err != nil {
 			fmt.Fprintf(out, "%s%v\n", offlineSay, err)
 			return 1
 		}
@@ -276,20 +281,10 @@ func offlineStateDirOf(cfgPath string) (string, bool) {
 }
 
 // offlineMetricsListenOf is metrics_listen as the config file names it, port49-broker's default when it
-// names none or the file does not read (the load then says what is wrong).
-func offlineMetricsListenOf(cfgPath string) string {
-	const def = ":9050"
-	raw, err := config.ReadRegular(cfgPath, config.MaxConfigSize)
-	if err != nil {
-		return def
-	}
-	var c struct {
-		MetricsListen string `yaml:"metrics_listen"`
-	}
-	if yaml.Unmarshal(raw, &c) != nil || c.MetricsListen == "" {
-		return def
-	}
-	return c.MetricsListen
+// names none, and an error when the file does not read or parse (healthcheck exits 1 on it; the offline
+// caller falls back to the default, since the load then says what is wrong).
+func offlineMetricsListenOf(cfgPath string) (string, error) {
+	return healthcheck.MetricsListen(cfgPath, ":9050")
 }
 
 // offlineOwnerHint is the refusal of a state path another user owns, in the

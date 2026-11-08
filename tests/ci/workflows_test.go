@@ -18,6 +18,7 @@ import (
 // that the release binary is the pinned one. Nothing here runs a workflow.
 
 type step struct {
+	ID   string            `yaml:"id"`
 	Name string            `yaml:"name"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
@@ -29,11 +30,13 @@ type step struct {
 }
 
 type job struct {
-	If string `yaml:"if"`
+	Name string `yaml:"name"`
+	If   string `yaml:"if"`
 
 	ContinueOnError any               `yaml:"continue-on-error"`
 	Env             map[string]string `yaml:"env"`
 	Needs           any               `yaml:"needs"`
+	Concurrency     any               `yaml:"concurrency"`
 	Environment     any               `yaml:"environment"`
 	Permissions     map[string]any    `yaml:"permissions"`
 	Steps           []step            `yaml:"steps"`
@@ -42,6 +45,7 @@ type job struct {
 type flow struct {
 	On          yaml.Node      `yaml:"on"`
 	Permissions map[string]any `yaml:"permissions"`
+	Concurrency any            `yaml:"concurrency"`
 	Jobs        map[string]job `yaml:"jobs"`
 }
 
@@ -96,7 +100,7 @@ func TestReleaseRunsOnTagsOnly(t *testing.T) {
 	}
 }
 
-func TestOnlyFourJobsHoldIDToken(t *testing.T) {
+func TestOnlyThePublishersHoldIDToken(t *testing.T) {
 	for name, text := range allWorkflows(t) {
 		f, _ := load(t, "../../.github/workflows/"+name)
 		if !readOnly(f.Permissions) {
@@ -113,11 +117,18 @@ func TestOnlyFourJobsHoldIDToken(t *testing.T) {
 		for id, j := range f.Jobs {
 			holds := j.Permissions["id-token"] != nil
 			may := name == "release.yml" && (id == "pypi" || id == "goreleaser" || id == "image" || id == "chart")
-			if holds && !may {
+			pages := name == "docs.yml" && id == "deploy"
+			if holds && !may && !pages {
 				t.Errorf("%s: job %s holds id-token", name, id)
 			}
 			if may && j.Permissions["id-token"] != "write" {
 				t.Errorf("release.yml: job %s does not hold id-token: write", id)
+			}
+			if pages && (len(j.Permissions) != 2 || j.Permissions["pages"] != "write" || j.Permissions["id-token"] != "write") {
+				t.Errorf("docs.yml: deploy holds %v, want exactly pages: write and id-token: write", j.Permissions)
+			}
+			if j.Permissions["pages"] != nil && !pages {
+				t.Errorf("%s: job %s holds pages", name, id)
 			}
 		}
 	}
@@ -130,6 +141,25 @@ func TestOnlyFourJobsHoldIDToken(t *testing.T) {
 	for id, j := range f.Jobs {
 		if _, named := map[string]bool{"pypi": true, "galaxy": true, "goreleaser": true, "image": true, "chart": true}[id]; !named && j.Environment != nil {
 			t.Errorf("job %s names an environment (%v)", id, j.Environment)
+		}
+	}
+	// docs.yml's deploy is the only job anywhere that names github-pages, and it names nothing else
+	for name := range allWorkflows(t) {
+		wf, _ := load(t, "../../.github/workflows/"+name)
+		for id, j := range wf.Jobs {
+			if j.Environment == nil {
+				continue
+			}
+			var env string
+			switch e := j.Environment.(type) {
+			case string:
+				env = e
+			case map[string]any:
+				env, _ = e["name"].(string)
+			}
+			if (env == "github-pages") != (name == "docs.yml" && id == "deploy") {
+				t.Errorf("%s: job %s names environment %q", name, id, env)
+			}
 		}
 	}
 	// GALAXY_API_KEY is read once, in the galaxy job's publish step's env, and nowhere else

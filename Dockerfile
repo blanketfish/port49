@@ -17,11 +17,13 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 # golang:1.26 (1.26.10, the current patch of the minor; a Go patch is often a security fix)
 FROM --platform=$BUILDPLATFORM golang:1.26@sha256:c141012f2b79382f9cb7438104ae0cd324cc548c1a605f393ef7402b87a1bd8b AS build
 ARG TARGETOS TARGETARCH
+# What the four binaries print for --version: the release's version, without the tag's v.
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/ \
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X github.com/blanketfish/port49/internal/version.Version=${VERSION}" -o /out/ \
       ./cmd/port49d ./cmd/port49-broker ./cmd/port49 ./cmd/port49-inventory
 # the three 0700 directories, as a tree COPY carries whole (see port49 below)
 RUN install -d -m 0700 /out/tree/var/lib/port49-broker /out/tree/var/spool/port49d /out/tree/run/port49

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The release's builds (pre-beta Task 20): what a pull request must build so a tag never meets a
@@ -26,6 +28,97 @@ func TestThePythonProjectHasNoLicenseClassifierBesideItsExpression(t *testing.T)
 	raw := readRepo(t, "clients", "python", "pyproject.toml")
 	if regexp.MustCompile(`(?m)^license\s*=\s*"`).MatchString(raw) && strings.Contains(raw, "License ::") {
 		t.Error("pyproject.toml has license = \"...\" and a License :: classifier")
+	}
+}
+
+// Every binary the release builds reports the tag it was built from (plan 13 task 9).
+func TestTheReleaseSetsTheVersion(t *testing.T) {
+	var cfg struct {
+		Builds []struct {
+			ID      string   `yaml:"id"`
+			Ldflags []string `yaml:"ldflags"`
+		} `yaml:"builds"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepo(t, ".goreleaser.yaml")), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Builds) < 5 {
+		t.Fatalf("found %d builds, want at least 5: the scan is broken", len(cfg.Builds))
+	}
+	const flag = "-X github.com/blanketfish/port49/internal/version.Version={{.Version}}"
+	for _, b := range cfg.Builds {
+		if !strings.Contains(strings.Join(b.Ldflags, " "), flag) {
+			t.Errorf("build %s: ldflags %q lack %s", b.ID, b.Ldflags, flag)
+		}
+	}
+}
+
+// The released image is built by the Dockerfile, not goreleaser, so its four binaries are stamped
+// by a build argument the release passes to the image build, with the same -X path and the same
+// v-less string goreleaser's {{.Version}} gives.
+func TestTheImageBuildStampsTheVersion(t *testing.T) {
+	const path = "-X github.com/blanketfish/port49/internal/version.Version="
+	df := readRepo(t, "Dockerfile")
+	if !regexp.MustCompile(`(?m)^ARG VERSION=dev$`).MatchString(df) {
+		t.Error("Dockerfile does not declare ARG VERSION=dev")
+	}
+	var goBuilds int
+	for _, line := range strings.Split(strings.ReplaceAll(df, "\\\n", " "), "\n") {
+		if !strings.Contains(line, "go build") {
+			continue
+		}
+		goBuilds++
+		if !strings.Contains(line, path+"${VERSION}") || !strings.Contains(line, "-s -w") || !strings.Contains(line, "-trimpath") {
+			t.Errorf("Dockerfile go build does not stamp %s${VERSION} beside -s -w and -trimpath: %s", path, line)
+		}
+	}
+	if goBuilds == 0 {
+		t.Error("found no go build in the Dockerfile: the scan is broken")
+	}
+
+	f, _ := load(t, "../../.github/workflows/release.yml")
+	found := false
+	for _, s := range f.Jobs["image"].Steps {
+		if strings.HasPrefix(s.Uses, "docker/build-push-action@") {
+			found = true
+			args, _ := s.With["build-args"].(string)
+			if !strings.Contains(args, "VERSION=${{ steps.tags.outputs.version }}") {
+				t.Errorf("release.yml's image build passes build-args %q, want VERSION from the tags step", args)
+			}
+		}
+	}
+	if !found {
+		t.Error("release.yml's image job has no docker/build-push-action step")
+	}
+	if !strings.Contains(readRepo(t, "Makefile"), "--build-arg VERSION=$(VERSION)") {
+		t.Error("the Makefile's image target does not pass --build-arg VERSION=$(VERSION)")
+	}
+}
+
+// One version string everywhere: the Makefile strips the tag's leading v as goreleaser does, falls
+// back to dev outside a git checkout, and stamps the same path the release does.
+func TestTheMakefileVersionMatchesTheReleaseString(t *testing.T) {
+	mk := readRepo(t, "Makefile")
+	if !strings.Contains(mk, "VERSION ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))") {
+		t.Error("Makefile VERSION does not strip a leading v and fall back to dev")
+	}
+	if !strings.Contains(mk, `-ldflags "-X github.com/blanketfish/port49/internal/version.Version=$(VERSION)"`) {
+		t.Error("Makefile VERSION_LDFLAGS does not stamp internal/version.Version")
+	}
+	seen := 0
+	defer func() {
+		if seen != 2 {
+			t.Errorf("found %d install build lines in the Makefile, want 2: the scan is broken", seen)
+		}
+	}()
+	for _, line := range strings.Split(mk, "\n") {
+		// the two targets that write the binaries an operator installs
+		if strings.Contains(line, "go build") && (strings.Contains(line, "-o bin/$$c ./cmd/") || strings.Contains(line, "-o bin/port49-client")) {
+			seen++
+			if !strings.Contains(line, "$(VERSION_LDFLAGS)") {
+				t.Errorf("Makefile build line lacks $(VERSION_LDFLAGS): %s", line)
+			}
+		}
 	}
 }
 

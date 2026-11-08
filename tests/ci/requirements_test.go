@@ -14,6 +14,37 @@ func TestTheReleaseRequirementsAreExactAndHashed(t *testing.T) {
 	exactAndHashed(t, "requirements-release", []string{"build", "setuptools", "ansible-core"})
 }
 
+// The documentation site's build (plan 13) installs packaging/requirements-docs.txt the same way.
+func TestTheDocsRequirementsAreExactAndHashed(t *testing.T) {
+	exactAndHashed(t, "requirements-docs", []string{"mkdocs", "mkdocs-material"})
+}
+
+// pip-tools is what compiles every .txt above, so it is installed from a hashed file too, and nothing
+// in the requirements-release recipe installs without --require-hashes.
+func TestThePipToolsBootstrapIsHashed(t *testing.T) {
+	exactAndHashed(t, "requirements-piptools", []string{"pip-tools"})
+	b, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := false
+	for i, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(l, "requirements-release:") {
+			in = true
+			continue
+		}
+		if in && !strings.HasPrefix(l, "\t") {
+			break
+		}
+		if in && strings.Contains(l, "pip install") && !strings.Contains(l, "--require-hashes") {
+			t.Errorf("Makefile:%d: requirements-release installs without --require-hashes: %s", i+1, strings.TrimSpace(l))
+		}
+	}
+	if !in {
+		t.Error("Makefile has no requirements-release recipe")
+	}
+}
+
 // The Python test job installs from packaging/requirements-ci.txt the same way, and the workflow says
 // --require-hashes (a pip install of bare pins would take whatever the index serves).
 func TestThePythonJobInstallsWithHashes(t *testing.T) {

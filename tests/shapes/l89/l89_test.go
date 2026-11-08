@@ -125,8 +125,13 @@ func example(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	return unlinked(string(b))
 }
+
+// a Markdown link reads as its text, so a lab ID linked to the docs site's register still says what it said
+var markdownLink = regexp.MustCompile(`\[([^\]\n]+)\]\([^)\s]+\)`)
+
+func unlinked(s string) string { return markdownLink.ReplaceAllString(s, "$1") }
 
 func TestTheVeleroExampleBacksUpBothStatefulSets(t *testing.T) {
 	var sch struct {
@@ -280,7 +285,7 @@ func readme(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	return unlinked(string(b))
 }
 
 func TestCommandExtractsTheMarkedBlock(t *testing.T) {
@@ -1202,7 +1207,7 @@ func TestTheREADMESuspendsGitOpsAndBringsTheHPABack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := string(b)
+	doc := unlinked(string(b))
 	first := strings.Index(doc, "kubectl delete namespace port49 port49-etcd")
 	for _, want := range []string{"argocd app set <app> --sync-policy none", "flux suspend helmrelease <name> -n <namespace>",
 		"flux suspend kustomization <name> -n <namespace>", "admit a revoked principal",
@@ -1239,7 +1244,7 @@ func TestTheREADMEsOrderRestoresWithThePodsRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := string(b)
+	doc := unlinked(string(b))
 	for _, gone := range []string{"--resource-modifier-configmap", "fallback order", "l89:restorezero", "l89:fallback"} {
 		if strings.Contains(doc, gone) {
 			t.Errorf("the README still holds %q", gone)

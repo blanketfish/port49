@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/blanketfish/port49/internal/port49d"
 )
 
 // A refusal that names a command must name one that works. The broker told an operator at 3am to run
@@ -50,37 +52,24 @@ func TestEveryDirectorySubcommandARefusalNamesIsOneTheCLIAccepts(t *testing.T) {
 }
 
 // The same for the two servers: every `port49-broker <sub>` and `port49d <sub>` that a refusal, a README or
-// the design names is a subcommand of that binary. The sets are read from the dispatch in BrokerMain and Main
-// (a literal `args[0] == "sub"`), so a command that is renamed or never added is found. A name counts when it
-// sits in a code span or a string, or is followed by a flag, so prose such as "port49d reads" is not one.
+// the design names is a subcommand of that binary. The sets are the tables Main and BrokerMain dispatch from
+// (port49d.DaemonSubcommands, port49d.BrokerSubcommands), so a command that is renamed or never added is found.
+// A name counts when it sits in a code span or a string, or is followed by a flag, so prose such as
+// "port49d reads" is not one.
 func TestEveryServerSubcommandNamedIsOneTheBinaryHas(t *testing.T) {
-	lit := regexp.MustCompile(`args\[0\] == "([a-z][a-z-]*)"`)
-	setOf := func(file, fn string) map[string]bool {
-		b, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(b)
-		i := strings.Index(text, "func "+fn+"(")
-		if i < 0 {
-			t.Fatalf("no %s in %s", fn, file)
-		}
-		body := text[i:]
-		if j := strings.Index(body, "\n}\n"); j > 0 {
-			body = body[:j]
+	setOf := func(names []string) map[string]bool {
+		if len(names) < 4 {
+			t.Fatalf("found %d subcommands, want more: the table is broken", len(names))
 		}
 		set := map[string]bool{}
-		for _, m := range lit.FindAllStringSubmatch(body, -1) {
-			set[m[1]] = true
-		}
-		if len(set) < 4 {
-			t.Fatalf("%s: found %d subcommands, want more: the scan is broken", fn, len(set))
+		for _, n := range names {
+			set[n] = true
 		}
 		return set
 	}
 	sets := map[string]map[string]bool{
-		"port49-broker": setOf("../../internal/port49d/brokerd.go", "BrokerMain"),
-		"port49d":       setOf("../../internal/port49d/main.go", "Main"),
+		"port49-broker": setOf(port49d.BrokerSubcommands()),
+		"port49d":       setOf(port49d.DaemonSubcommands()),
 	}
 	ref := regexp.MustCompile("(`)?\\b(port49-broker|port49d) ([a-z][a-z-]+)")
 	var files []string

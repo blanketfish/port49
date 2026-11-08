@@ -122,6 +122,15 @@ services:
       # an anonymous volume (plan 7e, Rulings 12 and 18). A second broker is
       # a second service with a volume of its own; never --scale.
       - broker-state:/var/lib/port49-broker
+    # --ready probes /readyz: compose only reports health and restarts nothing on it, so it can show
+    # readiness. Without the flag the probe is /healthz (liveness), which is what anything that
+    # restarts on unhealthy must use.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/port49-broker", "healthcheck", "--ready", "--config", "/etc/port49/port49-broker.yaml"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     depends_on:
       etcd-init: {condition: service_completed_successfully}
 
@@ -153,6 +162,12 @@ services:
       # the accounting spool: on an ephemeral layer a record acknowledged to
       # a device is lost at a recreate
       - port49d-spool:/var/spool/port49d
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/port49d", "healthcheck", "--ready", "--config", "/etc/port49/port49d.yaml"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     depends_on:
       etcd-init: {condition: service_completed_successfully}
 

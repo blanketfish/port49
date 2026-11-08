@@ -75,7 +75,10 @@ func composeUp(t *testing.T) matrix {
 		t.Fatal(err)
 	}
 	s := newStack(t)
-	s.run("up", "-d", "--build")
+	// build, then a plain up: `up --build` labels the containers with a digest a later plain `up -d`
+	// does not match, so the first policy edit would recreate port49d instead of reloading it
+	s.run("build")
+	s.run("up", "-d")
 	s.ready(daemonMetrics)
 	s.ready(brokerMetrics)
 	key, err := os.ReadFile(filepath.Join(s.local, "keys", "tacacs_v1"))

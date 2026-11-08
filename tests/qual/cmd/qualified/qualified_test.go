@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,18 +13,34 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/blanketfish/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/docgen"
 )
 
 const fixtures = "../../../../internal/devicemock/testdata"
 
 func TestTheCommittedListIsTheGeneratedOne(t *testing.T) {
-	got, err := Build("../../../..")
+	got, err := BuildLinked("../../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want, _ := os.ReadFile("../../../../docs/qualified-platforms.md")
 	if got != string(want) {
 		t.Fatal("docs/qualified-platforms.md is stale: run make qualified-platforms")
+	}
+}
+
+// The page is included into the device index on the site and is read on GitHub, so each lab ID links the
+// register page by its absolute site URL, with ", open" still beside an open row's ID.
+func TestEveryLabIDOfTheListLinksTheRegisterByItsSiteURL(t *testing.T) {
+	got, err := BuildLinked("../../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[L18](" + docgen.LabRegisterSiteURL + "#l18), open"; !strings.Contains(got, want) {
+		t.Errorf("the list does not hold %q", want)
+	}
+	if bare := docgen.BareLabIDs(got); len(bare) != 0 {
+		t.Errorf("the list holds %d lab IDs that are not linked", len(bare))
 	}
 }
 
@@ -74,31 +92,60 @@ func TestTLSCellNeedsTheTLSLogin(t *testing.T) {
 // when the profile records it, and a profile that merely lacks the steps reads no.
 func TestCommandAuthorizationNotApplicableNeedsTheMarker(t *testing.T) {
 	g := golden(stop)
-	if c := command(g.Scenarios["token_login"].Steps, true, "L18"); c != "— (L18)" {
+	if c := command(g.Scenarios["token_login"].Steps, true, "L18", fakeRegister("L18")); c != "— (L18, open)" {
 		t.Fatalf("marker and no command steps: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, true); s != "qualified" {
 		t.Fatalf("a recorded not-applicable cell does not count against qualified: %s", s)
 	}
-	if c := command(g.Scenarios["token_login"].Steps, false, ""); c != "no" {
+	if c := command(g.Scenarios["token_login"].Steps, false, "", nil); c != "no" {
 		t.Fatalf("no marker: absence is never not-applicable: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, false); s != "partial" {
 		t.Fatalf("%s", s)
 	}
 	denyOnly := golden(devicemock.GoldenStep{Step: "command_denied", Event: "author_error"}, stop)
-	if c := command(denyOnly.Scenarios["token_login"].Steps, true, "L18"); c != "no" {
+	if c := command(denyOnly.Scenarios["token_login"].Steps, true, "L18", fakeRegister("L18")); c != "no" {
 		t.Fatalf("a marker does not excuse command steps the golden holds: %s", c)
 	}
-	if c := command([]devicemock.GoldenStep{permitted, denied, stop}, true, "L18"); c != "yes" {
+	if c := command([]devicemock.GoldenStep{permitted, denied, stop}, true, "L18", fakeRegister("L18")); c != "yes" {
 		t.Fatalf("measured command steps win over the marker: %s", c)
 	}
 }
 
+// fakeRegister is a lab register holding the listed IDs open.
+func fakeRegister(open ...string) map[string]docgen.LabRow {
+	reg := map[string]docgen.LabRow{}
+	for _, id := range open {
+		reg[id] = docgen.LabRow{ID: id, Open: true}
+	}
+	return reg
+}
+
+// fixtureSpec is the minimal spec repoWith writes: L18 open, and every other ID the fixtures cite closed.
+const fixtureSpec = `# Spec
+
+## 15. Lab register
+
+| ID | Claim | Status |
+|---|---|---|
+| **L18** | unrecognised reply attributes | open — measured on five images |
+| **L73** | RFC 9887 client | closed — measured 2026-10-18; tests/lab/results/L73-fixture_junos.md |
+| **L76** | SR Linux | closed — measured 2026-10-18; tests/lab/results/L76-fixture_junos.md |
+| **L80** | NX-OS per-request TLS | closed — measured 2026-10-21; tests/lab/results/L80-fixture_junos.md |
+| **L99** | fixture | closed — measured 2026-01-01; tests/lab/results/L99-fixture_junos.md |
+
+## 16. Next
+`
+
 // repoWith is a repository root holding one profile, copied from the fixtures with
-// its golden path and gaps set, and the fixture notes unless withNotes is false.
+// its golden path and gaps set, and the fixture notes unless withNotes is false. It
+// writes fixtureSpec at the spec's path.
 func repoWith(t *testing.T, g devicemock.Golden, gap, withNotes bool, edits ...func(string) string) string {
 	dir := t.TempDir()
+	specPath := filepath.Join(dir, "docs/design/2026-08-23-policy-engine-spec.md")
+	os.MkdirAll(filepath.Dir(specPath), 0o755)
+	os.WriteFile(specPath, []byte(fixtureSpec), 0o600)
 	if withNotes {
 		notes := filepath.Join(dir, "tests/lab/results")
 		os.MkdirAll(notes, 0o755)
@@ -139,13 +186,65 @@ func TestARowForJunosReadsQualifiedOnlyWithTheMarker(t *testing.T) {
 	for _, tc := range []struct {
 		gap  bool
 		want string
-	}{{true, "| Juniper | Junos | 1.0 | yes | — | — (L18) | — | yes | yes | qualified |"}, {false, "| Juniper | Junos | 1.0 | yes | — | no | — | yes | yes | partial |"}} {
+	}{{true, "| Juniper | Junos | 1.0 | yes | — | — (L18, open) | — | yes | yes | qualified |"}, {false, "| Juniper | Junos | 1.0 | yes | — | no | — | yes | yes | partial |"}} {
 		got, err := Build(repoWith(t, golden(stop), tc.gap, true))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(got, tc.want+"\n") {
 			t.Fatalf("gap=%v: want row %q in:\n%s", tc.gap, tc.want, got)
+		}
+	}
+}
+
+// The spec's lab register decides how a cell cites a row: an open one reads ", open" (the docs
+// lint refuses an open row asserted), a closed one reads as before. No register is no page.
+func TestBuildFailsWithoutTheRegister(t *testing.T) {
+	dir := repoWith(t, golden(stop), true, true)
+	if err := os.Remove(filepath.Join(dir, "docs/design/2026-08-23-policy-engine-spec.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(dir); !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "policy-engine-spec.md") {
+		t.Fatalf("a build without the spec's register fails naming the spec: %v", err)
+	}
+}
+
+func TestACitedIDAbsentFromTheRegisterFailsTheBuild(t *testing.T) {
+	dir := repoWith(t, golden(stop), true, true, replace("the device sends none (L18)", "the device sends none (L55)"))
+	if _, err := Build(dir); err == nil || !strings.Contains(err.Error(), "L55") {
+		t.Fatalf("an ID the register lacks fails the build naming it: %v", err)
+	}
+}
+
+func TestAnOpenRegisterRowIsCitedAsOpen(t *testing.T) {
+	steps := golden(stop).Scenarios["token_login"].Steps
+	if c := command(steps, true, "L18", fakeRegister()); c != "— (L18)" {
+		t.Fatalf("a register with L18 closed: %s", c)
+	}
+	if c := command(steps, true, "QUAL; as L18", fakeRegister("L18")); c != "— (QUAL; as L18, open)" {
+		t.Fatalf("a QUAL citation of an open row: %s", c)
+	}
+	if c := command(steps, true, "L76 cell b", fakeRegister("L76")); c != "— (L76, open; cell b)" {
+		t.Fatalf("a cell citation of an open row: %s", c)
+	}
+}
+
+// A text that already reads "L18, open" is cited once, not twice.
+func TestCiteIsIdempotent(t *testing.T) {
+	reg := fakeRegister("L18", "L76")
+	for in, want := range map[string]string{
+		"L18":                "L18, open",
+		"L18, open":          "L18, open",
+		"QUAL; as L18, open": "QUAL; as L18, open",
+		"L18, open and L76":  "L18, open and L76, open",
+		"L76 cell b":         "L76, open; cell b",
+		"L76, open; cell b":  "L76, open; cell b",
+	} {
+		if got := cite(in, reg); got != want {
+			t.Errorf("cite(%q) = %q, want %q", in, got, want)
+		}
+		if again := cite(want, reg); again != want {
+			t.Errorf("cite is not idempotent: cite(%q) = %q", want, again)
 		}
 	}
 }
@@ -227,7 +326,7 @@ func TestTheCommandCellCitesItsOwnGapAndOperatorGapsArePrinted(t *testing.T) {
 			t.Fatalf("want %q in:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "(L18)") {
+	if strings.Contains(got, "(L18") {
 		t.Fatalf("a Junos citation on another platform:\n%s", got)
 	}
 }

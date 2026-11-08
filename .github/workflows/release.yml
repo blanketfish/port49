@@ -72,6 +72,7 @@ jobs:
       - id: tags
         run: |
           version="${GITHUB_REF_NAME#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
           {
             echo "tags<<EOF"
             echo "ghcr.io/blanketfish/port49:${version}"
@@ -92,6 +93,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: VERSION=${{ steps.tags.outputs.version }}
       - uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
         with:
           subject-name: ghcr.io/blanketfish/port49

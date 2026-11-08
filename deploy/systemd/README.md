@@ -273,7 +273,7 @@ on.
 **etcd's disk.** etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
 datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
 500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
-or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms (`tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md`); beehive's QLC drive failed it (`tests/lab/results/load-beehive.md`).
+or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms; a consumer QLC drive failed it (the notes are the `load-*` files in `tests/lab/results/`).
 port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The `port49_accounting_spool_disk_slow` alert watches it.
 
 Then apply the roles once per cluster:
@@ -329,7 +329,7 @@ bound, which leave `/etc` writable. The unit test (`tests/shapes`) holds each of
 
 ### `LoadCredential=` for the encryption key
 
-Measured (lab L84, `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
+Measured (lab [L84](https://blanketfish.github.io/port49/reference/lab-register/#l84), `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
 unit's hardening): port49d reads a file that systemd renders from `LoadCredential=`. systemd gives the
 credential `root:root 0440` with an ACL granting only `port49d`, in a directory with an ACL too, and
 the fence reads the ACL's entries, so it passes. Use it for the encryption key, so the file on disk
@@ -348,7 +348,7 @@ closes every session in flight, so adding a device credential that way would cos
 each time. A host whose systemd renders no credentials directory (a container's did not) cannot use this.
 
 This recipe is `port49d`'s alone. The broker's copy of the encryption key stays the file readable by
-`port49-broker`: L84 did not measure the broker unit's shape, so `LoadCredential=` is not claimed for it.
+`port49-broker`: [L84](https://blanketfish.github.io/port49/reference/lab-register/#l84) did not measure the broker unit's shape, so `LoadCredential=` is not claimed for it.
 
 ## Rotating the `encryption:` key
 
@@ -372,6 +372,7 @@ refused too.
 
 ## When it will not start
 
+<!-- --8<-- [start:will_not_start] -->
 `journalctl -u port49d -b` (or `-u port49-broker`) holds the line. The units set no start limit, so
 a start that fails is tried again every ten seconds, and a port49d whose etcd is down at boot
 comes back on its own when etcd does; journald rate-limits a repeated line. Fix the cause and the next
@@ -387,6 +388,7 @@ try starts.
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `journalctl -u port49d -b` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the unit restarts | `journalctl -u port49d -b` | nothing: it retries every ten seconds; start etcd |
 
+<!-- --8<-- [end:will_not_start] -->
 ## The smoke test
 
 `make systemd-smoke` installs the package under systemd in a container and drives it. The smokes run in CI

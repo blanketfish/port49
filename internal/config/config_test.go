@@ -1368,8 +1368,9 @@ func TestASecondYAMLDocumentIsRefused(t *testing.T) {
 	invPath := write(t, "inventory.yaml", inv)
 	raw := fmt.Sprintf(sample, invPath) + "---\nlimits: {per_nas_connections: 9999}\n"
 	p := write(t, "port49d.yaml", raw)
+	// the error names the temp file's path, whose random digits can hold "9999": look for the key instead
 	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "more than one YAML document") ||
-		strings.Contains(err.Error(), "9999") {
+		strings.Contains(err.Error(), "per_nas_connections") {
 		t.Fatalf("Load: %v", err)
 	}
 	for name, read := range map[string]func([]byte) error{

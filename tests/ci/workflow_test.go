@@ -108,6 +108,10 @@ var releaseJobPerms = map[string]map[string]string{
 
 // jobPermsOK is whether p is what job id of workflow name may hold.
 func jobPermsOK(name, id string, p any) bool {
+	if name == "docs.yml" && id == "deploy" {
+		m, ok := p.(map[string]any)
+		return ok && len(m) == 2 && m["pages"] == "write" && m["id-token"] == "write"
+	}
 	if name != "release.yml" {
 		return readOnly(p)
 	}

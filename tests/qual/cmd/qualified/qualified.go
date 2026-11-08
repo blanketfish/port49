@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/blanketfish/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/docgen"
 )
 
 const header = `# Qualified platforms
@@ -91,9 +93,83 @@ func commandReason(gaps []devicemock.EngineGap) (found bool, reason string) {
 	return false, ""
 }
 
+// specPath is the spec, under the repository root, whose §15 register says which cited rows are open.
+const specPath = "docs/design/2026-08-23-policy-engine-spec.md"
+
+var registerID = regexp.MustCompile(`\bL[0-9]+[a-z]?\b`)
+
+// citedID is a register ID with the " cell" that may follow it ("L76 cell b").
+var citedID = regexp.MustCompile(`\bL[0-9]+[a-z]?\b(?: cell\b)?`)
+
+// cite appends ", open" to every register ID in text that reg reads as open: the docs lint refuses
+// an open row asserted, and a cell that cites one says so. A closed or unknown ID is left alone
+// (checkCited refuses an unknown one before any page is built).
+func cite(text string, reg map[string]docgen.LabRow) string {
+	var b strings.Builder
+	last := 0
+	for _, loc := range citedID.FindAllStringIndex(text, -1) {
+		id, cell := strings.CutSuffix(text[loc[0]:loc[1]], " cell")
+		b.WriteString(text[last:loc[0]])
+		last = loc[1]
+		switch {
+		case !reg[id].Open, strings.HasPrefix(text[loc[1]:], ", open"):
+			b.WriteString(text[loc[0]:loc[1]]) // closed, or already cited
+		case cell:
+			b.WriteString(id + ", open; cell") // "L76, open; cell b": the lint reads "ID, open" beside the ID
+		default:
+			b.WriteString(id + ", open")
+		}
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+// checkCited is an error naming every register ID in text that reg lacks: a cell never cites a row
+// the register does not hold.
+func checkCited(where, text string, reg map[string]docgen.LabRow) error {
+	for _, id := range registerID.FindAllString(text, -1) {
+		if _, ok := reg[id]; !ok {
+			return fmt.Errorf("%s cites %s, which the spec's lab register does not hold", where, id)
+		}
+	}
+	return nil
+}
+
+// BuildLinked is Build with every lab ID linked to its section of the lab register page, by the site's
+// absolute URL: the page is included into the site and read on GitHub, and a relative link works on one.
+func BuildLinked(repoRoot string) (string, error) {
+	out, err := Build(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	spec, err := os.ReadFile(filepath.Join(repoRoot, specPath))
+	if err != nil {
+		return "", err
+	}
+	reg, err := docgen.LabRegister(spec)
+	if err != nil {
+		return "", err
+	}
+	return docgen.LinkLabIDs(out, reg, docgen.LabRegisterSiteURL)
+}
+
 // Build returns the Markdown page. A row exists only where a profile loads, which
-// needs every note it cites, and its golden loads.
+// needs every note it cites, and its golden loads. The spec's lab register decides
+// how a cell cites a row (cite); a repository without it builds no page.
 func Build(repoRoot string) (string, error) {
+	spec, err := os.ReadFile(filepath.Join(repoRoot, specPath))
+	if err != nil {
+		return "", err
+	}
+	reg, err := docgen.LabRegister(spec)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range []string{l80Runs, l80Refused, l80DeniedByPort49} {
+		if err := checkCited("the TLS column", s, reg); err != nil {
+			return "", err
+		}
+	}
 	files, err := filepath.Glob(filepath.Join(repoRoot, "tests/qual/profiles/*/*.yaml"))
 	if err != nil {
 		return "", err
@@ -130,16 +206,24 @@ func Build(repoRoot string) (string, error) {
 			notes = append(notes, f.What)
 		}
 		tlsGap, tlsReason := tlsNoCommands(p.DeviceFacts)
-		c := cells(p.Transports, g, gap, reason)
-		tc := tlsCommand(p.Transports, g, gap, reason, tlsGap, tlsReason)
+		for _, s := range append([]string{reason, tlsReason}, notes...) {
+			if err := checkCited(f, s, reg); err != nil {
+				return "", err
+			}
+		}
+		for i, n := range notes {
+			notes[i] = cite(n, reg)
+		}
+		c := cells(p.Transports, g, gap, reason, reg)
+		tc := tlsCommand(p.Transports, g, gap, reason, tlsGap, tlsReason, reg)
 		switch {
 		case !slices.Contains(p.Transports, "tls"):
 		case p.HasFact(devicemock.FactTLSPerRequestDeniedRuns):
-			tc = l80Runs
+			tc = cite(l80Runs, reg)
 		case p.HasFact(devicemock.FactTLSPerRequestDeniedRefused):
-			tc = l80Refused
+			tc = cite(l80Refused, reg)
 		case p.HasFact(devicemock.FactTLSPerRequestDeniedByPort49):
-			tc = l80DeniedByPort49
+			tc = cite(l80DeniedByPort49, reg)
 		}
 		c = slices.Insert(c, 3, tc)
 		c[len(c)-1] = rowStatus(c[len(c)-1], tc)
@@ -175,10 +259,10 @@ func Build(repoRoot string) (string, error) {
 // Build inserts: 49, 300, command authorization (over 49, from token_login),
 // accounting, mock and status. Accounting is read from token_login, or from
 // tls_token_login for a TLS-only platform.
-func cells(transports []string, g devicemock.Golden, commandGap bool, reason string) []string {
+func cells(transports []string, g devicemock.Golden, commandGap bool, reason string, reg map[string]docgen.LabRow) []string {
 	cmd := "—"
 	if slices.Contains(transports, "tcp") {
-		cmd = command(g.Scenarios["token_login"].Steps, commandGap, reason)
+		cmd = command(g.Scenarios["token_login"].Steps, commandGap, reason, reg)
 	}
 	return []string{tcp(transports, g), tlsCell(transports, g), cmd, accounting(g), "yes", status(transports, g, commandGap)}
 }
@@ -198,17 +282,17 @@ const (
 // no command authorization (its profile's device fact, never inferred) reads
 // "single-connection only" when tls_single_connection's golden holds both
 // command answers, else "no (per-request; <citation>)" (review batch 2 C1, I3).
-func tlsCommand(transports []string, g devicemock.Golden, commandGap bool, reason string, noCommands bool, factReason string) string {
+func tlsCommand(transports []string, g devicemock.Golden, commandGap bool, reason string, noCommands bool, factReason string, reg map[string]docgen.LabRow) string {
 	if !slices.Contains(transports, "tls") {
 		return "—"
 	}
 	if noCommands {
 		if commandsAnswered(g.Scenarios["tls_single_connection"].Steps) {
-			return "single-connection only (per-request: " + factReason + ")"
+			return "single-connection only (per-request: " + cite(factReason, reg) + ")"
 		}
-		return "no (per-request; " + factReason + ")"
+		return "no (per-request; " + cite(factReason, reg) + ")"
 	}
-	return command(g.Scenarios["tls_token_login"].Steps, commandGap, reason)
+	return command(g.Scenarios["tls_token_login"].Steps, commandGap, reason, reg)
 }
 
 func yn(ok bool) string {
@@ -257,8 +341,8 @@ func commandsAnswered(steps []devicemock.GoldenStep) bool {
 // command is "yes" when a login's steps answered a permitted and a denied
 // command, "— (reason)" when the profile records that the device sends none and
 // the steps hold none (reason is the register its gap cites: L18 for Junos, L76
-// cell b for SR Linux), else "no".
-func command(steps []devicemock.GoldenStep, commandGap bool, reason string) string {
+// cell b for SR Linux; reg marks an open row's ID "L18, open"), else "no".
+func command(steps []devicemock.GoldenStep, commandGap bool, reason string, reg map[string]docgen.LabRow) string {
 	if commandsAnswered(steps) {
 		return "yes"
 	}
@@ -266,7 +350,7 @@ func command(steps []devicemock.GoldenStep, commandGap bool, reason string) stri
 		if reason == "" {
 			return "—"
 		}
-		return "— (" + reason + ")"
+		return "— (" + cite(reason, reg) + ")"
 	}
 	return "no"
 }
@@ -283,7 +367,7 @@ func status(transports []string, g devicemock.Golden, commandGap bool) string {
 	}
 	cmd := "—"
 	if slices.Contains(transports, "tcp") {
-		cmd = command(g.Scenarios["token_login"].Steps, commandGap, "")
+		cmd = command(g.Scenarios["token_login"].Steps, commandGap, "", nil)
 	}
 	for _, c := range []string{tcp(transports, g), tlsCell(transports, g), cmd, accounting(g)} {
 		if c == "no" {

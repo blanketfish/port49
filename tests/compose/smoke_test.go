@@ -156,10 +156,24 @@ func (c composeRotator) WritePolicy(policyYAML []byte) error {
 	if err := os.WriteFile(filepath.Join(c.s.config, "policy.yaml"), policyYAML, 0o644); err != nil {
 		return err
 	}
+	before := c.containers()
 	if out, err := c.s.try("up", "-d"); err != nil {
 		return fmt.Errorf("docker compose up -d: %v\n%s", err, out)
 	}
+	if after := c.containers(); after != before {
+		return fmt.Errorf("up -d recreated port49d or the broker (%s, then %s): the policy reached it by a boot, not a reload", before, after)
+	}
 	return nil
+}
+
+// containers is the ids of port49d and the broker, so a recreate shows as a change.
+func (c composeRotator) containers() string {
+	var ids []string
+	for _, svc := range []string{"port49d", "port49-broker"} {
+		out, _ := c.s.try("ps", "-q", svc)
+		ids = append(ids, svc+"="+strings.TrimSpace(out))
+	}
+	return strings.Join(ids, " ")
 }
 
 // WriteKey makes keys/<name> root:65532 0440 in port49d-keys, never replacing one.
@@ -203,9 +217,19 @@ func (c composeRotator) StartedAt() string {
 func TestComposeSmoke(t *testing.T) {
 	s := newStack(t)
 	brokerDir := filepath.Join(s.local, "broker")
-	s.run("up", "-d", "--build")
+	s.run("build") // then a plain up, so WritePolicy's up -d reloads (see composeUp)
+	s.run("up", "-d")
 	s.ready("127.0.0.1:9050")
 	s.ready("127.0.0.1:9049")
+	// Both services report healthy through their own `healthcheck --ready` (plan 13, Task 10), which
+	// runs inside the container, so the image has the subcommand and the config path it names.
+	for _, svc := range []string{"port49d", "port49-broker"} {
+		shapetest.WaitFor(t, svc+" reports healthy", 2*time.Minute, func() bool {
+			id := strings.TrimSpace(s.run("ps", "-q", svc))
+			out, err := exec.Command("docker", "inspect", "-f", "{{.State.Health.Status}}", id).CombinedOutput()
+			return err == nil && strings.TrimSpace(string(out)) == "healthy"
+		})
+	}
 
 	key, err := os.ReadFile(filepath.Join(s.local, "keys", "tacacs_v1"))
 	if err != nil {
@@ -442,7 +466,8 @@ chmod 0400 /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key`); err != n
 // device key or a sealing key. Failures name the variable, never its value.
 func TestTheStackHasNoEnvSecret(t *testing.T) {
 	s := newStack(t)
-	s.run("up", "-d", "--build")
+	s.run("build")
+	s.run("up", "-d")
 	for _, id := range strings.Fields(s.run("ps", "-q")) {
 		out, err := exec.Command("docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", id).Output()
 		if err != nil {

@@ -1,0 +1,47 @@
+_description: "Every key of port49-inventory.yaml, the configuration of the inventory service that syncs devices from a source of truth and serves the signed bundle."
+_intro: |
+  `port49-inventory.yaml` configures the inventory service. It is read once at start and strict-decoded; an
+  unknown key, a removed key or a second document is refused, and an error names the line and the kind of
+  fault but never a value. Nothing in the file is a secret: secrets are references (`env:NAME` or
+  `file:/path`), and the keys are files.
+
+  Every path must be absolute. Durations need a unit, for example `10m`. Paths below use `[]` for an item of
+  a list.
+listen: "Required. The API address, `host:port`, such as `127.0.0.1:8443` or `:8443`. Mutual TLS on every path."
+metrics_listen: "Address of `/metrics`, `/healthz` and `/readyz`, plain HTTP, carrying no fleet data. Default `:9050`."
+webhook_listen: "Address that takes NetBox and Nautobot deliveries, `host:port`, TLS and no client certificate. Set it only if a source has `webhook_secret_ref`, and a source with `webhook_secret_ref` needs it. Unset means no webhook."
+webhook_tls_cert_file: "Certificate for the webhook listener. Default: the API's. Set with `webhook_tls_key_file`."
+webhook_tls_key_file: "Private key for the webhook listener. Set with `webhook_tls_cert_file`."
+tls_cert_file: "Required. The API's server certificate."
+tls_key_file: "Required. The API's private key. It is read through the key-file check: not a symlink, owned by the service user or root, no group or other mode bits, at most 1 MiB. Keep it in a directory only its owner can write."
+client_ca_file: "Required. The CA that issues the certificates of readers and syncers."
+readers: "Identities that may read the bundle: `user:<email>` in lowercase or a certificate's URI SAN such as `spiffe://...`. `readers` or `syncers` must name someone."
+syncers: "Identities that may read the bundle and start a sync (`POST /v1/sync`). Same form as `readers`."
+signing_key_file: "Required. The private key that signs the bundle."
+verify_key_files: "Further public keys the service accepts for its own state directory and mirror: the old signing key's during a rotation, so the sequence and the bound survive it. The service's own public key is always accepted. Read once, at start, so a change needs a restart: SIGHUP starts a sync and does not re-read it."
+sync_timeout: "How long one sync may run before it is cut off. Default `5m`; `10s` to `1h`."
+policy_file: "Required. The policy file the service validates a bundle against before serving it."
+state_dir: "Required. Where the service keeps its state. Must not contain or be inside `mirror_dir`."
+mirror_dir: "Optional. A separate copy of the state, read at a cold start when `state_dir` has none. Must be outside `state_dir`."
+interval: "How often each source is synced unless it sets its own. Default `10m`; `1m` to `24h`."
+safety.max_removed_percent: "The largest share of the fleet, `0` to `100`, a sync may remove before it is refused. Default `10`. A source without its own bound takes this one."
+sync.[].name: "Required. The source's name: lowercase letters, digits and `_`, starting with a letter, unique. At least one source is required."
+sync.[].type: "Required. `file`, `netbox` or `nautobot`."
+sync.[].path: "`file` only, required: the absolute path of the inventory file the source reads."
+sync.[].interval: "How often this source is synced. Default: the top-level `interval`; `1m` to `24h`."
+sync.[].safety.max_removed_percent: "This source's own removal bound, `0` to `100`. Default: the top-level bound."
+sync.[].url: "`netbox` and `nautobot` only, required: the product's base URL."
+sync.[].ca_file: "`netbox` and `nautobot` only, required: an absolute path to the CA bundle that issues the source's certificate (the host's own bundle file for a public one)."
+sync.[].token_secret_ref: "`netbox` and `nautobot` only, required: where the API token is read from, `env:NAME` or `file:/absolute/path`. One to 512 printable characters with no space."
+sync.[].webhook_secret_ref: "`netbox` and `nautobot` only: where the secret that signs this source's webhook deliveries is read from. 32 to 255 printable characters with no space. Needs `webhook_listen`."
+sync.[].profile: "`netbox` and `nautobot` only: the product profile to read with. Must be one the build knows for the type; the error lists them."
+sync.[].api: "`netbox` and `nautobot` only: `auto` (default), `graphql` or `rest`. `rest` cannot give interface addresses."
+sync.[].page_size: "`netbox` and `nautobot` only: devices per request, `1` to `1000`. Default `500`."
+sync.[].filter.status: "Statuses kept, a name or a list; an empty list is refused. Default `[active]`."
+sync.[].filter.tags: "Only devices with these tags are kept."
+sync.[].filter.has_primary_ip: "Set `true` to keep only devices that have a primary IP."
+sync.[].map: "Attribute name to the path in the product's record it is read from, for example `site: site.slug`. Must include `platform`. An attribute name is lowercase letters, digits and `_`, starting with a letter, and not `name`."
+sync.[].addresses.primary: "Whether the device's primary IP is an address. Default `true`."
+sync.[].addresses.interfaces: "Interface names whose addresses are also device addresses. Not with `all_interfaces`."
+sync.[].addresses.all_interfaces: "Set `true` to take the addresses of every interface. Not with `interfaces`. At least one of `primary`, `interfaces` or `all_interfaces` must give an address."
+sync.[].platform_aliases: "Maps the product's platform slug to the platform name the policy uses, `slug: platform_name`. Slugs are compared in lowercase; two entries alike in lowercase are refused."

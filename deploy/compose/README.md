@@ -32,10 +32,12 @@ Bring the whole stack up the first time, or run `docker compose build` first: on
 The trial PKI protects nothing real. TACACS+ is published on `127.0.0.1:49`, the broker on
 `127.0.0.1:8443`, and each component's metrics on `127.0.0.1:9049` and `127.0.0.1:9050`.
 
-**Ready is not "running".** The stack has no healthchecks (planned with plan 13), so
-`docker compose ps` showing `running` says only that the process started. Check readiness from
-the host with `curl 127.0.0.1:9049/readyz` (port49d) and `curl 127.0.0.1:9050/readyz` (the
-broker), on the metrics ports; a `200` is ready, anything else or no answer is not.
+**Ready is not "running".** `port49d` and `port49-broker` each have a healthcheck that runs
+`healthcheck --ready`, which probes `/readyz`, every ten seconds (the first thirty are a grace
+period). `docker compose ps` shows `healthy` only when it passes; `running` alone says the process
+started. You can ask the same question from the host with `curl 127.0.0.1:9049/readyz` (port49d) and
+`curl 127.0.0.1:9050/readyz` (the broker), on the metrics ports; a `200` is ready, anything else or no
+answer is not.
 
 Inputs, each an environment variable with a default: `PORT49_COMPOSE_LOCAL` (`./local`),
 `PORT49_COMPOSE_CONFIG` (`./config`), `PORT49_COMPOSE_SUBNET` (`172.30.49.0/24`),
@@ -74,11 +76,16 @@ file is kept and a line says so. To change a key, add a new version (below, and 
 is the opposite: `setup` copies `config/policy.yaml` over the volumes' at every `up`, so
 **edit `config/policy.yaml` on the host, then `docker compose up -d`**. port49d reads it at
 `policy.watch_interval` with no restart. A policy edited inside a volume is reverted at the next `up`.
+That holds only while the image is the one the containers were made from: an `up -d` after the
+image was rebuilt (an `up -d --build`, or a `docker compose build` after a `git pull`) recreates
+port49d and the broker, so the policy arrives by a restart, not a reload. Keep image changes and
+policy edits apart: rebuild with `docker compose build` and `up -d` as one change, then make policy
+edits with a plain `up -d`.
 
 Docker API access is root-equivalent, so guard it as you would the host: `docker run` with a volume
 reads every file in it.
 
-Compose's own `secrets:` is measured (lab L84, `tests/lab/results/L84-systemd-docker.md`) and is **not used
+Compose's own `secrets:` is measured (lab [L84](https://blanketfish.github.io/port49/reference/lab-register/#l84), `tests/lab/results/L84-systemd-docker.md`) and is **not used
 for device keys**. A file-backed secret starts port49d only if the host file is `root:65532` mode 0440:
 Compose bind-mounts it as it is and does not apply the long syntax's `uid`, `gid` or `mode`, and the file
 fence refuses `0444` (the short syntax's documented mode) and a file the operator owns. And adding a second
@@ -129,7 +136,7 @@ crash-loops until you restore the file in the `port49d-keys` volume or take the 
   `deploy/systemd/README.md`, "Where the secrets live", with the destination changed). Edit `config/` for your policy and CRL or OCSP
   (the example sets `certificate_status.disabled`, which a deployment must not).
 - List devices in `inventory.yaml` by the address port49d sees (design §13). A published port
-  may change that address; what it does is policy engine spec §15 L39 (a). Measured: kept for an off-host device
+  may change that address; what it does is policy engine spec §15 [L39](https://blanketfish.github.io/port49/reference/lab-register/#l39) (a). Measured: kept for an off-host device
   (modelled; `tests/lab/results/L39-docker-proxy-on-arista_eos.md` and `-off-`), masqueraded to
   the compose gateway for a device on another Docker network on the same host. A connection
   docker-proxy itself relays is unmeasured.
@@ -165,9 +172,9 @@ key does:
   `external` (`tls_cert_file`, `tls_key_file`) or `simple` (`bind_dn` and `password_secret_ref`, the
   weakest: the password is named by `file:/path`, read when the directory opens, never printed; use a
   file in `broker-etc`, not `env:NAME`, which would show in `docker inspect`).
-  Samba AD (lab L43): `external` is refused with LDAP result 1, which port49 counts as a server fault (every
+  Samba AD (lab [L43](https://blanketfish.github.io/port49/reference/lab-register/#l43)): `external` is refused with LDAP result 1, which port49 counts as a server fault (every
   breaker opens, `port49_directory_server_up` drops to 0), so use `simple` or `gssapi`; `gssapi` is refused
-  under `ldap server require strong auth = yes` and accepted under `allow_sasl_over_tls`. Windows Server AD: L44.
+  under `ldap server require strong auth = yes` and accepted under `allow_sasl_over_tls`. Windows Server AD: [L44](https://blanketfish.github.io/port49/reference/lab-register/#l44).
 - `base_dn`, `groups_base_dn`, `principal_attribute`, `username_attribute`: where a person
   and their groups are found, and which attributes name them. Only directory administrators
   may write the two attributes: two entries holding one value are both refused.
@@ -335,6 +342,7 @@ store and the id. Two store blocks reaching one etcd cluster at one prefix are r
 
 ## When it will not start
 
+<!-- --8<-- [start:will_not_start] -->
 `docker compose logs port49d` (or `port49-broker`) holds the line. `restart: unless-stopped` has no
 limit: a start that fails is tried again, with a restart delay that grows to a minute, until you fix the cause or `docker
 compose stop` it, so `docker compose ps` shows a restarting container and the log repeats the line.
@@ -349,18 +357,15 @@ A port49d whose etcd is down at boot comes back on its own when etcd does.
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `docker compose logs port49d` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the container restarts | `docker compose logs port49d` | nothing: it retries; start etcd |
 
+<!-- --8<-- [end:will_not_start] -->
 ## etcd's disk
 
 etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
 datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
 500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
-or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms (`tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md`); beehive's QLC drive failed it (`tests/lab/results/load-beehive.md`).
+or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms; a consumer QLC drive failed it (the notes are the `load-*` files in `tests/lab/results/`).
 port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The `port49_accounting_spool_disk_slow` alert watches it.
 
 ## Backups
 
 Each etcd data volume and `broker-state` (design §13's runbook).
-
-## Not here yet
-
-Plan 13's install page and etcd sizing.

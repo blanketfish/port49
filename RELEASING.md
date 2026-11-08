@@ -1,5 +1,6 @@
 # Releasing port49
 
+<!-- --8<-- [start:release] -->
 A release is a `v*` tag on a commit that is on `main`. The `release` workflow
 (`.github/workflows/release.yml`) does the rest: it checks the tag against every version file, builds
 the packages, image, chart, Python package and Galaxy collection, and publishes each from a job that
@@ -8,12 +9,20 @@ only downloads. The GitHub release stays a draft until every publisher has finis
 Nothing publishes until a tag is pushed. Do the one-time setup below first; it is what makes a tag
 without approval harmless.
 
+## Versioning
+
+port49 uses SemVer. `v0.1.0` is the beta. In 0.x, configuration may break between releases, and every
+such change gets a loud release note. `1.0.0` is the compatibility promise. There is one version across
+every artifact (packages, image, chart, Python package, Galaxy collection), and bumps come from
+Conventional Commits. Tags are pushed by hand and carry no pre-release suffix unless it maps to a valid
+PEP 440 version. The docs site states the same on its Versions page.
+
 ## One-time setup, before the first tag
 
 1. **PyPI trusted publisher.** Project `port49`, repository `blanketfish/port49`, workflow
    `release.yml`, environment `pypi`.
 2. **Environments** (Settings, Environments):
-   - `release` (the goreleaser, image and chart jobs): the maintainer (Ryan Wendt) as the **required reviewer**, so
+   - `release` (the goreleaser, image and chart jobs): the maintainer as the **required reviewer**, so
      no tag publishes without approval.
    - `pypi` and `galaxy`: created beside it.
    - Each of `release`, `pypi` and `galaxy`: deployment branches and tags restricted to the **`v*`
@@ -26,6 +35,13 @@ without approval harmless.
    outside collaborators": **Require approval for all outside collaborators**.
 6. **Public packages.** When the repository goes public, make the GHCR package `port49` and the
    chart package public.
+7. **Docs site.** Settings, Pages, source **GitHub Actions**. The `github-pages` environment's
+   deployment branches and tags are restricted to `main` and the `v*` tag pattern. `docs.yml`'s
+   `deploy` job is the only one that names it, and it deploys only from a public repository.
+8. **Required check.** Add `docs` (the build job in `docs.yml`, named `docs`) to the required
+   status checks of the `main` ruleset. The site deploys only for the highest final `vX.Y.Z` tag.
+9. **Link check.** At go-public, run one external link check over the built site (for example
+   `lychee` on `site/`) and fix what it finds.
 
 ## Each release
 
@@ -34,3 +50,4 @@ without approval harmless.
 2. Merge to `main`. The tag must be on `main`; the workflow refuses it otherwise.
 3. The maintainer pushes the tag; nobody else, and no automation, does. The maintainer approves the `release` environment when the run asks.
 4. Check the draft release's assets and provenance attestations, then let the last job publish it.
+<!-- --8<-- [end:release] -->

@@ -24,7 +24,7 @@ against the cluster's published keys.
 - **Set `--service-account-issuer` per cluster.** kubeadm's default is the same everywhere, and
   port49 refuses one issuer twice. This is the main onboarding cost for a self-managed fleet.
   The safe sequence when changing an issuer (not measured: it is reasoned from decision 49
-  rulings 3 and 4, and the two-verifier config is unit-tested; no L69 cell changed a real
+  rulings 3 and 4, and the two-verifier config is unit-tested; no [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) cell changed a real
   cluster's issuer, and (d) rotated a signing key under one issuer):
   1. Add the new issuer as the *first* `--service-account-issuer` flag, keeping the old one as a
      second (the API server signs with the first and accepts both).
@@ -33,13 +33,13 @@ against the cluster's published keys.
   3. Roll the pods.
   4. After the longest `expirationSeconds` in use has passed, remove the old flag and the old
      verifier.
-- **Apply `issuer-discovery.yaml`** (measured on kind, L69 (c); managed clusters are unmeasured,
-  L70). Know what it exposes: the binding is to `system:unauthenticated`, so anyone who can
+- **Apply `issuer-discovery.yaml`** (measured on kind, [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (c); managed clusters are unmeasured,
+  [L70](https://blanketfish.github.io/port49/reference/lab-register/#l70)). Know what it exposes: the binding is to `system:unauthenticated`, so anyone who can
   reach the API server's address can read the issuer discovery document and the JWKS without
   authenticating. They are public keys only, no secret, and the binding grants no other
   anonymous access. Where that reach is too wide, use a narrower route instead of the binding:
   the API server's structured authentication configuration (1.32+) with `anonymous.conditions`
-  limited to the two discovery paths (below; exact form not measured: L69 (c) measured the binding alone), or publish a
+  limited to the two discovery paths (below; exact form not measured: [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (c) measured the binding alone), or publish a
   mirror of the keys and point `jwks` at it (no binding at all; see the `jwks` item). Issuer
   discovery needs `--anonymous-auth` on (not measured; kind's default had it on); a CIS-hardened cluster turns it off. On
   1.32+ use the structured authentication configuration (`AuthenticationConfiguration`'s
@@ -90,10 +90,10 @@ the overlap would buy nothing.
 `backup-cronjob.yaml`:
 
 - `automountServiceAccountToken: false`, on the ServiceAccount and the pod. The default API token's
-  `aud` is the API server's and port49 refuses it (measured on kind, L69 (h)); only the projected
+  `aud` is the API server's and port49 refuses it (measured on kind, [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (h)); only the projected
   volume is mounted.
 - `expirationSeconds: 3600`. The kubelet refreshes a projected token at about 80% of its
-  lifetime (measured on kind, L69 (b)), and the broker refuses a token issued longer ago than
+  lifetime (measured on kind, [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (b)), and the broker refuses a token issued longer ago than
   `broker.identity.max_token_age` (2h by default), so keep it at or under 3600.
 - Least privilege: the pod sets `runAsNonRoot: true` (the image runs as 65532) and
   `seccompProfile: RuntimeDefault`; the container sets `allowPrivilegeEscalation: false`,
@@ -119,11 +119,11 @@ What the operator sees. `<cluster>` is the verifier's `cluster` name with its is
 |---|---|---|
 | First start, JWKS unreachable | 503 `identity_provider_unavailable`; retries within `--deadline`, exits 75 | `identity: <cluster>: no keys fetched yet (<error>)…`; `port49_oidc_keys_fetch_failures_total{issuer}` climbs; record `deny trust_domain_unresolved` |
 | JWKS unreachable later | mints go on with the keys held for `jwks_max_age` (24h); then as above | `keys not refreshed since <t>…`, hourly; alert on `time() - port49_oidc_keys_last_success_timestamp_seconds > jwks_max_age/2` |
-| Key rotated at the cluster | none: one refetch finds the new key (measured on kind, L69 (d)) | none; rotated wrongly: 401 "no one key of <cluster> matches its key id", exit 77 |
+| Key rotated at the cluster | none: one refetch finds the new key (measured on kind, [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (d)) | none; rotated wrongly: 401 "no one key of <cluster> matches its key id", exit 77 |
 | Clock skew | 401 "issued at <t>, ahead of the broker's clock by more than clock_skew" | fix the broker host's clock |
 | Token from an unlisted cluster | 401 "no configured verifier accepts its issuer", exit 77 | metric under `issuer="unknown"` |
 | Unlisted namespace | 401 `identity_unmapped` "its namespace <ns> is not one <cluster> lists" | record `auth.method: k8s` |
-| Wrong audience, or the default API token | 401 "its aud is not exactly [port49]", exit 77 | fix the volume's `audience` (L69 (g), (h)) |
+| Wrong audience, or the default API token | 401 "its aud is not exactly [port49]", exit 77 | fix the volume's `audience` ([L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (g), (h)) |
 | Token past `max_token_age` | 401 "issued <d> ago, past broker.identity.max_token_age" | the kubelet stopped rotating, or `expirationSeconds` is too long |
 | Discovery names another issuer | each token refused until `issuer` matches | `identity: <cluster>: the cluster's discovery … names issuer <X>`, once |
 
@@ -138,7 +138,7 @@ port49 revoke --principal system:serviceaccount:netops:oxidized
 Deleting the service account alone is not immediate. The broker does not call the cluster's
 TokenReview (decision 49 ruling 11): doing so would put every cluster's API server on the mint
 path, and needs a broker credential on each cluster. A token already in hand mints until its
-`exp` or `iat` plus `max_token_age`, at most 2h. L69 (e) measured that TokenReview answers
+`exp` or `iat` plus `max_token_age`, at most 2h. [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (e) measured that TokenReview answers
 unauthenticated after the pod and then the service account are deleted and port49 still mints, and
 that `revoke` then refuses at once (the 2h bound is the configured limit, not measured). `revoke` closes the
 window at once; the mark also stands for a service account re-created under that name until
@@ -146,6 +146,6 @@ window at once; the mark also stands for a service account re-created under that
 
 ## 8. What is not measured
 
-- Managed clusters (EKS, GKE, AKS): L70, open.
+- Managed clusters (EKS, GKE, AKS): [L70](https://blanketfish.github.io/port49/reference/lab-register/#l70), open.
 - A CronJob run in a cluster against a broker outside it is plan 12's deployment test.
 - Changing a real cluster's `--service-account-issuer` (section 2): not measured.

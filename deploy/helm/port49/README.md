@@ -32,7 +32,7 @@ its init Job.
 **etcd's disk.** etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
 datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
 500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
-or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms (`tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md`); beehive's QLC drive failed it (`tests/lab/results/load-beehive.md`).
+or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms; a consumer QLC drive failed it (the notes are the `load-*` files in `tests/lab/results/`).
 port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The `port49_accounting_spool_disk_slow` alert watches it.
 
 Two server groups (for example a lab and production) are two releases in two namespaces with their
@@ -42,7 +42,7 @@ own Secrets and their own etcd; they share nothing.
 
 1. `etcd.endpoints`: every member, at least three.
 2. `keys.existingSecret`: mounted whole at `/run/port49/keys`, in port49d's pod only, mode 0440 under
-   `fsGroup` (measured on kind: L82).
+   `fsGroup` (measured on kind: [L82](https://blanketfish.github.io/port49/reference/lab-register/#l82)).
 3. `encryption.existingSecret` and `encryption.id`: mounted in both pods.
 4. `policy` and `inventory`, via `--set-file`. Without a policy port49d refuses to start.
 
@@ -58,7 +58,7 @@ A key is read under the secret-file rule, so two things are refused at the pod's
 naming the file. A key directory that is group- or world-writable (outside a read-only Secret mount, which
 is excused): `chmod 0755` or `0750` it. A group-readable key whose group is not the pod's (fsGroup 65532
 is): a Secret volume's files are, and a file an injector or a CSI driver writes as `root:root` 0440 is not.
-Never a looser rule. Two mechanisms were measured on kind (L83, run 41155086403):
+Never a looser rule. Two mechanisms were measured on kind ([L83](https://blanketfish.github.io/port49/reference/lab-register/#l83), run 41155086403):
 
 - **The Secrets Store CSI driver is not supported for device keys.** Its files are `0:0 0644` (the world
   bit: refused) and, with the provider's `filePermission: 0440`, `0:0 0440` (port49d, uid 65532, cannot read
@@ -71,8 +71,8 @@ Never a looser rule. Two mechanisms were measured on kind (L83, run 41155086403)
   `vault.hashicorp.com/agent-run-as-same-user: "true"` the file is port49d's own and port49d starts. But adding
   a version is a pod rollout, not a reload: the injector reads its annotations only when a pod is admitted, and
   each file is its own annotation. A device key must reach a running process with no restart (spec decision 54
-  ruling 2), and the injector failed that cell (L83 c), so device keys come from External Secrets or a Secret
-  volume (L82). The encryption key changes rarely and a rollout is acceptable for it.
+  ruling 2), and the injector failed that cell ([L83](https://blanketfish.github.io/port49/reference/lab-register/#l83) c), so device keys come from External Secrets or a Secret
+  volume ([L82](https://blanketfish.github.io/port49/reference/lab-register/#l82)). The encryption key changes rarely and a rollout is acceptable for it.
 
 fsGroup also acts on a PVC's root, and two rules meet there. With `OnRootMismatch` the kubelet walks the
 whole volume at a pod's start unless the root is group 65532, includes 0770 and has setgid (kubelet
@@ -177,8 +177,15 @@ workstation that can reach the `<release>-broker` Service.
 
 Break-glass, when no broker is reachable: `scripts/revoke-offline.sh <ns> <release> -- --principal
 <name> [--lift|--list]` scales the brokers to 0, runs `port49-broker revoke --offline` against
-broker-0's volume, and scales back on every exit. `init-revocations` and `init-enrollments` are
-one-off Jobs, run once per new deployment: `examples/init-enrollments-job.yaml` is the second (adapt its names to
+broker-0's volume, and scales back on every exit. The chart is on etcd, which keeps the revocation
+marks (with a copy in `broker.state_dir`), so it has no `init-revocations` step (that command is for a single-process trial on the memory
+store). The etcd roles are applied once per cluster by `examples/etcd/etcd-init-job.yaml`, which applies
+`port49d store-roles`' output as etcd's root and enables auth. Before it, run
+`port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml > roles.sh` (the broker's
+config names the broker's own etcd certificate) and
+`kubectl -n port49-etcd create configmap port49-etcd-roles --from-file=roles.sh`; the Job's header
+comment has the details. `init-enrollments` is a one-off Job, run once per new deployment that uses directory password
+sign-in: `examples/init-enrollments-job.yaml` is it (adapt its names to
 your values, then `kubectl -n <ns> apply -f` it and `kubectl -n <ns> wait --for=condition=complete job/port49-init-enrollments
 --timeout=300s`; the kind job `make kind-enrollments` applies that file with only the image and the release's ConfigMap name changed, in the namespace `-n` names). A broker already running when `init-enrollments` finishes
 finds the new store within 30 seconds; until then its sign-ins answer `enrollment_store_lost`.
@@ -193,7 +200,7 @@ finds the new store within 30 seconds; until then its sign-ins answer `enrollmen
 | port49d refuses to start naming etcd and a version | `kubectl logs --previous <pod>` | A member is below the floor (spec decision 54 ruling 13); upgrade etcd. Every member is listed and checked. |
 | Not Ready, running | `curl :9049/readyz` through a port-forward | A store is unreachable; the body says which. |
 | Admin call 503 | broker log | No attestation roots configured. |
-| Brokers disagree on the CA, or one refuses to start on it | the broker's "issuing ca" log line; `copy-issuer.sh` output | Copy from a broker that holds the CA the store records, onto the one that differs: `copy-issuer.sh <ns> <release> --from <ordinal> --to <ordinal>`. It refuses to overwrite a different CA and names both; never `init-issuer` again, and not `forget-issuer`. |
+| Brokers disagree on the CA, or one refuses to start on it | the broker's "issuing ca" log line; `copy-issuer.sh` output | Copy from a broker that holds the CA the store records, onto one that holds none (a lost volume): `copy-issuer.sh <ns> <release> --from <ordinal> --to <ordinal>`. It never overwrites a CA: onto a broker that holds a different one, including one "behind a promotion" after a rotation, it refuses and names both, and the files are copied by hand with a debug pod on that broker's PVC (the docs' "When it will not start"). Never `init-issuer` again, and not `forget-issuer`. |
 | Pod `Init:Error` or `Init:CrashLoopBackOff` | `kubectl logs <pod> -c data-dir` and `-c data-dir-owner` (`describe` shows only the exit code) | `data-dir-owner` naming a path: a file in the data directory belongs to another uid; run the `chown -R 65532:65532 ...` it prints. `data-dir-owner` saying a directory may be mode 0000: `chmod u+rwx` it (as root on the volume), then restart. `data-dir` saying the data directory is a symlink: someone replaced it; inspect and remove the link. Otherwise the root init that sets up the volume failed; its log names the command. Usually a PVC that cannot be chowned (a read-only or network volume that refuses chown), or a namespace policy that drops its capabilities. |
 | No pod is ever created; the StatefulSet's events say `violates PodSecurity` | `kubectl -n <ns> describe statefulset <name>` | The namespace enforces `restricted`. The data-dir init runs as root (it makes the volume's root 3770 and the data directory 0700), so the namespace must be `baseline`: `kubectl label --overwrite ns <ns> pod-security.kubernetes.io/enforce=baseline`. |
 | A backup Job failed | `kubectl logs job/<name> -c stale-check` | A `.new` file is left from a run that did not finish; the log names it. Neither backup image has a shell: remove it from a throwaway alpine pod that mounts the backups PVC (`kubectl run`, `rm /backup/<name>.new`), and the next run proceeds. |
@@ -224,7 +231,7 @@ chart does not render one.
 
 `service.type` defaults to LoadBalancer with `externalTrafficPolicy: Local`, and the device's source
 address must reach port49d unrewritten, because port49d admits a device by that address. Measured on kind
-(spec §15 L39, 2026-11-04, kube-proxy in iptables mode, a device outside every node, a NodePort Service):
+(spec §15 [L39](https://blanketfish.github.io/port49/reference/lab-register/#l39), 2026-11-04, kube-proxy in iptables mode, a device outside every node, a NodePort Service):
 
 | Setting, and where the device dials | Result |
 |---|---|
@@ -237,7 +244,7 @@ address must reach port49d unrewritten, because port49d admits a device by that 
 Keep `Local`; `Cluster` breaks device binding. Under `Local`, give devices the LoadBalancer address, not a
 node's address: a pod that moves leaves its old node answering nothing, and the symptom is a device whose
 logins time out while port49d's log shows no attempt from it. MetalLB in BGP mode advertises the address
-only from nodes with a ready pod (L85 measured that); a cloud load balancer is unmeasured.
+only from nodes with a ready pod ([L85](https://blanketfish.github.io/port49/reference/lab-register/#l85) measured that); a cloud load balancer is unmeasured.
 
 Host networking passed in the lab, on a namespace relabelled `privileged`. The chart offers none: its namespace
 runs at Pod Security `baseline`. Kubernetes also refuses a pod's `net.ipv4.ip_unprivileged_port_start`
@@ -253,19 +260,19 @@ that forbid that sysctl need a different arrangement (not offered here).
 A terminating port49d pod keeps serving for `port49d.preStopSeconds` (default 15) before it closes its
 listeners, so the route to it is withdrawn first. Without the wait, a login that a router or load
 balancer still sent to the pod was refused: with MetalLB over BGP the route took 6.6 s to leave the
-router after the listener closed (L85 c, measured on kind), and the rolling-restart run without the
-wait lost one login of 42 past its retry (L85 d). It applies to every `service.type`, because the endpoint leaves the Service at the
+router after the listener closed ([L85](https://blanketfish.github.io/port49/reference/lab-register/#l85) c, measured on kind), and the rolling-restart run without the
+wait lost one login of 42 past its retry ([L85](https://blanketfish.github.io/port49/reference/lab-register/#l85) d). It applies to every `service.type`, because the endpoint leaves the Service at the
 pod's deletion in all of them. The image has no shell, so the wait is the kubelet's own `sleep`
 action, which needs Kubernetes 1.30 or later; on an older cluster set `port49d.preStopSeconds: 0`.
 `port49d.terminationGracePeriodSeconds` (default 60) must be at least the sleep plus 30, port49d's
 longest drain; the chart refuses a smaller value. With the 15 s wait the rolling restart lost no login
-(55 of 55 first time, L85 d, run 41155086403).
+(55 of 55 first time, [L85](https://blanketfish.github.io/port49/reference/lab-register/#l85) d, run 41155086403).
 
 ### Anycast with MetalLB
 
 `service.anycast.enabled: true` with `service.anycast.address` adds MetalLB's
 `metallb.universe.tf/loadBalancerIPs` annotation to the TACACS+ Service. Nothing else changes, and
-MetalLB, its address pool and its BGP peers stay yours. Lab L85 measured this on kind with MetalLB 0.16.1
+MetalLB, its address pool and its BGP peers stay yours. Lab [L85](https://blanketfish.github.io/port49/reference/lab-register/#l85) measured this on kind with MetalLB 0.16.1
 and an FRR 10.5.3 peer, and the chart refuses what it did not measure: `service.type` must be
 `LoadBalancer`, `externalTrafficPolicy` must be `Local`, and `port49d.preStopSeconds` must be at least 15.
 Measured: the device's own source address reaches port49d; exactly the nodes running a ready pod advertise
@@ -316,7 +323,7 @@ PVC a restrictive access mode. Restore enrollments with `port49 directory import
 and brings back redeemed tokens, so follow that runbook (delete `v1/t/` and `meta/judged`/`meta/judged_bundle`
 before the members serve clients, re-issue revocations with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`), lift again). Prefer
 restoring etcd from the `etcdctl snapshot` CronJob with `--bump-revision`; a file-system copy of a live member
-is crash-consistent at best and unmeasured under load (L89 measured one restore on an idle cluster). Measured on kind (Velero 1.18.4 with
+is crash-consistent at best and unmeasured under load ([L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) measured one restore on an idle cluster). Measured on kind (Velero 1.18.4 with
 its node agent, an S3-compatible store in the cluster; `tests/lab/results/L89-kind.md`, 2026-11-04): after a
 backup, deleting the namespace and a restore, both StatefulSets became ready with no fence refusal, the
 issuing CA's fingerprint was unchanged, the owner, group and mode of `state/`, `issuing-ca.key` and the
@@ -326,7 +333,7 @@ not measured here.
 
 - **Restore with the pods running, never with the StatefulSets at 0 replicas.** Velero's file-system
   restore copies a volume through the pod that mounts it; restored at 0 replicas, the restore stayed
-  `InProgress` past 8 minutes with every pod volume restore `New` and its pod absent (L89 cell (c), run
+  `InProgress` past 8 minutes with every pod volume restore `New` and its pod absent ([L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) cell (c), run
   42053716808). `examples/velero/README.md` has the order (etcd held down while the pods run, then both
   StatefulSets scaled to 0) and the recovery from a restore at 0 replicas.
 - **The backup holds the issuing CA's private key** (`state/issuing-ca.key`), each broker's state and the
@@ -366,7 +373,7 @@ not measured here.
   ```
   <!-- l89:claims:end -->
 
-  L89 runs these two commands verbatim, from this file, in CI after its backup (lab-kind run 41870212174): each printed nothing on a good backup, and with a claim no pod mounts the second printed exactly that claim.
+  [L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) runs these two commands verbatim, from this file, in CI after its backup (lab-kind run 41870212174): each printed nothing on a good backup, and with a claim no pod mounts the second printed exactly that claim.
 
   The backup's own warnings, which name a volume Velero skipped:
 

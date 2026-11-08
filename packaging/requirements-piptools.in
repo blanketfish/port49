@@ -1,0 +1,4 @@
+# The input of packaging/requirements-piptools.txt: pip-tools, which compiles every other .txt here, and
+# which `make requirements-release` installs with --require-hashes. Regenerate (never hand-edit the .txt)
+# by the bootstrap in the Makefile's comment above requirements-release.
+pip-tools==7.6.2

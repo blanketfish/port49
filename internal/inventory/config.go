@@ -155,6 +155,41 @@ type fileConfig struct {
 // matched identity is safe to print.
 var identityShape = regexp.MustCompile(`^(user:[!-?A-~]+@[!-?A-~]+|` + uriIdentity + `)$`)
 
+// FileSchema is the zero value of the type Load strict-decodes port49-inventory.yaml into. It exists
+// for the docs generator (internal/docgen), which reads the schema from its fields.
+func FileSchema() any { return fileConfig{} }
+
+// DecodeStrict is Load's decode of a port49-inventory.yaml's bytes without the checks on what it
+// decoded: a removed key, an unknown key and a second document are refused.
+func DecodeStrict(raw []byte) error {
+	_, err := decodeFile(raw, "")
+	return err
+}
+
+// decodeFile is Load's strict decode; path names the file in an error.
+func decodeFile(raw []byte, path string) (fileConfig, error) {
+	var f fileConfig
+	if err := yamlfault.Replaced(raw, map[string]string{
+		"token_secret_env":   "token_secret_ref (write token_secret_ref: env:NAME)",
+		"webhook_secret_env": "webhook_secret_ref (write webhook_secret_ref: env:NAME)",
+	}); err != nil {
+		return f, fmt.Errorf("port49-inventory: %s: %w", path, err)
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return f, fmt.Errorf("port49-inventory: %s: %w; check the key spelling against the "+
+			"port49-inventory.yaml schema", path, yamlfault.Of(err))
+	}
+	// A second document after --- would be ignored silently: refused, in
+	// fixed text, so none of it is echoed.
+	if err := dec.Decode(new(yaml.Node)); err != io.EOF {
+		return f, fmt.Errorf("port49-inventory: %s: holds more than one YAML document; "+
+			"port49-inventory.yaml is one YAML document", path)
+	}
+	return f, nil
+}
+
 // Load reads port49-inventory.yaml as port49d reads its own: a regular file,
 // bounded, strictly decoded, a decode error printed as its line and a
 // category only.
@@ -163,24 +198,9 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if err := yamlfault.Replaced(raw, map[string]string{
-		"token_secret_env":   "token_secret_ref (write token_secret_ref: env:NAME)",
-		"webhook_secret_env": "webhook_secret_ref (write webhook_secret_ref: env:NAME)",
-	}); err != nil {
-		return Config{}, fmt.Errorf("port49-inventory: %s: %w", path, err)
-	}
-	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return Config{}, fmt.Errorf("port49-inventory: %s: %w; check the key spelling against the "+
-			"port49-inventory.yaml schema", path, yamlfault.Of(err))
-	}
-	// A second document after --- would be ignored silently: refused, in
-	// fixed text, so none of it is echoed.
-	if err := dec.Decode(new(yaml.Node)); err != io.EOF {
-		return Config{}, fmt.Errorf("port49-inventory: %s: holds more than one YAML document; "+
-			"port49-inventory.yaml is one YAML document", path)
+	f, err := decodeFile(raw, path)
+	if err != nil {
+		return Config{}, err
 	}
 	c := Config{Listen: f.Listen, MetricsListen: f.MetricsListen, WebhookListen: f.WebhookListen,
 		WebhookTLSCertFile: f.WebhookTLSCertFile, WebhookTLSKeyFile: f.WebhookTLSKeyFile, TLSCertFile: f.TLSCertFile, TLSKeyFile: f.TLSKeyFile,

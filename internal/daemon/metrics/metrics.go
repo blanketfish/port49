@@ -1117,9 +1117,9 @@ func New(reg prometheus.Registerer) *Metrics {
 	for _, c := range []string{"broker", "tls_listener"} {
 		m.CertStatusUnavailable.WithLabelValues(c) // an alarm on it has a zero to start from
 	}
-	// process_start_time_seconds among them: an alert on
-	// port49_key_version_devices gates on uptime, because the count starts
-	// at 0 with every restart (spec §10). No labels.
+	// process_start_time_seconds among them: the directory refresh alerts
+	// (port49_directory_refresh_stale and _half_ceiling) gate a refresh
+	// timestamp on uptime, so a fresh start does not fire them. No labels.
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	reg.MustRegister(keyCollector{m: m,
 		devices: prometheus.NewDesc("port49_key_version_devices",

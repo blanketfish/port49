@@ -227,3 +227,7 @@ var reasons = []Reason{
 // expected reason is checked against it, so a typo fails at load rather than
 // as a test that can never pass.
 func Known(r Reason) bool { return slices.Contains(reasons, r) }
+
+// Reasons is the vocabulary in its declared order, as a copy. The generated reference page is written
+// from it.
+func Reasons() []Reason { return slices.Clone(reasons) }

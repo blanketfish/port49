@@ -27,6 +27,7 @@ import (
 	"github.com/blanketfish/port49/internal/config"
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/healthcheck"
 	"github.com/blanketfish/port49/internal/inventory"
 	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/printsafe"
@@ -37,7 +38,36 @@ import (
 	"github.com/blanketfish/port49/internal/store/guard"
 	"github.com/blanketfish/port49/internal/store/placement"
 	"github.com/blanketfish/port49/internal/token"
+	"github.com/blanketfish/port49/internal/version"
 )
+
+// brokerSubcommands is every subcommand port49-broker dispatches, by name. BrokerMain dispatches
+// from this table and BrokerSubcommands lists it, so the docs lint (tests/ci) cannot disagree
+// with it.
+var brokerSubcommands = map[string]func(args []string) int{
+	"revoke": func(a []string) int { return offlineRevoke(a, os.Stdout, os.Stderr) },
+	"init-enrollments": func(a []string) int {
+		return enrollmentsCmd("port49-broker", "init-enrollments", a, os.Stdout, os.Stderr)
+	},
+	"export-enrollments": func(a []string) int {
+		return enrollmentsCmd("port49-broker", "export-enrollments", a, os.Stdout, os.Stderr)
+	},
+	"forget-issuer": func(a []string) int { return forgetIssuer(a, os.Stdout, os.Stderr) },
+	"healthcheck": func(a []string) int {
+		return healthcheck.Command("port49-broker", "/etc/port49/port49-broker.yaml", ":9050", a, os.Stderr)
+	},
+	"init-issuer": func(a []string) int {
+		return issuerCmd("port49-broker", "init-issuer", "/etc/port49/port49-broker.yaml", config.LoadBroker, a,
+			os.Stdout, os.Stderr)
+	},
+	"rotate-issuer": func(a []string) int {
+		return issuerCmd("port49-broker", "rotate-issuer", "/etc/port49/port49-broker.yaml", config.LoadBroker, a,
+			os.Stdout, os.Stderr)
+	},
+}
+
+// BrokerSubcommands is the names of port49-broker's subcommands, sorted.
+func BrokerSubcommands() []string { return subcommandNames(brokerSubcommands) }
 
 // BrokerMain runs port49-broker with args (os.Args[1:]) and returns its
 // exit code (plan 7e): port49d's broker path as a process of its own on
@@ -45,27 +75,24 @@ import (
 // --config and nothing else, or the subcommands `revoke --offline`
 // (offlineRevoke; Ruling 13) and init-enrollments and export-enrollments.
 func BrokerMain(args []string) int {
-	if len(args) > 0 && args[0] == "revoke" {
-		return offlineRevoke(args[1:], os.Stdout, os.Stderr)
-	}
-	if len(args) > 0 && (args[0] == "init-enrollments" || args[0] == "export-enrollments") {
-		return enrollmentsCmd("port49-broker", args[0], args[1:], os.Stdout, os.Stderr)
-	}
-	if len(args) > 0 && args[0] == "forget-issuer" {
-		return forgetIssuer(args[1:], os.Stdout, os.Stderr)
-	}
-	if len(args) > 0 && (args[0] == "init-issuer" || args[0] == "rotate-issuer") {
-		return issuerCmd("port49-broker", args[0], "/etc/port49/port49-broker.yaml", config.LoadBroker, args[1:],
-			os.Stdout, os.Stderr)
+	if len(args) > 0 {
+		if cmd, ok := brokerSubcommands[args[0]]; ok {
+			return cmd(args[1:])
+		}
 	}
 	fs := flag.NewFlagSet("port49-broker", flag.ContinueOnError)
 	cfgPath := fs.String("config", "/etc/port49/port49-broker.yaml", "path to port49-broker.yaml")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		// The exit codes flag.ExitOnError would have used.
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+	if *showVersion {
+		fmt.Fprintln(os.Stdout, version.Line("port49-broker"))
+		return 0
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-enrollments|export-enrollments|init-issuer|rotate-issuer|forget-issuer …")

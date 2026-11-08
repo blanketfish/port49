@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	out, err := Build(".")
+	out, err := BuildLinked(".")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "qualified:", err)
 		os.Exit(1)

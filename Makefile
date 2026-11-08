@@ -1,16 +1,22 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l84-host lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red kind-enrollments systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
+.PHONY: requirements-release docs docs-build docs-serve qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l84-host lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red kind-enrollments systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
 STATIC_CMDS = port49d port49 port49-inventory port49-broker
 
+# What every binary prints for --version: the nearest tag without its v (as goreleaser's
+# {{.Version}} and the image's build argument give it), or the commit, marked -dirty when the tree
+# has changes; dev outside a git checkout.
+VERSION ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
+VERSION_LDFLAGS = -ldflags "-X github.com/blanketfish/port49/internal/version.Version=$(VERSION)"
+
 build:
-	set -e; for c in $(STATIC_CMDS); do CGO_ENABLED=0 go build -o bin/$$c ./cmd/$$c; done
+	set -e; for c in $(STATIC_CMDS); do CGO_ENABLED=0 go build $(VERSION_LDFLAGS) -o bin/$$c ./cmd/$$c; done
 
 # The client build: the PKCS#11 backend through purego, which links the
 # system's dynamic loader. Written beside, never over, bin/port49.
 build-client:
-	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
+	CGO_ENABLED=0 go build $(VERSION_LDFLAGS) -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
 
 # L86's and L91's binaries, at the fixed paths tests/lab/L86-runbook.md and L91-runbook.md run: the
 # client and the L86 and L91 cells as one compiled test binary, so what Ryan runs is this tree's.
@@ -441,7 +447,7 @@ lab:
 
 # The container image (plan 7f, Task 1): one peer shape, never required.
 image:
-	docker build --target port49 -t port49:dev .
+	docker build --target port49 --build-arg VERSION=$(VERSION) -t port49:dev .
 
 # The image's directory and binary modes (plan 12b, Task 5): builds, then reads the
 # exported filesystem. Behind the image tag so `go test ./...` never needs Docker.
@@ -510,14 +516,53 @@ release-packages: bin/goreleaser-$(GORELEASER_VERSION)
 # records the Python that compiled it (3.14 here; the release workflow installs with 3.12). The pins of
 # build and ansible-core carry no marker that differs between the two; a bump that adds a marker-gated
 # dependency must be compiled with the workflow's Python.
-PIP_TOOLS_VERSION ?= 7.5.0
+#
+# pip-tools itself installs from packaging/requirements-piptools.txt with --require-hashes (plan 13,
+# Task 1). That file cannot install itself the first time, so the first compile (and any bump of
+# pip-tools) is a bootstrap: with an unhashed venv (`python3 -m venv bin/piptools-venv &&
+# bin/piptools-venv/bin/pip install pip-tools==<version>`), run
+# `bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras
+# -o packaging/requirements-piptools.txt packaging/requirements-piptools.in`, delete the venv, and run
+# this target: it installs from the hashed file and writes every .txt.
+#
+# requirements-docs.txt is compiled for the docs job only, under Python 3.13 (DOCS_PYTHON), in a venv of
+# its own: the markers in a compiled file differ between Python versions. The release workflow's 3.12 is
+# unchanged. requirements-piptools.txt is compiled under python3 and installed into that venv, which is
+# fine while it carries no marker; a bump that adds one must be compiled under DOCS_PYTHON too.
+# DOCS_PYTHON is for this compile only: docs-build and docs-serve use python3, because the docs files
+# carry no marker either and the docs job (Task 2) installs Python 3.13 as its python3.
+DOCS_PYTHON ?= python3.13
 requirements-release:
 	python3 -m venv bin/piptools-venv
-	bin/piptools-venv/bin/pip install --disable-pip-version-check pip-tools==$(PIP_TOOLS_VERSION)
+	bin/piptools-venv/bin/pip install --disable-pip-version-check --require-hashes -r packaging/requirements-piptools.txt
 	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
 		-o packaging/requirements-release.txt packaging/requirements-release.in
 	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
 		-o packaging/requirements-ci.txt packaging/requirements-ci.in
+	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
+		-o packaging/requirements-piptools.txt packaging/requirements-piptools.in
+	$(DOCS_PYTHON) -m venv bin/piptools-docs-venv
+	bin/piptools-docs-venv/bin/pip install --disable-pip-version-check --require-hashes -r packaging/requirements-piptools.txt
+	bin/piptools-docs-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
+		-o packaging/requirements-docs.txt packaging/requirements-docs.in
+
+# The documentation site (plan 13): MkDocs Material, from the hashed requirements, built --strict so a
+# broken link or a page outside the nav fails. `make docs-serve` is the same venv, live-reloading.
+# NO_MKDOCS_2_WARNING silences Material's MkDocs 2.0 banner, which would land in every build log.
+docs-build:
+	python3 -m venv bin/docs-venv
+	bin/docs-venv/bin/pip install --disable-pip-version-check --require-hashes -r packaging/requirements-docs.txt
+	NO_MKDOCS_2_WARNING=1 bin/docs-venv/bin/mkdocs build --strict --site-dir site
+
+# The pages written from code (internal/docgen): the config reference now, the rest as tasks add them.
+# The drift test (go test ./internal/docgen/) fails when a committed page differs from this output.
+docs:
+	go run ./internal/docgen/cmd/docgen
+
+docs-serve:
+	python3 -m venv bin/docs-venv
+	bin/docs-venv/bin/pip install --disable-pip-version-check --require-hashes -r packaging/requirements-docs.txt
+	NO_MKDOCS_2_WARNING=1 bin/docs-venv/bin/mkdocs serve
 
 
 # The Helm chart's render checks (plan 12b, Task 10). Helm is pinned by sha256 (the digest is the

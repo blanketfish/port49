@@ -801,52 +801,9 @@ func load(path string, role Role) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	// Before the strict decode, because KnownFields(true) refuses `secret:` and
-	// `kind:` under a seed with "field secret not found in type
-	// config.SeedToken" — true, and no help at all to an operator whose lab
-	// logins stopped working. staleSeedKeys names the replacement instead.
-	if err := staleSeedKeys(raw); err != nil {
+	f, err := decodeChecked(raw, role, path)
+	if err != nil {
 		return Config{}, err
-	}
-	// KnownFields: this file is read once, at start, and every key in it
-	// changes how the daemon answers devices. Silently ignoring an unknown one
-	// turns `per_nas_conections: 4` into the default 32 and `retire:` into a
-	// dropped key version — both invisible until a device is affected by them.
-	var f fileConfig
-	if err := decodeFile(raw, &f); err != nil {
-		return Config{}, fmt.Errorf("config: %s: %w", path, err)
-	}
-	// `tls_listener:` with nothing under it decodes to nil, the same as no
-	// block: an operator who wrote the key meant a listener, so it is said.
-	var tlsKey struct {
-		TLSListener yaml.Node `yaml:"tls_listener"`
-	}
-	if err := yaml.Unmarshal(raw, &tlsKey); err == nil && tlsKey.TLSListener.Kind == yaml.ScalarNode &&
-		tlsKey.TLSListener.Tag == "!!null" {
-		if role == RoleBroker {
-			f.TLSListener = &tlsListenerYAML{} // brokerRefusals says it is port49d's
-		} else {
-			return Config{}, errors.New("config: tls_listener is empty: name cert_file, key_file, client_ca_file and " +
-				"certificate_status, or remove the key")
-		}
-	}
-	switch role {
-	case RoleBroker:
-		if err := brokerRefusals(f); err != nil {
-			return Config{}, err
-		}
-	default:
-		// Each is port49-broker.yaml's, and would be ignored here.
-		if f.Broker != nil && f.Broker.StateDir != "" {
-			return Config{}, errors.New("config: broker.state_dir is port49-broker.yaml's: the in-process broker " +
-				"keeps its CRLs beside broker.revocations_file; remove it (plan 7e)")
-		}
-	}
-
-	if f.ReceiptTTL != 0 {
-		return Config{}, fmt.Errorf("config: receipt_ttl was replaced by receipt_idle_ttl (default 15m) " +
-			"and receipt_max_age (default 2h) when the receipt became a sliding window (spec §13, decision 15); " +
-			"remove the key and set those")
 	}
 
 	c := Config{
@@ -1414,15 +1371,40 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 // device key or the daemon's etcd identity, and on etcd keeps no
 // revocations file.
 func brokerRefusals(f fileConfig) error {
+	for _, c := range brokerRefusalTable(f) {
+		if c.set {
+			return fmt.Errorf("config: %s is not port49-broker.yaml's: %s (plan 7e)", c.key, c.why)
+		}
+	}
+	return nil
+}
+
+// brokerRefusal is one key port49-broker.yaml refuses, whether f names it, and why it is refused.
+type brokerRefusal struct {
+	key string
+	set bool
+	why string
+}
+
+// BrokerRefusal is a key port49-broker.yaml refuses and the reason it gives, for the docs generator.
+type BrokerRefusal struct{ Key, Why string }
+
+// BrokerRefusals lists every key port49-broker.yaml refuses, in the order the loader checks them: the
+// docs generator writes the broker's page from it, so the page cannot drift from brokerRefusals.
+func BrokerRefusals() []BrokerRefusal {
+	var out []BrokerRefusal
+	for _, c := range brokerRefusalTable(fileConfig{}) {
+		out = append(out, BrokerRefusal{c.key, c.why})
+	}
+	return out
+}
+
+func brokerRefusalTable(f fileConfig) []brokerRefusal {
 	lab := f.Lab
 	if lab == nil {
 		lab = &LabConfig{}
 	}
-	for _, c := range []struct {
-		key string
-		set bool
-		why string
-	}{
+	return []brokerRefusal{
 		{"listen", f.Listen != "", "port49-broker never speaks TACACS+; that is port49d's"},
 		{"tls_listener", f.TLSListener != nil, "port49-broker never speaks TACACS+; that is port49d's"},
 		{"keys:", len(f.Keys) > 0, "device keys are the policy file's keys: block"},
@@ -1445,12 +1427,7 @@ func brokerRefusals(f fileConfig) error {
 		{"lab.deny_prefixes", len(lab.DenyPrefixes) > 0, "the lab's answers are port49d's"},
 		{"lab.deny_message_length", lab.DenyMessageLength != 0, "the lab's answers are port49d's"},
 		{"lab.deny_session", lab.DenySession, "the lab's answers are port49d's"},
-	} {
-		if c.set {
-			return fmt.Errorf("config: %s is not port49-broker.yaml's: %s (plan 7e)", c.key, c.why)
-		}
 	}
-	return nil
 }
 
 // EncryptionKeys is the two-key window: writes use Current, reads try Current
@@ -1870,6 +1847,84 @@ func decodeFile(raw []byte, f *fileConfig) error {
 	return nil
 }
 
+// FileSchema is the zero value of the type Load strict-decodes port49d.yaml and port49-broker.yaml
+// into. It exists for the docs generator (internal/docgen), which reads the schema from its fields.
+func FileSchema() any { return fileConfig{} }
+
+// DecodeStrict is Load's decode of a port49d.yaml's bytes and the refusals that need no other file: an
+// unknown key, a second document, the keys decision 53 removed (admin_socket, secret_env, key_refs),
+// the stale lab seed keys, an empty tls_listener, receipt_ttl and, under the daemon's role,
+// broker.state_dir. It reads no secret and no inventory, so it is what the docs check runs a config
+// example through.
+func DecodeStrict(raw []byte) error {
+	_, err := decodeChecked(raw, RoleDaemon, "")
+	return err
+}
+
+// DecodeStrictBroker is DecodeStrict under the broker's role: it refuses what brokerRefusals refuses.
+func DecodeStrictBroker(raw []byte) error {
+	_, err := decodeChecked(raw, RoleBroker, "")
+	return err
+}
+
+// decodeChecked is every refusal of load that needs only the file's bytes, in load's order: a lab seed
+// key that was replaced, an unknown key or second document, an empty tls_listener, what the role may not
+// name, and receipt_ttl. load and the two Decode functions call it, so they cannot drift. path names the
+// file in a decode error; "" leaves it out.
+func decodeChecked(raw []byte, role Role, path string) (fileConfig, error) {
+	var f fileConfig
+	// Before the strict decode, because KnownFields(true) refuses `secret:` and
+	// `kind:` under a seed with "field secret not found in type
+	// config.SeedToken" — true, and no help at all to an operator whose lab
+	// logins stopped working. staleSeedKeys names the replacement instead.
+	if err := staleSeedKeys(raw); err != nil {
+		return f, err
+	}
+	// KnownFields: this file is read once, at start, and every key in it
+	// changes how the daemon answers devices. Silently ignoring an unknown one
+	// turns `per_nas_conections: 4` into the default 32 and `retire:` into a
+	// dropped key version — both invisible until a device is affected by them.
+	if err := decodeFile(raw, &f); err != nil {
+		if path == "" {
+			return f, fmt.Errorf("config: %w", err)
+		}
+		return f, fmt.Errorf("config: %s: %w", path, err)
+	}
+	// `tls_listener:` with nothing under it decodes to nil, the same as no
+	// block: an operator who wrote the key meant a listener, so it is said.
+	var tlsKey struct {
+		TLSListener yaml.Node `yaml:"tls_listener"`
+	}
+	if err := yaml.Unmarshal(raw, &tlsKey); err == nil && tlsKey.TLSListener.Kind == yaml.ScalarNode &&
+		tlsKey.TLSListener.Tag == "!!null" {
+		if role == RoleBroker {
+			f.TLSListener = &tlsListenerYAML{} // brokerRefusals says it is port49d's
+		} else {
+			return f, errors.New("config: tls_listener is empty: name cert_file, key_file, client_ca_file and " +
+				"certificate_status, or remove the key")
+		}
+	}
+	switch role {
+	case RoleBroker:
+		if err := brokerRefusals(f); err != nil {
+			return f, err
+		}
+	default:
+		// Each is port49-broker.yaml's, and would be ignored here.
+		if f.Broker != nil && f.Broker.StateDir != "" {
+			return f, errors.New("config: broker.state_dir is port49-broker.yaml's: the in-process broker " +
+				"keeps its CRLs beside broker.revocations_file; remove it (plan 7e)")
+		}
+	}
+
+	if f.ReceiptTTL != 0 {
+		return f, fmt.Errorf("config: receipt_ttl was replaced by receipt_idle_ttl (default 15m) " +
+			"and receipt_max_age (default 2h) when the receipt became a sliding window (spec §13, decision 15); " +
+			"remove the key and set those")
+	}
+	return f, nil
+}
+
 // decodeFault is a port49d.yaml decode error as it is shown: each fault's
 // line and a fixed category, and no text from the document (yamlfault).
 func decodeFault(err error) error { return yamlfault.Of(err) }
@@ -2152,6 +2207,17 @@ var removedSecretKeys = map[string]string{
 	"secret_env":   "secret_ref (write secret_ref: env:NAME)",
 	"password_env": "password_secret_ref (write password_secret_ref: env:NAME)",
 	"key_refs":     "the policy's keys: block (decision 53 ruling 3)",
+}
+
+// RemovedKeys is the names of removedSecretKeys, sorted: the docs lint (tests/ci) keeps every
+// page from teaching a key the loader refuses.
+func RemovedKeys() []string {
+	keys := make([]string, 0, len(removedSecretKeys))
+	for k := range removedSecretKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // resolveInto reads the secret text names, at key at, into c.secrets under
