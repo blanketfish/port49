@@ -67,6 +67,40 @@ func TestKeysTypesAndNames(t *testing.T) {
 	}
 }
 
+// humans and machines share one verifier struct, but the loader refuses the other list's keys by name
+// (internal/config/identity.go), so each list shows only its own.
+func TestKeysShowEachIdentityListItsOwnKeys(t *testing.T) {
+	var s Schema
+	for _, c := range Schemas() {
+		if c.Descriptions != "" && strings.HasSuffix(c.Descriptions, "port49d.yaml") {
+			s = c
+			break
+		}
+	}
+	keys := map[string]bool{}
+	for _, k := range Keys(s.Root) {
+		keys[k.Path] = true
+	}
+	const h, m = "broker.identity.humans.[].", "broker.identity.machines.[]."
+	for _, tail := range []string{"type", "trust_anchor_file", "issuer", "algorithms", "ca_file"} {
+		if !keys[h+tail] || !keys[m+tail] {
+			t.Errorf("both lists take %s: humans %v, machines %v", tail, keys[h+tail], keys[m+tail])
+		}
+	}
+	for _, tail := range []string{"client_id", "principal_claim", "principal_domains", "scopes", "second_factor", "filter",
+		"enrollment.open_until", "rate_limits.window", "totp_label"} {
+		if !keys[h+tail] || keys[m+tail] {
+			t.Errorf("%s is humans-only: humans %v, machines %v", tail, keys[h+tail], keys[m+tail])
+		}
+	}
+	for _, tail := range []string{"spiffe_trust_domains", "audience", "clients.[].client_id", "clients.[].sub", "cluster", "jwks",
+		"namespaces", "directory.kind", "directory.issuers"} {
+		if keys[h+tail] || !keys[m+tail] {
+			t.Errorf("%s is machines-only: humans %v, machines %v", tail, keys[h+tail], keys[m+tail])
+		}
+	}
+}
+
 func TestEveryKeyHasADescriptionAndEveryDescriptionAKey(t *testing.T) {
 	for _, s := range Schemas() {
 		desc, err := LoadDescriptions(repoRoot, s)

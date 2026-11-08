@@ -84,25 +84,13 @@ broker.tls_key_file: "The server certificate's private key. Required. It must be
 broker.client_ca_file: "Shorthand for one x509 human verifier: the one trust anchor client certificates are verified against, which must hold exactly one certificate. Use it or `broker.identity`, not both; with `broker.identity`, set `trust_anchor_file` on the x509 verifier instead. Read once, at start."
 broker.identity.humans.[].type: &id_type "Which kind of verifier this is. Under `humans`: `x509`, `oidc` or `directory_password`. Under `machines`: `x509` (a workload certificate), `oidc` or `k8s`. Each type accepts only its own keys; another type's key is refused."
 broker.identity.humans.[].trust_anchor_file: &id_anchor "`x509` only: the PEM file of the one trust anchor a chain is verified against. At most one `x509` verifier per list, and the two lists may not name the same file. Read once, at start."
-broker.identity.humans.[].spiffe_trust_domains: &id_spiffe "`x509` under `machines` only, and required there: the SPIFFE trust domains whose workloads this anchor may name (`spiffe://<trust domain>/<path>`), each written as the domain is, never folded to lower case."
 broker.identity.humans.[].issuer: &id_issuer "`oidc` and `k8s`: the provider's issuer URL, `https` with no user information, query or fragment, spelled as the provider spells it in its discovery document. Required."
 broker.identity.humans.[].client_id: &id_client_id "`oidc` under `humans`, required: the public client's id, which a person's ID token names in `aud`."
-broker.identity.humans.[].audience: &id_audience "Required for `oidc` under `machines` (the API identifier a client-credentials token names in `aud`) and for `k8s` (the audience your pods' projected token volume asks for). Refused on a human verifier."
 broker.identity.humans.[].principal_claim: &id_claim "`oidc` under `humans`, required, with no default: `preferred_username`, `email` or `upn`. Choose the claim only your provider's administrators can set."
 broker.identity.humans.[].principal_domains: &id_domains "`oidc` and `directory_password` under `humans`, required: the domains whose people this verifier may name (`user:<name>@<domain>`), each a name with a dot and no `@`, lower-cased. Matched exactly; no subdomain is implied. Two verifiers at different issuers may not share a domain, and a `directory_password` verifier may not share one with an `oidc` verifier."
-broker.identity.humans.[].clients.[].client_id: &id_clients_client "`oidc` under `machines`: a client id that may be a machine principal (`app:<client id>`). Required, and not repeated."
-broker.identity.humans.[].clients.[].sub: &id_clients_sub "`oidc` under `machines`: the client's own identity at the provider, which its client-credentials tokens carry as `sub` and no person's token does. Required."
 broker.identity.humans.[].scopes: &id_scopes "`oidc` under `humans`: extra scopes to request beyond `openid`, each printable ASCII with no space."
 broker.identity.humans.[].algorithms: &id_algs "`oidc` and `k8s`: the token signature algorithms accepted, from `RS256`, `PS256`, `ES256`, `ES384` and `EdDSA`. Default `RS256`. `none` and the `HS` algorithms are refused."
 broker.identity.humans.[].ca_file: &id_ca "`oidc` and `k8s`: PEM CA for the provider's TLS certificate. Optional; without it the system roots are used. It must be a readable file."
-broker.identity.humans.[].cluster: &id_cluster "`k8s` only, required: this cluster's name in port49's records and log lines. Lowercase letters, digits and `_`, starting with a letter, at most 64; one name per cluster."
-broker.identity.humans.[].jwks: &id_jwks "`k8s` only, required: the `https` URL the cluster's signing keys are read from, typically the API server's `/openid/v1/jwks`."
-broker.identity.humans.[].namespaces: &id_namespaces "`k8s` only, required: the namespaces whose service accounts this cluster may name, by name."
-broker.identity.humans.[].directory.kind: &id_dir_kind "`x509` under `machines`: how a workload certificate finds its directory entry. Must be `spiffe_id`. Needs `broker.directory`."
-broker.identity.humans.[].directory.attribute: &id_dir_attr "`x509` under `machines`: the directory attribute that holds the SPIFFE ID. Required, no default, and not the attribute `broker.directory` uses for `username_attribute` or `principal_attribute`."
-broker.identity.humans.[].directory.allow_weak: &id_dir_weak "`x509` under `machines`: acknowledges that this mapping is weak. Required to be `true`, with `issuers`."
-broker.identity.humans.[].directory.issuers: &id_dir_issuers "`x509` under `machines`: the RFC 4514 issuer DNs the workload certificate's issuer must be one of. Required."
-broker.identity.humans.[].directory.user_filter: &id_dir_filter "`x509` under `machines`: the LDAP filter for the entry lookup. Default `broker.directory.user_filter`."
 broker.identity.humans.[].second_factor: &id_second "`directory_password` only, required: `totp`, the one second factor a password sign-in takes."
 broker.identity.humans.[].filter: &id_filter "`directory_password` only: an LDAP filter, which must compile, that a person's entry must also match to sign in."
 broker.identity.humans.[].enrollment.open_until: &id_enr_open "`directory_password` only: until this RFC 3339 time (for example `2026-12-01T00:00:00Z`), a person with no authenticator enrolled may enroll one by signing in with their directory password. Outside every enrollment window the sign-in is refused."
@@ -114,34 +102,21 @@ broker.identity.humans.[].rate_limits.window: &id_rl_window "`directory_password
 broker.identity.humans.[].totp_label: &id_totp_label "`directory_password` only: the issuer name an authenticator app shows. Printable ASCII, no colon, at most 64 bytes."
 broker.identity.machines.[].type: *id_type
 broker.identity.machines.[].trust_anchor_file: *id_anchor
-broker.identity.machines.[].spiffe_trust_domains: *id_spiffe
+broker.identity.machines.[].spiffe_trust_domains: "`x509` only, and required: the SPIFFE trust domains whose workloads this anchor may name (`spiffe://<trust domain>/<path>`), each written as the domain is, never folded to lower case."
 broker.identity.machines.[].issuer: *id_issuer
-broker.identity.machines.[].client_id: *id_client_id
-broker.identity.machines.[].audience: *id_audience
-broker.identity.machines.[].principal_claim: *id_claim
-broker.identity.machines.[].principal_domains: *id_domains
-broker.identity.machines.[].clients.[].client_id: *id_clients_client
-broker.identity.machines.[].clients.[].sub: *id_clients_sub
-broker.identity.machines.[].scopes: *id_scopes
+broker.identity.machines.[].audience: "Required for `oidc` (the API identifier a client-credentials token names in `aud`) and for `k8s` (the audience your pods' projected token volume asks for)."
+broker.identity.machines.[].clients.[].client_id: "`oidc` only: a client id that may be a machine principal (`app:<client id>`). Required, and not repeated."
+broker.identity.machines.[].clients.[].sub: "`oidc` only: the client's own identity at the provider, which its client-credentials tokens carry as `sub` and no person's token does. Required."
 broker.identity.machines.[].algorithms: *id_algs
 broker.identity.machines.[].ca_file: *id_ca
-broker.identity.machines.[].cluster: *id_cluster
-broker.identity.machines.[].jwks: *id_jwks
-broker.identity.machines.[].namespaces: *id_namespaces
-broker.identity.machines.[].directory.kind: *id_dir_kind
-broker.identity.machines.[].directory.attribute: *id_dir_attr
-broker.identity.machines.[].directory.allow_weak: *id_dir_weak
-broker.identity.machines.[].directory.issuers: *id_dir_issuers
-broker.identity.machines.[].directory.user_filter: *id_dir_filter
-broker.identity.machines.[].second_factor: *id_second
-broker.identity.machines.[].filter: *id_filter
-broker.identity.machines.[].enrollment.open_until: *id_enr_open
-broker.identity.machines.[].enrollment.new_entries_for: *id_enr_new
-broker.identity.machines.[].enrollment.reopen_for: *id_enr_reopen
-broker.identity.machines.[].rate_limits.failures_per_principal: *id_rl_principal
-broker.identity.machines.[].rate_limits.failures_per_source: *id_rl_source
-broker.identity.machines.[].rate_limits.window: *id_rl_window
-broker.identity.machines.[].totp_label: *id_totp_label
+broker.identity.machines.[].cluster: "`k8s` only, required: this cluster's name in port49's records and log lines. Lowercase letters, digits and `_`, starting with a letter, at most 64; one name per cluster."
+broker.identity.machines.[].jwks: "`k8s` only, required: the `https` URL the cluster's signing keys are read from, typically the API server's `/openid/v1/jwks`."
+broker.identity.machines.[].namespaces: "`k8s` only, required: the namespaces whose service accounts this cluster may name, by name."
+broker.identity.machines.[].directory.kind: "`x509` only: how a workload certificate finds its directory entry. Must be `spiffe_id`. Needs `broker.directory`."
+broker.identity.machines.[].directory.attribute: "`x509` only: the directory attribute that holds the SPIFFE ID. Required, no default, and not the attribute `broker.directory` uses for `username_attribute` or `principal_attribute`."
+broker.identity.machines.[].directory.allow_weak: "`x509` only: acknowledges that this mapping is weak. Required to be `true`, with `issuers`."
+broker.identity.machines.[].directory.issuers: "`x509` only: the RFC 4514 issuer DNs the workload certificate's issuer must be one of. Required."
+broker.identity.machines.[].directory.user_filter: "`x509` only: the LDAP filter for the entry lookup. Default `broker.directory.user_filter`."
 broker.identity.clock_skew: "How far a token's time claims may differ from the broker's clock. Default `1m`; `0s` to `5m`. Needs a restart."
 broker.identity.max_token_age: "The oldest an ID token may be, by its issue time, and still be accepted. Default `2h`; `5m` to `24h`. Needs a restart."
 broker.identity.jwks_refresh_interval: "How often each provider's signing keys are re-fetched. Default `1h`; `5m` to `24h`. Needs a restart."
@@ -153,7 +128,7 @@ broker.identity.per_login_mfa.idp_mfa.acr_values: "The `acr_values` the sign-in 
 broker.policy_file: "Path of the policy file this process admits from. Required. It is watched every `policy_watch_interval` and re-read at SIGHUP; a file that does not load is refused and the policy in force keeps serving. The file and its directory must be writable by port49's user or root alone."
 broker.batch_max: "The most devices in one mint request; a larger sweep pages. Default `100`; `1` to `1000`. Needs a restart."
 broker.policy_watch_interval: "How often the policy file is read for a change. A change is loaded once two reads in a row agree, so an edit takes effect within two intervals and a write in progress is not loaded part-way. Default `5s`; `1s` to `5m`. SIGHUP loads what is on disk at once. Write the file atomically: a temporary file renamed over it. A change to this key needs a restart."
-broker.revocations_file: "port49d.yaml only (refused in `port49-broker.yaml`): where port49d keeps the revocations `port49 revoke` puts in force, so a restart forgets none. Required. Its directory must exist and be writable by port49's user or root alone, and the name may not be a symlink. port49d never creates it: run `port49d init-revocations` once per install. port49d rewrites it, mode 0600 and atomically, after every revocation and lift. Needs a restart."
+broker.revocations_file: "port49d.yaml only (refused in `port49-broker.yaml`): where port49d keeps the revocations `port49 revoke` puts in force, so a restart forgets none. Required in a `broker:` block, which port49d.yaml accepts only on the memory store. Its directory must exist and be writable by port49's user or root alone, and the name may not be a symlink. port49d never creates it: run `port49d init-revocations` once per install. port49d rewrites it, mode 0600 and atomically, after every revocation and lift. Needs a restart."
 broker.max_conns_per_principal: "The most broker connections one principal may hold; a new one closes the oldest idle one, and is refused with 503 when all are busy. Default `4`; `1` to `64`. Needs a restart."
 broker.max_pending_conns_per_source: "The most broker connections one address may hold that are not yet bound to a principal; the next is reset. Default `16`; `1` to `256`. Needs a restart."
 broker.certificate_status.disabled: *cs_disabled

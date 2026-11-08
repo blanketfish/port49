@@ -72,7 +72,7 @@ defaults.per_login_mfa.applies_to_machines: &mfa_machines "Set `true` to require
 "roles.[].privilege": "The privilege level the role grants. Must be a declared level."
 "roles.[].reason": "Free text recorded with the role, for review: why it exists."
 "roles.[].permit": "Command rules the role permits, as words. `**` is any number of words; `/regex/` and `@class` are terms."
-"roles.[].deny": "Command rules the role denies. A deny wins over a permit. A class used in a deny may not turn case-insensitivity off."
+"roles.[].deny": "Command rules the role denies. A permit wins over a matching deny only when it is more specific than every deny that matches (dominance; see Policy). A class used in a deny may not turn case-insensitivity off."
 "roles.[].pipe.permit": "Rules for the part of a command after the pipe that the role permits. Present with an empty list means no pipe is allowed."
 "roles.[].attributes": "Per platform (or `all`), attribute strings added to the reply. The key must be `all`, a platform port49 ships or one the inventory names."
 "roles.[].max_session_age": "How long a session may last, a duration of at least `1m`, or `never`."

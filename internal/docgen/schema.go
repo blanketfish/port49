@@ -39,9 +39,38 @@ func refusedNames() map[string]bool {
 // Keys lists the settable keys under root, in field order. It walks exported fields by their yaml tag,
 // skips "-" and the keys the loader refuses by name, and reads a yaml.Unmarshaler as one leaf.
 func Keys(root reflect.Type) []Key {
-	var out []Key
-	walk(root, "", map[reflect.Type]bool{}, refusedNames(), &out)
+	var all, out []Key
+	walk(root, "", map[reflect.Type]bool{}, refusedNames(), &all)
+	for _, k := range all {
+		if !identityKeyBelongs(k.Path) {
+			continue
+		}
+		out = append(out, k)
+	}
 	return out
+}
+
+// Humans and machines share one verifier struct, and the loader refuses the other list's keys by name
+// (internal/config/identity.go: checkOIDCVerifier, the x509, k8s and directory_password cases). Each list
+// shows only the keys it takes, the first segment of the key under the item.
+var (
+	humansOnlyKeys = map[string]bool{"client_id": true, "principal_claim": true, "principal_domains": true, "scopes": true,
+		"second_factor": true, "filter": true, "enrollment": true, "rate_limits": true, "totp_label": true}
+	machinesOnlyKeys = map[string]bool{"spiffe_trust_domains": true, "audience": true, "clients": true, "cluster": true,
+		"jwks": true, "namespaces": true, "directory": true}
+)
+
+func identityKeyBelongs(path string) bool {
+	for list, other := range map[string]map[string]bool{
+		"broker.identity.humans.[].":   machinesOnlyKeys,
+		"broker.identity.machines.[].": humansOnlyKeys,
+	} {
+		if rest, ok := strings.CutPrefix(path, list); ok {
+			first, _, _ := strings.Cut(rest, ".")
+			return !other[first]
+		}
+	}
+	return true
 }
 
 func join(path, name string) string {

@@ -54,7 +54,7 @@ A report event shares the envelope but is not a decision: it carries no verdict.
 | `directory_forget` | broker | An operator ran `port49 directory forget` for a principal, which deleted the principal's directory membership and the entry it was pinned to. The `forget` block holds the entry. |
 | `second_factor_reset` | broker | An operator reset a person's second factor (`port49 directory reset-second-factor`), or `port49-broker init-enrollments` created the enrollment store. The `second_factor_reset` block holds the cleared enrollment. |
 | `sign_in_unlock` | broker | An operator cleared a principal's failed-attempt count (`port49 directory unlock`). The `sign_in_unlock` block holds the count the broker held. |
-| `enrollments_import` | `port49 directory import` | The command filled or replaced the enrollment store. The `enrollments_import` block holds the record count and the export time. |
+| `enrollments_import` | broker | An operator ran `port49 directory import`, which filled or replaced the enrollment store. The `enrollments_import` block holds the record count and the export time. |
 | `generic_platform` | daemon | port49d serves an admitted device whose platform has no adapter, with the set's generic adapter. One record per such device at start and at each bundle swap. It carries no verdict, and the broker does not write it. |
 
 ## Fields

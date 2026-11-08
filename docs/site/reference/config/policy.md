@@ -104,7 +104,7 @@ list and the position.
 | `roles.[].privilege` | string | The privilege level the role grants. Must be a declared level. |
 | `roles.[].reason` | string | Free text recorded with the role, for review: why it exists. |
 | `roles.[].permit` | list of string | Command rules the role permits, as words. `**` is any number of words; `/regex/` and `@class` are terms. |
-| `roles.[].deny` | list of string | Command rules the role denies. A deny wins over a permit. A class used in a deny may not turn case-insensitivity off. |
+| `roles.[].deny` | list of string | Command rules the role denies. A permit wins over a matching deny only when it is more specific than every deny that matches (dominance; see Policy). A class used in a deny may not turn case-insensitivity off. |
 | `roles.[].pipe.permit` | list of string | Rules for the part of a command after the pipe that the role permits. Present with an empty list means no pipe is allowed. |
 | `roles.[].attributes` | map of list of string | Per platform (or `all`), attribute strings added to the reply. The key must be `all`, a platform port49 ships or one the inventory names. |
 | `roles.[].max_session_age` | string | How long a session may last, a duration of at least `1m`, or `never`. |
