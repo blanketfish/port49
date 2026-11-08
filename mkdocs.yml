@@ -12,6 +12,19 @@ theme:
   # No third-party font requests: the site loads nothing from outside its own origin.
   font: false
   custom_dir: docs/overrides
+  # Light and dark: the first scheme follows the reader's system setting, the toggle overrides it. The
+  # icons are Material's own, served from the site, so nothing is requested from another origin.
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
   features:
     - navigation.sections
     - navigation.indexes
