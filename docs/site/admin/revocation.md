@@ -107,12 +107,21 @@ that device re-admits every session still open there under that username. The re
 | Exit | Meaning |
 |---|---|
 | 0 | done; `--list` printed |
-| 1 | nothing was revoked, or it is unknown. Refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (`nothing was revoked`), an unreadable or refused `--cert` file, or a broker refusal. **Unknown whether it ran:** the broker did not answer (`the broker did not answer ...`), or it answered with no revocation named (`the broker's answer named no revocation; it may be in force`). Both say to run `port49 revoke --list` and look at the decision log before you retry |
+| 1 | nothing was revoked, or it is unknown. Refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (`nothing was revoked`), an unreadable or refused `--cert` file, or a broker refusal that says nothing was done. **Unknown whether it ran:** the broker did not answer (`the broker did not answer ...`), it answered with no revocation named (`the broker's answer named no revocation; it may be in force`), it answered `503 revocation_unconfirmed` (`the broker could not confirm it: ...`), or a revoke got `503 store_unavailable` (`the broker says: ...`). The first two say to run `port49 revoke --list` and look at the decision log before you retry; for the last two, read the broker's words |
 | 2 | the flags are wrong: no target, two targets, or a flag that does not go with the form |
 | 3 | the revocation **is in force** but incomplete, or not saved to the revocations file, or a lift step did not finish: run the same command again, which repeats every step |
 
-Exit 1 is two different things, so read the line. A refusal means nothing happened, and exit 1 with `it may be in
-force` means it may have. Exit 3 is never a failure to revoke: the mark stands and refuses every new mint, but
+Exit 1 is two different things, so read the line. A refusal that says nothing was done means nothing happened;
+`it may be in force` means it may have. Two broker answers look like refusals and are not:
+
+- `the broker could not confirm it` (`503 revocation_unconfirmed`): the revocation may have gone through, and so
+  may a lift made meanwhile. Run `port49 revoke --list` to see what is in force, then repeat the command if the
+  mark is not what you wanted.
+- `the broker says: ...` on a revoke that got `503 store_unavailable`: the mark went nowhere but that one broker's
+  own process, so the credential is revoked on that broker and not, yet, on the others. Do what the broker's words
+  say to make the mark everywhere, and run the revoke again once the store is back.
+
+Exit 3 is never a failure to revoke: the mark stands and refuses every new mint, but
 until a run finishes, unspent tokens may still log in (up to their TTL) and unmarked contexts keep authorizing.
 `port49 revoke --lift` takes the same codes; an answer with no text exits 1 with `it may have run`.
 
@@ -211,7 +220,9 @@ says why.
 anchor), or every certificate under the intermediate is refused: port49d checks each CA in the chain, and nothing
 else says whether the intermediate itself was revoked. An OCSP responder the root signs for covers it as well. At
 start port49d says which CA nothing covers, as `certificates issued by <CA> will be refused ...: nothing covers
-<CA> itself; name the root CA's CRL`, and never refuses to start over it.
+<CA> itself; name the root CA's CRL`, and never refuses to start over it. That is the `on_unavailable: refuse`
+line; under `allow` it reads `certificates issued by <CA> will be admitted with their revocation status unchecked
+(on_unavailable: allow): nothing covers <CA> itself; name the root CA's CRL`, and those certificates are let in.
 
 Each verified list is kept as `crl-<name>.der` in `broker.state_dir` (beside `broker.revocations_file` for a
 single-process port49d), so a restart during a publisher outage keeps serving it until its next update. Back these
@@ -229,8 +240,10 @@ down, `on_unavailable` decides:
   cannot be established`). It keeps logins working through an outage, and lets a certificate revoked during the
   outage in until the list returns. It is the reviewed escape, not a setting to leave on.
 
-An uncovered status, with no CRL or OCSP source for that issuer, is `refuse` too, and it holds until a source covers
-it, so retrying does not help; add the CRL.
+An uncovered status, with no CRL or OCSP source for that issuer, follows the same setting. Under `refuse` it is
+refused too, and it holds until a source covers it, so retrying does not help; add the CRL. **Under `allow`, a
+certificate from an issuer nothing covers is admitted with its revocation status unchecked**, like any other
+unavailable status: that is a fail-open case, and the start line quoted under the `issuer_file` rules is the warning.
 
 What the broker refuses and what it marks:
 

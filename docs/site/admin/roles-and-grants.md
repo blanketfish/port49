@@ -154,7 +154,8 @@ subject, scope and roles are refused, so merge them. `expires` is a date (the st
 RFC 3339 time, after which the grant stops matching, and `port49 policy diff` and `policy test` read the policy
 at every later expiry as well as now. `max_privilege` is a ceiling on the level a token from the grant may
 carry, which is how far `enable` may take the session; with no `enable` on the subject, nothing escalates to it.
-`enable` is `none` (the default), `auto` or `token`. A grant on a scope that is `on_missing: include` is refused;
+`enable` is `none` (the default), `auto` or `token`. A grant on a scope that is `on_missing: include` is refused (a scope with no
+match key, or pinned by `name` alone, is the exception);
 see [Policy](policy.md#the-include-scope-grant-refusal).
 
 When one person matches several subjects, the grants of all of them compose: the roles are the union, the
@@ -172,10 +173,14 @@ defaults:
 scopes:
   - name: core
     match: {tier: core}
-    on_missing: include
+    on_missing: exclude
     security_log: true
     per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}
 ```
+
+The scope is `exclude` so that a grant can sit on it: a grant on an `on_missing: include` scope is refused at
+load. For this policy and a device `core1` with `tier: core`, `port49 policy test` prints
+`report: per_login_mfa_on_missing_exclude: scope "core" carries per_login_mfa with on_missing: exclude: a sync that drops tier lifts this requirement from the device; security_log records it (spec §5.1.5)`.
 
 `accept` is a list of `hardware_key_touch` (a touch on the token holding the session key), `idp_mfa` (a fresh
 identity-provider sign-in showing a second factor) or both. Leaving the block out means no requirement; there
@@ -193,8 +198,11 @@ A machine principal is exempt except under a level that sets `applies_to_machine
 with `hardware_key_touch` alone, from a key and touch slot on one token. A mint under an unmet requirement is
 answered `deny` with the reason `per_login_mfa_required` and a challenge; a requirement no method this broker
 can verify satisfies is `per_login_mfa_unavailable` for that device. A requirement gates logins and refreshes,
-never a live session: adding one revokes nothing. `port49 policy diff` fails on a weakening no session test
-asserts.
+never a live session: adding one revokes nothing. `port49 policy diff` fails, as `per_login_mfa_weakened`, on a weakening
+that no session test asserts. The test must be new or changed against the old file; one carried over
+unchanged does not count. Widening the scope above to `accept: [hardware_key_touch, idp_mfa]` prints
+`per_login_mfa_weakened: netops on core1: accept [hardware_key_touch] reuse_for 5m (defaults ∩ scope core) -> accept [hardware_key_touch, idp_mfa] reuse_for 5m (defaults ∩ scope core); no session test asserts it: add {subject: netops, device: core1, per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 5m}}`
+and exits 1.
 
 ## Reading why a grant applied
 
@@ -208,8 +216,7 @@ port49 explain --policy policy.yaml --inventory inventory.yaml --subject netops 
 
 Signed in, `port49 identity` prints whom the broker resolves you to (your subject, grants, `api:` rights) and
 `port49 explain --device NAME` asks the broker the same question from the policy in force. The `per_login_mfa`
-line reads, for example, `per_login_mfa accept hardware_key_touch (defaults ∩ role netadmin ∩ scope core);
-reuse_for 5m (scope core); applies to humans`, or `per_login_mfa none`: the default is never invisible.
+line reads, for example, `per_login_mfa accept hardware_key_touch (defaults ∩ scope core); reuse_for 5m (scope core); applies to humans`, or `per_login_mfa none`: the default is never invisible.
 
 For a review, `port49 access review --policy FILE --inventory FILE --subject NAME` prints one subject's grant
 table, with the roles, ceiling, expiry and device count per row. To offboard a machine subject or a literal

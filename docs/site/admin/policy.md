@@ -114,7 +114,8 @@ Any other scope takes `on_missing: exclude`.
 
 ### The include-scope grant refusal
 
-A **grant on an `on_missing: include` scope is refused at load**, whatever its roles carry. A grant is what
+A **grant on an `on_missing: include` scope is refused at load**, whatever its roles carry (unless the scope
+has no match key or is pinned by `name` alone; see the end of this section). A grant is what
 lets a login reach a device, even with roles that only deny, so on an include scope a device the inventory
 cannot describe would get a session from the grant alone. The error reads:
 
@@ -146,7 +147,8 @@ roles:
 
 An include scope may attach only roles that cannot widen access: no `permit`, no `privilege`, no
 `attributes`. A role that carries one is refused at load and the error says to put it on an exclude scope.
-(The exception is a scope with no match key, or one pinned by `name` alone: it has nothing to include.)
+The exception, for both the grant refusal and the attached-roles rule, is a scope with no match key, or one
+pinned by `name` alone: it has no attribute a device could be missing, so it has nothing to include.
 
 ### `security_log`
 
@@ -180,11 +182,14 @@ port49 policy test --policy policy.yaml --inventory inventory.yaml [--config por
 ```
 
 It loads the policy against the inventory as port49d does, so every load error is a failure here. Then it
-prints the platform set, the reports, the shadowed-deny report and one line per test, and a summary:
+prints the platform set, the key check, the reports, the shadowed-deny report and one line per test, and a
+summary. For the policy above, against an inventory whose `leaf1` is an `arista_eos` device with `site: dc1` and
+`role: leaf`, it prints:
 
 ```text
 platform_set: 1.3.0
-report: api_rights: subject "netops" holds api: [explain_others], authority over other people's sessions (spec §2)
+keys: checked against the default key_secret_refs (env: variables starting PORT49_KEY_, file: under /run/port49/keys); pass --config to check port49d.yaml's
+report: group_subject: subject "netops" is a group: subject: it mints only with broker.directory configured, through which the broker matches a person to the group; explain and policy tests evaluate it by name
 PASS netops on leaf1: "show version" -> permit permit_dominates
 PASS netops on leaf1: "configure terminal" -> deny no_rule_matched
 2 tests, 0 failed; 0 shadowed denies, 0 unacknowledged; 0 quarantined, 0 projection refusals
@@ -219,6 +224,8 @@ acknowledgment accounts for. Run it in CI on every pull request that touches the
 | `REGEX-CONSTRAINED` | a permit with a regex or class term added, or a deny with one removed or rewritten | a passing `permit` test on a command that rule decides, or an `acknowledge:` entry for a deny |
 | `API` | `api:` rights added to a subject | a session test with `api:` listing the subject's whole list |
 | `PRINCIPAL`, `USERNAME` | an identity that now resolves to another subject, or a `username:` that changed | a session test naming the principal |
+| `per_login_mfa_weakened` | a `per_login_mfa` requirement removed or loosened on a device | a session test asserting the new requirement that is **new or changed** against the old file; a test carried over unchanged does not count |
+| `subject:` (lowercase) | a subject's `group:` or `machine_group:` changed, or a new group subject was added | a session test naming the subject |
 | `ADAPTER` | an edit to a platform adapter key that changes what port49 decides | an `acknowledge:` entry (below) |
 | `QUARANTINES`, `REFUSED`, `UNRESOLVED` | a device newly quarantined, a mint or admission newly refused, a composition the diff could not compare | fix the cause; no test clears these |
 
@@ -234,7 +241,7 @@ writing, in a top-level block that review reads beside the change:
 
 ```yaml
 acknowledge:
-  - {role: guard, rule: "/^(wri|rel)/ **", reason: "rewritten wider as /^(wri|rel|rep)/"}
+  - {role: guard, rule: "/^(wri|rel)/ **", reason: "rewritten as /^wri/: rel* commands are allowed on purpose"}
   - {platform: juniper_junos, field: rpc_entry_denies, sha256: <sha256>, reason: "moved to set 1.2.0"}
 ```
 
@@ -270,8 +277,13 @@ and the diff exits 0. A new role on a device the subject already reaches is a `w
 exits 0 too. No test is demanded for either. Who gets access to what is a decision for the person reviewing
 the pull request, so read every `access:` and `widens:` line, and run
 `port49 access review --policy FILE --inventory FILE --subject NAME` to see one subject's grants, how many
-devices each reaches and when each expires. The gate does catch a grant that adds `api:` rights, a new
-identity for an existing subject, and a privilege raise on a device the subject already reached.
+devices each reaches and when each expires.
+
+Only a grant to an existing, unchanged subject is ungated. A **new `group:` or `machine_group:` subject** exits 1
+whatever its grants, on a lowercase `subject: NAME's none -> group ...` line, until a session test names the
+subject; a new `identity:` subject is a `PRINCIPAL`. The gate also catches a grant that adds `api:` rights, a new
+identity for an existing subject, a changed group, a `per_login_mfa` weakening no new or changed session test
+asserts, and a privilege raise on a device the subject already reached.
 
 ### `port49 policy replay`
 
@@ -306,6 +318,7 @@ deny no_rule_matched
   command     configure terminal
   rule        no permit matches
   permitted by none
+note: arista_eos does not declare config_commands: whether a command typed in configuration mode is sent to port49 at all is unmeasured, so if this is a configuration-mode command the device may apply it whatever this answer says (spec §9, §12)
 ```
 
 It resolves a hypothetical decision and prints exactly one reason from the
@@ -357,13 +370,22 @@ many devices and subjects it reaches, the `acknowledge:` entry the gated ones ne
 `platforms:` block keeps its own value for while the built-in under it changes, and what the move would
 quarantine or fail closed.
 
+For a policy pinned to `1.1.0` and an inventory with one Junos device, the move to `1.3.0` prints:
+
 ```text
 platform_set 1.1.0 -> 1.3.0
   platforms.juniper_junos.rpc_entry_denies
     null -> ["junoscript **","op **"]
     affects 1 devices, 0 subjects
     gated: add {platform: juniper_junos, field: rpc_entry_denies, sha256: <sha256>, reason: "..."} under acknowledge:
+  platforms.juniper_junos.deny_reach_bits
+    null -> ["view-configuration"]
+    affects 1 devices, 0 subjects
+    gated: add {platform: juniper_junos, field: deny_reach_bits, sha256: <sha256>, reason: "..."} under acknowledge:
+  port49 policy diff fails on the move until every gated entry above is under acknowledge: (spec §12); it also shows the replies the move changes
 ```
+
+(The `<sha256>` placeholders stand for the 64-character digests the tool prints; copy them from your own run.)
 
 It writes nothing unless you add `--write`, which rewrites the pin in the file and nothing else. Then commit the
 policy, let `port49 policy diff` show the replies the move changes, and add the `acknowledge:` entries it asks for

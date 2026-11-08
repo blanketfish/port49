@@ -4,8 +4,13 @@ package ci
 func init() {
 	mustSay["admin/policy.md"] = append(mustSay["admin/policy.md"],
 		"on_missing: exclude", "deny_scope_unlogged", "acknowledge:", "rpc_entry_denies", "view-configuration",
+		"per_login_mfa_weakened", "new `group:` or `machine_group:` subject", "no match key",
+	)
+	mustSay["admin/roles-and-grants.md"] = append(mustSay["admin/roles-and-grants.md"],
+		"per_login_mfa_weakened", "new or changed",
 	)
 	mustSay["admin/revocation.md"] = append(mustSay["admin/revocation.md"],
 		"--cert-serial", "certificate_status_unavailable", "issuer_file", "disabled: true",
+		"revocation_unconfirmed", "store_unavailable", "admitted with its revocation status unchecked",
 	)
 }
