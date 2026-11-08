@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -163,6 +164,49 @@ func TestReadyProbesReadyz(t *testing.T) {
 	}
 	if s.got() != "/readyz" {
 		t.Fatalf("--live reached the server: %q", s.got())
+	}
+}
+
+// nonLoopbackAddr is a local IPv4 address that is not loopback. Go sends a loopback request direct even
+// with HTTP_PROXY set, so only another address shows whether the probe honours the proxy.
+func nonLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && !n.IP.IsLoopback() {
+			return n.IP.String()
+		}
+	}
+	t.Skip("no non-loopback IPv4 address on this host")
+	return ""
+}
+
+// The probe talks to the process's own metrics port, so an HTTP_PROXY in the container's environment
+// must not carry it elsewhere. Go reads the proxy variables once per process, so the probe runs in a
+// child process whose environment names a proxy that does not answer.
+func TestRunIgnoresTheProxyEnvironment(t *testing.T) {
+	if listen := os.Getenv("P49_HC_CHILD_LISTEN"); listen != "" {
+		var out bytes.Buffer
+		if got := Run(context.Background(), listen, "/healthz", &out); got != 0 {
+			t.Fatalf("exit %d with a proxy in the environment: %q", got, out.String())
+		}
+		return
+	}
+	ln, err := net.Listen("tcp", nonLoopbackAddr(t)+":0")
+	if err != nil {
+		t.Skipf("cannot listen on a non-loopback address: %v", err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunIgnoresTheProxyEnvironment$")
+	cmd.Env = append(os.Environ(), "P49_HC_CHILD_LISTEN="+ln.Addr().String(),
+		"HTTP_PROXY=http://127.0.0.1:1", "http_proxy=http://127.0.0.1:1",
+		"HTTPS_PROXY=http://127.0.0.1:1", "https_proxy=http://127.0.0.1:1", "NO_PROXY=", "no_proxy=")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the probe went through the proxy: %v\n%s", err, out)
 	}
 }
 

@@ -21,8 +21,10 @@ import (
 	"github.com/blanketfish/port49/internal/printsafe"
 )
 
-// timeout bounds one probe; compose's own timeout is 3s.
-const timeout = 3 * time.Second
+// Timeout bounds one probe. It must stay under every container runtime's own healthcheck timeout (compose's
+// is 3s): when the two meet, the runtime kills the probe and the operator sees a timeout, not the line
+// the probe prints. tests/ci holds compose to it.
+const Timeout = 2 * time.Second
 
 // lineLimit bounds each printed line.
 const lineLimit = 300
@@ -60,19 +62,20 @@ func MetricsListen(cfgPath, def string) (string, error) {
 	return c.MetricsListen, nil
 }
 
-// Run GETs path on listen within 3s. It returns 0 on a 200, else 1 after one line on out.
+// Run GETs path on listen within Timeout. It returns 0 on a 200, else 1 after one line on out.
 func Run(ctx context.Context, listen, path string, out io.Writer) int {
 	addr, err := DialAddr(listen)
 	if err != nil {
 		return fail(out, "%v", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+path, nil)
 	if err != nil {
 		return fail(out, "%v", err)
 	}
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// The metrics port is this process's own: no proxy from the environment sits between the probe and it.
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fail(out, "%v", err)

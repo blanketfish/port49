@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/blanketfish/port49/internal/healthcheck"
 )
 
 // Plan 13, Task 10: compose reports health and restarts nothing on it, so its probes may show
@@ -18,7 +21,8 @@ func TestComposeHealthchecksPassReady(t *testing.T) {
 	var c struct {
 		Services map[string]struct {
 			Healthcheck *struct {
-				Test []string `yaml:"test"`
+				Test    []string `yaml:"test"`
+				Timeout string   `yaml:"timeout"`
 			} `yaml:"healthcheck"`
 		} `yaml:"services"`
 	}
@@ -38,6 +42,11 @@ func TestComposeHealthchecksPassReady(t *testing.T) {
 			continue
 		}
 		checked++
+		// The probe must give up before compose does, so a hung metrics port shows the probe's own line.
+		if d, err := time.ParseDuration(s.Healthcheck.Timeout); err != nil || d <= healthcheck.Timeout {
+			t.Errorf("%s: healthcheck.timeout %q must be a duration greater than the probe's own %s", svc,
+				s.Healthcheck.Timeout, healthcheck.Timeout)
+		}
 		bin, ok := want[svc]
 		if !ok {
 			t.Errorf("service %s has a healthcheck this test does not know the binary of", svc)
