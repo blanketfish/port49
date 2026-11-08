@@ -235,12 +235,19 @@ If the region that received the logout is cut from the directory:
 - To cut the session off in the other regions before the heal, run `port49 revoke --principal <principal>`
   from a region that reaches the directory.
 
-The runner does not repeat itself while this lasts. It says `N back-channel logout(s) pending until the
-directory store answers` once for a run of forwarding passes that fail, and then says nothing more until a
-pass forwards them. A logout it could not finish applying in its own region is tried again after a wait
-that doubles from 1 second, and the log gives the `port49 revoke` remedy only with the first failure; the
-lines after it read `still not reached after N tries … (the remedy was said with the first failure)`.
-Look for the first line of the run, not the latest.
+The cut region's runner does not repeat itself while this lasts. It says
+`N back-channel logout(s) pending until the directory store answers` once for a run of forwarding passes
+that fail, and then says nothing more until a pass forwards them.
+
+The retry lines come from the other regions, the ones following a logout made elsewhere. If such a region
+cannot finish reaching the logout in its own session store, its `a logout made elsewhere (...) reached`
+line carries `not every step finished (...)`, and the logout is tried again after a wait that doubles from 1
+second to at most 64 seconds. Its mints and refreshes are refused meanwhile. The first failure's line
+carries the `port49 revoke` remedy for ending the person's live sessions at once; the lines after it read
+`still not reached after N tries (...); tried again in <wait> (the remedy was said with the first failure)`.
+Look for the first line of the run, not the latest. A logout the broker can never reach is not tried again:
+its line ends `not every step finished (...)` with no wait and no remedy, and the next takeover of that
+keyspace reaches it once more.
 
 ### A person who signs in again during a cut
 
