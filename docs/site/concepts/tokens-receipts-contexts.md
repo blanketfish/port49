@@ -69,9 +69,16 @@ A receipt is a sliding window, not a fixed one. Each presentation it answers ext
 `receipt_idle_ttl` (default 15 minutes), up to `receipt_max_age` (default 2 hours) from the first
 redemption. A presentation past either bound is a plain FAIL on the wire, exactly as a wrong password
 is, and the log says `token_spent`. Interactive logins present once and never slide; a client that
-re-presents the same credential does, with no flag to set. How many times a given client library
-authenticates is the client's choice, not the transport's. The keys are in the
+re-presents the same credential does, with no flag to set. The keys are in the
 [port49d configuration reference](../reference/config/port49d.md).
+
+How many times a client library authenticates differs between libraries. On EOS, pyeapi authenticated once per task (10 `authorize_session` records for ten tasks, [the arista_eos note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-arista_eos.md)).
+On NX-OS, NAPALM's `nxos` driver made 23 for ten tasks, all in one context ([the cisco_nxos note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-cisco_nxos.md)).
+
+!!! warning "Unmeasured"
+    Whether any other client library, or any other platform, authenticates more or fewer times per task
+    is unknown (L15, open). Do not size `receipt_idle_ttl` on a count you have not measured for your
+    own client.
 
 `token_spent` also covers a receipt whose context no longer exists (it was replaced or reclaimed), and
 a token brought back by a store restore. The device simply prompts again. See

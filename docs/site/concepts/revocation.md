@@ -27,8 +27,8 @@ another principal needs the `revoke_others` right and a press of the operator's 
 Without the right the call is refused and the refusal is logged. `port49 revoke --help` lists every
 flag, and [Administer: revocation](../admin/revocation.md) is the runbook.
 
-A **standing mark** is kept in the store and in the broker's revocations file, so a restart forgets
-nothing. It does not expire, because the agent reconnects with the same key by itself and a mark that
+A **standing mark** is kept in the store (with a copy in `broker.state_dir`), or on the memory store in
+`broker.revocations_file`, so a restart forgets nothing. It does not expire, because the agent reconnects with the same key by itself and a mark that
 a fresh handshake could outlive would be undone without anyone acting.
 
 ## What happens, in order
@@ -83,8 +83,8 @@ workload anchor as the issuer.
 
     A platform that asks port49 only at login asks nothing afterwards, so a revocation reaches a context
     nobody reads and the session lasts until the device ends it. Junos asks only at login unless its
-    `authorization-time-interval` is set. With it set, Junos re-authorizes the open session once at the
-    interval, and a revoked principal is denied `credential_revoked` there. Measured on vJunos-router
+    `authorization-time-interval` is set. With it set, Junos re-authorizes the open session at the
+    interval (one re-authorization was measured), and a revoked principal is denied `credential_revoked` there. Measured on vJunos-router
     23.4R2-S2.1 and vSRX3 21.4R3.15 with an interval of 15 minutes (L36, closed:
     [vJunos-router](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md),
     [vSRX](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md)).

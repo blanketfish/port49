@@ -7351,7 +7351,7 @@ authorization request, and Junos never makes one. Rather than claim reach that d
 `explain` states the limit, the adapter renders class `idle-timeout` from `max_session_age` as
 the enforced approximation, and revocation records name the contexts they could not reach.
 Corrected 2026-11-07: "Junos never makes one" holds only without `authorization-time-interval`;
-with it set, Junos re-authorizes the open session once at the interval, and a revoked principal is
+with it set, Junos re-authorizes the open session at the interval (one re-authorization was measured), and a revoked principal is
 denied there (`tests/lab/results/L36-juniper_vjunos-router.md`, `L36-juniper_vsrx.md`; whether it
 re-authorizes again is L40, open).
 (§5.6) *Plan 5b:* `port49 platform export --classes` renders the idle-timeout (§8), and it

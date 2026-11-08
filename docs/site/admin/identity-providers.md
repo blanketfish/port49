@@ -112,8 +112,8 @@ logout: a logout token from <issuer> could not be applied: the store did not ans
 and goes on with one of two forms. Both are run through your agent ([Revocation](revocation.md)) and need the
 `revoke_others` and `lift_revocations` rights.
 
-**Form 1: the logout wrote its record** (a later step failed). The form is conditional on the decision log, which
-holds a revoke record with origin `backchannel_logout`:
+**Form 1: the logout wrote its record** (a later step failed). The form reads "if the decision log holds"
+a revoke record with origin `backchannel_logout`:
 
 ```text
 if the decision log has a revoke record with origin backchannel_logout for <principal> just before this line, end its contexts with `port49 revoke --principal <principal>`, then `port49 revoke --lift --principal <principal>` so they may log in again; a lift can be lost across a <process> stop, so last check that `port49 revoke --list` shows no mark for <principal>
@@ -127,10 +127,12 @@ expired (the line's `<time>` is the record's lifetime from now):
 end <principal>'s contexts with `port49 revoke --principal <principal>` (api: revoke_others), and lift it with `port49 revoke --lift --principal <principal>` (api: lift_revocations) only after <time>: no logout record refuses the session's held ID token or issued certificate until then; last check that `port49 revoke --list` shows no mark for <principal>
 ```
 
-A token that carries `sid` and `sub` gets this form, once per principal the decision log's mint records name for that
-`sub`. Lifting early lets the person's held token mint again. On an issuing broker the line adds a shorter path:
-revoke each certificate issued to the principal with `port49 revoke --cert-issuer <DN> --cert-serial <HEX>` (the DN
-and serial from each broker's issue records), and lift the mark after `max_token_age` plus twice `clock_skew` instead.
+A token that carries `sid` and `sub` can get either form: Form 1 when the logout wrote its record, Form 2 when it
+wrote nothing. Form 2 is printed once per principal the decision log's mint records name for that `sub`. Lifting
+early lets the person's held token mint again. On an issuing broker the line adds a shorter path: revoke each
+certificate issued to the principal with `port49 revoke --cert-issuer <DN> --cert-serial <HEX>` (the DN and serial
+from each broker's issue records), and lift the mark after `max_token_age` plus twice `clock_skew` instead. The
+shorter path holds only if every broker's issue records can be read: if any cannot, wait out the first time.
 
 For a token that names only a `sid`, the line first offers `port49 revoke --sid <sid> --sid-issuer <issuer>` (needs
 `revoke_others` and a press of your security key). It ends that one session, as a logout by `sid` does, and leaves

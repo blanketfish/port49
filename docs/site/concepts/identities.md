@@ -102,3 +102,4 @@ directory entry for group membership, but only to a machine-scoped group, never 
 | neither | a directory password and TOTP (`port49 login --directory`) |
 | automation in Kubernetes | a service account token |
 | automation on static hosts | a workload certificate |
+| automation with a client at your identity provider | a machine OIDC client |

@@ -182,6 +182,6 @@ Kubernetes one after it. Each numbers its own sections from 1, so the second "1.
 "What it is". Section headings of the Oxidized guide run from "What runs where" to "What L49 measured, and what it
 did not".
 
---8<-- "examples/oxidized/README.md:8:260"
+--8<-- "examples/oxidized/README.md:8:"
 
---8<-- "examples/kubernetes/README.md:16:151"
+--8<-- "examples/kubernetes/README.md:16:"

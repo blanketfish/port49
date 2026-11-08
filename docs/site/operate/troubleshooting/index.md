@@ -95,8 +95,8 @@ get around the outage; the devices already fall to local.
   [IOS XR](../../admin/devices/cisco-ios-xr.md), [Junos](../../admin/devices/juniper-junos.md).
 - **A device that failed over keeps answering locally for a while.** After its servers failed, the device
   itself answers for a window and sends port49 nothing: a token login is refused during it, and
-  break-glass works. Measured (cells f2 and f3 of the closed reference-configuration row): IOS XE 30 to
-  39 seconds over TCP
+  break-glass works. Measured (cells f2 and f3 for IOS XE, cells a and f for XR, of the closed
+  reference-configuration row): IOS XE 30 to 39 seconds over TCP
   ([the IOS XE note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md)),
   and about a minute over TLS on one release, measured once; IOS XR 24 to 46 seconds
   ([the XR note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd.md)). XR

@@ -77,9 +77,9 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 
 | What | Measured | Note |
 |---|---|---|
-| A deny | Falls through only when `password` is listed, so final under `tacplus` alone | `tests/lab/results/L4-juniper_vjunos-router.md`; under the reference: refused, no fall-through (L88 a; `tests/lab/results/L88-juniper_vjunos-router.md`, `L88-juniper_vsrx.md`, `L88-juniper_vjunos-router-vjunos26.md`) |
+| A deny | Not confirmed here against a note line: that a denied login falls through to a local password when `password` is listed, and that it is refused with no fall-through under `tacplus` alone (the Junos page boxes both as unmeasured) | `tests/lab/results/L88-juniper_vjunos-router.md`, `L88-juniper_vsrx.md`, `L88-juniper_vjunos-router-vjunos26.md` (cell a) |
 | port49 stopped | Break-glass logs in. Junos asks port49 for no command authorization (decision 21), dark or not | `tests/lab/results/L41-juniper_vjunos-router.md`, `L41-juniper_vsrx.md`, `tests/lab/results/L4-juniper_vjunos-router.md`, under the reference: break-glass in 20 to 40 ms (L88 b) |
-| ERROR | Final until go-dark, then break-glass. Under the reference the first break-glass login succeeded at +7 s on 23.4 and vSRX (port49d closed its listener at +5.5 s); on 26.2R1.7 at once (L88 c) | `tests/lab/results/L4-error-juniper_vjunos-router.md`; bound from L41; L88 notes |
+| ERROR | Final until go-dark, then break-glass. The first break-glass login under the reference (+7 s on 23.4 and vSRX, at once on 26.2R1.7) is not confirmed here against a note line; port49d closes its listener at +5.5 s (L88 c) | `tests/lab/results/L4-error-juniper_vjunos-router.md`; bound from L41; L88 notes |
 | Dark | Break-glass logs in (L41, both images). Junos asks port49 for no command authorization (decision 21), dark or not. | `L41-juniper_vjunos-router.md`, `L41-juniper_vsrx.md`; under the reference: break-glass logs in and runs a command, 160 to 190 ms (L88 d) |
 | Second server | The first server resetting at Accept, the second answering: token login succeeded in 160 to 180 ms (L88 f) | L88 notes |
 | Key retire / reload | Session survives; next login break-glass | `tests/lab/results/L29-reload-juniper_vjunos-router.md` (23.4). On 26.2R1.7 the device held no connection open across the reload; on vSRX the in-flight and second command printed, and the next token login was refused for about 5 s with break-glass working (L88 g) |
@@ -134,11 +134,11 @@ startup config pinned none. L88 loaded the clause as shipped (default VRF) on vE
 
 ### Cisco IOS XR
 
-Needs the `policy-platforms.yaml` block. XR enrols nothing until a `domain name` is configured (seen during development, not measured: unmeasured).
+Needs the `policy-platforms.yaml` block. XR enrols nothing until a `domain name` is configured (seen during development; unmeasured).
 
 | What | Measured | Note |
 |---|---|---|
-| A deny | A deny port49 answers is refused (L88 a). After earlier failures XR answers locally for about 24 to 46 s and asks port49 nothing: a login at +12 s succeeded on a local account while port49d was up and saw no request. In that window any local account's password logs in, including one whose user port49 denies, so keep local accounts to break-glass only | `tests/lab/results/L88-cisco_xrd.md`, `L88-cisco_xrd-named-vrf.md` |
+| A deny | The denied user was tried once before an attempt reached port49, and logged in at +12 s without port49 seeing it (L88 cell a). After earlier failures XR answers locally for about 24 to 46 s and asks port49 nothing. In that window any local account's password logs in, including one whose user port49 denies, so keep local accounts to break-glass only | `tests/lab/results/L88-cisco_xrd.md`, `L88-cisco_xrd-named-vrf.md` |
 | port49 stopped | Break-glass in 120 ms (L88 b). Commands in sessions already open: unmeasured | L88 notes |
 | ERROR | Over TLS final: a refused handshake then an ERROR gives no fall to local, and break-glass fails; keep a console or second path (L73, `L73-cisco_xrd.md`). Over plain TCP: the qualification vet saw break-glass refused after the ERROR (`QUAL-XRd-control-plane-26.1.1-cisco_xrd.md`, `store_unavailable`), and no closed register row measured it: unmeasured (L93, open). L88 c ran inside the device's dead window and did not exercise an ERROR, so it shows nothing about one | `tests/lab/results/L73-cisco_xrd.md`, `tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd.md`, `tests/qual/profiles/cisco_iosxr/XRd-control-plane-26.1.1.yaml` |
 | Dark | Break-glass logs in, 5.6 s (L88 d). Commands in sessions already open: unmeasured | L88 notes |

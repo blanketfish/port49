@@ -176,7 +176,7 @@ Read from the commands themselves.
 | `port49 ssh` | 2 | a flag it does not accept, no device named, or a device name it does not accept |
 | `port49 ssh` | 255 | ssh's own failure (connection, host key, authentication), or port49 ended ssh: the asker could not be verified, the token was asked for after it expired, or the device asked for the password again |
 | `port49 revoke` | 0 | done; `--list` printed |
-| `port49 revoke` | 1 | refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (`nothing was revoked`), an unreadable `--cert` file. **Also when the broker did not answer and the revocation may be in force** (`it may be in force`, `it may have run`): run `port49 revoke --list` before you retry |
+| `port49 revoke` | 1 | refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (`nothing was revoked`), an unreadable `--cert` file. **Also when the broker did not answer, or answered without naming a revocation, and the revocation may be in force** (`it may be in force`, `it may have run`): run `port49 revoke --list` before you retry |
 | `port49 revoke` | 2 | the flags are wrong: no target, two targets, or a flag that does not go with the form |
 | `port49 revoke` | 3 | the revocation is in force but incomplete or not saved, or a lift step did not finish: run the same command again |
 | `port49 hwkey` | 0 | ready; for `setup`, the keys are written, or already name this token |

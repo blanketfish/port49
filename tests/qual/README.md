@@ -30,7 +30,8 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
    - each device fact.
 
    A claim is measured only when a note for **this** firmware measured it (decision 52, ruling 4).
-   On Junos the command cells are `not_applicable` (L18: `tests/lab/results/L18-juniper_vjunos-router.md`), so `genprofile` records the engine gap
+   On Junos the command cells are `not_applicable`
+   (L18: `tests/lab/results/L18-juniper_vjunos-router.md`), so `genprofile` records the engine gap
    `command_authorization_not_sent`; that is expected, not a failure.
 
    The TLS login is played the way the device defaults, per-request (`tls_token_login`), and

@@ -64,7 +64,7 @@ The RFC 9887 client was measured on Nexus 9300v 10.6(2)F on 2026-10-18 ([L73-cis
 
 - Set no `deadtime`: with a `deadtime` configured the device does not ask a server again until its minute has passed after the server returns, measured at 50 to 67 s ([L4-error-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_nxos.md), section d).
 - Set the TLS `port`: with none the device dials 49, not port49d's listener ([L73-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_nxos.md)).
-- Over TLS, break-glass after an alert or an ERROR took 5.2 s in the lab, because the device's next data came 5 s after the server's first: allow for it ([L73-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_nxos.md), cell i).
+- Over TLS, break-glass after an alert or an ERROR took 5.2 s in the lab, and the device's next data came 5 s after the server's first: allow for it ([L73-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_nxos.md), cell i).
 
 ## Unmeasured
 

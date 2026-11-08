@@ -178,7 +178,7 @@ workstation that can reach the `<release>-broker` Service.
 Break-glass, when no broker is reachable: `scripts/revoke-offline.sh <ns> <release> -- --principal
 <name> [--lift|--list]` scales the brokers to 0, runs `port49-broker revoke --offline` against
 broker-0's volume, and scales back on every exit. The chart is on etcd, which keeps the revocation
-marks, so it has no `init-revocations` step (that command is for a single-process trial on the memory
+marks (with a copy in `broker.state_dir`), so it has no `init-revocations` step (that command is for a single-process trial on the memory
 store). The etcd roles are applied once per cluster by `examples/etcd/etcd-init-job.yaml`, which applies
 `port49d store-roles`' output as etcd's root and enables auth. Before it, run
 `port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml > roles.sh` (the broker's

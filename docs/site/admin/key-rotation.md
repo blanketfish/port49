@@ -161,8 +161,8 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   the broker's scheduled refresh line `broker: refresh: the directory failed for <principal> (crypt: opening
   membership: ...); its contexts are left unstamped and unrevoked`, the counter
   `port49_crypt_open_failures_total{record="membership"}` rising, and bind, mint and refresh failing for
-  the pinned principals. Sessions already open are, by my reading of the code, left as they are until
-  `session.staleness_ceiling` (4 hours by default) and then denied `context_stale`; I did not measure that.
+  the pinned principals. From the code (not measured), sessions already open are left as they are until
+  `session.staleness_ceiling` (4 hours by default) and then denied `context_stale`.
   The cure is to put the old key back as `previous` and restart; nothing was deleted.
 - **A store that holds pins can rotate again only after re-sealing them.** A process opens a record only
   if it was sealed under `current` or `previous`, and there is one `previous` slot. Call the keys K1 (the
@@ -175,8 +175,9 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
     deletes a pin and leaves a tombstone, and the person's next sign-in writes a fresh pin sealed under the
     current key, K2, which the second rotation keeps. Start with two admins, each forgetting the other, so
     that neither depends on a pin left under K1. Then do every other pinned principal; that is the only way
-    to rotate again with nobody locked out. Also let 24 hours pass after the first rotation's step 2
-    finished everywhere, so that no region still holds a session copy of a membership sealed under K1.
+    to rotate again with nobody locked out. Also let 24 hours pass, or the step-3 wait if that is longer, after
+    the first rotation's step 2 finished everywhere, so that no region still holds a session copy of a
+    membership sealed under K1.
     The costs:
 
     - Until the person signs in again, the pin protects nothing. A pin exists so a principal cannot

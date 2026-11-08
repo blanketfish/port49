@@ -26,7 +26,7 @@ Every device page has the same sections, in this order:
 3. **What the lab measured** lists what a lab run observed, each item linked to the results note that records it, with the image and the date in the note.
 4. **Traps** are the things an operator gets wrong, each linked the same way.
 5. **Unmeasured** holds everything that is not measured, one yellow box per item. A claim is *measured* when a linked note shows it, and *unmeasured* when it appears only in a yellow "Unmeasured" box. Where a box says a device is "reported" to do something, a person saw it and the lab did not measure it: treat it as an expectation, not a limit.
-6. **Lab evidence** is the table of every results note for the platform, with its image and date, generated from the notes.
+6. **Lab evidence** is the table of every results note for the platform, with its image and date, generated from the notes. Each row names the lab register entry the note belongs to and its status: *(closed)* means the register row is measured and closed, and *(open)* means that row is still open, so the note is evidence for part of it and a claim that rests on the row alone is unmeasured.
 
 A result written for one image is not a result for a release or a hardware family the page does not name. A platform that is not here was not tested.
 

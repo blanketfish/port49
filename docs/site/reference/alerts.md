@@ -466,7 +466,7 @@ port49_store_circuit_open == 1
 
 **Source:** design §15: "a circuit open"
 
-**Why this threshold:** The rule fires for every `{component, pool}` series, and what an open circuit costs depends on which. On port49d (`component="daemon"`), a `token` or `context` pool open for `hold_ttl` (the 15s `hold_ttl` default) closes the listeners, so a minute is four times that and this ticket follows the close; it does not warn before it. A `bulk` pool never closes them: logins and commands are unaffected and the scans (the refresh, a revocation by principal, a start's purge) fail until a probe succeeds. On port49-broker (`component="broker"`) no circuit closes anything, because its guards never stop; mints, refreshes and revocations through the open pool fail. A component whose name ends in `enrollments` refuses password sign-in and second-factor enrollment through its open pool.
+**Why this threshold:** The rule fires for every `{component, pool}` series, and what an open circuit costs depends on which. On port49d (`component="daemon"`), a `token` or `context` pool open for `hold_ttl` (the 15s `hold_ttl` default) closes the listeners, so a minute is four times that and this ticket follows the close; it does not warn before it. A `bulk` pool never closes them: logins and commands are unaffected and the scans (the refresh, a revocation by principal, a start's purge) fail until a probe succeeds. On port49-broker (`component="broker"`) no circuit closes anything, because its guards never stop; mints, refreshes and revocations through the open pool fail. The component `broker_enrollments` refuses password sign-in and second-factor enrollment through its open pool, and closes nothing.
 
 ### port49_contexts_reindexed {#port49_contexts_reindexed}
 
