@@ -1306,6 +1306,11 @@ type Membership struct {
 	Server     string
 	Site       string
 	Sealed     []byte // written by internal/store/crypt; nil in plaintext form
+	// Stale is a record opened under the previous encryption key: the
+	// scheduled pass seals the directory's pin again (decision 57).
+	// Written by internal/store/crypt's reads; a write ignores it, and a
+	// broker snapshot's cached pins carry it as it was read.
+	Stale bool
 	// Version is the backend's version of the record GetMembership read: what
 	// a PinExpect names. Zero when written, and in answers that name no
 	// single record.

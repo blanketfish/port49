@@ -1161,6 +1161,7 @@ type membershipSecret struct {
 var (
 	errVerifiedMoved   = errors.New("crypt: a membership's plaintext verified_at differs from its sealed one")
 	errMembershipMoved = errors.New("crypt: a membership's plaintext map keys or refusal differ from its sealed ones")
+	errMembershipBody  = errors.New("crypt: a membership's sealed part does not decode")
 	// errKeyNotSealed is a key the index points at a record whose sealed
 	// list does not hold it: a store write, answered as no membership.
 	errKeyNotSealed = fmt.Errorf("crypt: a membership key its sealed record does not list: %w", store.ErrNotFound)
@@ -1214,7 +1215,7 @@ func (w *wrapped) openMembership(m store.Membership, err error) (store.Membershi
 	}
 	var ms membershipSecret
 	if err := json.Unmarshal(b, &ms); err != nil {
-		return store.Membership{}, w.openErr("membership", m.Sealed, err)
+		return store.Membership{}, w.openErr("membership", m.Sealed, errMembershipBody)
 	}
 	if !ms.VerifiedAt.Equal(m.VerifiedAt) {
 		return store.Membership{}, w.openErr("membership", m.Sealed, errVerifiedMoved)
@@ -1222,6 +1223,10 @@ func (w *wrapped) openMembership(m store.Membership, err error) (store.Membershi
 	if ms.Refused != m.Refused || !slices.Equal(ms.MapKeys, m.MapKeys) {
 		return store.Membership{}, w.openErr("membership", m.Sealed, errMembershipMoved)
 	}
+	// Stale, as a second factor's is: opened under the previous key, so the
+	// scheduled pass seals the pin again before encryption.previous is
+	// retired (decision 57).
+	m.Stale = w.keys.Previous != nil && SealedKeyID(m.Sealed) == LineKeyID(w.keys.Previous.ID)
 	m.DN, m.EntryID, m.Username, m.GroupDNs, m.GroupNames, m.Sealed = ms.DN, ms.EntryID, ms.Username, ms.GroupDNs,
 		ms.GroupNames, nil
 	return m, nil

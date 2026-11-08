@@ -2274,3 +2274,50 @@ func TestTheSealingLayerKeepsTheRevision(t *testing.T) {
 		t.Fatalf("Revision lost through the sealing layer: %+v %v", got, err)
 	}
 }
+
+// A membership sealed under the previous key opens Stale; written again it
+// is not, and with no previous key nothing is (decision 57).
+func TestAMembershipUnderThePreviousKeyIsStale(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	k := keys() // Current v2, Previous v1
+	m := store.Membership{Principal: "user:alice@corp.example.com", EntryID: "uuid:1", MapKeys: []string{"k1"},
+		VerifiedAt: time.Now().Add(-time.Minute).UTC()}
+	if err := Wrap(inner, Keys{Current: *k.Previous}, nil).PutPin(ctx, m, store.PinExpect{Absent: true}); err != nil {
+		t.Fatal(err)
+	}
+	w := Wrap(inner, k, nil)
+	got, err := w.GetMembership(ctx, m.Principal)
+	if err != nil || !got.Stale || got.EntryID != "uuid:1" || got.Version == 0 {
+		t.Fatalf("under the previous key: stale %v, entry %q, version %d, %v", got.Stale, got.EntryID, got.Version, err)
+	}
+	if err := w.PutPin(ctx, got, store.PinExpect{Version: got.Version}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := w.GetMembership(ctx, m.Principal); err != nil || got.Stale {
+		t.Fatalf("written again under the current key: stale %v, %v", got.Stale, err)
+	}
+	if got, err := Wrap(inner, Keys{Current: k.Current}, nil).GetMembership(ctx, m.Principal); err != nil || got.Stale {
+		t.Fatalf("with no previous key: stale %v, %v", got.Stale, err)
+	}
+}
+
+// A sealed part that opens and does not decode is refused with a sentinel:
+// the decoder's own error would put a plaintext byte in the pin's log line.
+func TestAMembershipBodyThatDoesNotDecodeNamesNoByteOfIt(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	k := keys()
+	p, at := "user:alice@corp.example.com", time.Now().Add(-time.Minute).UTC()
+	sealed, err := k.SealBound([]byte("x-not-json"), membershipAAD(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.PutMembership(ctx, store.Membership{Principal: p, VerifiedAt: at, Sealed: sealed}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Wrap(inner, k, nil).GetMembership(ctx, p)
+	if !errors.Is(err, errMembershipBody) || strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("a body that does not decode: %v", err)
+	}
+}
