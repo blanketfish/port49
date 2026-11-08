@@ -24,565 +24,565 @@ rows below are shortened from it. Follow the spec link for a row's full wording.
 
 ## The register
 
-### L1 {#l1}
+### [L1](#l1) {#l1}
 
 **Open.** What the `port` field contains, per platform and per transport — SSH, console, eAPI, NX-API, NETCONF.
 
 Results notes: [L1-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-arista_eos.md), [L1-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-cisco_iosxe.md), [L1-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-cisco_nxos.md), [L1-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-juniper_vjunos-router.md), [L1-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-juniper_vsrx.md), [L1-restconf-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-restconf-cisco_iosxe.md)
 
-### L2 {#l2}
+### [L2](#l2) {#l2}
 
 **Open.** Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates.
 
 Results notes: [L2-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-arista_eos.md), [L2-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-cisco_iosxe.md), [L2-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-cisco_nxos.md), [L2-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-juniper_vjunos-router.md), [L2-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-juniper_vsrx.md)
 
-### L3 {#l3}
+### [L3](#l3) {#l3}
 
 **Closed**, measured 2026-09-21. Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port.
 
 Results notes: [L3-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-arista_eos.md), [L3-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-cisco_iosxe.md), [L3-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-cisco_nxos.md), [L3-nxos-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-nxos-cisco_nxos.md)
 
-### L4 {#l4}
+### [L4](#l4) {#l4}
 
 **Open.** Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior.
 
 Results notes: [L4-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-arista_eos.md), [L4-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-cisco_iosxe.md), [L4-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-cisco_nxos.md), [L4-error-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-arista_eos.md), [L4-error-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md), [L4-error-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_nxos.md), [L4-error-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md), [L4-error-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vsrx.md), [L4-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-juniper_vjunos-router.md), [L4-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-juniper_vsrx.md)
 
-### L5 {#l5}
+### [L5](#l5) {#l5}
 
 **Closed**, measured 2026-09-20. Which platforms send accounting WATCHDOG, how often, and with or without arguments.
 
 Results notes: [L5-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-arista_eos.md), [L5-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-cisco_iosxe.md), [L5-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-cisco_nxos.md), [L5-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-juniper_vjunos-router.md), [L5-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-juniper_vsrx.md)
 
-### L6 {#l6}
+### [L6](#l6) {#l6}
 
 **Open.** How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next.
 
 Results notes: [L6-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-arista_eos.md), [L6-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-cisco_iosxe.md), [L6-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-cisco_nxos.md), [L6-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-juniper_vjunos-router.md), [L6-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-juniper_vsrx.md)
 
-### L7 {#l7}
+### [L7](#l7) {#l7}
 
 **Closed**, measured 2026-09-24. Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests.
 
 Results notes: [L7-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-arista_eos.md), [L7-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-cisco_nxos.md), [L7-login-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-login-arista_eos.md), [L7-nxapi-cookie-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-nxapi-cookie-cisco_nxos.md)
 
-### L8 {#l8}
+### [L8](#l8) {#l8}
 
 **Closed**, measured 2026-09-23. The maximum password length each platform accepts at an interactive prompt.
 
 Results notes: [L8-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-arista_eos.md), [L8-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-cisco_iosxe.md), [L8-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-cisco_nxos.md), [L8-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-juniper_vjunos-router.md), [L8-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-juniper_vsrx.md)
 
-### L9 {#l9}
+### [L9](#l9) {#l9}
 
 **Closed**, measured 2026-09-29. Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects.
 
-Results notes: [L9-abbreviations-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-abbreviations-juniper_vjunos-router.md), [L9-abbreviations-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-abbreviations-juniper_vsrx.md), [L9-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-juniper_vjunos-router.md), [L9-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-juniper_vsrx.md)
+Results notes: [L12-projection-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vjunos-router.md), [L12-projection-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vsrx.md), [L9-abbreviations-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-abbreviations-juniper_vjunos-router.md), [L9-abbreviations-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-abbreviations-juniper_vsrx.md), [L9-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-juniper_vjunos-router.md), [L9-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-juniper_vsrx.md)
 
-### L10 {#l10}
+### [L10](#l10) {#l10}
 
 **Closed**, measured 2026-09-29. Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter.
 
-Results notes: [L10-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-arista_eos.md), [L10-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-cisco_iosxe.md), [L10-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-cisco_nxos.md), [L10-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-juniper_vjunos-router.md), [L10-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-juniper_vsrx.md)
+Results notes: [L10-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-arista_eos.md), [L10-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-cisco_iosxe.md), [L10-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-cisco_nxos.md), [L10-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-juniper_vjunos-router.md), [L10-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-juniper_vsrx.md), [L12-projection-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vjunos-router.md), [L12-projection-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vsrx.md)
 
-### L11 {#l11}
+### [L11](#l11) {#l11}
 
 **Closed**, measured 2026-09-03. Junos precedence, repetition, and length behavior for wire and class rules.
 
 No results note yet.
 
-### L12 {#l12}
+### [L12](#l12) {#l12}
 
 **Closed**, measured 2026-09-29. `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session, and two bits in one value.
 
 Results notes: [L12-bits-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-bits-juniper_vjunos-router.md), [L12-bits-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-bits-juniper_vsrx.md), [L12-configuration-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-configuration-juniper_vjunos-router.md), [L12-configuration-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-configuration-juniper_vsrx.md), [L12-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-juniper_vjunos-router.md), [L12-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-juniper_vsrx.md), [L12-netconf-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-netconf-juniper_vjunos-router.md), [L12-netconf-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-netconf-juniper_vsrx.md), [L12-projection-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vjunos-router.md), [L12-projection-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vsrx.md)
 
-### L13 {#l13}
+### [L13](#l13) {#l13}
 
 **Open.** How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server.
 
 Results notes: [L13-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-arista_eos.md), [L13-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-cisco_iosxe.md), [L13-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-cisco_nxos.md), [L13-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-juniper_vjunos-router.md), [L13-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-juniper_vsrx.md)
 
-### L14 {#l14}
+### [L14](#l14) {#l14}
 
 **Open.** Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an `<edit-config>`, and with what `service`, `cmd` and `cmd-arg`; what `port` and `rem_addr` …
 
 No results note yet.
 
-### L15 {#l15}
+### [L15](#l15) {#l15}
 
 **Open.** How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and what port49 then answers.
 
-Results notes: [L15-clients-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-arista_eos.md), [L15-clients-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-cisco_nxos.md)
+Results notes: [L15-clients-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-arista_eos.md), [L15-clients-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-cisco_nxos.md), [L7-login-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-login-arista_eos.md), [L7-nxapi-cookie-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-nxapi-cookie-cisco_nxos.md)
 
-### L16 {#l16}
+### [L16](#l16) {#l16}
 
 **Open.** Role delivery over TACACS+ and its interaction with command authorization.
 
 Results notes: [L16-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L16-arista_eos.md), [L16-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L16-cisco_nxos.md)
 
-### L17 {#l17}
+### [L17](#l17) {#l17}
 
 **Open.** Which `system tacplus-options` statements change what a port49 answer MEANS on Junos.
 
 Results notes: [L17-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L17-juniper_vjunos-router.md), [L17-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L17-juniper_vsrx.md)
 
-### L18 {#l18}
+### [L18](#l18) {#l18}
 
 **Open.** How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed.
 
 Results notes: [L18-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-arista_eos.md), [L18-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-cisco_iosxe.md), [L18-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-cisco_nxos.md), [L18-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-juniper_vjunos-router.md), [L18-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-juniper_vsrx.md)
 
-### L19 {#l19}
+### [L19](#l19) {#l19}
 
 **Open.** The maximum password length each platform accepts via PAP, on every login path where the device uses PAP.
 
-No results note yet.
+Results notes: [L8-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-cisco_nxos.md)
 
-### L20 {#l20}
+### [L20](#l20) {#l20}
 
 **Open.** Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a wrong password for the same user inside that window is also accepted; and whether a …
 
-Results notes: [L20-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L20-cisco_iosxe.md)
+Results notes: [L1-restconf-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-restconf-cisco_iosxe.md), [L20-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L20-cisco_iosxe.md)
 
-### L21 {#l21}
+### [L21](#l21) {#l21}
 
 **Closed**, measured 2026-09-24. Whether each platform sends the command words the operator typed (`sh run`) or the resolved ones (`show running-config`) on a per-command authorization request, and on the accounting record for it.
 
 Results notes: [L21-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-arista_eos.md), [L21-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-cisco_iosxe.md), [L21-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-cisco_nxos.md)
 
-### L22 {#l22}
+### [L22](#l22) {#l22}
 
 **Closed**, measured 2026-09-24. What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and …
 
 Results notes: [L22-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-arista_eos.md), [L22-carried-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-carried-arista_eos.md), [L22-carried-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-carried-cisco_iosxe.md), [L22-carried-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-carried-cisco_nxos.md), [L22-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-cisco_iosxe.md), [L22-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-cisco_nxos.md)
 
-### L23 {#l23}
+### [L23](#l23) {#l23}
 
 **Closed**, measured 2026-09-25. Whether `home-directory`, `idletime` and `timeout`, each beside readonly's reply, leave the session readonly's on EOS and NX-OS: the same identity, the same reach for `clear counters` and `configure terminal`, and a permitted `show version`.
 
 Results notes: [L23-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L23-arista_eos.md), [L23-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L23-cisco_nxos.md)
 
-### L24 {#l24}
+### [L24](#l24) {#l24}
 
 **Closed**, measured 2026-09-25. Whether a Junos login class's `idle-timeout` ends an idle session a TACACS+ reply landed in that class, through `local-user-name` and through the `remote` template.
 
 Results notes: [L24-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L24-juniper_vjunos-router.md), [L24-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L24-juniper_vsrx.md)
 
-### L25 {#l25}
+### [L25](#l25) {#l25}
 
 **Open.** Whether the N9Kv writes an accounting record under `admin` with task_id `vsh.bin.<port>` when a network-operator cancels the sudo prompt of a bare `show interface`, and what distinguishes it from a person's `admin` session, over SSH and over NX-API.
 
 Results notes: [L25-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L25-cisco_nxos.md)
 
-### L26 {#l26}
+### [L26](#l26) {#l26}
 
 **Closed**, measured 2026-09-25. The Junos operational CLI keyword tree under `show`: at each command path, the words proven keywords — offered by completion there, and shown a keyword by `| display xml rpc` (an element named as the word, none holding it as text, or a path still asking for a …
 
 Results notes: [L26-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26-juniper_vjunos-router.md), [L26-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26-juniper_vsrx.md)
 
-### L26b {#l26b}
+### [L26b](#l26b) {#l26b}
 
 **Closed**, measured 2026-09-25. Whether a word is a keyword to `deny-commands`, by the deny itself: a deny naming the word at its path refuses the command, the CLI's caret under the word, while a paired control without the deny runs it with positive evidence.
 
 Results notes: [L26b-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26b-juniper_vjunos-router.md), [L26b-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26b-juniper_vsrx.md)
 
-### L26c {#l26c}
+### [L26c](#l26c) {#l26c}
 
 **Closed**, measured 2026-10-12. Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off (moved to [L59](#l59)): `xml-mode netconf need-trailer` and `xml-mode netconf`, then `<get-software-information/>`, `<get-configuration/>` and a `<command>` RPC; `op url` …
 
 Results notes: [L26c-entries-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-entries-juniper_vjunos-router.md), [L26c-entries-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-entries-juniper_vsrx.md), [L26c-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-juniper_vjunos-router.md), [L26c-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-juniper_vsrx.md), [L26c-junoscript-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-junoscript-juniper_vjunos-router.md), [L26c-junoscript-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-junoscript-juniper_vsrx.md), [L26c-operator-juniper_srx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-operator-juniper_srx.md), [L26c-projected-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-projected-juniper_vjunos-router.md), [L26c-projected-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-projected-juniper_vsrx.md), [L26c-scripts-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-scripts-juniper_vjunos-router.md), [L26c-scripts-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-scripts-juniper_vsrx.md)
 
-### L27 {#l27}
+### [L27](#l27) {#l27}
 
 **Closed**, measured 2026-09-30. What NetBox and Nautobot's APIs return for a device, per product and major version: where the version is reported (`/api/status/`, the `API-Version` header on `/api/`); the field names for role, platform, site or location, primary address, custom fields and …
 
 Results notes: [L27-nautobot.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L27-nautobot.md), [L27-netbox.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L27-netbox.md)
 
-### L28 {#l28}
+### [L28](#l28) {#l28}
 
 **Closed**, measured 2026-09-30. What a device does when port49d cannot validate its key on a connection's first packet.
 
 Results notes: [L28-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-arista_eos.md), [L28-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-cisco_iosxe.md), [L28-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-cisco_nxos.md), [L28-fin-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-fin-cisco_iosxe.md), [L28-held-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-arista_eos.md), [L28-held-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-cisco_iosxe.md), [L28-held-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-cisco_nxos.md), [L28-held-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-juniper_vjunos-router.md), [L28-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-juniper_vjunos-router.md)
 
-### L29 {#l29}
+### [L29](#l29) {#l29}
 
 **Closed**, measured 2026-09-30. What a device does when port49d resets a connection it holds open mid-session, at its first packet after a reload refused, removed, renamed, re-keyed or re-platformed its device (§10, "How a daemon refreshes its snapshot"): whether the session survives …
 
 Results notes: [L29-reload-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-arista_eos.md), [L29-reload-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-cisco_iosxe.md), [L29-reload-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-cisco_nxos.md), [L29-reload-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-juniper_vjunos-router.md)
 
-### L30 {#l30}
+### [L30](#l30) {#l30}
 
 **Closed**, measured 2026-09-30. How NetBox and Nautobot page a device list that does not fit one page, and what Nautobot 3.x returns: for NetBox 3.7 and 4.x and Nautobot 1.6 and 2.x, a REST list holding more devices than its `limit`, whether `next` is an absolute URL, which host and scheme …
 
 Results notes: [L30-nautobot.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md), [L30-netbox.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-netbox.md)
 
-### L31 {#l31}
+### [L31](#l31) {#l31}
 
 **Closed**, measured 2026-09-30. What break-glass costs on IOS-XE and NX-OS with single-connection on, when port49d resets a de-admitted device's connection after the device has written its request: a device removed from inventory (unadmitted), refused admission, or quarantined.
 
 Results notes: [L31-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-arista_eos.md), [L31-breakglass-cisco-singleconnection.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-breakglass-cisco-singleconnection.md), [L31-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-cisco_iosxe.md), [L31-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-cisco_nxos.md)
 
-### L32 {#l32}
+### [L32](#l32) {#l32}
 
 **Closed**, measured 2026-10-01. What the inventory service's NetBox and Nautobot connectors read as built (plan 6c), from each measured release: the GraphQL list query with every field the connector asks for (`status`, `primary_ip4`, `primary_ip6`, the map's paths, every interface address) …
 
 Results notes: [L32-nautobot.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L32-nautobot.md), [L32-netbox.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L32-netbox.md)
 
-### L33 {#l33}
+### [L33](#l33) {#l33}
 
 **Closed**, measured 2026-10-01. What NetBox and Nautobot do delivering a webhook to port49-inventory's `webhook_listen`, per measured release: whether each delivers to an `https` payload URL whose certificate a private CA issued (`ca_file_path`, `ssl_verification` on); whether …
 
 Results notes: [L33-e2e-nautobot-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-e2e-nautobot-arista_eos.md), [L33-e2e-netbox-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-e2e-netbox-arista_eos.md), [L33-nautobot.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-nautobot.md), [L33-netbox.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-netbox.md)
 
-### L34 {#l34}
+### [L34](#l34) {#l34}
 
 **Closed**, measured 2026-10-01. Whether a device shows the `server_msg` port49 puts on a permitted authorization reply — the session reply at login, and a per-command reply — and still treats the reply as a permit: the command's output appears and the session goes on.
 
 Results notes: [L34-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-arista_eos.md), [L34-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-cisco_iosxe.md), [L34-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-cisco_nxos.md), [L34-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-juniper_vjunos-router.md), [L34-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-juniper_vsrx.md)
 
-### L35 {#l35}
+### [L35](#l35) {#l35}
 
 **Closed**, measured 2026-10-20. What a device does when port49d's store hangs rather than refuses (etcd cut off from port49d, or past its quorum): each request's time from the device's send to port49d's reply, against the device's own TACACS+ timeout (§15 [L4](#l4), [L13](#l13)); what it shows for `FAIL` …
 
-Results notes: [L35-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-arista_eos.md), [L35-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-cisco_iosxe.md), [L35-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-cisco_nxos.md), [L35-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-juniper_vjunos-router.md), [L35-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-juniper_vsrx.md), [L35-restore-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-arista_eos.md), [L35-restore-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-cisco_iosxe.md), [L35-restore-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-cisco_nxos.md)
+Results notes: [L35-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-arista_eos.md), [L35-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-cisco_iosxe.md), [L35-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-cisco_nxos.md), [L35-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-juniper_vjunos-router.md), [L35-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-juniper_vsrx.md), [L35-restore-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-arista_eos.md), [L35-restore-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-cisco_iosxe.md), [L35-restore-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-cisco_nxos.md), [L38-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L38-cisco_iosxe.md), [L4-error-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md), [quarantine-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/quarantine-cisco_iosxe.md)
 
-### L36 {#l36}
+### [L36](#l36) {#l36}
 
 **Closed**, measured 2026-10-04. On etcd, whether a live Junos session's re-authorization (`authorization-time-interval`, 15 min) after a port49d restart is answered from the context the store kept, and whether a denial then ends the session.
 
 Results notes: [L36-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md), [L36-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md)
 
-### L37 {#l37}
+### [L37](#l37) {#l37}
 
 **Closed**, measured 2026-10-20. On the split deployment (plan 7e; two port49d replicas and port49-broker on one etcd, each device listing both replicas as TACACS+ servers): whether a session opened through one replica has its next command answered by the other once the first stops; whether …
 
 Results notes: [L37-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-arista_eos.md), [L37-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-cisco_iosxe.md), [L37-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-cisco_nxos.md), [L37-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-juniper_vjunos-router.md), [L37-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-juniper_vsrx.md)
 
-### L38 {#l38}
+### [L38](#l38) {#l38}
 
 **Closed**, measured 2026-10-04. On IOS-XE, whether an open session's command runs under local authorization once port49 is unreachable, by the command (`show privilege`, `show version`) and by what port49 answered before it went away (nothing; a `FAIL store_unavailable`) …
 
-Results notes: [L38-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L38-cisco_iosxe.md)
+Results notes: [L38-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L38-cisco_iosxe.md), [quarantine-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/quarantine-cisco_iosxe.md)
 
-### L39 {#l39}
+### [L39](#l39) {#l39}
 
 **Closed**, measured 2026-11-04. Whether port49d sees a device's true source address in each deployment shape: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with `externalTrafficPolicy: Cluster` and with `Local`; (c) Kubernetes with …
 
 Results notes: [L39-docker-proxy-off-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-docker-proxy-off-arista_eos.md), [L39-docker-proxy-on-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-docker-proxy-on-arista_eos.md), [L39-kind.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-kind.md)
 
-### L40 {#l40}
+### [L40](#l40) {#l40}
 
 **Open.** On Junos, whether `authorization-time-interval` re-authorizes a session more than once: after the first re-authorization (`L36-*.md` saw one, 15 minutes after login), whether a second request comes one interval later, and so whether a revocation made after …
 
 No results note yet.
 
-### L41 {#l41}
+### [L41](#l41) {#l41}
 
 **Closed**, measured 2026-10-05. On the compose deployment (decision 37), what a device does when port49d closes its TACACS+ listener mid-session on its store health checks, beside port49d stopped: how long after the store hangs an idle port49d closes it (against `close_after` × `interval` + …
 
 Results notes: [L41-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-arista_eos.md), [L41-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-cisco_iosxe.md), [L41-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-cisco_nxos.md), [L41-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vjunos-router.md), [L41-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vsrx.md)
 
-### L42 {#l42}
+### [L42](#l42) {#l42}
 
 **Closed**, measured 2026-10-05. Nested-group resolution, per directory.
 
 Results notes: [L42-openldap.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L42-openldap.md), [L42-samba_ad.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L42-samba_ad.md)
 
-### L43 {#l43}
+### [L43](#l43) {#l43}
 
 **Closed**, measured 2026-10-05. Which bind mechanisms each directory accepts from port49-broker, and how each refusal reads: SASL EXTERNAL over LDAPS with a client certificate (OpenLDAP mapping it by `olcAuthzRegexp`); GSSAPI with a keytab and no SASL security layer, over LDAPS (Samba AD's …
 
 Results notes: [L43-openldap.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L43-openldap.md), [L43-samba_ad.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L43-samba_ad.md)
 
-### L44 {#l44}
+### [L44](#l44) {#l44}
 
 **Closed**, measured 2026-10-07. The Active Directory claims on a Windows DC: on [L42](#l42)'s fixture and its loop, which groups `member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL with a client certificate (over StartTLS, where a DC maps it, and over …
 
 Results notes: [L44-windows_ad.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L44-windows_ad.md)
 
-### L45 {#l45}
+### [L45](#l45) {#l45}
 
 **Closed**, measured 2026-10-07. The back-channel logout token a provider sends to port49's `/v1/logout`, per way a session ends: an RP-initiated logout at the provider's end-session endpoint, an administrator signing a user out of every session, and an administrator ending one session.
 
-Results notes: [L45-keycloak.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L45-keycloak.md)
+Results notes: [L45-keycloak.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L45-keycloak.md), [oidc-e2e-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/oidc-e2e-arista_eos.md)
 
-### L46 {#l46}
+### [L46](#l46) {#l46}
 
 **Closed**, measured 2026-10-07. Fresh authentication on a provider: with an SSO session live, whether a plain second authorization request reuses it (no credentials asked, `auth_time` unchanged: the control); whether one with `prompt=login` makes the person enter their credentials again …
 
 Results notes: [L46-keycloak.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L46-keycloak.md)
 
-### L47 {#l47}
+### [L47](#l47) {#l47}
 
 **Open.** [L45](#l45)'s and [L46](#l46)'s claims on hosted providers, and their access tokens' `azp`, `aud` and `sub` under the client-credentials grant.
 
 No results note yet.
 
-### L48 {#l48}
+### [L48](#l48) {#l48}
 
 **Closed**, measured 2026-10-08. A workload CA's behaviour with port49's workload verifier (plan 8).
 
 Results notes: [L48-step_ca.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md)
 
-### L49 {#l49}
+### [L49](#l49) {#l49}
 
 **Closed**, measured 2026-10-08. Oxidized as the day-one consumer of minted tokens (plan 8): the commands each model (`eos`, `nxos`, `ios`, `junos`) sends at login and during a backup, as port49 receives them; whether Oxidized reads a node's username and password from its CSV source at each …
 
 Results notes: [L49-oxidized-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-arista_eos.md), [L49-oxidized-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-cisco_iosxe.md), [L49-oxidized-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-cisco_nxos.md), [L49-oxidized-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-juniper_vjunos-router.md), [L49-oxidized-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-juniper_vsrx.md)
 
-### L50 {#l50}
+### [L50](#l50) {#l50}
 
 **Closed**, measured 2026-10-09. Who can write the directory attribute a workload certificate's directory mapping reads (plan 8b; §13 decisions 16, 40 ruling 5 and 41 ruling 10): on Windows AD and on Samba AD, for a service account's entry in its own OU, and for each of `uid`, `description` …
 
 Results notes: [L50-samba_ad.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L50-samba_ad.md), [L50-windows_ad.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L50-windows_ad.md)
 
-### L51 {#l51}
+### [L51](#l51) {#l51}
 
 **Closed**, measured 2026-10-09. What an SSH client offering several public keys before the password does to a port49 login (raised by the owner from production NX-OS experience): on each platform, whether each refused key counts against the device's SSH authentication-attempt limit (NX-OS …
 
 Results notes: [L51-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-arista_eos.md), [L51-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-cisco_iosxe.md), [L51-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-cisco_nxos.md), [L51-juniper_vjunos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-juniper_vjunos.md), [L51-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-juniper_vsrx.md)
 
-### L52 {#l52}
+### [L52](#l52) {#l52}
 
 **Open.** Why a C8000V running IOS-XE 17.13.01a intermittently skips its TACACS+ method for SSH logins (found during [L51](#l51), Addendum B of tests/lab/results/L51-cisco_iosxe.md): about four good logins, then 40–55 s in which …
 
 No results note yet.
 
-### L53 {#l53}
+### [L53](#l53) {#l53}
 
-**Closed**, measured 2026-10-09. The SSH host key each platform presents to the device scan, and what the scan does to the device.
+**Closed**, measured 2026-10-09. The SSH host key each platform presents, whether a console command shows the same key so an operator can check it out of band, whether it survives a reload, and what an SSH key exchange abandoned before authentication does to the device.
 
 Results notes: [L53-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-arista_eos.md), [L53-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-cisco_iosxe.md), [L53-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-cisco_nxos.md), [L53-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-juniper_vjunos-router.md), [L53-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-juniper_vsrx.md)
 
-### L54 {#l54}
+### [L54](#l54) {#l54}
 
 **Closed**, measured 2026-10-09. `port49 ssh` against each platform (plan 9a): which authentication method the device takes under `PreferredAuthentications keyboard-interactive,password` with public-key authentication off; that ssh's prompt for it names `<username>@<device>`, so port49's …
 
 Results notes: [L54-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-arista_eos.md), [L54-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-cisco_iosxe.md), [L54-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-cisco_nxos.md), [L54-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-juniper_vjunos-router.md), [L54-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-juniper_vsrx.md)
 
-### L55 {#l55}
+### [L55](#l55) {#l55}
 
 **Closed**, measured 2026-10-11. Keycloak as port49's public client meets it (plan 9b).
 
 Results notes: [L55-keycloak.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L55-keycloak.md)
 
-### L56 {#l56}
+### [L56](#l56) {#l56}
 
 **Closed**, measured 2026-10-11. Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real `port49` CLI.
 
 Results notes: [L56-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L56-arista_eos.md)
 
-### L57 {#l57}
+### [L57](#l57) {#l57}
 
 **Closed**, measured 2026-10-12. What a Junos configuration capture carries for configuration groups that reach port49's template classes.
 
 Results notes: [L57-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L57-juniper_vjunos-router.md), [L57-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L57-juniper_vsrx.md)
 
-### L58 {#l58}
+### [L58](#l58) {#l58}
 
 **Closed**, measured 2026-10-11. The two Junos baseline words a readonly's set 1.2.0 reply rests on, under the factored deny set 1.2.0 renders, one alternative naming both words (`^ *(save|junoscript)( .*)?` and the pipe tail), each against a control with the same class and no deny …
 
 Results notes: [L58-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L58-juniper_vjunos-router.md), [L58-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L58-juniper_vsrx.md)
 
-### L59 {#l59}
+### [L59](#l59) {#l59}
 
 **Open.** What plan 9b1 left unmeasured of [L26c](#l26c), under a reply carrying set 1.2.0's entry denies (`junoscript `, `op `) beside a deny of `show configuration` beneath `view-configuration`, each against a control with the same bits and no deny that reaches the service …
 
 No results note yet.
 
-### L60 {#l60}
+### [L60](#l60) {#l60}
 
 **Open.** A YubiKey's PIV applet through `libykcs11` under purego, on the lab's dedicated machine.
 
 Results notes: [L60-ser8.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L60-ser8.md)
 
-### L61 {#l61}
+### [L61](#l61) {#l61}
 
 **Closed**, measured 2026-10-12. Keycloak's `amr` and `acr` in an ID token for `idp_mfa`.
 
 Results notes: [L61-keycloak.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L61-keycloak.md)
 
-### L62 {#l62}
+### [L62](#l62) {#l62}
 
 **Closed**, measured 2026-10-15. A real TPM 2.0 through `/dev/tpmrm0` on the lab's dedicated machine, for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file.
 
 Results notes: [L62-ser8.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L62-ser8.md)
 
-### L63 {#l63}
+### [L63](#l63) {#l63}
 
 **Open.** The macOS Secure Enclave through Security.framework under purego, from an unsigned `port49` built with `CGO_ENABLED=0`: whether `SecKeyCreateRandomKey` with `kSecAttrTokenIDSecureEnclave` and `kSecAttrIsPermanent` creates a key, whether a second process finds …
 
 No results note yet.
 
-### L64 {#l64}
+### [L64](#l64) {#l64}
 
 **Closed**, measured 2026-10-14. `port49 ssh` under decision 46 against each platform, with OpenSSH's default algorithms: (a) a first contact, the operator's known_hosts holding nothing for the device: whether the login succeeds with one askpass ask, and every line ssh files under the …
 
 Results notes: [L64-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-arista_eos.md), [L64-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-cisco_iosxe.md), [L64-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-cisco_nxos.md), [L64-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-juniper_vjunos-router.md), [L64-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-juniper_vsrx.md)
 
-### L65 {#l65}
+### [L65](#l65) {#l65}
 
 **Closed**, measured 2026-10-14. The Python client (`port49.netmiko.connect`) against each platform: (a) a first contact: Netmiko logs in, and the key Paramiko accepted is filed under the inventory name (hashed under `HashKnownHosts yes`), its type recorded; (b) a second connection verifies …
 
 Results notes: [L65-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-arista_eos.md), [L65-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-cisco_iosxe.md), [L65-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-cisco_nxos.md), [L65-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-juniper_vjunos-router.md), [L65-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-juniper_vsrx.md)
 
-### L66 {#l66}
+### [L66](#l66) {#l66}
 
 **Closed**, measured 2026-10-14. The Ansible lookup `port49.client.token` over `ansible.netcommon.network_cli` against each platform: (a) a ten-task play with the lookup in `ansible_password`: how many mints per host; (b) the same play minting once in a `pre_tasks` `set_fact`: how many mints …
 
 Results notes: [L66-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-arista_eos.md), [L66-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-cisco_iosxe.md), [L66-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-cisco_nxos.md), [L66-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-juniper_vjunos-router.md), [L66-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-juniper_vsrx.md)
 
-### L67 {#l67}
+### [L67](#l67) {#l67}
 
 **Closed**, measured 2026-10-15. A person's simple bind from port49-broker, per directory, over LDAPS and over StartTLS (`start_tls: true`): (a) the right password accepted, a wrong one refused with which result code and, on AD, which `data` code; (b) a DN with an empty password sent by a …
 
 Results notes: [L67-openldap.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L67-openldap.md), [L67-samba_ad.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L67-samba_ad.md), [L67-windows_ad.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L67-windows_ad.md)
 
-### L68 {#l68}
+### [L68](#l68) {#l68}
 
 **Closed**, measured 2026-10-16. A Junos reply sending view-configuration with the rest of its reach denied (plan 9g; decision 48).
 
 Results notes: [L68-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-juniper_vjunos-router.md), [L68-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-juniper_vsrx.md), [L68-netconf-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-juniper_vjunos-router.md), [L68-netconf-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-juniper_vsrx.md), [L68-netconf-operator-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-operator-juniper_vjunos-router.md), [L68-netconf-operator-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-operator-juniper_vsrx.md), [L68-projected-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-projected-juniper_vjunos-router.md), [L68-projected-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-projected-juniper_vsrx.md)
 
-### L69 {#l69}
+### [L69](#l69) {#l69}
 
 **Closed**, measured 2026-10-16. A Kubernetes cluster's service account tokens as port49's `k8s` verifier meets them (plan 10), on kind: (a) a projected token's claims for `audience: port49-lab`, `expirationSeconds: 600` (`iss`, `aud`, `exp` − `iat`, `nbf`, `sub`, `kubernetes.io` with …
 
 Results notes: [L69-kind.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L69-kind.md)
 
-### L70 {#l70}
+### [L70](#l70) {#l70}
 
 **Open.** [L69](#l69)'s (a), (c) and (d) on managed clusters: whether EKS, GKE and AKS publish issuer discovery and the JWKS anonymously over the internet, the form of their issuer and `kid`, and how they rotate signing keys.
 
 No results note yet.
 
-### L71 {#l71}
+### [L71](#l71) {#l71}
 
 **Closed**, measured 2026-10-17. Which lab images carry an RFC 9887 (TACACS+ over TLS) client at all, read from each image's own CLI help with nothing left configured: EOS `tacacs-server host <ip> ?` (an `ssl-profile` or `tls` option), IOS-XE `tacacs server <name>` then `tls ?` (IOS has no …
 
 Results notes: [L71-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-arista_ceos.md), [L71-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-arista_eos.md), [L71-cisco_iol-xe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_iol-xe.md), [L71-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_iosxe.md), [L71-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_nxos.md), [L71-cisco_xrd.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_xrd.md), [L71-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vjunos-router.md), [L71-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vsrx.md)
 
-### L72 {#l72}
+### [L72](#l72) {#l72}
 
 **Closed**, measured 2026-10-17. port49's RFC 9887 listener against reference clients (`openssl s_client` 3.x and `tests/lab/cmd/tacacs-tls-client`, Go `crypto/tls`), on the lab host with no device: (a) a TLS 1.3 PAP login with a seed token passes, every reply has the unencrypted flag, and …
 
 Results notes: [L72-reference.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L72-reference.md)
 
-### L73 {#l73}
+### [L73](#l73) {#l73}
 
 **Closed**, measured 2026-10-18. Each device's RFC 9887 client against port49, per platform, once an image carries one ([L71](#l71)): (a) the port it uses with none configured (RFC 9887 says 300; Cisco's documents use 6049); (b) whether every packet has the unencrypted flag set; (c) whether it sends …
 
 Results notes: [L73-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md), [L73-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md), [L73-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_nxos.md), [L73-cisco_xrd.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md), [L73-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md)
 
-### L74 {#l74}
+### [L74](#l74) {#l74}
 
 **Closed**, measured 2026-11-05. port49 across three simulated regions on one host: three network namespaces joined by a bridge, `tc netem` adding 20ms each way on each region's link (40ms round trip region to region); a directory etcd of three members, one per region; a session etcd, a …
 
 Results notes: [L74-regions.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L74-regions.md)
 
-### L75 {#l75}
+### [L75](#l75) {#l75}
 
 **Closed**, measured 2026-11-05. The TOTP used step and the unlock across three port49-broker processes on the lab host, each with a session etcd of its own and [L74](#l74)'s directory etcd shared, and [L67](#l67)'s OpenLDAP.
 
 Results notes: [L75-regions.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L75-regions.md)
 
-### L76 {#l76}
+### [L76](#l76) {#l76}
 
 **Closed**, measured 2026-10-18. Nokia SR Linux against port49 over TACACS+ on port 49 (`kind: nokia_srlinux`; server group `port49` first and `local` second; accounting to `port49`; `tests/lab/configs/srlinux-startup.cli`): (a) a user that exists only in port49 logs in over SSH; the session …
 
 Results notes: [L76-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L76-nokia_srlinux.md)
 
-### L78 {#l78}
+### [L78](#l78) {#l78}
 
 **Open.** Whether Junos locks a user out when a *permit* session reply totals more than 255 bytes with every attribute at most 255 (port49 never sends one attribute over 255: §6, "Length"): the total at which the login is refused or the user locked out, if any, and …
 
 Results notes: [L78-vJunos-router-23.4R2-S2.1-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-23.4R2-S2.1-juniper_vjunos-router.md), [L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md)
 
-### L79 {#l79}
+### [L79](#l79) {#l79}
 
 **Closed**, measured 2026-11-05. Whether a directory write sent from a region whose link is cut (iptables DROP, so the kernel keeps retransmitting) is delivered after the link heals within the retransmission window: (j) a lift reported "could not be lifted, and stands" that lands later; (k) …
 
 Results notes: [L79-regions.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L79-regions.md)
 
-### L80 {#l80}
+### [L80](#l80) {#l80}
 
 **Closed**, measured 2026-10-21. NX-OS 10.6(2)F over per-request TLS (RFC 9887 with no `single-connection`, the device default) with `aaa authorization commands default group port49 local`: whether a command port49's policy denies runs (local fallback) or is refused, graded from the …
 
-Results notes: [L80-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L80-cisco_nxos.md)
+Results notes: [L80-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L80-cisco_nxos.md), [QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.md)
 
-### L81 {#l81}
+### [L81](#l81) {#l81}
 
 **Open.** An IP address as the TLS server name (decision 50 ruling 10): (a) `openssl s_client -servername <IPv6 literal>` against a listener whose `server_names` lists it in another spelling: accepted.
 
 Results notes: [L81-reference.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L81-reference.md)
 
-### L82 {#l82}
+### [L82](#l82) {#l82}
 
 **Closed**, measured 2026-10-31. Kubernetes Secret volumes as port49d's key directory, on kind.
 
 Results notes: [L82-kind.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L82-kind.md)
 
-### L83 {#l83}
+### [L83](#l83) {#l83}
 
 **Closed**, measured 2026-10-31. Secret-store agents rendering port49d's keys, on kind.
 
 Results notes: [L83-kind.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L83-kind.md)
 
-### L84 {#l84}
+### [L84](#l84) {#l84}
 
 **Closed**, measured 2026-11-04. Host credential mechanisms against `fence.ReadSecret`.
 
 Results notes: [L84-systemd-docker.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L84-systemd-docker.md)
 
-### L85 {#l85}
+### [L85](#l85) {#l85}
 
 **Closed**, measured 2026-10-31. MetalLB in BGP mode as an anycast VIP for port49d, on kind with an FRR peer.
 
 Results notes: [L85-kind.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L85-kind.md)
 
-### L86 {#l86}
+### [L86](#l86) {#l86}
 
 **Closed**, measured 2026-11-01. An admin call's touch on a real YubiKey, on the lab's dedicated machine.
 
 Results notes: [L86-ser8.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L86-ser8.md)
 
-### L87 {#l87}
+### [L87](#l87) {#l87}
 
 **Closed**, measured 2026-11-04. SR Linux with `exit-on-reject true` when port49 is up and answers ERROR (`store_unavailable`, the lab fault switch), and once port49d has closed its listener on etcd (go-dark).
 
 Results notes: [L87-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L87-nokia_srlinux.md)
 
-### L88 {#l88}
+### [L88](#l88) {#l88}
 
 **Closed**, measured 2026-11-04. Each platform under port49's reference AAA configuration (`deploy/device-aaa/`), loaded as shipped.
 
 Results notes: [L88-arista_ceos-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_ceos-tls.md), [L88-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_ceos.md), [L88-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_eos.md), [L88-cisco_iosxe-f-evidence-run.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-f-evidence-run.md), [L88-cisco_iosxe-iosxe1718-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md), [L88-cisco_iosxe-iosxe1718.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718.md), [L88-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md), [L88-cisco_nxos-nxos106-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos-nxos106-tls.md), [L88-cisco_nxos-nxos106.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos-nxos106.md), [L88-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos.md), [L88-cisco_xrd-named-vrf.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd-named-vrf.md), [L88-cisco_xrd-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd-tls.md), [L88-cisco_xrd.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd.md), [L88-juniper_vjunos-router-vjunos26-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26-tls.md), [L88-juniper_vjunos-router-vjunos26.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26.md), [L88-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router.md), [L88-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vsrx.md), [L88-nokia_srlinux-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux-tls.md), [L88-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux.md)
 
-### L89 {#l89}
+### [L89](#l89) {#l89}
 
 **Closed**, measured 2026-11-04. Velero file-system backup (node agent) of a chart release's PVCs, on kind with an S3-compatible store in the cluster.
 
 Results notes: [L89-kind.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L89-kind.md)
 
-### L90 {#l90}
+### [L90](#l90) {#l90}
 
 **Closed**, measured 2026-11-04. Oxidized's SSH host-key handling against accept-new, on one EOS device.
 
 Results notes: [L90-oxidized-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L90-oxidized-arista_eos.md)
 
-### L91 {#l91}
+### [L91](#l91) {#l91}
 
 **Open.** `port49 hwkey status` and `setup` on a real YubiKey, on the lab's dedicated machine.
 
 No results note yet.
 
-### L92 {#l92}
+### [L92](#l92) {#l92}
 
 **Open.** SR Linux over RFC 9887 ([L88](#l88) h).
 
-No results note yet.
+Results notes: [L88-nokia_srlinux-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux-tls.md)
 
-### L93 {#l93}
+### [L93](#l93) {#l93}
 
 **Open.** IOS XR over plain TCP under the reference configuration: whether an authentication ERROR is final.
 

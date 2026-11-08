@@ -968,9 +968,9 @@ port49d's accounting spool disk cannot keep up; every accounting record waits on
 histogram_quantile(0.99, rate(port49_accounting_spool_sync_seconds_bucket[5m])) > 0.010
 ```
 
-**Source:** load results, run 5 diagnosis (tests/lab/results/load-beehive.md, cell c): "p99 of `port49_accounting_spool_sync_seconds` over 10 ms for 10m"
+**Source:** the project's chosen threshold, not quoted from a note: p99 of `port49_accounting_spool_sync_seconds` over 10 ms for 10m
 
-**Why this threshold:** Every accounting ack waits on the spool's fsync; with the session etcd and the spool on a QLC drive, account p99 was 152 ms at 170/s (tests/lab/results/load-beehive.md, cell c); with both in RAM the spool's capacity was 1291/s (tests/lab/results/load-beehive-ram.md, cell c), and on a GCE pd-ssd (operator-declared) 2905/s with account p99 3.67 ms at 170/s (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md, cell c).
+**Why this threshold:** Every accounting ack waits on the spool's fsync; with the session etcd and the spool on a CT1000P3PSSD8 drive, account p99 was 152 ms at 170/s (tests/lab/results/load-beehive.md, cell c, `step_1_account_p99_ms`); with both in RAM the spool's capacity was 1291/s (tests/lab/results/load-beehive-ram.md, cell c), and on a GCE pd-ssd (operator-declared) 2905/s with account p99 3.67 ms at 170/s (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md, cell c).
 
 ### port49_decision_log_write_failures {#port49_decision_log_write_failures}
 
@@ -1150,9 +1150,9 @@ etcd's disk cannot keep up; port49 store calls will time out in bursts. Move etc
 histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])) > 0.010 or histogram_quantile(0.99, rate(etcd_disk_backend_commit_duration_seconds_bucket[5m])) > 0.025
 ```
 
-**Source:** load results, run 5 diagnosis (tests/lab/results/load-beehive.md): "p99 of `etcd_disk_wal_fsync_duration_seconds` over 10 ms, or of `etcd_disk_backend_commit_duration_seconds` over 25 ms"
+**Source:** the project's chosen threshold, not quoted from a note: p99 of `etcd_disk_wal_fsync_duration_seconds` over 10 ms, or of `etcd_disk_backend_commit_duration_seconds` over 25 ms
 
-**Why this threshold:** etcd's own guidance is a WAL fsync p99 under 10 ms; a drive that stalls can push store calls past the 500 ms call timeout in bursts: on a QLC drive the session etcd logged 7974 to 9244 slow applies in cells d and e (tests/lab/results/load-beehive.md), against 1 and 0 in RAM (tests/lab/results/load-beehive-ram.md) and at most 74 on a GCE pd-ssd (operator-declared; a 44, c 74, d 1, e 0) with a WAL fsync mean of 0.72 to 0.86 ms (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md). Ten minutes over a 5m rate is a drive, not a compaction.
+**Why this threshold:** etcd's own guidance is a WAL fsync p99 under 10 ms; a drive that stalls can push store calls past the 500 ms call timeout in bursts: on a CT1000P3PSSD8 drive the session etcd logged 7974 to 9244 slow applies in cells d and e (tests/lab/results/load-beehive.md), against 1 and 0 in RAM (tests/lab/results/load-beehive-ram.md) and at most 74 on a GCE pd-ssd (operator-declared; a 44, c 74, d 1, e 0) with a WAL fsync mean of 0.72 to 0.86 ms (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md). Ten minutes over a 5m rate is a drive, not a compaction.
 
 ### etcd_leader_changes {#etcd_leader_changes}
 

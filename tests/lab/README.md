@@ -945,7 +945,7 @@ The first run passed 58 of 66 entries. Of the 8 that failed, all are resolved:
   health checks (about 5 s). The verdict was fixed and both passed on the rerun.
 - **[L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29, and [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66)
   passed on the rerun.
-- **L29-reload on vjunos**: no connection open across the change was reset in the refused/rekeyed
+- **[L29](https://blanketfish.github.io/port49/reference/lab-register/#l29)-reload on vjunos**: no connection open across the change was reset in the refused/rekeyed
   phase. Junos sends nothing on a held connection, so the phase can fail its premise; a device
   flake, so retry the entry.
 
@@ -968,7 +968,7 @@ Read a hang from them: `ssh_auth` with no `tacacs_seen` is the config apply, and
 **What a run needs beyond the base setup:**
 
 - `PORT49_LAB_ETCD_BIN` names a directory holding `etcd`, `etcdctl` and `etcdutl`, all v3.6.15
-  (for example `/mnt/images/etcd-v3.6.15` on the lab host). L35-restore needs `etcdutl`.
+  (for example `/mnt/images/etcd-v3.6.15` on the lab host). [L35](https://blanketfish.github.io/port49/reference/lab-register/#l35)-restore needs `etcdutl`.
 - [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) needs `tests/lab/l66/.collections`, which is git-ignored, so a fresh worktree lacks it. Create it
   with `<venv>/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
   the [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) preflight prints the exact command with the collection names.
