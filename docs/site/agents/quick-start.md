@@ -21,8 +21,9 @@ Every sentence is an instruction, so it says what to do and what never to do.
    read-only role first and widen it only when a human decides to. See
    [Workloads](../admin/workloads.md) and [Roles and grants](../admin/roles-and-grants.md#machine_group).
 3. **The tooling mints and presents the token. The token never enters the agent's context.** Use the Ansible
-   lookup or the Python library's `port49.Workload`: each reads the token from the `port49` command and hands
-   it to the connection, and nowhere else. Never use `port49.Agent`: it holds a person's session. Never run
+   lookup, which reads the token from the `port49` command and hands it to the connection and nowhere else, or
+   the Python library's `port49.Workload`, which only mints: its token goes to the connection code and
+   nowhere else. Never use `port49.Agent`: it holds a person's session. Never run
    `port49 token`, `port49 workload token` or `port49 ssh` in a shell: on success they print the token (and
    `port49 token --json` the broker's whole answer, token included) on standard output, which is the
    transcript, or they use a person's login. Never print, log or `cat` a token, a certificate's key file, a
@@ -170,14 +171,21 @@ tests:
 The permits are an allow-list of the `show` commands the agent needs, not `show **`. A `show` that prints the
 device's configuration (`show running-config`, `show startup-config`, `show tech-support`) prints its AAA lines
 and its local users' secrets, and the output lands in the agent's context. So the role also denies each of
-them. The allow-list is the fence; the denies hold even if someone later widens the permit to `show **`
-(re-run with that permit, each of the four is `deny no_permit_dominates_deny`).
+them. The allow-list is the fence. Over SSH the denies also hold if someone later widens the permit to
+`show **` (re-run with that permit, each of the four is `deny no_permit_dominates_deny`), because an
+interactive SSH session on `arista_eos` sends the command with its words spelled out: `sh run` reaches port49 as
+`show running-config` ([L21-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-arista_eos.md);
+`expands_abbreviations: true` in `platforms/1.3.0/arista_eos.yaml`). EOS ships no policy class for
+configuration views, so the denies name the commands. Add the equivalents of your own platform from its
+[device page](../admin/devices/index.md) before you grant it.
 
-On `arista_eos` the device sends the command with its words spelled out, so `sh run` reaches port49 as
-`show running-config` and the deny binds (`expands_abbreviations: true` in
-`platforms/1.3.0/arista_eos.yaml`, measured for an SSH session on the lab image; eAPI and NETCONF are
-unmeasured). EOS ships no policy class for configuration views, so the denies name the commands. Add the
-equivalents of your own platform from its [device page](../admin/devices/index.md) before you grant it.
+!!! warning "Unmeasured"
+    Whether EOS sends a command spelled out over eAPI or NETCONF is unknown, because the lab measured an
+    interactive SSH session only. Over a transport that sends `show run` as typed, a full-word deny may not bind,
+    and a role widened to `show **` would permit it. The allow-list is what protects the agent there.
+
+The agent connects over SSH only: Ansible `network_cli`, never eAPI, `httpapi` or NETCONF. If a play or a
+script would use another transport, stop and ask a human.
 
 The inventory has both devices, and only `leaf1` is in the scope:
 

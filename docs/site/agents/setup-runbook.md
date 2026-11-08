@@ -101,8 +101,10 @@ shared key is the placeholder `<KEY>`: the agent never fetches or writes the rea
 ### 8. A smoke login
 
 Run the one `show` command of [the quick start's worked example](quick-start.md#the-worked-example-one-read-only-agent)
-through the Ansible lookup or the Python library's `port49.Workload`, with `no_log: true` on the mint and on
-the command task.
+through the Ansible lookup over `network_cli` (SSH), with `no_log: true` on the mint and on the command task.
+The Python library's `port49.Workload` only mints: it runs no device command, and `port49.netmiko.connect`
+uses a person's session, so the agent never calls it. Running a command with a `Workload` token is the agent's
+own code over SSH, and port49 ships no connector for it. Use the Ansible play here.
 
 **Check:** the play's `debug` of `out.stdout_lines` prints the command's output (the example registers the
 result and prints that one key; the tasks that hold the token stay censored, and the agent never prints the
