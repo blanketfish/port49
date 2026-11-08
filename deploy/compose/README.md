@@ -76,6 +76,11 @@ file is kept and a line says so. To change a key, add a new version (below, and 
 is the opposite: `setup` copies `config/policy.yaml` over the volumes' at every `up`, so
 **edit `config/policy.yaml` on the host, then `docker compose up -d`**. port49d reads it at
 `policy.watch_interval` with no restart. A policy edited inside a volume is reverted at the next `up`.
+That holds only while the image is the one the containers were made from: an `up -d` after the
+image was rebuilt (an `up -d --build`, or a `docker compose build` after a `git pull`) recreates
+port49d and the broker, so the policy arrives by a restart, not a reload. Keep image changes and
+policy edits apart: rebuild with `docker compose build` and `up -d` as one change, then make policy
+edits with a plain `up -d`.
 
 Docker API access is root-equivalent, so guard it as you would the host: `docker run` with a volume
 reads every file in it.
