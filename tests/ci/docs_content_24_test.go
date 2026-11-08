@@ -14,7 +14,7 @@ const siteURL = "https://blanketfish.github.io/port49/"
 
 func init() {
 	mustSay["index.md"] = append(mustSay["index.md"],
-		"## Why port49", "systemd", "Helm", "Apache-2.0", siteURL, "qualified-platforms", "contributing/",
+		"## Why port49", "systemd", "Helm", "Apache-2.0", siteURL, "admin/devices/", "contributing/",
 	)
 }
 
@@ -23,14 +23,14 @@ func TestTheReadmeSaysWhatItMust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"## Why port49", "systemd", "Helm", "Apache-2.0", siteURL, "qualified-platforms", "docs/site/contributing/"} {
+	for _, want := range []string{"## Why port49", "systemd", "Helm", "Apache-2.0", siteURL, "admin/devices/", "docs/site/contributing/"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("README.md does not say %q", want)
 		}
 	}
 }
 
-var topBullet = regexp.MustCompile(`^[-*] `)
+var topBullet = regexp.MustCompile(`^ {0,3}(?:[-*+]|\d+[.)])[ \t]`)
 
 // topBullets counts the top-level bullets of text outside fenced blocks.
 func topBullets(text string) int {
@@ -48,8 +48,20 @@ func topBullets(text string) int {
 }
 
 func TestTheBulletCounterCountsTopLevelOnly(t *testing.T) {
-	if got := topBullets("- a\n  - b\n* c\n```\n- d\n```\ntext\n"); got != 2 {
+	if got := topBullets("- a\n    - b\n* c\n```\n- d\n```\ntext\n"); got != 2 {
 		t.Errorf("counted %d, want 2", got)
+	}
+	// Each of these renders as a top-level bullet, so a feature list written in it must be counted.
+	for name, list := range map[string]string{
+		"numbered":   "1. a\n2. b\n3. c\n",
+		"numbered )": "1) a\n2) b\n",
+		"plus":       "+ a\n+ b\n+ c\n",
+		"indented":   "  - a\n  - b\n  - c\n",
+		"tab":        "-\ta\n-\tb\n-\tc\n",
+	} {
+		if got := topBullets(list); got < 2 {
+			t.Errorf("%s list counted %d, want its items", name, got)
+		}
 	}
 }
 

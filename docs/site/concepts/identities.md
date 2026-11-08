@@ -65,7 +65,7 @@ wire again.
 
 ## Machines
 
-A workload cannot sign in interactively and has no directory password. There are two mechanisms.
+A workload cannot sign in interactively and has no directory password. There are three mechanisms.
 
 **Kubernetes service account tokens** are the first choice where the workload runs in a cluster. The
 pod requests a projected token with the audience `port49`; the kubelet writes and rotates it. The broker
@@ -85,7 +85,12 @@ organization's CA; a renewal needs nothing from port49, and a late renewal is co
 `port49_workload_certificates_renewal_late_total` (see [Metrics](../reference/metrics.md)).
 `port49 workload token` mints with no agent, reading the certificate and key on each run.
 
-Either way the workload's access is its own identity subject's in policy. A machine can be mapped to a
+**A machine OIDC client** is for a workload that gets its token from your identity provider. The
+`oidc` machine verifier lists the client ids it accepts, each pinned to the subject the provider
+issues for it, and the principal is `app:<client_id>`. A token that names a client the verifier does
+not list, or whose subject is not the pinned one, is refused.
+
+In every case the workload's access is its own identity subject's in policy. A machine can be mapped to a
 directory entry for group membership, but only to a machine-scoped group, never to a person's.
 
 ## Which one should I use

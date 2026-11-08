@@ -16,8 +16,8 @@ identity, with declarative policy.
   not a shared password.
 - **Policy as reviewed code.** `port49 policy diff` fails a change that widens access until a test or
   a written acknowledgment accounts for it.
-- **Built for a bad day.** Failure behavior is measured per platform in the lab; the
-  [qualified platforms](admin/devices/index.md#qualified-platforms) say which.
+- **Built for a bad day.** Failure and break-glass behavior is measured in the lab, platform by
+  platform; each [device page](admin/devices/index.md) says what was measured and what is still open.
 - **Runs where you run things.** [systemd](operate/install/systemd.md),
   [containers](operate/install/container.md) or [Helm](operate/install/helm.md), as peers.
 
