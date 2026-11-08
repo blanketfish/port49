@@ -2321,3 +2321,38 @@ func TestAMembershipBodyThatDoesNotDecodeNamesNoByteOfIt(t *testing.T) {
 		t.Fatalf("a body that does not decode: %v", err)
 	}
 }
+
+// A receipt whose sealed part opens and does not decode is refused with a
+// sentinel, as a membership's is: the decoder's own error would put a
+// plaintext byte in the receipt's log line.
+func TestAReceiptBodyThatDoesNotDecodeNamesNoByteOfIt(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	k := keys()
+	s := Wrap(inner, k, nil)
+	tk := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	tok := store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin,
+		Principal: "user:alice@example.com", Username: "alice",
+		Credential: store.Credential{Method: "oidc", Sub: "a7f3"}, ExpiresAt: time.Now().Add(time.Minute), BlobHash: "sha256:x"}
+	if _, err := s.PutToken(ctx, tk, tok); err != nil {
+		t.Fatal(err)
+	}
+	var h [32]byte
+	copy(h[:], "hash")
+	rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", Kind: store.KindLogin, CredentialSHA256: h}
+	sealed, err := k.SealBound([]byte("x-not-json"), receiptAAD(rk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	w := store.ReceiptWrite{Key: rk, Principal: "user:alice@example.com", IndexTTL: time.Hour,
+		Receipt: store.Receipt{Sealed: sealed, FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute),
+			RetainUntil: now.Add(time.Hour)}}
+	if err := inner.RedeemAndReceipt(ctx, tk, "t1", w); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.GetReceipt(ctx, rk)
+	if !errors.Is(err, errReceiptBody) || strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("a receipt body that does not decode: %v", err)
+	}
+}

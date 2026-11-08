@@ -395,12 +395,18 @@ func (w *wrapped) openErr(record string, sealed []byte, err error) error {
 	if w.onUnopenable != nil {
 		w.onUnopenable(record, SealedKeyID(sealed), err)
 	}
-	// err is already ErrUnknownKey when neither key id matched, and a GCM or
-	// JSON failure when the key matched and the bytes did not; both are
-	// wrapped as they are, so `errors.Is(err, ErrUnknownKey)` distinguishes
-	// "wrong key" from "tampered record" at the call site.
+	// err is already ErrUnknownKey when neither key id matched, and a GCM
+	// failure when the key matched and the bytes did not; both are wrapped as
+	// they are, so `errors.Is(err, ErrUnknownKey)` distinguishes "wrong key"
+	// from "tampered record" at the call site. A body that opens and does not
+	// decode arrives as a sentinel (errMembershipBody, errReceiptBody), never
+	// the decoder's error, which quotes a plaintext byte.
 	return fmt.Errorf("crypt: opening %s: %w", record, err)
 }
+
+// errReceiptBody is a receipt whose sealed part opens and does not decode:
+// the decoder's own error would quote a plaintext byte into a log line.
+var errReceiptBody = errors.New("crypt: a receipt's sealed part does not decode")
 
 // errExpiryMoved is a token whose plaintext expiry is not the one sealed
 // with it. sealToken writes them equal, so a store write moved it, and an
@@ -529,7 +535,7 @@ func (w *wrapped) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Re
 	}
 	var rs receiptSecret
 	if err := json.Unmarshal(b, &rs); err != nil {
-		return store.Receipt{}, w.openErr("receipt", r.Sealed, err)
+		return store.Receipt{}, w.openErr("receipt", r.Sealed, errReceiptBody)
 	}
 	r.CredentialSHA256, r.Status, r.CtxID, r.FirstRedeemedAt, r.Sealed =
 		rs.CredentialSHA256, rs.Status, rs.CtxID, rs.FirstRedeemedAt, nil
