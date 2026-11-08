@@ -566,6 +566,20 @@ increase(port49_crypt_open_failures_total{record="token"}[10m]) > 0
 
 **Why this threshold:** The counter is the only witness; the token is dropped from its candidates with no error.
 
+### port49_directory_pins_unopenable {#port49_directory_pins_unopenable}
+
+**Severity:** ticket. **For:** none.
+
+A directory pin opens under neither encryption key: its principal cannot bind, mint or refresh.
+
+```promql
+port49_directory_pins_unopenable > 0 and on(instance) port49_store_keyspace_held == 1
+```
+
+**Source:** design §15: "`port49_directory_pins_unopenable` above 0 on the replica holding the keyspace"
+
+**Why this threshold:** One principal is locked out until the key that sealed the pin is back as `encryption.previous` or the pin is forgotten; the pass never deletes it. Gated on `port49_store_keyspace_held == 1`, since a replica that handed over keeps its last value.
+
 ### port49_store_feed_rescans {#port49_store_feed_rescans}
 
 **Severity:** ticket. **For:** none.

@@ -231,6 +231,12 @@ groups:
         annotations:
           summary: "A stored token would not decrypt: a rotation may have retired a key while tokens it sealed were live."
           runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_crypt_token_open_failures"
+      - alert: port49_directory_pins_unopenable
+        expr: "port49_directory_pins_unopenable > 0 and on(instance) port49_store_keyspace_held == 1"
+        labels: {severity: ticket}
+        annotations:
+          summary: "A directory pin opens under neither encryption key: its principal cannot bind, mint or refresh."
+          runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_pins_unopenable"
       - alert: port49_store_feed_rescans
         expr: "increase(port49_store_feed_rescans_total[10m]) > 0"
         labels: {severity: ticket}
