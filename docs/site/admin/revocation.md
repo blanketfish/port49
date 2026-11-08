@@ -236,7 +236,7 @@ down, `on_unavailable` decides:
 - `refuse` (the default): the broker answers `503 certificate_status_unavailable` with `Retry-After: 60`, the
   reason `trust_domain_unresolved`. The agent is told to try again, and nothing is minted for that certificate
   until the status is known.
-- `allow`: the connection is admitted and the broker says so (`admitting a certificate whose revocation status
+- `allow` (fail-open): the connection is admitted and the broker says so (`admitting a certificate whose revocation status
   cannot be established`). It keeps logins working through an outage, and lets a certificate revoked during the
   outage in until the list returns. It is the reviewed escape, not a setting to leave on.
 

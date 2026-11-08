@@ -173,14 +173,32 @@ defaults:
 scopes:
   - name: core
     match: {tier: core}
-    on_missing: exclude
+    on_missing: include             # the requirement holds on a device the inventory cannot describe
     security_log: true
     per_login_mfa: {accept: [hardware_key_touch], reuse_for: 5m}
+  - name: core_access
+    match: {tier: core}
+    on_missing: exclude             # the grant is earned by data
 ```
 
-The scope is `exclude` so that a grant can sit on it: a grant on an `on_missing: include` scope is refused at
-load. For this policy and a device `core1` with `tier: core`, `port49 policy test` prints
-`report: per_login_mfa_on_missing_exclude: scope "core" carries per_login_mfa with on_missing: exclude: a sync that drops tier lifts this requirement from the device; security_log records it (spec §5.1.5)`.
+The scope that carries the requirement is `include`, so a device whose `tier` is missing is still held to it.
+A grant on an include scope is refused at load, so the grant goes on `core_access`, a second scope with the same
+match (`grants: [{subject: netops, scope: core_access, roles: [read_only]}]`). For a policy with those two
+scopes and a device `core1` with `tier: core`, `port49 policy test` prints, with nothing about `per_login_mfa`:
+
+```text
+platform_set: 1.0.0
+keys: checked against the default key_secret_refs (env: variables starting PORT49_KEY_, file: under /run/port49/keys); pass --config to check port49d.yaml's
+report: group_subject: subject "netops" is a group: subject: it mints only with broker.directory configured, through which the broker matches a person to the group; explain and policy tests evaluate it by name
+PASS netops on core1: "show version" -> permit permit_dominates
+1 tests, 0 failed; 0 shadowed denies, 0 unacknowledged; 0 quarantined, 0 projection refusals
+```
+
+`port49 explain` on `core1` still prints the requirement, `per_login_mfa accept hardware_key_touch (defaults ∩ scope core); reuse_for 5m (scope core); applies to humans`.
+
+Do not put the requirement on an `on_missing: exclude` scope to be able to grant on it.
+`port49 policy test` reports that shape as `per_login_mfa_on_missing_exclude`: a sync that drops `tier` lifts the
+per-login proof from the device.
 
 `accept` is a list of `hardware_key_touch` (a touch on the token holding the session key), `idp_mfa` (a fresh
 identity-provider sign-in showing a second factor) or both. Leaving the block out means no requirement; there

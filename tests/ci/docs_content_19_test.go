@@ -7,7 +7,7 @@ func init() {
 		"per_login_mfa_weakened", "new `group:` or `machine_group:` subject", "no match key",
 	)
 	mustSay["admin/roles-and-grants.md"] = append(mustSay["admin/roles-and-grants.md"],
-		"per_login_mfa_weakened", "new or changed",
+		"per_login_mfa_weakened", "new or changed", "core_access", "Do not put the requirement on an `on_missing: exclude` scope",
 	)
 	mustSay["admin/revocation.md"] = append(mustSay["admin/revocation.md"],
 		"--cert-serial", "certificate_status_unavailable", "issuer_file", "disabled: true",
