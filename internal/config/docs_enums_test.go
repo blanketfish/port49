@@ -75,7 +75,7 @@ func portEnums() []portEnum {
 				_, err := oidc.ParseAlgs([]string{v})
 				return err == nil
 			}},
-		{key: "broker.identity.humans.[].directory.kind", accept: []string{string(directory.MapSPIFFEID)},
+		{key: "broker.identity.machines.[].directory.kind", accept: []string{string(directory.MapSPIFFEID)},
 			others: []string{"x509", "machines"}},
 		{key: "broker.directory.certificate_mapping.kind", accept: kindNames(), others: []string{"allow_weak", "issuers"},
 			takes: func(t *testing.T, v string) bool {
