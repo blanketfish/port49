@@ -122,7 +122,11 @@ func walkMarkdown(t *testing.T, root string) []string {
 // citesNote reports whether names holds a results note that leads with id and belongs, by the segment
 // rule, to one of the page's platforms. The universe is every suffix any page claims, so that
 // juniper_vjunos never takes a juniper_vjunos-router note.
-func citesNote(names []string, id string, platforms, universe []string, results string) bool {
+//
+// A page that lists no platforms is not a device page. A note that exists and belongs to no device (a lab
+// host's note) cites its row there; a device note does only when sentence, the one the claim is in, names
+// that note's platform. sentence is unused on a page that lists platforms.
+func citesNote(names []string, id string, platforms, universe []string, results, sentence string) bool {
 	for _, name := range names {
 		ids, _ := docgen.NoteParts(name)
 		leads := false
@@ -135,9 +139,12 @@ func citesNote(names []string, id string, platforms, universe []string, results 
 		if _, err := os.Stat(filepath.Join(results, name)); err != nil {
 			continue
 		}
-		// A page that lists no platforms is not a device page: a note that exists cites its row there.
 		if len(platforms) == 0 {
-			return true
+			slugs := noteSlugs(name, universe)
+			if len(slugs) == 0 || namesPlatform(sentence, slugs) {
+				return true
+			}
+			continue
 		}
 		if suffix, ok := docgen.MatchNote(name, universe); ok && contains(platforms, suffix) {
 			return true
@@ -159,14 +166,85 @@ func citesNote(names []string, id string, platforms, universe []string, results 
 	return false
 }
 
-// maskNotes blanks the L of each results-note path in text, same length, so the ID in a link to a note is
-// not read as a reference to its row.
-func maskNotes(text string) string {
-	b := []byte(text)
+func sentenceOf(text string, m []int) string {
+	s, _ := sentenceAround(text, m[0], m[1])
+	return s
+}
+
+// platformWords is how a page names each device page's platforms in a sentence.
+var platformWords = map[string]*regexp.Regexp{
+	"arista-eos":     regexp.MustCompile(`\b(?:EOS|cEOS|Arista)\b`),
+	"cisco-ios-xe":   regexp.MustCompile(`IOS[ -]XE|\bIOL\b|Catalyst`),
+	"cisco-nx-os":    regexp.MustCompile(`NX-OS|NXOS|Nexus`),
+	"cisco-ios-xr":   regexp.MustCompile(`IOS[ -]XR|\bXR\b|XRd`),
+	"juniper-junos":  regexp.MustCompile(`Junos|\bSRX\b|vSRX`),
+	"nokia-sr-linux": regexp.MustCompile(`SR Linux|\bSRL\b`),
+}
+
+// noteSlugs is the device pages a results note belongs to: by its platform suffix, and MultiPage. A note
+// of no device gives none.
+func noteSlugs(name string, universe []string) []string {
+	slugs := append([]string(nil), docgen.MultiPage[name]...)
+	if suffix, ok := docgen.MatchNote(name, universe); ok {
+		for _, p := range docgen.DevicePages {
+			if contains(p.Suffixes, suffix) {
+				slugs = append(slugs, p.Slug)
+			}
+		}
+	}
+	return slugs
+}
+
+func namesPlatform(sentence string, slugs []string) bool {
+	for _, s := range slugs {
+		if re := platformWords[s]; re != nil && re.MatchString(sentence) {
+			return true
+		}
+	}
+	return false
+}
+
+// existingNotes is the results-note paths in text that name a note that exists, as [start,end) of the
+// file name.
+func existingNotes(text, results string) (spans [][2]int) {
 	for _, m := range resultsNote.FindAllStringSubmatchIndex(text, -1) {
-		b[m[2]] = 'x'
+		if _, err := os.Stat(filepath.Join(results, text[m[2]:m[3]])); err == nil {
+			spans = append(spans, [2]int{m[2], m[3]})
+		}
+	}
+	return spans
+}
+
+// maskNotes blanks the L of each path to a results note that exists, same length, so the ID in a link to
+// a note is not read as a bare reference; the note itself is checked by noteFindings. A path to a note
+// that does not exist keeps its ID, which then fails as an open row cited to nothing.
+func maskNotes(text, results string) string {
+	b := []byte(text)
+	for _, s := range existingNotes(text, results) {
+		b[s[0]] = 'x'
 	}
 	return string(b)
+}
+
+// noteFindings checks each existing note path in text that leads with an open row: the note must carry
+// that row for the page (citesNote), with the sentence the path is in.
+func noteFindings(file string, line int, text string, inWarn bool, reg map[string]docgen.LabRow, platforms, universe []string, results string) []labFinding {
+	var out []labFinding
+	for _, s := range existingNotes(text, results) {
+		name := text[s[0]:s[1]]
+		id := labRef.FindString(name)
+		row, ok := reg[id]
+		switch {
+		case !ok:
+			out = append(out, labFinding{file, line, "unknown_lab_id"})
+		case row.Open && !inWarn:
+			sentence, _ := sentenceAround(text, s[0], s[1])
+			if !citesNote([]string{name}, id, platforms, universe, results, sentence) {
+				out = append(out, labFinding{file, line, "open_entry_asserted"})
+			}
+		}
+	}
+	return out
 }
 
 func noteNames(re *regexp.Regexp, text string) []string {
@@ -192,12 +270,15 @@ func checkOpenEntries(file string, text string, reg map[string]docgen.LabRow, un
 		case inWarn && line != "" && !strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "\t"):
 			inWarn = false
 		}
-		for _, id := range labRef.FindAllString(maskNotes(line), -1) {
+		out = append(out, noteFindings(file, skipped+i+1, line, inWarn, reg, platforms, universe, results)...)
+		masked := maskNotes(line, results)
+		for _, m := range labRef.FindAllStringIndex(masked, -1) {
+			id := line[m[0]:m[1]]
 			row, ok := reg[id]
 			switch {
 			case !ok:
 				out = append(out, labFinding{file, skipped + i + 1, "unknown_lab_id"})
-			case row.Open && !inWarn && !citesNote(noteNames(markdownLink, line), id, platforms, universe, results):
+			case row.Open && !inWarn && !citesNote(noteNames(markdownLink, line), id, platforms, universe, results, sentenceOf(line, m)):
 				out = append(out, labFinding{file, skipped + i + 1, "open_entry_asserted"})
 			case !row.Open && inWarn:
 				out = append(out, labFinding{file, skipped + i + 1, "closed_entry_unmeasured"})
@@ -264,11 +345,11 @@ func TestAMultiPageNoteCountsOnEachOfItsPages(t *testing.T) {
 	const name = "L31-breakglass-cisco-singleconnection.md"
 	universe := siteUniverse(t)
 	for _, platforms := range [][]string{{"cisco_iosxe", "cisco_iol"}, {"cisco_nxos"}} {
-		if !citesNote([]string{name}, "L31", platforms, universe, resultsDir) {
+		if !citesNote([]string{name}, "L31", platforms, universe, resultsDir, "") {
 			t.Errorf("%s does not carry %v", name, platforms)
 		}
 	}
-	if citesNote([]string{name}, "L31", []string{"arista_eos", "arista_ceos"}, universe, resultsDir) {
+	if citesNote([]string{name}, "L31", []string{"arista_eos", "arista_ceos"}, universe, resultsDir, "") {
 		t.Errorf("%s carries an Arista page", name)
 	}
 	page := "---\nplatforms:\n  - cisco_nxos\n---\n\n# x\n\nThe single-connection break-glass login fails after a reset " +
@@ -508,7 +589,7 @@ func citesAny(names []string, platforms, universe []string, results string) bool
 	for _, name := range names {
 		ids, _ := docgen.NoteParts(name)
 		for _, id := range ids {
-			if citesNote([]string{name}, id, platforms, universe, results) {
+			if citesNote([]string{name}, id, platforms, universe, results, "") {
 				return true
 			}
 		}
@@ -720,7 +801,8 @@ func checkBuiltHTML(file string, doc []byte, platforms []string, reg map[string]
 	}
 	var out []labFinding
 	for _, b := range blocks {
-		for _, m := range labRef.FindAllStringIndex(maskNotes(b.Text), -1) {
+		out = append(out, noteFindings(file, 0, b.Text, b.Unmeasured, reg, platforms, universe, results)...)
+		for _, m := range labRef.FindAllStringIndex(maskNotes(b.Text, results), -1) {
 			id := b.Text[m[0]:m[1]]
 			row, ok := reg[id]
 			switch {
@@ -730,7 +812,7 @@ func checkBuiltHTML(file string, doc []byte, platforms []string, reg map[string]
 				out = append(out, labFinding{file, 0, "closed_entry_unmeasured"})
 			case row.Open && !b.Unmeasured:
 				sentence, from := sentenceAround(b.Text, m[0], m[1])
-				if citesNote(noteNames(resultsNote, sentence), id, platforms, universe, results) ||
+				if citesNote(noteNames(resultsNote, sentence), id, platforms, universe, results, sentence) ||
 					readmeWording(sentence, id, m[0]-from, m[1]-from) {
 					continue
 				}
