@@ -329,7 +329,7 @@ bound, which leave `/etc` writable. The unit test (`tests/shapes`) holds each of
 
 ### `LoadCredential=` for the encryption key
 
-Measured (lab L84, `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
+Measured (lab [L84](https://blanketfish.github.io/port49/reference/lab-register/#l84), `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
 unit's hardening): port49d reads a file that systemd renders from `LoadCredential=`. systemd gives the
 credential `root:root 0440` with an ACL granting only `port49d`, in a directory with an ACL too, and
 the fence reads the ACL's entries, so it passes. Use it for the encryption key, so the file on disk
@@ -348,7 +348,7 @@ closes every session in flight, so adding a device credential that way would cos
 each time. A host whose systemd renders no credentials directory (a container's did not) cannot use this.
 
 This recipe is `port49d`'s alone. The broker's copy of the encryption key stays the file readable by
-`port49-broker`: L84 did not measure the broker unit's shape, so `LoadCredential=` is not claimed for it.
+`port49-broker`: [L84](https://blanketfish.github.io/port49/reference/lab-register/#l84) did not measure the broker unit's shape, so `LoadCredential=` is not claimed for it.
 
 ## Rotating the `encryption:` key
 

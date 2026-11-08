@@ -143,7 +143,7 @@ and the file has to pass the secret-file rule. Two agents were measured on kind
 
 | Mechanism | Device keys | Encryption key | Why |
 |---|---|---|---|
-| External Secrets syncing into a Secret volume | Supported | Supported | Measured in L82: a new version reaches a running process. |
+| External Secrets syncing into a Secret volume | Supported | Supported | Measured in [L82](../reference/lab-register.md#l82): a new version reaches a running process. |
 | Vault Agent injector | **No** | Yes, with `vault.hashicorp.com/agent-run-as-same-user: "true"` | By default the agent is uid 100 and owns the rendered file, and port49d crash-loops on the owner rule. With `agent-run-as-same-user: "true"` the file is port49d's own and it starts. But a new version is a pod rollout, not a reload, so it fails the "no restart" requirement for a device key. |
 | Secrets Store CSI driver | **No** | **No** | Its files are `root` mode `0644` (a world bit: refused), or `0440` with the provider's file permission set, which the process's user cannot read; the driver sets no group for `fsGroup` to act on. |
 

@@ -77,7 +77,7 @@ On NX-OS, NAPALM's `nxos` driver made 23 for ten tasks, all in one context ([the
 
 !!! warning "Unmeasured"
     Whether any other client library, or any other platform, authenticates more or fewer times per task
-    is unknown (L15, open). Do not size `receipt_idle_ttl` on a count you have not measured for your
+    is unknown ([L15](../reference/lab-register.md#l15), open). Do not size `receipt_idle_ttl` on a count you have not measured for your
     own client.
 
 `token_spent` also covers a receipt whose context no longer exists (it was replaced or reclaimed), and

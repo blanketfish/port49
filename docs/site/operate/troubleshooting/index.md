@@ -106,7 +106,7 @@ get around the outage; the devices already fall to local.
   has the cells and the other notes.
 
 !!! warning "Unmeasured"
-    Whether an authentication `ERROR` is final on Cisco IOS XR over plain TCP is not measured (L93,
+    Whether an authentication `ERROR` is final on Cisco IOS XR over plain TCP is not measured ([L93](../../reference/lab-register.md#l93),
     open). Plan as if break-glass is refused until port49d closes its listener, and keep a console path.
 
 **Do this:** to get to break-glass at once, stop port49d: the devices then find TCP 49 refused and use

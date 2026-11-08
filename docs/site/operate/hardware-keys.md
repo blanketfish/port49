@@ -164,19 +164,19 @@ offline, and when you are, take the file from the broker's administrator, not fr
 !!! warning "Unmeasured"
     `port49 hwkey status` and `port49 hwkey setup` have not been run against a real YubiKey for this
     register entry: how they behave there, and whether `libykcs11` lists a slot's key when the slot
-    holds no certificate, are unknown (L91, open). The `ykman` lines above are what the commands
+    holds no certificate, are unknown ([L91](../reference/lab-register.md#l91), open). The `ykman` lines above are what the commands
     print; treat them as a starting point and read `ykman piv info` before and after.
 
 !!! warning "Unmeasured"
     The touch timeout, the low-tries flags and the wrong-PIN behaviour above were measured on one
     YubiKey 5C Nano FIPS, firmware 5.4.3, with libykcs11 2.7.2
     ([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L60-ser8.md)).
-    Other tokens, other firmware and other libykcs11 versions are unknown (L60, open). Also unknown:
+    Other tokens, other firmware and other libykcs11 versions are unknown ([L60](../reference/lab-register.md#l60), open). Also unknown:
     whether a `port49 login` to the running agent puts it back on the key after a wrong PIN typed in
     another process; whether `port49 token` still mints on the connection the agent already holds
     after it; and what other processes using the token do to the agent. Whether parallel forks, such
     as several Ansible workers sharing one agent, are asked for one touch or for several when a
-    device requires `hardware_key_touch` is a question for L60's next session. The agent serializes
+    device requires `hardware_key_touch` is a question for [L60](../reference/lab-register.md#l60)'s next session. The agent serializes
     token requests, but what the key does is not measured. Run `port49 token` once for one such
     device before a play, as the Ansible collection's README says.
 
@@ -188,5 +188,5 @@ offline, and when you are, take the file from the broker's administrator, not fr
     a Homebrew Mac loads the module and signs in end to end is unknown.
 
 !!! warning "Unmeasured"
-    How the macOS Secure Enclave key store behaves on a Mac is unknown (L63, open). It is experimental
+    How the macOS Secure Enclave key store behaves on a Mac is unknown ([L63](../reference/lab-register.md#l63), open). It is experimental
     and opt-in.

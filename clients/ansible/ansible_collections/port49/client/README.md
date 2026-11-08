@@ -55,7 +55,7 @@ lived; each call of the lookup is a mint.
   your own credentials. **`ansible_look_for_keys: false`** stops `network_cli` offering your own
   ssh keys ahead of the token.
 - **Never put the lookup itself in `ansible_password`.** Ansible templates connection variables
-  many times per task. Measured on EOS, NX-OS, IOS-XE, vJunos-router and vSRX (L66 (a),
+  many times per task. Measured on EOS, NX-OS, IOS-XE, vJunos-router and vSRX ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (a),
   `tests/lab/results/L66-<platform>.md`): with the lookup in `ansible_password` and `ansible_user`,
   a ten-task play minted 10 tokens for its first 2 tasks. The ninth unspent token was refused
   `candidate_cap_reached` (port49's `token.candidate_cap`, 8 by default), and the play failed at
@@ -66,14 +66,14 @@ lived; each call of the lookup is a mint.
 - **A reconnect reuses the spent token, and that works only inside the receipt's window.**
   `network_cli` closes an idle persistent connection (`persistent_connect_timeout`, 30 s by
   default), and `meta: reset_connection` closes it too. The next task logs in again with the same
-  token. Measured on all five lab platforms (L66 (b2)): both an idle gap and a `reset_connection` led to a
+  token. Measured on all five lab platforms ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (b2)): both an idle gap and a `reset_connection` led to a
   second login, which port49 answered PASS `receipt_replayed` from the stored decision. That holds
   within `receipt_idle_ttl` (15 m by default) of the last use and `receipt_max_age` (2 h) of the
   first. Past either, the login fails `token_spent`, and the device reports an authentication
   error that points nowhere near port49. Mint again (a second `set_fact`) before a gap that long.
 - **Never enable `persistent_log_messages`** (`ANSIBLE_PERSISTENT_LOG_MESSAGES`). The persistent
   socket carries the connection's options, password included, to the connection process, and
-  with this setting the log file records them. Measured on all five lab platforms (L66 (d)): the token is
+  with this setting the log file records them. Measured on all five lab platforms ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (d)): the token is
   in that log in the clear. Ansible prints a warning saying so; believe it. `-vvv` and `-vvvv`
   output held no token.
 - **`no_log: true` on the mint.** The fact holds the token. With `no_log`, `-v`, `-vvv` and
@@ -135,16 +135,16 @@ way to mark one value secret, so `no_log` on every task that templates the token
 port49 stores no host key. Ansible keeps them its own way. What follows was measured with
 ansible-core 2.21.4, ansible.netcommon 8.7.1, ansible-pylibssh 1.4.0 (libssh 0.12.0) and
 paramiko 5.0.0. Each platform gave the same reading: EOS, NX-OS, IOS-XE, vJunos-router and vSRX (lab entry
-L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not the device's.
+[L66](https://blanketfish.github.io/port49/reference/lab-register/#l66), `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not the device's.
 
 - **`network_cli` keys a host by `ansible_host`, the address in Ansible's inventory, not by the
   port49 name.** Both ssh types filed the first contact under the address.
   `ansible_libssh_config_file` naming an ssh_config with `HostKeyAlias` is not honoured: the key
   still went under the address. So an address changed for a device in the source of truth (a
   dynamic inventory built from it, the usual case) is a first contact for Ansible. Measured
-  (L66 (e)): with `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at
+  ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (e)): with `host_key_auto_add`, both `libssh` and `paramiko` connected to another host at
   the new address and presented it the token.
-- **The lookup closes that gap before it mints.** *Measured on L66 (e3), 2026-10-16 (`tests/lab/results/L66-arista_eos.md`): with a different key already filed under the new address, it refused for both `libssh` and `paramiko` before any mint. At a new address with no entry it copies the device's key there, and `libssh` with `host_key_auto_add` still accepted the other host's key and presented the token (`paramiko` refused), so do not enable `host_key_auto_add` with `ssh_type: libssh`. Measured also without `host_key_auto_add` (L66 (e3d)): the lookup copies the name's key to a new address, the play logs in at the device's own address, and both `libssh` and `paramiko` refuse another host's key at a moved address without presenting the token. **With the lookup, run `network_cli` without `host_key_auto_add`, for either ssh type.** Only a device's very first contact (case 4 below) needs its key filed some other way: connect once with `port49 ssh`, or file a key from `ssh-keyscan` after checking it on the console.* For a
+- **The lookup closes that gap before it mints.** *Measured on [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (e3), 2026-10-16 (`tests/lab/results/L66-arista_eos.md`): with a different key already filed under the new address, it refused for both `libssh` and `paramiko` before any mint. At a new address with no entry it copies the device's key there, and `libssh` with `host_key_auto_add` still accepted the other host's key and presented the token (`paramiko` refused), so do not enable `host_key_auto_add` with `ssh_type: libssh`. Measured also without `host_key_auto_add` ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (e3d)): the lookup copies the name's key to a new address, the play logs in at the device's own address, and both `libssh` and `paramiko` refuse another host's key at a moved address without presenting the token. **With the lookup, run `network_cli` without `host_key_auto_add`, for either ssh type.** Only a device's very first contact (case 4 below) needs its key filed some other way: connect once with `port49 ssh`, or file a key from `ssh-keyscan` after checking it on the console.* For a
   device on `network_cli` (`ansible_connection` is `network_cli` or `ansible.netcommon.network_cli`,
   or none is visible and `ansible_network_os` is set), it compares the keys filed under the port49
   name with the keys filed under the address in `~/.ssh/known_hosts`. The address is
@@ -181,7 +181,7 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
 - **Never set `host_key_auto_add` with `ansible_network_cli_ssh_type: libssh`.** libssh appended
   the first contact and kept the file's comments and `@revoked` and `@cert-authority` lines. But
   given a changed key for a host it knew, **it accepted the new key, logged in and presented the
-  token** (L66 (c), (e3b)). Without `host_key_auto_add`, and with the lookup's copy of the name's key at the address, libssh refused another host's key and presented nothing (L66 (e3d)).
+  token** ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (c), (e3b)). Without `host_key_auto_add`, and with the lookup's copy of the name's key at the address, libssh refused another host's key and presented nothing ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (e3d)).
 - **`paramiko` with `host_key_auto_add` refused a changed key before authentication.** No TACACS+
   exchange happened and the token was never presented. It has two costs:
   - **It refuses a known_hosts file that holds an `@revoked` or `@cert-authority` line**
@@ -192,7 +192,7 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
   Of the two `network_cli` paths, this is the one that refuses a changed key. A first contact is
   still accepted. With the lookup (below), an address changed in the inventory is not a first
   contact when the device's name holds a key: the lookup copies the name's key to the new address
-  first, so `paramiko` meets a changed key and refuses it (L66 (e3b), (e3d)). It stays a first
+  first, so `paramiko` meets a changed key and refuses it ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (e3b), (e3d)). It stays a first
   contact for a device whose name holds no key.
 - **Where the connection runs OpenSSH** (`ansible.builtin.ssh`), set
 
@@ -201,14 +201,14 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
   ```
 
   This files keys under the port49 name, as `port49 ssh` and the Python client do (the name is
-  lowercased, as they lowercase it). Measured (L66 (e)): with the alias, an address moved to
+  lowercased, as they lowercase it). Measured ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (e)): with the alias, an address moved to
   another host was refused, and the token was never presented to it. This is the measured path that
   closes the gap. Without `accept-new`, a first contact is `Host key verification failed.`
   **Do not set `host_key_checking = False`**: Ansible then passes `StrictHostKeyChecking=no`
   ahead of your extra args, which overrides `accept-new`. OpenSSH still withholds a password from
   a host whose key changed, but a first contact is accepted unchecked.
   - **One inventory name per address.** `ansible.builtin.ssh` keys its ControlPath on address,
-    port and user. Measured (L66 (e2)): a second inventory name at the same address reused the
+    port and user. Measured ([L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (e2)): a second inventory name at the same address reused the
     first name's open master, and its own `HostKeyAlias` was never looked up.
   - **For `raw` against Junos, also set `ansible_ssh_use_tty: false`.** The plugin runs `raw`
     with `ssh -tt`. The Junos CLI ran the command at once, then held the session open until the

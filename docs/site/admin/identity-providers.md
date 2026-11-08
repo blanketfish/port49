@@ -74,7 +74,7 @@ private key gets `sign_in_not_bound`. A sign-in is also exchanged once; a second
   fetched.
 
 !!! warning "Unmeasured"
-    Hosted providers, Microsoft Entra ID and Okta, are unmeasured (lab register entry L47, open): whether they send
+    Hosted providers, Microsoft Entra ID and Okta, are unmeasured (lab register entry [L47](../reference/lab-register.md#l47), open): whether they send
     `email_verified`, what their tokens carry in `idtyp` and `scp`, and which `aud` their v2 tokens use are unknown
     until a run measures them. Keycloak is the measured provider. Check a hosted provider's token on a test account
     before relying on it.

@@ -63,7 +63,7 @@ Put the new bytes in a new file under a new version number.
 Adding the policy line before the file exists does not take effect, and does no harm to a running port49d:
 the policy already serving stays in force, and the refusal is tried again every 30 seconds until the file
 reads or the policy file changes. On Kubernetes this is the normal case for up to a couple of minutes after
-you add a key to a Secret (the kubelet took 1m34s in the L82 run). A SIGHUP tries at once. After a restart the same mistake is a refused start, so a pod
+you add a key to a Secret (the kubelet took 1m34s in the [L82](../reference/lab-register.md#l82) run). A SIGHUP tries at once. After a restart the same mistake is a refused start, so a pod
 crash-loops until the file is restored or the policy line is taken out.
 
 To remove a key, take the policy line out first, then the file.

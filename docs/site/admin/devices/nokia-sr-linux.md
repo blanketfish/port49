@@ -66,7 +66,7 @@ server-group port49 {
 ## Unmeasured
 
 !!! warning "Unmeasured: TLS on SR Linux"
-    Whether SR Linux speaks RFC 9887 is unknown (L92, open). The schema has `server tls-profile`. One observation on 26.7.2: with a profile set and port 300 the client sent plain TACACS+ (first byte `0xc0`, not `0x16`) and the device logged no error and no TLS line in its aaa log, while the login failed ([the TLS observation](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux-tls.md)). That is not a finding that the device cannot do TLS, and it is not a promise that it can. Keep SR Linux on port 49 with the shared key, and do not count on a profile for confidentiality.
+    Whether SR Linux speaks RFC 9887 is unknown ([L92](../../reference/lab-register.md#l92), open). The schema has `server tls-profile`. One observation on 26.7.2: with a profile set and port 300 the client sent plain TACACS+ (first byte `0xc0`, not `0x16`) and the device logged no error and no TLS line in its aaa log, while the login failed ([the TLS observation](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux-tls.md)). That is not a finding that the device cannot do TLS, and it is not a promise that it can. Keep SR Linux on port 49 with the shared key, and do not count on a profile for confidentiality.
 
 !!! warning "Unmeasured: a reload"
     The reference README reports that SR Linux has no single-connection setting in its schema, so a reload has no shared connection to reset. This page cannot confirm it against a note line; what SR Linux does across a key reload is unknown.

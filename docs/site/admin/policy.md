@@ -352,7 +352,7 @@ The routes `rpc_entry_denies` closes, and the bits `deny_reach_bits` covers, wer
 images the [Junos page](devices/juniper-junos.md) lists, and the evidence table there links each note.
 
 !!! warning "Unmeasured"
-    Whether the `junoscript` deny also closes REST, the XML API, `outbound-ssh` and `scp` is unknown (L59, open),
+    Whether the `junoscript` deny also closes REST, the XML API, `outbound-ssh` and `scp` is unknown ([L59](../reference/lab-register.md#l59), open),
     and so is what these replies do on a Junos release or hardware family the lab did not run. Test a policy on
     the device before you rely on it there.
 

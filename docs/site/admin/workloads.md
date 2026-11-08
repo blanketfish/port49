@@ -172,14 +172,14 @@ and the broker verifies it against the cluster's published keys.
 
 !!! warning "Unmeasured"
     Managed Kubernetes services (GKE, EKS, AKS) are unmeasured: whether their token issuers, discovery and key
-    endpoints behave as the kind cluster did is unknown until they are measured (lab register entry L70, open).
+    endpoints behave as the kind cluster did is unknown until they are measured (lab register entry [L70](../reference/lab-register.md#l70), open).
     The Kubernetes guide below is measured on kind only; read each claim for the cell that backs it.
 
 ## The guides in full
 
 Everything from here to the end of the page is two example READMEs verbatim, the Oxidized one first and the
 Kubernetes one after it. Each numbers its own sections from 1, so the second "1." below is the Kubernetes guide's
-"What it is". Section headings of the Oxidized guide run from "What runs where" to "What L49 measured, and what it
+"What it is". Section headings of the Oxidized guide run from "What runs where" to "What [L49](../reference/lab-register.md#l49) measured, and what it
 did not".
 
 --8<-- "examples/oxidized/README.md:8:"

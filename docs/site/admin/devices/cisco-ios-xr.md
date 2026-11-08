@@ -74,7 +74,7 @@ tacacs-server host <PORT49_1> port <TLS_PORT> single-connection
     The reference file says that XR reserves `default` as a VRF name and refuses `vrf default` under the group, reverting the whole commit, and that each TLS option after the port ends its line, so each is a line of its own for the same host. These come from the file's own comments; no results note shows the device saying either, and no device debug was captured. Follow the file, and read `show configuration failed` if a commit reverts.
 
 !!! warning "Unmeasured: an ERROR over plain TCP"
-    Whether XR falls to its local method when port49 answers ERROR over TACACS+ on port 49 is unknown (L93, open). The qualification run saw break-glass refused after the ERROR ([the qualification note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd.md)), and no register row measured it. Plan as if it is refused.
+    Whether XR falls to its local method when port49 answers ERROR over TACACS+ on port 49 is unknown ([L93](../../reference/lab-register.md#l93), open). The qualification run saw break-glass refused after the ERROR ([the qualification note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd.md)), and no register row measured it. Plan as if it is refused.
 
 !!! warning "Unmeasured: commands in sessions already open"
     What XR does with a session that is already open when port49 stops or goes dark is unknown: the lab did not run it.

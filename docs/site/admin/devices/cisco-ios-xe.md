@@ -61,10 +61,10 @@ tacacs server port49-1
 ## Unmeasured
 
 !!! warning "Unmeasured: why the second-server login once failed"
-    One earlier full reference run failed the second-server cell without an explanation and did not repeat in the three runs after it. The cause is unknown (L52, open; [the evidence run](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-f-evidence-run.md) is its history).
+    One earlier full reference run failed the second-server cell without an explanation and did not repeat in the three runs after it. The cause is unknown ([L52](../../reference/lab-register.md#l52), open; [the evidence run](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-f-evidence-run.md) is its history).
 
 !!! warning "Unmeasured: the IOS XE SSH condition after refusals"
-    A run of refusals to an unrecognised reply attribute stopped the device answering SSH for about a minute without sending port49 a packet. Whether that is the vty pool is unknown (L18, open; [the reply-attribute note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-cisco_iosxe.md)).
+    A run of refusals to an unrecognised reply attribute stopped the device answering SSH for about a minute without sending port49 a packet. Whether that is the vty pool is unknown ([L18](../../reference/lab-register.md#l18), open; [the reply-attribute note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-cisco_iosxe.md)).
 
 !!! warning "Unmeasured: two server objects at one address, and the hang timing"
     The reference file says that 17.18.02 drops a second TLS server object that shares an address, so give the two servers distinct addresses; this comes from the file's own comment, and no results note shows the device doing it. How long after a store hang starts the local account first works on IOS XE is also not confirmed here: a report of about 6 s rests on the reference README, not on a note line this page can cite.

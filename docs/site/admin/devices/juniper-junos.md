@@ -60,7 +60,7 @@ The login classes and the remote template user are not in the files. They come f
 ## Unmeasured
 
 !!! warning "Unmeasured: a reply over 255 bytes on hardware"
-    Whether Junos on hardware locks a user out when a permit session reply totals more than 255 bytes is unknown (L78, open). The lab ran two VM images only ([the 26.2R1.7 run](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md)). The only evidence for hardware is a production prior, not a measurement: the operator's experience on hardware Junos is that a reply over 255 bytes locked the user out. port49 keeps its replies inside a budget for that reason; test any long policy on the hardware you run before you rely on it.
+    Whether Junos on hardware locks a user out when a permit session reply totals more than 255 bytes is unknown ([L78](../../reference/lab-register.md#l78), open). The lab ran two VM images only ([the 26.2R1.7 run](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md)). The only evidence for hardware is a production prior, not a measurement: the operator's experience on hardware Junos is that a reply over 255 bytes locked the user out. port49 keeps its replies inside a budget for that reason; test any long policy on the hardware you run before you rely on it.
 
 !!! warning "Unmeasured: the Junos TLS certificate enrolment and SRX"
     The documented enrolment through the PKI store (generate-key-pair, generate-certificate-request, local-certificate load, a trusted-ca-group) is not shown to work: the lab placed the trust files and the client key through a lab-only root shell, and the note does not record which of two issued certificates the device sent. Whether SRX speaks RFC 9887 at all, and on which releases, is unknown: the lab has not run it, and the vendor documentation quoted in [the lab's client check](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vjunos-router.md) puts the TLS client on routing and switching platforms, not SRX.
@@ -69,13 +69,13 @@ The login classes and the remote template user are not in the files. They come f
     That a login port49 denies falls through to a local password when `password` is listed after `tacplus`, that `authentication-order tacplus` alone refuses a denied login with no fall-through, that `set` on the list adds to it so a device already holding `[ tacplus password ]` keeps `password` (the reference file deletes the list first), and that on 23.4 and on vSRX break-glass lands about 7 s into a store hang, are reported in the reference README and the file's comments. None of these is confirmed here against a note line, and no device debug was captured. Treat them as expectations and check the order with `show configuration system authentication-order` after you load the file.
 
 !!! warning "Unmeasured: how far the junoscript deny reaches"
-    Whether the `junoscript` deny also closes REST, the XML API, `outbound-ssh` and `scp` is unknown (L59, open), and so is what these replies do on a Junos release or hardware family the lab did not run.
+    Whether the `junoscript` deny also closes REST, the XML API, `outbound-ssh` and `scp` is unknown ([L59](../../reference/lab-register.md#l59), open), and so is what these replies do on a Junos release or hardware family the lab did not run.
 
 !!! warning "Unmeasured: SRX hardware command denies"
     An operator reported, from SRX hardware running Junos 23.4R2-S8.7, that a deny naming a hierarchy such as `show configuration security` was not enforced and that regex denies of `xml-mode` did not stop `xml-mode netconf` ([operator-reported note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-operator-juniper_srx.md)). The lab did not run those commands on hardware.
 
 !!! warning "Unmeasured: a second re-authorization"
-    Whether Junos re-authorizes an open session more than once, so whether a revocation made after the first ever reaches it, is unknown (L40, open). Do not rely on a revocation reaching a Junos session before the device ends it.
+    Whether Junos re-authorizes an open session more than once, so whether a revocation made after the first ever reaches it, is unknown ([L40](../../reference/lab-register.md#l40), open). Do not rely on a revocation reaching a Junos session before the device ends it.
 
 ## Lab evidence
 

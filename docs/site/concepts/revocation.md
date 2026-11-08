@@ -85,7 +85,7 @@ workload anchor as the issuer.
     nobody reads and the session lasts until the device ends it. Junos asks only at login unless its
     `authorization-time-interval` is set. With it set, Junos re-authorizes the open session at the
     interval (one re-authorization was measured), and a revoked principal is denied `credential_revoked` there. Measured on vJunos-router
-    23.4R2-S2.1 and vSRX3 21.4R3.15 with an interval of 15 minutes (L36, closed:
+    23.4R2-S2.1 and vSRX3 21.4R3.15 with an interval of 15 minutes ([L36](../reference/lab-register.md#l36), closed:
     [vJunos-router](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md),
     [vSRX](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md)).
     The denial does not end the session: it stayed open, and its next command printed an error.
@@ -96,7 +96,7 @@ workload anchor as the issuer.
 
 !!! warning "Unmeasured"
     Whether Junos re-authorizes more than once, so whether a revocation made after the first
-    re-authorization ever reaches the session, is unknown (L40, open). Do not rely on a revocation
+    re-authorization ever reaches the session, is unknown ([L40](../reference/lab-register.md#l40), open). Do not rely on a revocation
     reaching a Junos session before its device ends it.
 
 Two other limits are worth knowing.
