@@ -4,8 +4,8 @@
 
 ## Start here
 
-- [AI agents setup runbook](https://blanketfish.github.io/port49/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end.
-- [AI agents quick start](https://blanketfish.github.io/port49/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity.
+- [AI agents setup runbook](https://blanketfish.github.io/port49/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end, with the check after each step and the points where a human decides.
+- [AI agents quick start](https://blanketfish.github.io/port49/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity, and what it reads back when a device refuses it.
 
 ## Home
 
@@ -41,26 +41,26 @@
 
 ## Administer
 
-- [Policy](https://blanketfish.github.io/port49/admin/policy/): Writing the policy file that decides who may log in to which devices and what they may run.
-- [Roles and grants](https://blanketfish.github.io/port49/admin/roles-and-grants/): Defining roles, granting them to people and groups, and reading why a grant applied.
+- [Policy](https://blanketfish.github.io/port49/admin/policy/): Writing the policy file that decides who may log in to which devices and what they may run, and checking a change before it ships.
+- [Roles and grants](https://blanketfish.github.io/port49/admin/roles-and-grants/): Defining roles, granting them to people, groups and workloads, and reading why a grant applied.
 - [Key rotation](https://blanketfish.github.io/port49/admin/key-rotation/): Rotating the devices' shared secrets and port49's encryption setting without locking anyone out.
-- [Revocation](https://blanketfish.github.io/port49/admin/revocation/): Revoking a person, a token or a certificate, and confirming the revocation took effect.
-- [Identity providers](https://blanketfish.github.io/port49/admin/identity-providers/): Connecting an OIDC identity provider or a directory so people can sign in.
-- [Workloads](https://blanketfish.github.io/port49/admin/workloads/): Giving automation its own identity through workload certificates.
-- [Inventory](https://blanketfish.github.io/port49/admin/inventory/): Telling port49 which devices exist, from a file or from an inventory connector.
-- [Devices](https://blanketfish.github.io/port49/admin/devices/): What every device needs to talk to port49, and the page for each qualified platform.
-- [Arista EOS](https://blanketfish.github.io/port49/admin/devices/arista-eos/): Configuring Arista EOS to authenticate and authorize logins through port49.
-- [Cisco IOS XE](https://blanketfish.github.io/port49/admin/devices/cisco-ios-xe/): Configuring Cisco IOS XE to authenticate and authorize logins through port49.
-- [Cisco NX-OS](https://blanketfish.github.io/port49/admin/devices/cisco-nx-os/): Configuring Cisco NX-OS to authenticate and authorize logins through port49.
-- [Cisco IOS XR](https://blanketfish.github.io/port49/admin/devices/cisco-ios-xr/): Configuring Cisco IOS XR to authenticate and authorize logins through port49.
-- [Juniper Junos](https://blanketfish.github.io/port49/admin/devices/juniper-junos/): Configuring Juniper Junos to authenticate and authorize logins through port49.
-- [Nokia SR Linux](https://blanketfish.github.io/port49/admin/devices/nokia-sr-linux/): Configuring Nokia SR Linux to authenticate and authorize logins through port49.
-- [Other platforms](https://blanketfish.github.io/port49/admin/devices/other-platforms/): What to expect from a TACACS+ client port49 has not been qualified against.
+- [Revocation](https://blanketfish.github.io/port49/admin/revocation/): Revoking a person, a certificate or a session, closing what revocation cannot reach, and setting up the CRL and OCSP checks that mark certificates for you.
+- [Identity providers](https://blanketfish.github.io/port49/admin/identity-providers/): Connecting an OIDC provider, a directory or a directory password to port49, and ending a person's sessions when the provider signs them out.
+- [Workloads](https://blanketfish.github.io/port49/admin/workloads/): Giving a cron job or a pod its own identity at the device, with a workload certificate or a Kubernetes token, and grouping workloads in a directory.
+- [Inventory](https://blanketfish.github.io/port49/admin/inventory/): Telling port49 which devices exist, from a file or from an inventory connector, and the bounds that stop a bad source from taking the fleet off the air.
+- [Devices](https://blanketfish.github.io/port49/admin/devices/): What every device needs to talk to port49, how to read a device page, and the page for each qualified platform.
+- [Arista EOS](https://blanketfish.github.io/port49/admin/devices/arista-eos/): Configuring Arista EOS to authenticate and authorize logins through port49, and what the lab measured on vEOS and cEOS.
+- [Cisco IOS XE](https://blanketfish.github.io/port49/admin/devices/cisco-ios-xe/): Configuring Cisco IOS XE to authenticate and authorize logins through port49, and what the lab measured on it.
+- [Cisco NX-OS](https://blanketfish.github.io/port49/admin/devices/cisco-nx-os/): Configuring Cisco NX-OS to authenticate and authorize logins through port49, and what the lab measured on Nexus 9300v.
+- [Cisco IOS XR](https://blanketfish.github.io/port49/admin/devices/cisco-ios-xr/): Configuring Cisco IOS XR to authenticate and authorize logins through port49, and what the lab measured on XRd.
+- [Juniper Junos](https://blanketfish.github.io/port49/admin/devices/juniper-junos/): Configuring Juniper Junos to authenticate and authorize logins through port49, and what the lab did and did not measure on it.
+- [Nokia SR Linux](https://blanketfish.github.io/port49/admin/devices/nokia-sr-linux/): Configuring Nokia SR Linux to authenticate logins through port49, and what it does not send.
+- [Other platforms](https://blanketfish.github.io/port49/admin/devices/other-platforms/): What to expect from a TACACS+ client port49 has not been qualified against, and how the generic adapter serves it.
 
 ## AI agents
 
-- [Quick start](https://blanketfish.github.io/port49/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity.
-- [Setup runbook](https://blanketfish.github.io/port49/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end.
+- [Quick start](https://blanketfish.github.io/port49/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity, and what it reads back when a device refuses it.
+- [Setup runbook](https://blanketfish.github.io/port49/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end, with the check after each step and the points where a human decides.
 
 ## Reference
 
@@ -76,6 +76,6 @@
 
 ## Contributing
 
-- [Contributing](https://blanketfish.github.io/port49/contributing/): How to build, test and change port49, and where the design lives.
-- [Qualification](https://blanketfish.github.io/port49/contributing/qualification/): How a device platform is qualified against port49 in the lab, and how to add one.
-- [Releasing](https://blanketfish.github.io/port49/contributing/releasing/): How a port49 release is cut, signed and published.
+- [Contributing](https://blanketfish.github.io/port49/contributing/): How to build, test and change port49, and the lab register rules that decide what a doc may claim about a device.
+- [Qualification](https://blanketfish.github.io/port49/contributing/qualification/): How a device platform is qualified against port49, how to vet a firmware and add a platform, and how the lab regression run works.
+- [Releasing](https://blanketfish.github.io/port49/contributing/releasing/): How a port49 release is cut, signed and published, and the one-time repository setup it depends on.
