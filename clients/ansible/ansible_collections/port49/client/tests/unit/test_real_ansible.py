@@ -64,6 +64,23 @@ PLAY = """- hosts: all
         msg: "login is {{{{ port49.login | length }}}} long, user {{{{ port49.username }}}}"
 """
 
+# The quick start's shape: a no_log mint, a no_log command task that registers its result, and a debug of one key.
+REGISTER_PLAY = """- hosts: all
+  gather_facts: false
+  tasks:
+    - name: mint
+      ansible.builtin.set_fact:
+        port49: "{{{{ lookup('port49.client.token', inventory_hostname, field='all', enable=true, port49='{fake}') }}}}"
+      no_log: true
+    - name: a command that receives the credentials
+      ansible.builtin.command: echo real-command-output
+      register: out
+      no_log: true
+    - name: the command's output, and only that
+      ansible.builtin.debug:
+        var: out.stdout
+"""
+
 
 NSS_LIB = next((p for p in ("/usr/lib/x86_64-linux-gnu/libnss_wrapper.so", "/usr/lib/aarch64-linux-gnu/libnss_wrapper.so",
                              "/usr/lib/libnss_wrapper.so", "/usr/lib64/libnss_wrapper.so") if os.path.exists(p)), None)
@@ -129,6 +146,18 @@ class RealAnsible(unittest.TestCase):
             self.assertNotIn(ENABLE, out, flags)
         with open(self.log, encoding="utf-8") as f:
             self.assertNotIn(LOGIN, f.read())  # nor in the CLI's argv
+
+    def test_a_registered_no_log_result_keeps_the_real_output(self):
+        # agents/quick-start.md relies on this: the command task is no_log (it receives the password), `register`
+        # keeps the real result, and a `debug` of one key prints that key and no token.
+        path = os.path.join(self.tmp, "register.yml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(REGISTER_PLAY.format(fake=self.fake))
+        code, out = run(self.tmp, PLAYBOOK, "-i", os.path.join(self.tmp, "inv.yml"), "--limit", "leaf1", path)
+        self.assertEqual(code, 0, out)
+        self.assertIn("real-command-output", out)  # the debug of out.stdout shows it
+        self.assertNotIn(LOGIN, out)
+        self.assertNotIn(ENABLE, out)
 
     def test_the_token_reaches_the_play(self):
         code, out = self.play(True)
