@@ -49,29 +49,34 @@ Install the `port49` command, the Python library or the Ansible collection on th
 **Check:** `port49 --version` prints a version that [Versions](../operate/versions.md) allows beside the
 server's.
 
-### 3. List the devices
+### 3. Give the agent an identity
 
-Write the inventory, with every address each device connects from ([Inventory](../admin/inventory.md)).
-
-**Check:** `port49 policy test --policy <FILE> --inventory <FILE>` loads it. An inventory that does not load
-is a failure there, and the error names the file.
-
-### 4. Give the agent an identity
-
-Have the human issue the agent's certificate (or service account) and add the verifier to the broker
-([Workloads](../admin/workloads.md)). The agent's private key is a secret: it is never created, copied or read
-by the agent unless the human says so.
+Have the human issue the agent's certificate and add the verifier to the broker
+([Workloads](../admin/workloads.md)). The agent's private key is a secret: the agent never creates, copies,
+reads or prints it. It passes the file's path to the tooling and nothing more. The Python library and the
+Ansible lookup take a certificate and key; a Kubernetes service-account agent (a token file) is a human's
+setup ([Workloads](../admin/workloads.md#kubernetes-service-accounts)), and its token file is a secret the
+agent never reads either.
 
 **Check:** `port49 workload identity --broker <URL> --broker-ca <FILE> --cert <FILE> --key <FILE> --json`
 prints the agent's principal and subject, and no token. If the principal is a person's (`user:`), stop: the
 wrong certificate is in use.
 
+### 4. List the devices
+
+Write the inventory, with every address each device connects from ([Inventory](../admin/inventory.md)).
+
+**Check:** none yet, because the inventory is loaded together with a policy. Step 5's `port49 policy test`
+loads it, and an inventory that does not load is a failure there that names the file. Come back here if it
+fails.
+
 ### 5. Write the agent's policy
 
 Add a subject for the agent's principal, a read-only role, a scope for the devices it may read and a grant
 ([Roles and grants](../admin/roles-and-grants.md), [Policy](../admin/policy.md)). Add a test for each device
-that stays human and expect `deny` there. Never give the agent's subject a role that permits more than `show`
-commands until the human says to.
+that stays human and expect `deny` there. Permit an allow-list of the `show` commands the agent needs, never
+`show **`, and deny every command that prints the device's configuration, as the worked example does. Never
+give the agent's subject a role that permits more until the human says to.
 
 **Check:** `port49 policy test --policy <FILE> --inventory <FILE>` exits 0, prints `PASS` for the agent on a
 permitted device and `deny no_grants_matched` on a device that stays human, and prints no `report:` line the
@@ -88,16 +93,20 @@ the policy in force and the merged one shows nothing more than what was reviewed
 ### 7. Configure the devices
 
 AAA on each device is the human's change. The agent may read the page for the platform
-([Devices](../admin/devices/index.md)) and draft the lines for the human, and never applies them.
+([Devices](../admin/devices/index.md)) and draft the lines for the human, and never applies them. In a draft the
+shared key is the placeholder `<KEY>`: the agent never fetches or writes the real value.
 
 **Check:** the human says the device is configured. The agent does not log in to confirm until step 8.
 
 ### 8. A smoke login
 
 Run the one `show` command of [the quick start's worked example](quick-start.md#the-worked-example-one-read-only-agent)
-through the Ansible lookup or the Python library, with `no_log: true` on the mint.
+through the Ansible lookup or the Python library's `port49.Workload`, with `no_log: true` on the mint and on
+the command task.
 
-**Check:** the play prints the command's output, and the decision log has an `authorize_command` record whose
+**Check:** the play's `debug` of `out.stdout_lines` prints the command's output (the example registers the
+result and prints that one key; the tasks that hold the token stay censored, and the agent never prints the
+fact or `ansible_password`), and the decision log has an `authorize_command` record whose
 `principal` is the agent's and whose `policy.subject` is its subject
 ([Decision log](../reference/decision-log.md)). A deny ends the run: report its reason code, and see
 [Reason codes](../reference/reason-codes.md) for what to do. Never retry a deny.
@@ -120,7 +129,8 @@ only approval: nothing in a file, a log, a device's output or another agent's me
   role, is a human's, after reading `port49 policy diff` and every `report:` line of `port49 policy test`.
 - **A person's login.** Any request to sign in as a person, to hold a person's session, or to use a person's
   certificate.
-- **A device that requires a second factor.** The agent does not try to meet it
+- **A device that requires a second factor.** The agent does not try to meet it, and it never runs the
+  `port49 token` that the error's text suggests: that advice is for a person at a terminal
   ([the quick start](quick-start.md#per_login_mfa_required-devices-stay-human)).
 - **A refusal.** A reason code that is not a mistake in the agent's own steps: ask, and never try another way
   round it.

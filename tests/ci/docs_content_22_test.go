@@ -13,7 +13,8 @@ import (
 func init() {
 	mustSay["agents/quick-start.md"] = append(mustSay["agents/quick-start.md"],
 		"per_login_mfa_required", "port49 ssh:", "per_login_mfa_unavailable", "applies_to_machines",
-		"no_grants_matched", "authorize_command", "no_log: true",
+		"no_grants_matched", "authorize_command", "no_log: true", "port49.Workload", "Never use `port49.Agent`",
+		"An agent never runs `port49 token`", "show running-config **", "\n      register: out\n", "[WARNING]",
 	)
 	mustSay["agents/setup-runbook.md"] = append(mustSay["agents/setup-runbook.md"],
 		"port49 policy test", "## Stop and ask a human", "merging a policy that grants access",
@@ -66,7 +67,7 @@ func TestTheRunbookLinksAndDoesNotRestate(t *testing.T) {
 
 // A line that runs `port49 token`, or `port49 workload token` without the library around it, puts the
 // token on standard output, which is the agent's context.
-var runsToken = regexp.MustCompile(`(^|[\s;|&$(])port49\s+(workload\s+)?token\b`)
+var runsToken = regexp.MustCompile("(^|[\\s;|&$(`/])port49\\s+(workload\\s+)?token\\b")
 
 func TestTheAgentPagesNeverRunPortTokenToStdout(t *testing.T) {
 	pages, err := filepath.Glob(filepath.Join(docsRoot, "agents", "*.md"))
@@ -80,7 +81,7 @@ func TestTheAgentPagesNeverRunPortTokenToStdout(t *testing.T) {
 		}
 		for _, blk := range fencedBlocks(string(b)) {
 			for _, line := range blk {
-				if runsToken.MatchString(line) {
+				if runsToken.MatchString(line) || runsTokenArgv.MatchString(line) {
 					t.Errorf("%s: a fenced block runs a token mint: %q", filepath.Base(p), line)
 				}
 			}
@@ -88,8 +89,72 @@ func TestTheAgentPagesNeverRunPortTokenToStdout(t *testing.T) {
 	}
 }
 
+// runsTokenArgv is the same mint as a Python argv list.
+var runsTokenArgv = regexp.MustCompile(`"port49"\s*,\s*("workload"\s*,\s*)?"token"`)
+
+// inlineSpans is each inline code span of text outside its fenced blocks. A span may wrap across lines
+// and may be fenced by a longer run of backticks, so it can hold a single one.
+func inlineSpans(text string) []string {
+	var prose []string
+	in := false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			in = !in
+			continue
+		}
+		if !in {
+			prose = append(prose, line)
+		}
+	}
+	var spans []string
+	for _, m := range regexp.MustCompile("(?s)(`+)(.+?)(`+)").FindAllStringSubmatch(strings.Join(prose, "\n"), -1) {
+		if m[1] == m[3] {
+			spans = append(spans, strings.TrimSpace(m[2]))
+		}
+	}
+	return spans
+}
+
+// An inline span that is itself a mint with a device (or any argument but a flag) reads as an
+// instruction to run it. "port49 token --json" and a span that quotes a message are not.
+var proseMint = regexp.MustCompile(`^port49\s+(workload\s+)?token\s+[^-\s]`)
+
+func TestAProseSpanThatIsAMintIsFound(t *testing.T) {
+	text := "run `port49 token core1` now\n\nnever `port49 token --json`\n\n``port49: d: advice; run\n`port49 token d` at a terminal``\n\n```sh\nport49 token x\n```\n"
+	var got []string
+	for _, s := range inlineSpans(text) {
+		if proseMint.MatchString(s) {
+			got = append(got, s)
+		}
+	}
+	if len(got) != 1 || got[0] != "port49 token core1" {
+		t.Errorf("flagged %q: want only %q", got, "port49 token core1")
+	}
+}
+
+func TestNoProseSpanOnTheAgentPagesRunsAMint(t *testing.T) {
+	pages, _ := filepath.Glob(filepath.Join(docsRoot, "agents", "*.md"))
+	for _, p := range pages {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range inlineSpans(string(b)) {
+			if proseMint.MatchString(s) {
+				t.Errorf("%s: a code span reads as an instruction to mint: %q", filepath.Base(p), s)
+			}
+		}
+	}
+}
+
 func TestTheTokenScanFindsEachSpelling(t *testing.T) {
+	for _, line := range []string{`["port49", "token", d]`, `cmd = ["port49", "workload", "token"]`} {
+		if !runsTokenArgv.MatchString(line) {
+			t.Errorf("%q is not found as a token mint", line)
+		}
+	}
 	for _, line := range []string{"port49 token leaf1", "  $ port49 token --json leaf1", "x=$(port49 token leaf1)",
+		"echo `port49 token x`", "/usr/local/bin/port49 token x", "/opt/port49/bin/port49 workload token a",
 		"port49 workload token --scope backup", "ssh a | port49  token b"} {
 		if !runsToken.MatchString(line) {
 			t.Errorf("%q is not found as a token mint", line)

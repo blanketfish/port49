@@ -21,16 +21,19 @@ Every sentence is an instruction, so it says what to do and what never to do.
    read-only role first and widen it only when a human decides to. See
    [Workloads](../admin/workloads.md) and [Roles and grants](../admin/roles-and-grants.md#machine_group).
 3. **The tooling mints and presents the token. The token never enters the agent's context.** Use the Ansible
-   lookup or the Python library: each reads the token from the `port49` command and hands it to the
-   connection, and nowhere else. Never run `port49 token` or `port49 workload token` in a shell: on success
-   they print the token (and `port49 token --json` the broker's whole answer, token included) on standard
-   output, which is the transcript. Never print, log or `cat` a token, a certificate's key file, a password,
-   an ID token, or a dump of the environment, and keep `no_log: true` on every Ansible task that holds one.
+   lookup or the Python library's `port49.Workload`: each reads the token from the `port49` command and hands
+   it to the connection, and nowhere else. Never use `port49.Agent`: it holds a person's session. Never run
+   `port49 token`, `port49 workload token` or `port49 ssh` in a shell: on success they print the token (and
+   `port49 token --json` the broker's whole answer, token included) on standard output, which is the
+   transcript, or they use a person's login. Never print, log or `cat` a token, a certificate's key file, a
+   password, an ID token, or a dump of the environment, and keep `no_log: true` on every Ansible task that
+   holds one. The agent passes the key file's path to the tooling and never opens it.
 4. **A refusal arrives as a reason code.** The agent reads the code from its tooling and stops. It never
    retries a deny, and it never tries another device, another identity or a person's login to get round it.
    The next section says where the code appears on each path.
 5. **Every command is recorded under the agent's principal.** See [what is recorded](#5-what-is-recorded).
-6. **A device that asks for a person's second factor stays human.** See
+6. **A device that asks for a person's second factor stays human: the agent's subject has no grant on it.**
+   A `per_login_mfa` requirement does not keep an agent off a device on its own. See
    [per_login_mfa_required devices](#per_login_mfa_required-devices-stay-human).
 
 ## How a refusal reaches the agent
@@ -43,26 +46,42 @@ Read it from the tooling the agent already runs. These are the four paths, and w
 | `port49 ssh:` | `port49 ssh: <device>: deny <reason>: <detail>` on standard error | in the line |
 | `port49 workload token:` | `port49 workload token: <device>: deny <reason>: <detail>` on standard error | in the line |
 | The Python library | a `Denied` whose message is `port49: <device>: deny <reason>: <detail>` | `.reason` and `.code`, and in the message |
-| The Ansible lookup | the failed task's error, `port49: <device>: deny <reason>: <detail>` | the message always holds it: at its end, in brackets, when the detail does not |
+| The Ansible lookup | the failed task's error, `port49: <device>: deny <reason>: <detail>` | the message always holds it, but where you find it depends on the ansible-core version (below) |
 
-Two things about that table.
+Three things about that table.
 
 - **`port49 ssh:` is a person's path, not the agent's.** `port49 ssh` mints through the agent that
-  `port49 login` started, which holds a person's session. An agent with its own identity has no such agent,
-  so it never sees that line. If an agent ever reports one, it is running on a person's login: stop, and tell
-  a human (rule 1).
-- **A second factor is the one refusal whose message may not hold the code.** A device that asks for a proof
-  the agent cannot give is `per_login_mfa_required`. The Python `MFARequired` message says what is asked but
-  not the code: read `.code` (and `.reason`). The Ansible lookup appends `[per_login_mfa_required]`.
+  `port49 login` started, which holds a person's session; with no such agent it prints a line that also
+  starts `port49 ssh:`. An agent with its own identity runs neither. If an agent ever reports a line that
+  starts `port49 ssh:`, it ran `port49 ssh`, which is a person's path (rule 1): stop, and tell a human.
+- **On ansible-core 2.16 to 2.18 the code is in the warning.** Those versions censor the message of a failed
+  `no_log` task and show only `censored`. The lookup also raises the same message as a `[WARNING]` line, printed
+  beside the censored result: read the code there. On 2.19 and later the task's error holds it.
+- **A second factor is the one refusal whose message may not hold the code, and it tells the agent to do
+  what an agent never does.** A device that asks for a proof the agent cannot give is
+  `per_login_mfa_required`. The Python `MFARequired` message reads
+  ``port49: <device>: asks for <methods> at each login, and it could not be given here (<detail>); run
+  `port49 token <device>` at a terminal, and one proof covers this agent's further logins for its reuse_for``,
+  and the Ansible lookup raises that same text with `[per_login_mfa_required]` appended when the detail does
+  not hold the code. **That advice is for a person at a terminal. An agent never runs `port49 token`.** It stops
+  and asks a human. Read `.code` and `.reason` in Python, not the advice.
 
 In Python, a sweep puts each refusal in `res.refused` instead of raising, so one device does not stop the
 rest. Read the code there:
 
 ```python
+import port49
+
+workload = port49.Workload(broker="https://broker.example.com:8443", broker_ca="/etc/port49/ca.pem",
+                           cert="/etc/port49/agent-cert.pem", key="/etc/port49/agent-key.pem")
 res = workload.tokens(["leaf1", "core1"])
 for device, refusal in res.refused.items():
     print(device, refusal.reason or refusal.error)   # a code, never a token
 ```
+
+`port49.Workload` presents the agent's own certificate. `port49.Agent` presents whatever person logged in on
+the machine, so an agent never constructs one. Never print `res` or `res.tokens`: hand each token to the
+connection and nowhere else.
 
 ## `per_login_mfa_required` devices stay human
 
@@ -83,7 +102,8 @@ Two things in the code decide how that works for an agent, and the second is eas
   `internal/decision/reasons.go` and spec §5.7.
 
 What the agent does on either code: stop, name the device and the code, and ask a human. It never looks for a
-touch key, never asks for a PIN, and never starts a sign-in.
+touch key, never asks for a PIN, never starts a sign-in, and never runs the `port49 token` that the
+`MFARequired` message suggests.
 
 ## The worked example: one read-only agent
 
@@ -114,7 +134,18 @@ scopes:
 roles:
   - name: read_only
     privilege: readonly
-    permit: ["show **", "terminal length *"]
+    permit:
+      - "show version"
+      - "show interfaces status"
+      - "show ip interface brief"
+      - "show ip bgp summary"
+      - "show lldp neighbors"
+      - "terminal length *"
+    deny:
+      - "show running-config **"
+      - "show startup-config **"
+      - "show tech-support **"
+      - "show session-config **"
     max_session_age: 1h
 
 subjects:
@@ -129,8 +160,24 @@ grants:
 tests:
   - {subject: agent_readonly, device: leaf1, command: "show version", expect: permit}
   - {subject: agent_readonly, device: leaf1, command: "configure terminal", expect: deny}
+  - {subject: agent_readonly, device: leaf1, command: "show running-config", expect: deny}
+  - {subject: agent_readonly, device: leaf1, command: "show startup-config", expect: deny}
+  - {subject: agent_readonly, device: leaf1, command: "show tech-support", expect: deny}
+  - {subject: agent_readonly, device: leaf1, command: "show session-config", expect: deny}
   - {subject: agent_readonly, device: core1, command: "show version", expect: deny}
 ```
+
+The permits are an allow-list of the `show` commands the agent needs, not `show **`. A `show` that prints the
+device's configuration (`show running-config`, `show startup-config`, `show tech-support`) prints its AAA lines
+and its local users' secrets, and the output lands in the agent's context. So the role also denies each of
+them. The allow-list is the fence; the denies hold even if someone later widens the permit to `show **`
+(re-run with that permit, each of the four is `deny no_permit_dominates_deny`).
+
+On `arista_eos` the device sends the command with its words spelled out, so `sh run` reaches port49 as
+`show running-config` and the deny binds (`expands_abbreviations: true` in
+`platforms/1.3.0/arista_eos.yaml`, measured for an SSH session on the lab image; eAPI and NETCONF are
+unmeasured). EOS ships no policy class for configuration views, so the denies name the commands. Add the
+equivalents of your own platform from its [device page](../admin/devices/index.md) before you grant it.
 
 The inventory has both devices, and only `leaf1` is in the scope:
 
@@ -151,11 +198,15 @@ platform_set: 1.3.0
 keys: checked against the default key_secret_refs (env: variables starting PORT49_KEY_, file: under /run/port49/keys); pass --config to check port49d.yaml's
 PASS agent_readonly on leaf1: "show version" -> permit permit_dominates
 PASS agent_readonly on leaf1: "configure terminal" -> deny no_rule_matched
+PASS agent_readonly on leaf1: "show running-config" -> deny no_rule_matched
+PASS agent_readonly on leaf1: "show startup-config" -> deny no_rule_matched
+PASS agent_readonly on leaf1: "show tech-support" -> deny no_rule_matched
+PASS agent_readonly on leaf1: "show session-config" -> deny no_rule_matched
 PASS agent_readonly on core1: "show version" -> deny no_grants_matched
-3 tests, 0 failed; 0 shadowed denies, 0 unacknowledged; 0 quarantined, 0 projection refusals
+7 tests, 0 failed; 0 shadowed denies, 0 unacknowledged; 0 quarantined, 0 projection refusals
 ```
 
-The third line is the point: the agent has no grant on `core1`, so a refusal there is
+The last line is the point: the agent has no grant on `core1`, so a refusal there is
 `no_grants_matched`. Keep a test like it for every device that stays human. A human reads this output and
 merges the policy ([the runbook](setup-runbook.md#stop-and-ask-a-human) says why the agent does not).
 
@@ -176,7 +227,7 @@ permit permit_dominates
   session     max_session_age 1h0m0s (the least of its roles')
   per_login_mfa none
   command     show version
-  rule        show ** (read_only) [3 0]
+  rule        show version (read_only) [3 3]
 note: arista_eos does not declare config_commands: whether a command typed in configuration mode is sent to port49 at all is unmeasured, so if this is a configuration-mode command the device may apply it whatever this answer says (spec §9, §12)
 ```
 
@@ -208,13 +259,26 @@ certificate and key stay in files that only it can read. Never open them.
     - name: show version
       arista.eos.eos_command:
         commands: ["show version"]
+      register: out
       no_log: true
+    - name: the command's output, and only that
+      ansible.builtin.debug:
+        var: out.stdout_lines
 ```
 
-Keep `gather_facts: false`, keep the mint first, and keep `| default(omit)` and `no_log: true` exactly as
-shown, for the reasons on [Install the clients](../operate/install/clients.md#the-ansible-collection). If the
-mint is refused, the play stops for that host with the code at the end of the error, for example
-`port49: core1: deny no_grants_matched: <detail>`. Report that line and stop.
+The command task keeps `no_log: true` because it receives `ansible_password`, so Ansible censors its own
+result. `register: out` keeps the result in a variable, and the `debug` prints one key of it, the command's
+output, which holds no token. Never drop `no_log` from the mint or the command task to see output, and never
+`debug` `port49`, `out` or `ansible_password`. Keep `gather_facts: false`, keep the mint first, and keep
+`| default(omit)` exactly as shown, for the reasons on
+[Install the clients](../operate/install/clients.md#the-ansible-collection).
+
+If the mint is refused, the play stops for that host. On ansible-core 2.19 and later the error ends with the
+code, for example `port49: core1: deny no_grants_matched: <detail>`. On 2.16 to 2.18 the task shows only
+`censored` and the same text is in the `[WARNING]` line beside it. Report that line and stop. Leave out any of
+`broker`, `broker_ca`, `cert` and `key` and the lookup would use a person's agent instead of the agent's
+certificate, so always give all four. The Python `Workload` and this lookup take a certificate and key, and no
+token file; a Kubernetes service-account agent is a human's setup ([Workloads](../admin/workloads.md#kubernetes-service-accounts)).
 
 ### 5. What is recorded
 
@@ -226,8 +290,10 @@ returns the agent's commands and nothing else. A denied command is recorded too,
 
 ## What the agent never does
 
-- Never runs `port49 login`, `port49 token` or `port49 workload token`, and never reads a file under the
-  secrets directories ([Secrets](../operate/secrets.md)).
+- Never runs `port49 login`, `port49 ssh`, `port49 token` or `port49 workload token`, and never reads a file
+  under the secrets directories ([Secrets](../operate/secrets.md)).
+- Never runs a command that prints the device's configuration unsanitized (`show running-config`,
+  `show startup-config`, `show tech-support`, or the platform's equivalents).
 - Never retries a deny, and never widens its own policy, grant or role.
 - Never touches a device's AAA configuration. That is a human's change, from the page for the device's
   platform ([Devices](../admin/devices/index.md)).
