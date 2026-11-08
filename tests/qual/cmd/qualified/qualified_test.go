@@ -214,6 +214,26 @@ func TestAnOpenRegisterRowIsCitedAsOpen(t *testing.T) {
 	}
 }
 
+// A text that already reads "L18, open" is cited once, not twice.
+func TestCiteIsIdempotent(t *testing.T) {
+	reg := fakeRegister("L18", "L76")
+	for in, want := range map[string]string{
+		"L18":                "L18, open",
+		"L18, open":          "L18, open",
+		"QUAL; as L18, open": "QUAL; as L18, open",
+		"L18, open and L76":  "L18, open and L76, open",
+		"L76 cell b":         "L76, open; cell b",
+		"L76, open; cell b":  "L76, open; cell b",
+	} {
+		if got := cite(in, reg); got != want {
+			t.Errorf("cite(%q) = %q, want %q", in, got, want)
+		}
+		if again := cite(want, reg); again != want {
+			t.Errorf("cite is not idempotent: cite(%q) = %q", want, again)
+		}
+	}
+}
+
 func TestAMissingGoldenFailsTheBuild(t *testing.T) {
 	dir := repoWith(t, golden(stop), true, true)
 	os.Remove(filepath.Join(dir, "tests/qual/golden/juniper_junos/1.0.json"))

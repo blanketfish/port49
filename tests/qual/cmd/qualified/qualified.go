@@ -105,16 +105,23 @@ var citedID = regexp.MustCompile(`\bL[0-9]+[a-z]?\b(?: cell\b)?`)
 // an open row asserted, and a cell that cites one says so. A closed or unknown ID is left alone
 // (checkCited refuses an unknown one before any page is built).
 func cite(text string, reg map[string]docgen.LabRow) string {
-	return citedID.ReplaceAllStringFunc(text, func(m string) string {
-		id, cell := strings.CutSuffix(m, " cell")
-		if !reg[id].Open {
-			return m
+	var b strings.Builder
+	last := 0
+	for _, loc := range citedID.FindAllStringIndex(text, -1) {
+		id, cell := strings.CutSuffix(text[loc[0]:loc[1]], " cell")
+		b.WriteString(text[last:loc[0]])
+		last = loc[1]
+		switch {
+		case !reg[id].Open, strings.HasPrefix(text[loc[1]:], ", open"):
+			b.WriteString(text[loc[0]:loc[1]]) // closed, or already cited
+		case cell:
+			b.WriteString(id + ", open; cell") // "L76, open; cell b": the lint reads "ID, open" beside the ID
+		default:
+			b.WriteString(id + ", open")
 		}
-		if cell {
-			return id + ", open; cell" // "L76, open; cell b": the lint reads "ID, open" beside the ID
-		}
-		return id + ", open"
-	})
+	}
+	b.WriteString(text[last:])
+	return b.String()
 }
 
 // checkCited is an error naming every register ID in text that reg lacks: a cell never cites a row
