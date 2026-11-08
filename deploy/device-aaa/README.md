@@ -60,7 +60,7 @@ once, after port49d declined or reset the handshakes (L73), the device's own dea
 sent to port49, and break-glass works. After port49d returns from a stop expect it. On XR, in that window any
 local account's password also logs in, including one whose user port49 denies (L88 a, `L88-cisco_xrd.md`: a
 login at +12 s succeeded on a local account while port49d was up and saw no request), so keep local
-accounts to break-glass only. A deny port49 answers is refused.
+accounts to break-glass only. A deny port49 answers is refused (L88 a; Junos: see its row).
 
 ### Junos
 
@@ -79,7 +79,7 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 |---|---|---|
 | A deny | Not confirmed here against a note line: that a denied login falls through to a local password when `password` is listed, and that it is refused with no fall-through under `tacplus` alone (the Junos page boxes both as unmeasured) | `tests/lab/results/L88-juniper_vjunos-router.md`, `L88-juniper_vsrx.md`, `L88-juniper_vjunos-router-vjunos26.md` (cell a) |
 | port49 stopped | Break-glass logs in. Junos asks port49 for no command authorization (decision 21), dark or not | `tests/lab/results/L41-juniper_vjunos-router.md`, `L41-juniper_vsrx.md`, `tests/lab/results/L4-juniper_vjunos-router.md`, under the reference: break-glass in 20 to 40 ms (L88 b) |
-| ERROR | Final until go-dark, then break-glass. The first break-glass login under the reference (+7 s on 23.4 and vSRX, at once on 26.2R1.7) is not confirmed here against a note line; port49d closes its listener at +5.5 s (L88 c) | `tests/lab/results/L4-error-juniper_vjunos-router.md`; bound from L41; L88 notes |
+| ERROR | Final until go-dark, then break-glass. The first break-glass login under the reference landed at +0 s on 26.2R1.7 (L88 c, `L88-juniper_vjunos-router-vjunos26.md`); the +7 s figures on 23.4 and on vSRX are not confirmed here against a note line. port49d closes its listener at +5.5 s (L88 c) | `tests/lab/results/L4-error-juniper_vjunos-router.md`; bound from L41; `tests/lab/results/L88-juniper_vjunos-router-vjunos26.md` (cell c), other L88 notes |
 | Dark | Break-glass logs in (L41, both images). Junos asks port49 for no command authorization (decision 21), dark or not. | `L41-juniper_vjunos-router.md`, `L41-juniper_vsrx.md`; under the reference: break-glass logs in and runs a command, 160 to 190 ms (L88 d) |
 | Second server | The first server resetting at Accept, the second answering: token login succeeded in 160 to 180 ms (L88 f) | L88 notes |
 | Key retire / reload | Session survives; next login break-glass | `tests/lab/results/L29-reload-juniper_vjunos-router.md` (23.4). On 26.2R1.7 the device held no connection open across the reload; on vSRX the in-flight and second command printed, and the next token login was refused for about 5 s with break-glass working (L88 g) |

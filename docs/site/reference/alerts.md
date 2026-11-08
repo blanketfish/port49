@@ -968,7 +968,7 @@ port49d's accounting spool disk cannot keep up; every accounting record waits on
 histogram_quantile(0.99, rate(port49_accounting_spool_sync_seconds_bucket[5m])) > 0.010
 ```
 
-**Source:** Ryan 2026-11-03, fix 6b: "p99 of `port49_accounting_spool_sync_seconds` over 10 ms for 10m"
+**Source:** load results, run 5 diagnosis (tests/lab/results/load-beehive.md, cell c): "p99 of `port49_accounting_spool_sync_seconds` over 10 ms for 10m"
 
 **Why this threshold:** Every accounting ack waits on the spool's fsync; with the session etcd and the spool on a QLC drive, account p99 was 152 ms at 170/s (tests/lab/results/load-beehive.md, cell c); with both in RAM the spool's capacity was 1291/s (tests/lab/results/load-beehive-ram.md, cell c), and on a GCE pd-ssd (operator-declared) 2905/s with account p99 3.67 ms at 170/s (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md, cell c).
 
