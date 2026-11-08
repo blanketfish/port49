@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/blanketfish/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/docgen"
 )
 
 const fixtures = "../../../../internal/devicemock/testdata"
@@ -74,31 +75,60 @@ func TestTLSCellNeedsTheTLSLogin(t *testing.T) {
 // when the profile records it, and a profile that merely lacks the steps reads no.
 func TestCommandAuthorizationNotApplicableNeedsTheMarker(t *testing.T) {
 	g := golden(stop)
-	if c := command(g.Scenarios["token_login"].Steps, true, "L18"); c != "— (L18)" {
+	if c := command(g.Scenarios["token_login"].Steps, true, "L18", fakeRegister("L18")); c != "— (L18, open)" {
 		t.Fatalf("marker and no command steps: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, true); s != "qualified" {
 		t.Fatalf("a recorded not-applicable cell does not count against qualified: %s", s)
 	}
-	if c := command(g.Scenarios["token_login"].Steps, false, ""); c != "no" {
+	if c := command(g.Scenarios["token_login"].Steps, false, "", nil); c != "no" {
 		t.Fatalf("no marker: absence is never not-applicable: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, false); s != "partial" {
 		t.Fatalf("%s", s)
 	}
 	denyOnly := golden(devicemock.GoldenStep{Step: "command_denied", Event: "author_error"}, stop)
-	if c := command(denyOnly.Scenarios["token_login"].Steps, true, "L18"); c != "no" {
+	if c := command(denyOnly.Scenarios["token_login"].Steps, true, "L18", fakeRegister("L18")); c != "no" {
 		t.Fatalf("a marker does not excuse command steps the golden holds: %s", c)
 	}
-	if c := command([]devicemock.GoldenStep{permitted, denied, stop}, true, "L18"); c != "yes" {
+	if c := command([]devicemock.GoldenStep{permitted, denied, stop}, true, "L18", fakeRegister("L18")); c != "yes" {
 		t.Fatalf("measured command steps win over the marker: %s", c)
 	}
 }
 
+// fakeRegister is a lab register holding the listed IDs open.
+func fakeRegister(open ...string) map[string]docgen.LabRow {
+	reg := map[string]docgen.LabRow{}
+	for _, id := range open {
+		reg[id] = docgen.LabRow{ID: id, Open: true}
+	}
+	return reg
+}
+
+// fixtureSpec is the minimal spec repoWith writes: L18 open, and every other ID the fixtures cite closed.
+const fixtureSpec = `# Spec
+
+## 15. Lab register
+
+| ID | Claim | Status |
+|---|---|---|
+| **L18** | unrecognised reply attributes | open — measured on five images |
+| **L73** | RFC 9887 client | closed — measured 2026-10-18; tests/lab/results/L73-fixture_junos.md |
+| **L76** | SR Linux | closed — measured 2026-10-18; tests/lab/results/L76-fixture_junos.md |
+| **L80** | NX-OS per-request TLS | closed — measured 2026-10-21; tests/lab/results/L80-fixture_junos.md |
+| **L99** | fixture | closed — measured 2026-01-01; tests/lab/results/L99-fixture_junos.md |
+
+## 16. Next
+`
+
 // repoWith is a repository root holding one profile, copied from the fixtures with
-// its golden path and gaps set, and the fixture notes unless withNotes is false.
+// its golden path and gaps set, and the fixture notes unless withNotes is false. It
+// writes fixtureSpec at the spec's path.
 func repoWith(t *testing.T, g devicemock.Golden, gap, withNotes bool, edits ...func(string) string) string {
 	dir := t.TempDir()
+	specPath := filepath.Join(dir, "docs/design/2026-08-23-policy-engine-spec.md")
+	os.MkdirAll(filepath.Dir(specPath), 0o755)
+	os.WriteFile(specPath, []byte(fixtureSpec), 0o600)
 	if withNotes {
 		notes := filepath.Join(dir, "tests/lab/results")
 		os.MkdirAll(notes, 0o755)
@@ -139,7 +169,7 @@ func TestARowForJunosReadsQualifiedOnlyWithTheMarker(t *testing.T) {
 	for _, tc := range []struct {
 		gap  bool
 		want string
-	}{{true, "| Juniper | Junos | 1.0 | yes | — | — (L18) | — | yes | yes | qualified |"}, {false, "| Juniper | Junos | 1.0 | yes | — | no | — | yes | yes | partial |"}} {
+	}{{true, "| Juniper | Junos | 1.0 | yes | — | — (L18, open) | — | yes | yes | qualified |"}, {false, "| Juniper | Junos | 1.0 | yes | — | no | — | yes | yes | partial |"}} {
 		got, err := Build(repoWith(t, golden(stop), tc.gap, true))
 		if err != nil {
 			t.Fatal(err)
@@ -147,6 +177,38 @@ func TestARowForJunosReadsQualifiedOnlyWithTheMarker(t *testing.T) {
 		if !strings.Contains(got, tc.want+"\n") {
 			t.Fatalf("gap=%v: want row %q in:\n%s", tc.gap, tc.want, got)
 		}
+	}
+}
+
+// The spec's lab register decides how a cell cites a row: an open one reads ", open" (the docs
+// lint refuses an open row asserted), a closed one reads as before. No register is no page.
+func TestBuildFailsWithoutTheRegister(t *testing.T) {
+	dir := repoWith(t, golden(stop), true, true)
+	if err := os.Remove(filepath.Join(dir, "docs/design/2026-08-23-policy-engine-spec.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(dir); err == nil {
+		t.Fatal("a build without the spec's register makes an uncited page")
+	}
+}
+
+func TestACitedIDAbsentFromTheRegisterFailsTheBuild(t *testing.T) {
+	dir := repoWith(t, golden(stop), true, true, replace("the device sends none (L18)", "the device sends none (L55)"))
+	if _, err := Build(dir); err == nil || !strings.Contains(err.Error(), "L55") {
+		t.Fatalf("an ID the register lacks fails the build naming it: %v", err)
+	}
+}
+
+func TestAnOpenRegisterRowIsCitedAsOpen(t *testing.T) {
+	steps := golden(stop).Scenarios["token_login"].Steps
+	if c := command(steps, true, "L18", fakeRegister()); c != "— (L18)" {
+		t.Fatalf("a register with L18 closed: %s", c)
+	}
+	if c := command(steps, true, "QUAL; as L18", fakeRegister("L18")); c != "— (QUAL; as L18, open)" {
+		t.Fatalf("a QUAL citation of an open row: %s", c)
+	}
+	if c := command(steps, true, "L76 cell b", fakeRegister("L76")); c != "— (L76, open cell b)" {
+		t.Fatalf("a cell citation of an open row: %s", c)
 	}
 }
 
@@ -227,7 +289,7 @@ func TestTheCommandCellCitesItsOwnGapAndOperatorGapsArePrinted(t *testing.T) {
 			t.Fatalf("want %q in:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "(L18)") {
+	if strings.Contains(got, "(L18") {
 		t.Fatalf("a Junos citation on another platform:\n%s", got)
 	}
 }
