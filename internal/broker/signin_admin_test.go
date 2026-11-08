@@ -730,9 +730,9 @@ func TestTheScheduledPassReSealsPinsAndGaugesWhatIsLeft(t *testing.T) {
 	if _, err := f.b.RefreshDirectory(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if p, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious),
-		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || at != float64(ended) {
-		t.Fatalf("a stopped pass moved the gauges: sealed_previous %v, last_complete %v", p, at)
+	if p, u, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious), testutil.ToFloat64(m.DirectoryPinsUnopenable),
+		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 1 || at != float64(ended) {
+		t.Fatalf("a stopped pass moved the gauges: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
 	}
 	logs := f.logs()
 	for _, want := range []string{
@@ -748,6 +748,41 @@ func TestTheScheduledPassReSealsPinsAndGaugesWhatIsLeft(t *testing.T) {
 	}
 	if strings.Contains(logs, "more are not named") {
 		t.Errorf("one unopenable pin was said as more than the named ones:\n%s", logs)
+	}
+}
+
+// A pass the store refuses or the context cancels, like one it cannot reach,
+// leaves all three gauges as the last complete pass set them.
+func TestAStoppedPinPassLeavesAllThreeGaugesWhatEverStoppedIt(t *testing.T) {
+	for name, stop := range map[string]struct {
+		err    error
+		cancel bool
+	}{
+		"unavailable": {err: fmt.Errorf("%w: cut", store.ErrUnavailable)},
+		"refused":     {err: fmt.Errorf("%w: no", store.ErrRefused)},
+		"canceled":    {err: context.Canceled, cancel: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := newSignInFixture(t)
+			m := f.b.Metrics
+			r := &resealing{Store: f.b.Store, held: true, rep: store.PinReseal{Sealed: 3, Previous: 1, Unopened: 2}}
+			f.b.Store = r
+			f.b.pinPass(context.Background())
+			ended := f.b.Now().Unix()
+			f.now = f.now.Add(time.Hour)
+			r.rep, r.err = store.PinReseal{Sealed: 9, Previous: 7, Unopened: 5}, stop.err
+			ctx := context.Background()
+			if stop.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			f.b.pinPass(ctx)
+			if p, u, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious), testutil.ToFloat64(m.DirectoryPinsUnopenable),
+				testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 2 || at != float64(ended) {
+				t.Fatalf("a stopped pass moved the gauges: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
+			}
+		})
 	}
 }
 
