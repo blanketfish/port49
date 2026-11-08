@@ -357,7 +357,7 @@ groups:
   - name: port49_directory
     rules:
       - alert: port49_directory_refresh_stale
-        expr: "(time() - max(last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 600) and on() (time() - max(last_over_time(process_start_time_seconds[1d]) and on(instance) last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 600)"
+        expr: "(time() - max(last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 300) and on() (time() - max(last_over_time(process_start_time_seconds[1d]) and on(instance) last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 300)"
         for: 15m
         labels: {severity: ticket}
         annotations:

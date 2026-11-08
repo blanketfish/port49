@@ -1035,6 +1035,23 @@ tests:
         alertname: port49_workload_certificates_renewal_late
         exp_alerts: []
   # port49_directory_refresh_stale
+  # broker.refresh_interval defaults to 5m, so three of them is 900s: a refresh last seen at 100s has been stale
+  # since about 17m, and with the 15m `for:` the ticket fires by 35m. At 10m intervals it would wait for 45m.
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "100+0x60"}
+      - {series: "process_start_time_seconds{instance=\"a\"}", values: "0+0x60"}
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: port49_directory_refresh_stale
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: port49_directory_refresh_stale
+        exp_alerts:
+          - exp_labels: {severity: "ticket"}
+            exp_annotations:
+              summary: "No scheduled directory refresh has verified every principal for over three refresh intervals; contexts keep their last verification and will deny context_stale at the ceiling."
+              runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_refresh_stale"
   - interval: 1m
     input_series:
       - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "100+0x60"}
@@ -1099,10 +1116,10 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "0+0x40 2460+60x30"}
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "0+0x25 1560+60x30"}
       - {series: "process_start_time_seconds{instance=\"a\"}", values: "0+0x70"}
     alert_rule_test:
-      - eval_time: 40m
+      - eval_time: 25m
         alertname: port49_directory_refresh_stale
         exp_alerts: []
   # port49_directory_refresh_half_ceiling

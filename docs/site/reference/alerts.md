@@ -34,7 +34,7 @@ Each alert below carries a `runbook_url` annotation that points at its section h
 ## Thresholds and defaults
 
 Each rule is a statement from the design or the roadmap and the rule that answers it. The thresholds
-that follow a default (`close_after` 5, `refresh_interval` 10m, `jwks_max_age` 24h,
+that follow a default (`close_after` 5, `broker.refresh_interval` 5m, `jwks_max_age` 24h,
 `expiry_warning_fraction` 0.33, `staleness_ceiling` 4h) are those defaults: edit the rule if you set another.
 The `hold_ttl` rules are the exception: they use multiples of the 15s `hold_ttl` default that hold at any
 allowed setting (10s to 1m), so they need no edit.
@@ -839,12 +839,12 @@ port49d found its session store restored from a snapshot: tokens minted before t
 No scheduled directory refresh has verified every principal for over three refresh intervals; contexts keep their last verification and will deny context_stale at the ceiling.
 
 ```promql
-(time() - max(last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 600) and on() (time() - max(last_over_time(process_start_time_seconds[1d]) and on(instance) last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 600)
+(time() - max(last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 300) and on() (time() - max(last_over_time(process_start_time_seconds[1d]) and on(instance) last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 300)
 ```
 
 **Source:** roadmap, plan 8 directory: "`time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`"
 
-**Why this threshold:** 600 is refresh_interval at its default (10m); set 3x yours. The freshest refresh anywhere, so a runner that lost the hold does not alarm on its old value; and only once the newest process with the series is also that old, so a restart does not, but a restart in the middle of an outage does (the gauge reads 0 until a pass completes). 15 minutes covers a failover: the new runner's series sits at 0 until its first pass completes. last_over_time keeps the rule firing for a day after every broker is gone.
+**Why this threshold:** 300 is broker.refresh_interval at its default (5m); set 3x yours. The freshest refresh anywhere, so a runner that lost the hold does not alarm on its old value; and only once the newest process with the series is also that old, so a restart does not, but a restart in the middle of an outage does (the gauge reads 0 until a pass completes). 15 minutes covers a failover: the new runner's series sits at 0 until its first pass completes. last_over_time keeps the rule firing for a day after every broker is gone.
 
 ### port49_directory_refresh_half_ceiling {#port49_directory_refresh_half_ceiling}
 
@@ -1150,7 +1150,7 @@ etcd's disk cannot keep up; port49 store calls will time out in bursts. Move etc
 histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])) > 0.010 or histogram_quantile(0.99, rate(etcd_disk_backend_commit_duration_seconds_bucket[5m])) > 0.025
 ```
 
-**Source:** Ryan 2026-11-03, run 5 diagnosis: "p99 of `etcd_disk_wal_fsync_duration_seconds` over 10 ms, or of `etcd_disk_backend_commit_duration_seconds` over 25 ms"
+**Source:** load results, run 5 diagnosis (tests/lab/results/load-beehive.md): "p99 of `etcd_disk_wal_fsync_duration_seconds` over 10 ms, or of `etcd_disk_backend_commit_duration_seconds` over 25 ms"
 
 **Why this threshold:** etcd's own guidance is a WAL fsync p99 under 10 ms; a drive that stalls can push store calls past the 500 ms call timeout in bursts: on a QLC drive the session etcd logged 7974 to 9244 slow applies in cells d and e (tests/lab/results/load-beehive.md), against 1 and 0 in RAM (tests/lab/results/load-beehive-ram.md) and at most 74 on a GCE pd-ssd (operator-declared; a 44, c 74, d 1, e 0) with a WAL fsync mean of 0.72 to 0.86 ms (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md). Ten minutes over a 5m rate is a drive, not a compaction.
 
