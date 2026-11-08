@@ -151,6 +151,12 @@ Two things stay true while this happens:
   outage does not take every replica out of a load balancer at once. Alert on the metrics above, not on
   `/readyz`.
 
+A call whose caller's deadline had already passed when it reached the store is counted as
+`outcome="deadline_on_entry"` on `port49_store_calls_total`, and it does not count toward opening a
+circuit: the time was spent before the store was asked, so it says nothing about the store. A call that
+the store was too slow to answer within its deadline still counts as a failure. A rising count of this
+outcome is therefore not a sign that the store is unhealthy; the store alerts above are.
+
 Some devices do not fall back to their local method when the server answers an error. See
 [IOS XE and a down store](tls.md#ios-xe-and-a-down-store) before you rely on break-glass.
 
@@ -228,6 +234,13 @@ If the region that received the logout is cut from the directory:
 - On the heal the runner forwards it, and the other regions refuse that session from then on.
 - To cut the session off in the other regions before the heal, run `port49 revoke --principal <principal>`
   from a region that reaches the directory.
+
+The runner does not repeat itself while this lasts. It says `N back-channel logout(s) pending until the
+directory store answers` once for a run of forwarding passes that fail, and then says nothing more until a
+pass forwards them. A logout it could not finish applying in its own region is tried again after a wait
+that doubles from 1 second, and the log gives the `port49 revoke` remedy only with the first failure; the
+lines after it read `still not reached after N tries … (the remedy was said with the first failure)`.
+Look for the first line of the run, not the latest.
 
 ### A person who signs in again during a cut
 
