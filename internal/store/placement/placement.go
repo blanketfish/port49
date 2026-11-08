@@ -11,6 +11,7 @@
 package placement
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ type Members interface {
 	MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error)
 	RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error
 	DeleteMembership(ctx context.Context, principal string) (store.Membership, error)
+	MembershipSeals(ctx context.Context) ([]store.MembershipSeal, error)
 }
 
 // Config is Wrap's.
@@ -297,6 +299,68 @@ func (p *placed) PutPin(ctx context.Context, m store.Membership, expect store.Pi
 		return p.Store.PutPin(ctx, m, expect)
 	}
 	return p.putPin(ctx, m, expect)
+}
+
+// ResealPins is the scheduled re-seal of the directory's pins (decision
+// 57). The directory lists its pins with the key id each is sealed under;
+// only those not under the current key are read. Each that opened under
+// encryption.previous is written again, sealed under the current key, by a
+// compare on the version it was read at, so a pin a forget, a re-pin or
+// another region changed since the read stands; that one is counted in
+// Previous and the next pass reads it again. A pin that opens under
+// neither key is told to unopened and counted, and never written or
+// deleted. A directory that does not answer, or a ctx that ends, ends the
+// pass with that error: each pin is one compare, so nothing is left
+// half-written. held is false where the router has no directory of its
+// own, which holds no pins.
+func (p *placed) ResealPins(ctx context.Context, unopened func(principal string, err error)) (rep store.PinReseal,
+	held bool, err error) {
+	if p.c.Members == nil {
+		return rep, false, nil
+	}
+	if !p.reachable() {
+		return rep, true, fmt.Errorf("%w: the directory store does not answer", store.ErrUnavailable)
+	}
+	var seals []store.MembershipSeal
+	if err := bounded(ctx, p.c.BulkTimeout, func(ctx context.Context) (x error) {
+		seals, x = p.c.Members.MembershipSeals(ctx)
+		return
+	}); err != nil {
+		return rep, true, err
+	}
+	for _, s := range seals {
+		if s.Current {
+			continue // sealed under the current key: nothing to read
+		}
+		var pin store.Membership
+		err := bounded(ctx, p.c.CallTimeout, func(ctx context.Context) (x error) {
+			pin, x = p.c.Members.GetMembership(ctx, s.Principal)
+			return
+		})
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue // forgotten or gone since the listing (ErrForgotten is an ErrNotFound)
+		case errors.Is(err, store.ErrUnavailable), ctx.Err() != nil:
+			return rep, true, cmp.Or(err, ctx.Err())
+		case err != nil:
+			rep.Unopened++
+			if unopened != nil {
+				unopened(s.Principal, err)
+			}
+			continue
+		case !pin.Stale:
+			continue // written under the current key since the listing
+		}
+		switch err := p.putPin(ctx, pin, store.PinExpect{Version: pin.Version}); {
+		case err == nil:
+			rep.Sealed++
+		case errors.Is(err, store.ErrConflict):
+			rep.Previous++
+		default:
+			return rep, true, err
+		}
+	}
+	return rep, true, nil
 }
 
 // PutMembership writes the session's record always, and the directory's

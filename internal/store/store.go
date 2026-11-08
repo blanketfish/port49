@@ -1341,6 +1341,14 @@ type MembershipSeal struct {
 	Current          bool
 }
 
+// PinReseal is one complete pass of the directory pins' re-seal (decision
+// 57): pins sealed again under the current key, pins still under the
+// previous one (a write that met a newer pin, left for the next pass), and
+// pins that opened under neither key, left as they are.
+type PinReseal struct {
+	Sealed, Previous, Unopened int
+}
+
 // SealedKeyID is the key id the header of a record internal/store/crypt
 // sealed names (len(id) ‖ id ‖ ...), "" when it is too short to name one.
 // It is the raw header, which whoever can write the store writes:
