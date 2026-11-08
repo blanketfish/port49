@@ -135,6 +135,10 @@ func citesNote(names []string, id string, platforms, universe []string, results 
 		if _, err := os.Stat(filepath.Join(results, name)); err != nil {
 			continue
 		}
+		// A page that lists no platforms is not a device page: a note that exists cites its row there.
+		if len(platforms) == 0 {
+			return true
+		}
 		if suffix, ok := docgen.MatchNote(name, universe); ok && contains(platforms, suffix) {
 			return true
 		}
@@ -153,6 +157,16 @@ func citesNote(names []string, id string, platforms, universe []string, results 
 		}
 	}
 	return false
+}
+
+// maskNotes blanks the L of each results-note path in text, same length, so the ID in a link to a note is
+// not read as a reference to its row.
+func maskNotes(text string) string {
+	b := []byte(text)
+	for _, m := range resultsNote.FindAllStringSubmatchIndex(text, -1) {
+		b[m[2]] = 'x'
+	}
+	return string(b)
 }
 
 func noteNames(re *regexp.Regexp, text string) []string {
@@ -178,7 +192,7 @@ func checkOpenEntries(file string, text string, reg map[string]docgen.LabRow, un
 		case inWarn && line != "" && !strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "\t"):
 			inWarn = false
 		}
-		for _, id := range labRef.FindAllString(line, -1) {
+		for _, id := range labRef.FindAllString(maskNotes(line), -1) {
 			row, ok := reg[id]
 			switch {
 			case !ok:
@@ -706,7 +720,7 @@ func checkBuiltHTML(file string, doc []byte, platforms []string, reg map[string]
 	}
 	var out []labFinding
 	for _, b := range blocks {
-		for _, m := range labRef.FindAllStringIndex(b.Text, -1) {
+		for _, m := range labRef.FindAllStringIndex(maskNotes(b.Text), -1) {
 			id := b.Text[m[0]:m[1]]
 			row, ok := reg[id]
 			switch {
@@ -823,6 +837,20 @@ func TestBuiltSiteWordingFixtures(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A page that lists no platforms is not a device page: a link to a results note that exists cites that
+// row there, whatever platform the note measured, and the ID inside the link is no bare reference.
+func TestABuiltNoteLinkOnANonDevicePageCites(t *testing.T) {
+	reg := loadRegister(t, filepath.Join(labFixtures, "register.md"))
+	p := filepath.Join(labFixtures, "built", "nodevice", "non-device-note.html")
+	got, err := checkBuiltHTML(p, []byte(readFile(t, p)), nil, reg, fixtureUniverse, filepath.Join(labFixtures, "results"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("%s: %v", p, got)
 	}
 }
 
