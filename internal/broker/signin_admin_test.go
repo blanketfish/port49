@@ -837,3 +837,100 @@ func TestTheScheduledPassChecksAndReSealsTheEnrollmentStore(t *testing.T) {
 		t.Fatal("the pass re-sealed a store with no mark")
 	}
 }
+
+// blocking is a store whose ResealPins seals n pins and then waits for its
+// ctx, as a pass over a directory too slow to finish does.
+type blocking struct {
+	store.Store
+	n int
+}
+
+func (r *blocking) ResealPins(ctx context.Context, _ func(string, error)) (store.PinReseal, bool, error) {
+	<-ctx.Done()
+	return store.PinReseal{Sealed: r.n}, true, ctx.Err()
+}
+
+// S2: a pass that runs out of its budget leaves the gauges as they were and
+// says so once an hour; the parent's cancel says nothing.
+func TestAPinPassThatRunsOutOfItsBudgetSaysSoOnceAndLeavesTheGauges(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	m := f.b.Metrics
+	r := &resealing{Store: f.b.Store, held: true, rep: store.PinReseal{Sealed: 3, Previous: 1, Unopened: 2}}
+	f.b.Store = r
+	f.b.pinPass(context.Background())
+	ended := f.b.Now().Unix()
+	f.b.Store = &blocking{Store: r.Store, n: 4}
+	f.b.PinBudget = 20 * time.Millisecond
+	f.now = f.now.Add(time.Minute)
+	f.b.pinPass(context.Background())
+	f.b.pinPass(context.Background()) // within the hour: not said again
+	if p, u, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious), testutil.ToFloat64(m.DirectoryPinsUnopenable),
+		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 2 || at != float64(ended) {
+		t.Fatalf("a pass out of budget moved the gauges: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
+	}
+	const want = "directory store: the re-seal of pins ran out of its 20ms budget after sealing 4 pins; " +
+		"the next pass goes on from there"
+	if n := strings.Count(f.logs(), want); n != 1 {
+		t.Fatalf("the budget line was said %d times, want 1:\n%s", n, f.logs())
+	}
+}
+
+func TestAPinPassTheParentCancelsSaysNothing(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	f.b.Store = &blocking{Store: f.b.Store, n: 4}
+	f.b.PinBudget = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	f.b.pinPass(ctx)
+	if l := f.logs(); strings.Contains(l, "re-seal of pins") {
+		t.Fatalf("a parent cancel was said:\n%s", l)
+	}
+}
+
+// tellingStore tells the unopened callback the error it is given for each of
+// three principals.
+type tellingStore struct {
+	store.Store
+	told map[string]error
+}
+
+func (r *tellingStore) ResealPins(_ context.Context, unopened func(string, error)) (store.PinReseal, bool, error) {
+	for _, p := range []string{"user:a@example.com", "user:b@example.com", "user:c@example.com"} {
+		unopened(p, r.told[p])
+	}
+	return store.PinReseal{Previous: 1, Unopened: 2}, true, nil
+}
+
+// M2: the advice follows the cause. A lost key says to put it back; a
+// record that does not match its seal says to forget it; a write that failed
+// is not called unopenable.
+func TestThePinAdviceFollowsTheCause(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	f.b.Store = &tellingStore{Store: f.b.Store, told: map[string]error{
+		"user:a@example.com": fmt.Errorf("crypt: %w", crypt.ErrUnknownKey),
+		"user:b@example.com": errors.New("crypt: message authentication failed"),
+		"user:c@example.com": fmt.Errorf("%w: etcd: cut", store.ErrPinNotWritten),
+	}}
+	f.b.pinPass(context.Background())
+	lines := strings.Split(f.logs(), "\n")
+	find := func(p string) string {
+		for _, l := range lines {
+			if strings.Contains(l, p) {
+				return l
+			}
+		}
+		t.Fatalf("no line for %s:\n%s", p, f.logs())
+		return ""
+	}
+	if l := find("user:a@example.com"); !strings.Contains(l, "put the key that sealed it back as encryption.previous") {
+		t.Errorf("a lost key: %s", l)
+	}
+	if l := find("user:b@example.com"); strings.Contains(l, "put the key") ||
+		!strings.Contains(l, "the record does not match its seal; run `port49 directory forget user:b@example.com`") {
+		t.Errorf("a record that does not match its seal: %s", l)
+	}
+	if l := find("user:c@example.com"); strings.Contains(l, "does not open") || strings.Contains(l, "put the key") ||
+		!strings.Contains(l, "could not be written") {
+		t.Errorf("a write that failed: %s", l)
+	}
+}

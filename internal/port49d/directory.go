@@ -187,6 +187,9 @@ func every(d time.Duration) string {
 // session.staleness_ceiling. A pass that stops is said; the next runs on
 // schedule.
 func scheduled(ctx context.Context, brk *broker.Broker, interval time.Duration, say func(string, ...any)) {
+	// The pin re-seal shares the pass with the stamping refresh: it gets half
+	// the interval, so it never holds the next refresh off.
+	brk.PinBudget = interval / 2
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
