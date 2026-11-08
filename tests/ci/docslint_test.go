@@ -73,18 +73,25 @@ func TestLabResultPathExemptionNeedsTheNoteToExist(t *testing.T) {
 	}
 }
 
-// A link to a results note may be written with the note's file name (the lab register page lists notes so).
-// The text passes only when it is the very file the link goes to and that note exists.
-func TestALinkTextNamingAnExistingNoteCarriesAHostNamePastTheLint(t *testing.T) {
+// A results note's file name is a file name, not a host, wherever it is written: as a path, as the text of a
+// link to the note (the lab register page lists notes so), or as the bare text the built-site lint reads
+// once the tags are gone. Only a note that exists carries the exemption, and only the name does.
+func TestAnExistingNotesFileNameCarriesAHostNamePastTheLint(t *testing.T) {
 	const url = "https://github.com/blanketfish/port49/blob/main/tests/lab/results/"
-	if fs := LintText("a.md", []byte("[load-beehive-ram.md]("+url+"load-beehive-ram.md)")); len(fs) != 0 {
-		t.Errorf("an existing note linked by its file name: got %v", fs)
+	for name, text := range map[string]string{
+		"a link":         "[load-beehive-ram.md](" + url + "load-beehive-ram.md)",
+		"an anchor":      `<a href="` + url + `load-beehive-ram.md">load-beehive-ram.md</a>`,
+		"the bare name":  "Results notes: load-beehive-ram.md, load-beehive.md.",
+		"the bare name2": "Results notes: L62-ser8.md",
+	} {
+		if fs := LintText("a.md", []byte(text)); len(fs) != 0 {
+			t.Errorf("%s: got %v", name, fs)
+		}
 	}
 	for name, text := range map[string]string{
-		"a note that does not exist":  "[load-beehive-invented.md](" + url + "load-beehive-invented.md)",
-		"text that is not the target": "[load-beehive-ram.md](" + url + "load-beehive-gates.md)",
-		"text with more than a name":  "[the beehive load-beehive-ram.md](" + url + "load-beehive-ram.md)",
-		"a link to somewhere else":    "[load-beehive-ram.md](https://example.com/load-beehive-ram.md)",
+		"a note that does not exist": "[load-beehive-invented.md](" + url + "load-beehive-invented.md)",
+		"text with more than a name": "[the beehive load-beehive-ram.md](" + url + "load-beehive-ram.md)",
+		"a name with a host in it":   "see the beehive-ram.md file",
 	} {
 		if fs := LintText("a.md", []byte(text)); len(fs) == 0 || fs[0].Rule != "lab_host" {
 			t.Errorf("%s: got %v, want lab_host", name, fs)

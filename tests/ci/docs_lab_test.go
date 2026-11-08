@@ -727,7 +727,8 @@ func builtBlocks(doc []byte) ([]builtBlock, error) {
 				walk(c, unmeasured)
 			}
 			if n.Data == "a" {
-				if href := attr(n, "href"); href != "" {
+				// A link to the register page is not a citation; its href would split "L18, open".
+				if href := attr(n, "href"); href != "" && !strings.Contains(href, "reference/lab-register/#") {
 					cur.WriteString(" [" + href + "] ")
 				}
 			}
