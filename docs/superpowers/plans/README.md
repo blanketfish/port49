@@ -8665,6 +8665,10 @@ Executed on `feature/user-and-admin-docs` (PR pending). No spec change, no lab r
   tables and `llms.txt` from the code and the spec (commit the result; CI fails a stale page); **`make docs-build`** builds the site
   strictly in a hashed-requirements virtualenv (`bin/docs-venv`), and `PORT49_DOCS_SITE=site go test ./tests/ci/ -run '^TestTheBuiltSite'`
   lints the built output.
+- **Light and dark schemes** with a toggle; the site follows the reader's system setting at first.
+- **The lab register page** (`reference/lab-register.md`, generated from spec §15 by `make docs`) says what an L-number is
+  and, for every register ID, what it measures, whether it is open or closed, and its results notes. Every lab ID on the
+  site links to its row; CI fails a page or an included README region that names a bare lab ID.
 
 **Found by the closing source-map check:** two roadmap hand-offs had no page. Both are now on `operate/stores.md`: the
 `deadline_on_entry` outcome of `port49_store_calls_total` (counted apart, not toward opening a circuit), and the plan 11a
@@ -8672,7 +8676,8 @@ pending-logout note (the runner says a failed logout's remedy and the "pending u
 per run, not on every retry).
 
 **Left:**
-- **The README's wording** awaits Ryan's review before go-public.
+- **The repository description** on GitHub still says "Kubernetes-native"; set it to the README's tagline at go-public
+  (the README's wording itself was approved by Ryan, 2026-11-08).
 - **Decision 4's settings, at go-public:** Pages source "GitHub Actions", the `github-pages` environment's branch and tag
   restriction, `docs` among the `main` ruleset's required checks, and one external link check over the built site
   (`RELEASING.md`, one-time setup items 7 to 9).
