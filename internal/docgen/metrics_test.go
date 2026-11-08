@@ -163,6 +163,14 @@ func TestAlertMatchIsByWholeName(t *testing.T) {
 	}
 }
 
+// A metric with no name matches no alert: an empty pattern would link every alert to it.
+func TestAnEmptyMetricNameLinksNoAlert(t *testing.T) {
+	as := []Alert{{Name: "a", Expr: "rate(port49_store_calls_total[5m]) > 0"}}
+	if got := alertsOn(Metric{Kind: "counter"}, as); len(got) != 0 {
+		t.Errorf("an empty name linked %v", got)
+	}
+}
+
 func TestMetricsPageIsCurrent(t *testing.T) {
 	pages, err := Pages(repoRoot)
 	if err != nil {

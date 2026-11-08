@@ -207,6 +207,9 @@ func Alerts(rules []byte) ([]Alert, error) {
 // alertsOn lists the alerts whose expression names m: the series itself, or for a histogram or summary
 // its _bucket, _sum or _count series.
 func alertsOn(m Metric, as []Alert) []string {
+	if m.Name == "" {
+		return nil
+	}
 	names := []string{regexp.QuoteMeta(m.Name)}
 	if m.Kind == "histogram" || m.Kind == "summary" {
 		names = append(names, regexp.QuoteMeta(m.Name)+"_(?:bucket|sum|count)")
