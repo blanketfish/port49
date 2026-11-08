@@ -150,13 +150,48 @@ func TestEvidenceListsAMultiPageNoteOnBothPages(t *testing.T) {
 	}
 }
 
+// A note that measured two images lists them under "Platforms:". Each page shows its own platform row.
+func TestEvidenceReadsThePlatformsListForEachPage(t *testing.T) {
+	dir := t.TempDir()
+	name := "L31-breakglass-cisco-singleconnection.md"
+	writeNote(t, dir, name, "# L31\n\n- **Date observed:** 2026-09-30 (the runs)\n- **Platforms:**\n"+
+		"  - cisco_iosxe (containerlab node `xe1`, 192.0.2.41): Catalyst 8000V 17.13.01a\n"+
+		"    (`vrnetlab/cisco_c8000v:17.13.01a`)\n"+
+		"  - cisco_nxos (containerlab node `nx1`, 192.0.2.31): Nexus 9300v 10.4(2)F\n"+
+		"    (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)\n"+
+		"  - For comparison, unaffected: vEOS-lab 4.31.2F\n"+
+		"- **Runs analysed:** plan 6b\n\n## Claim\n")
+	want := map[string][2]string{
+		"cisco-ios-xe": {"cisco_iosxe", "Catalyst 8000V 17.13.01a"},
+		"cisco-nx-os":  {"cisco_nxos", "Nexus 9300v 10.4(2)F"},
+	}
+	for slug, w := range want {
+		var page DevicePage
+		for _, p := range DevicePages {
+			if p.Slug == slug {
+				page = p
+			}
+		}
+		ev, err := EvidenceFor(dir, page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ev) != 1 || ev[0].Platform != w[0] || ev[0].Image != w[1] {
+			t.Errorf("%s: got %+v, want platform %q image %q", slug, ev, w[0], w[1])
+		}
+	}
+}
+
 func TestEvidenceTableRendersTheRegisterStatus(t *testing.T) {
 	reg := map[string]LabRow{"L4": {ID: "L4", Open: true}, "L5": {ID: "L5"}}
 	ev := []Evidence{
 		{"L4", "L4-arista_eos.md", "arista_eos", "vEOS 4.31.2F", "2026-09-20"},
 		{"L5", "L5-arista_eos.md", "arista_eos", "vEOS | 4.31.2F", "2026-09-21"},
 	}
-	got := EvidenceTable(ev, reg)
+	got, err := EvidenceTable(ev, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"| Entry | Platform | Image | Date | Note |",
 		"[L4 (open)](" + specLabURL + ")",
@@ -168,8 +203,18 @@ func TestEvidenceTableRendersTheRegisterStatus(t *testing.T) {
 			t.Errorf("table lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(EvidenceTable(nil, reg), "| L") {
-		t.Error("an empty table names an entry")
+	empty, err := EvidenceTable(nil, reg)
+	if err != nil || strings.Contains(empty, "| L") {
+		t.Errorf("an empty table names an entry or fails: %v\n%s", err, empty)
+	}
+}
+
+// A note whose ID the register does not hold fails the build; it is not shown bare.
+func TestEvidenceTableFailsOnAnUnknownLabID(t *testing.T) {
+	reg := map[string]LabRow{"L4": {ID: "L4"}}
+	ev := []Evidence{{"L999", "L999-arista_eos.md", "arista_eos", "vEOS", "2026-09-20"}}
+	if got, err := EvidenceTable(ev, reg); err == nil {
+		t.Errorf("an unknown lab ID was accepted:\n%s", got)
 	}
 }
 

@@ -220,7 +220,9 @@ func Pages(root string) (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[evidenceDir+p.Slug+".md"] = EvidenceTable(ev, reg)
+		if out[evidenceDir+p.Slug+".md"], err = EvidenceTable(ev, reg); err != nil {
+			return nil, err
+		}
 	}
 	mk, err := os.ReadFile(filepath.Join(root, "mkdocs.yml"))
 	if err != nil {

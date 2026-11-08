@@ -102,15 +102,19 @@ var (
 	plainDate   = regexp.MustCompile(`^Date:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})\s*$`)
 	plainPlat   = regexp.MustCompile(`^Platform:\s*(.*)$`)
 	plainImage  = regexp.MustCompile(`^Image:\s*(.*)$`)
-	oneLiner    = regexp.MustCompile(`^Platform:\s*(.+?)\.\s+Image:\s*(.+?)\.\s+Transport:\s*.+?\.\s+Measured\s+(\S+?)[.,;]?\s+by\s`)
+	// A note that measured several images lists them under "Platforms:", one nested "- <platform> (...): <image>" each.
+	bulletPlatforms = regexp.MustCompile(`^- \*\*Platforms:\*\*\s*$`)
+	nestedPlatform  = regexp.MustCompile(`^\s+- ([A-Za-z0-9_.-]+)[^:]*:\s*(.*)$`)
+	oneLiner        = regexp.MustCompile(`^Platform:\s*(.+?)\.\s+Image:\s*(.+?)\.\s+Transport:\s*.+?\.\s+Measured\s+(\S+?)[.,;]?\s+by\s`)
 )
 
 // headerLimit bounds how far into a note the header can reach.
 const headerLimit = 40
 
 // readEvidence parses the header of one results note: the lines before its first "## " heading. It keeps
-// the three fields and prints nothing else.
-func readEvidence(dir, name string) (Evidence, error) {
+// the three fields and prints nothing else. A "Platforms:" list gives the row of the one entry whose name is
+// in suffixes, the page's own platform.
+func readEvidence(dir, name string, suffixes []string) (Evidence, error) {
 	f, err := os.Open(filepath.Join(dir, name))
 	if err != nil {
 		return Evidence{}, err
@@ -120,10 +124,29 @@ func readEvidence(dir, name string) (Evidence, error) {
 	ev := Evidence{ID: strings.Join(ids, ", "), File: name, Platform: none, Image: none, Date: none}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	inPlatforms := false
 	for n := 0; n < headerLimit && sc.Scan(); n++ {
 		line := sc.Text()
 		if strings.HasPrefix(line, "## ") {
 			break
+		}
+		if bulletPlatforms.MatchString(line) {
+			inPlatforms = true
+			continue
+		}
+		if inPlatforms {
+			if strings.HasPrefix(line, "- ") {
+				inPlatforms = false
+			} else if m := nestedPlatform.FindStringSubmatch(line); m != nil {
+				for _, s := range suffixes {
+					if m[1] == s {
+						ev.Platform, ev.Image = m[1], cleanImage(m[2])
+					}
+				}
+				continue
+			} else {
+				continue
+			}
 		}
 		if m := oneLiner.FindStringSubmatch(line); m != nil {
 			ev.Platform, ev.Image, ev.Date = cleanPlatform(m[1]), cleanImage(m[2]), m[3]
@@ -211,7 +234,7 @@ func EvidenceFor(resultsDir string, p DevicePage) ([]Evidence, error) {
 		if !mine {
 			continue
 		}
-		ev, err := readEvidence(resultsDir, name)
+		ev, err := readEvidence(resultsDir, name, p.Suffixes)
 		if err != nil {
 			return nil, err
 		}
@@ -248,21 +271,21 @@ const resultsURL = "https://github.com/blanketfish/port49/blob/main/tests/lab/re
 
 // EvidenceTable is the table a device page includes under "Lab evidence": one row per note, with the
 // register entry and whether it is open or closed, the platform, image and date the note records, and a
-// link to the note. An ID the register does not hold is shown bare, which the docs lab check then
-// reports as an unknown lab ID. A page with no notes gets a sentence in place of the table.
-func EvidenceTable(ev []Evidence, reg map[string]LabRow) string {
+// link to the note. An ID the register does not hold is an error, so the build fails on it. A page with
+// no notes gets a sentence in place of the table.
+func EvidenceTable(ev []Evidence, reg map[string]LabRow) (string, error) {
 	if len(ev) == 0 {
-		return Header + "\n\nNo lab results note covers this page.\n"
+		return Header + "\n\nNo lab results note covers this page.\n", nil
 	}
 	var b strings.Builder
 	b.WriteString(Header + "\n\n| Entry | Platform | Image | Date | Note |\n|---|---|---|---|---|\n")
 	for _, e := range ev {
 		entry, err := RenderLabIDs(e.ID, reg)
 		if err != nil {
-			entry = e.ID
+			return "", fmt.Errorf("%s: %w", e.File, err)
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | [%s](%s%s) |\n", entry, cell(e.Platform), cell(e.Image), cell(e.Date),
 			e.File, resultsURL, e.File)
 	}
-	return b.String()
+	return b.String(), nil
 }
