@@ -412,6 +412,15 @@ type Metrics struct {
 	// time of the last scheduled refresh that verified every principal, 0
 	// before one has. No labels: no principal or device.
 	DirectoryRefreshLastComplete *prometheus.GaugeVec
+	// The directory pins' re-seal (spec decision 57), each a vector with no
+	// labels, absent until a pass on a directory store of its own
+	// completes: port49_directory_pins_sealed_previous, the pins that pass
+	// left under encryption.previous (a write that met a newer pin
+	// included); port49_directory_pins_unopenable, those that opened under
+	// neither key; port49_directory_pins_reseal_last_complete_timestamp_seconds,
+	// when it ended. A replica that hands over the keyspace keeps its last
+	// values: read them on the holder. No principal.
+	DirectoryPinsSealedPrevious, DirectoryPinsUnopenable, DirectoryPinsResealLastComplete *prometheus.GaugeVec
 	// port49_oidc_keys_last_success_timestamp_seconds{issuer}: the Unix
 	// time the keys held were fetched: 0 from the key set's creation until
 	// a fetch or a restore, and after a restore the kept set's fetched_at,
@@ -922,6 +931,16 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "The Unix time the last pre-warm pass finished; 0 before one has."}),
 		DirectoryRefreshLastComplete: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_refresh_last_complete_timestamp_seconds",
 			Help: "The Unix time of the last scheduled refresh that verified every principal; 0 before one has, absent where no scheduled refresh runs."}, nil),
+		DirectoryPinsSealedPrevious: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_pins_sealed_previous",
+			Help: "Directory pins the last complete re-seal pass left sealed under encryption.previous; remove " +
+				"encryption.previous only at 0, read on the keyspace holder from a pass that ended after the last " +
+				"restart of the rotation's step 2. Absent until a pass completes, and where the store holds no pins."}, nil),
+		DirectoryPinsUnopenable: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_pins_unopenable",
+			Help: "Directory pins the last complete re-seal pass could not open under either encryption key; " +
+				"their principals cannot bind, mint or refresh. Alert above 0 where port49_store_keyspace_held is 1."}, nil),
+		DirectoryPinsResealLastComplete: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "port49_directory_pins_reseal_last_complete_timestamp_seconds",
+			Help: "The Unix time the last complete re-seal pass of the directory pins ended; absent before one."}, nil),
 		OIDCKeysLastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_oidc_keys_last_success_timestamp_seconds",
 			Help: "Unix time the OIDC or cluster issuer's held keys were fetched (restored included), 0 before any."}, []string{"issuer"}),
@@ -1078,7 +1097,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.DirectoryPinsSealedPrevious, m.DirectoryPinsUnopenable, m.DirectoryPinsResealLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.BrokerLogoutsQueueFull, m.RedemptionRestoreUnjudged, m.RedemptionRestoredRefused, m.StoreRestoreDetected,
 		m.InventoryReloads,
 		m.InventoryFileRefused,

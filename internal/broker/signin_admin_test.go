@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/blanketfish/port49/internal/broker/api"
@@ -664,6 +665,110 @@ func TestTheSignInOpsNeedTheVerifier(t *testing.T) {
 	}
 	if _, err := f.b.ImportEnrollments(ctx, []byte("x"), false, "o"); err == nil {
 		t.Fatal("import")
+	}
+}
+
+// resealing is a store as the scheduled pass sees it: ResealPins tells
+// each of unopened and answers rep, held, err.
+type resealing struct {
+	store.Store
+	rep      store.PinReseal
+	held     bool
+	err      error
+	unopened []string
+}
+
+func (r *resealing) ResealPins(_ context.Context, unopened func(string, error)) (store.PinReseal, bool, error) {
+	for _, p := range r.unopened {
+		unopened(p, errors.New("crypt: opening membership: crypt: sealed under an unknown key"))
+	}
+	return r.rep, r.held, r.err
+}
+
+// series fails the test unless each gauge has want series (0: absent).
+func series(t *testing.T, want int, gs ...*prometheus.GaugeVec) {
+	t.Helper()
+	for _, g := range gs {
+		if n := testutil.CollectAndCount(g); n != want {
+			t.Fatalf("a pin gauge has %d series, want %d", n, want)
+		}
+	}
+}
+
+// The scheduled pass re-seals the directory's pins (decision 57): a pass
+// that completes sets the three gauges and says what it did; one the store
+// stops changes none; a store with no pins has none of them.
+func TestTheScheduledPassReSealsPinsAndGaugesWhatIsLeft(t *testing.T) {
+	ctx := context.Background()
+	f, _ := newSignInFixture(t)
+	m := f.b.Metrics
+	gauges := []*prometheus.GaugeVec{m.DirectoryPinsSealedPrevious, m.DirectoryPinsUnopenable,
+		m.DirectoryPinsResealLastComplete}
+	if _, err := f.b.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	series(t, 0, gauges...) // a shared store: no ResealPins
+	r := &resealing{Store: f.b.Store, held: false}
+	f.b.Store = r
+	if _, err := f.b.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	series(t, 0, gauges...) // a router with no directory of its own
+	r.held, r.rep, r.unopened = true, store.PinReseal{Sealed: 3, Previous: 1, Unopened: 1},
+		[]string{"user:carol@example.com"}
+	if _, err := f.b.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ended := f.b.Now().Unix()
+	series(t, 1, gauges...)
+	if p, u, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious), testutil.ToFloat64(m.DirectoryPinsUnopenable),
+		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 1 || at != float64(ended) {
+		t.Fatalf("after a complete pass: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
+	}
+	f.now = f.now.Add(time.Hour)
+	r.rep, r.err, r.unopened = store.PinReseal{Sealed: 1}, fmt.Errorf("%w: cut", store.ErrUnavailable), nil
+	if _, err := f.b.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious),
+		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || at != float64(ended) {
+		t.Fatalf("a stopped pass moved the gauges: sealed_previous %v, last_complete %v", p, at)
+	}
+	logs := f.logs()
+	for _, want := range []string{
+		"directory store: the re-seal sealed 3 pins under the current key; 1 are left under encryption.previous",
+		"directory store: user:carol@example.com's pin does not open",
+		"`port49 directory forget user:carol@example.com`",
+		"directory store: 1 pins open under neither encryption key",
+		"directory store: the re-seal of pins stopped",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("the log lacks %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "more are not named") {
+		t.Errorf("one unopenable pin was said as more than the named ones:\n%s", logs)
+	}
+}
+
+// Pre-flight S4: a lost key strands every pin, so a pass names at most 20
+// and counts the rest.
+func TestThePinPassNamesAtMostTwentyUnopenablePins(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	var ps []string
+	for i := range 21 {
+		ps = append(ps, fmt.Sprintf("user:p%02d@example.com", i))
+	}
+	f.b.Store = &resealing{Store: f.b.Store, held: true, rep: store.PinReseal{Unopened: 21}, unopened: ps}
+	if _, err := f.b.RefreshDirectory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logs := f.logs()
+	if !strings.Contains(logs, "user:p19@example.com's pin does not open") ||
+		strings.Contains(logs, "user:p20@example.com's pin") ||
+		!strings.Contains(logs, "21 pins open under neither encryption key") ||
+		!strings.Contains(logs, "; 1 more are not named") {
+		t.Fatalf("the lines for 21 unopenable pins:\n%s", logs)
 	}
 }
 
