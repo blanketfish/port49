@@ -70,7 +70,7 @@ func TestTheLabIDCheckPassesItsPassFixtures(t *testing.T) {
 }
 
 // bareBuiltLabIDs counts the lab IDs in a built page's article that a reader sees as plain text: not in a
-// link, a code span or a block, and not a heading that is the ID itself (the register page's anchors).
+// link, a code span or a block. A heading that is only an ID is linked like any other mention.
 func bareBuiltLabIDs(doc []byte) (int, error) {
 	root, err := html.Parse(bytes.NewReader(doc))
 	if err != nil {
@@ -101,11 +101,6 @@ func bareBuiltLabIDs(doc []byte) (int, error) {
 			switch node.Data {
 			case "a", "code", "pre", "script", "style", "kbd":
 				skip = true
-			case "h1", "h2", "h3", "h4", "h5", "h6":
-				// the heading that is only an ID is the anchor itself
-				if id := attr(node, "id"); id != "" && strings.EqualFold(id, strings.TrimSpace(strings.TrimSuffix(textOf(node), "¶"))) {
-					skip = true
-				}
 			}
 		}
 		for c := node.FirstChild; c != nil; c = c.NextSibling {

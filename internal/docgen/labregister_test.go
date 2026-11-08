@@ -12,7 +12,8 @@ func registerFixture(t *testing.T) (map[string]LabRow, string) {
 	spec := []byte("## 15. Lab register\n\n| ID | Claim | Rests | Platforms | Status |\n|---|---|---|---|---|\n" +
 		"| **L10** | Whether `a. b` holds, e.g. on Junos. A second sentence that is left out. | x | all | open |\n" +
 		"| **L2** | Whether a `server_msg` is shown, as L10 also asks. | x | all | closed — measured 2026-10-01; `tests/lab/results/L2-arista_eos.md` |\n" +
-		"| **L26c** | " + strings.Repeat("word ", 80) + "end. | x | all | **closed** — measured 2026-09-25 |\n")
+		"| **L26c** | " + strings.Repeat("word ", 80) + "end. | x | all | **closed** — measured 2026-09-25; tests/lab/results/L26-other.md, `L2-cisco_nxos.md`, L2-arista_eos.md, tests/lab/results/L9999-missing.md, tests/lab/results/L88-*.md |\n" +
+		"| **L30** | Nothing measured yet. | x | all | open — added 2026-10-01 |\n")
 	reg, err := LabRegister(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +34,7 @@ func TestTheRegisterPageHasAnAnchoredSectionPerRowInNumericOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := -1
-	for _, h := range []string{"### L2 {#l2}", "### L10 {#l10}", "### L26c {#l26c}"} {
+	for _, h := range []string{"### [L2](#l2) {#l2}", "### [L10](#l10) {#l10}", "### [L26c](#l26c) {#l26c}"} {
 		i := strings.Index(page, h)
 		if i < 0 || i < last {
 			t.Fatalf("%q is missing or out of order in:\n%s", h, page)
@@ -64,7 +65,7 @@ func TestTheRegisterPageLinksEveryNoteOfARow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l2 := page[strings.Index(page, "### L2 {#l2}"):strings.Index(page, "### L10 {#l10}")]
+	l2 := page[strings.Index(page, "### [L2](#l2) {#l2}"):strings.Index(page, "### [L10](#l10) {#l10}")]
 	for _, n := range []string{"L2-arista_eos.md", "L2-cisco_nxos.md", "L2-L10-both.md"} {
 		if !strings.Contains(l2, "["+n+"]("+resultsURL+n+")") {
 			t.Errorf("L2 does not link %s:\n%s", n, l2)
@@ -73,13 +74,32 @@ func TestTheRegisterPageLinksEveryNoteOfARow(t *testing.T) {
 	if strings.Contains(l2, "L26-other.md") || strings.Contains(l2, "README.md") {
 		t.Errorf("L2 links a note that is not its own:\n%s", l2)
 	}
-	l10 := page[strings.Index(page, "### L10 {#l10}"):strings.Index(page, "### L26c {#l26c}")]
+	l10 := page[strings.Index(page, "### [L10](#l10) {#l10}"):strings.Index(page, "### [L26c](#l26c) {#l26c}")]
 	if !strings.Contains(l10, "L2-L10-both.md") {
 		t.Error("a note that leads with two IDs is listed under the second as well")
 	}
-	l26c := page[strings.Index(page, "### L26c {#l26c}"):]
-	if !strings.Contains(l26c, "No results note yet.") {
-		t.Errorf("a row with no note says so:\n%s", l26c)
+	l30 := page[strings.Index(page, "### [L30](#l30) {#l30}"):]
+	if !strings.Contains(l30, "No results note yet.") {
+		t.Errorf("a row with no note says so:\n%s", l30)
+	}
+}
+
+// A row's status cell names the notes that measured it, and some are another ID's (L19 cites L8's note). The
+// row lists those too, once, and never a path that is not a file or a glob.
+func TestARowListsTheNotesItsStatusCellCites(t *testing.T) {
+	reg, dir := registerFixture(t)
+	page, err := LabRegisterText(reg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := page[strings.Index(page, "### [L26c](#l26c) {#l26c}"):strings.Index(page, "### [L30](#l30) {#l30}")]
+	for _, n := range []string{"L26-other.md", "L2-cisco_nxos.md", "L2-arista_eos.md"} {
+		if strings.Count(sec, "["+n+"]("+resultsURL+n+")") != 1 {
+			t.Errorf("L26c does not link %s exactly once:\n%s", n, sec)
+		}
+	}
+	if strings.Contains(sec, "L9999-missing") || strings.Contains(sec, "L88-") || strings.Contains(sec, "No results note yet.") {
+		t.Errorf("L26c lists a note that does not exist, or says it has none:\n%s", sec)
 	}
 }
 
@@ -89,7 +109,7 @@ func TestALongClaimIsCutAtAWordWithAnEllipsis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sec := page[strings.Index(page, "### L26c {#l26c}"):]
+	sec := page[strings.Index(page, "### [L26c](#l26c) {#l26c}"):strings.Index(page, "### [L30](#l30) {#l30}")]
 	if !strings.Contains(sec, "word …") || strings.Contains(sec, "end.") {
 		t.Errorf("long claim not cut with an ellipsis:\n%s", sec)
 	}
@@ -130,8 +150,8 @@ func TestRowsThatNameTheLabMachineOrARemovedCommandAreReworded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, o := range claimRewordings {
-		if !strings.HasPrefix(shortClaim(reg[id].Claim), o.From) {
-			t.Errorf("%s: the spec's claim no longer starts %q, so the rewording is stale", id, o.From)
+		if got := shortClaim(reg[id].Claim); got != o.From {
+			t.Errorf("%s: the spec's claim is now %q, not %q, so the rewording is stale", id, got, o.From)
 		}
 		if !strings.Contains(page, o.Text) {
 			t.Errorf("%s: the page does not say its rewording", id)
@@ -154,7 +174,7 @@ func TestTheRegisterPageIsGeneratedForEverySpecRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id := range reg {
-		if !strings.Contains(page, "### "+id+" {#"+strings.ToLower(id)+"}") {
+		if !strings.Contains(page, "### ["+id+"](#"+strings.ToLower(id)+") {#"+strings.ToLower(id)+"}") {
 			t.Errorf("no section for %s", id)
 		}
 	}

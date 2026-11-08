@@ -3,6 +3,7 @@ package ci
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -66,10 +67,14 @@ func TestTheBannerOverrideHardCodesNoColor(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(b)
-	for _, bad := range []string{"style=", "<style", "#", "rgb(", "color:"} {
+	for _, bad := range []string{"style=", "<style", "rgb(", "rgba(", "hsl("} {
 		if strings.Contains(s, bad) {
 			t.Errorf("docs/overrides/main.html holds %q: use the theme's variables, not a color", bad)
 		}
+	}
+	// a hex color, not a Jinja comment or a fragment link; a var(--md-...) reference is the theme's own
+	if hex := regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b`).FindString(s); hex != "" {
+		t.Errorf("docs/overrides/main.html holds the color %q: use the theme's variables", hex)
 	}
 	cfg, err := os.ReadFile(filepath.Join("..", "..", "mkdocs.yml"))
 	if err != nil {

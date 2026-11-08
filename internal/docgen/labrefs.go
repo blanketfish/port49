@@ -42,7 +42,8 @@ var (
 	labIDWord  = regexp.MustCompile(`\bL[0-9]+[a-z]?\b`)
 	fenceOpen  = regexp.MustCompile("^\\s*(```|~~~)")
 	admonOpen  = regexp.MustCompile(`^\s*(!!!|\?\?\?\+?)\s`)
-	idHeading  = regexp.MustCompile(`^#{1,6}\s+L[0-9]+[a-z]?(\s+\{#[^}]*\})?\s*$`)
+	fileExt    = regexp.MustCompile(`\.[A-Za-z][A-Za-z0-9]{0,4}$`)
+	idSegment  = regexp.MustCompile(`^L[0-9]+[a-z]?(-[A-Za-z0-9_.-]*)?$`)
 	refDef     = regexp.MustCompile(`^\s{0,3}\[[^\]]+\]:\s`)
 	rawURL     = regexp.MustCompile(`^https?://[^\s<>]*`)
 	htmlTag    = regexp.MustCompile(`^</?[A-Za-z][^>]*>|^<!--.*?-->`)
@@ -81,7 +82,12 @@ func BareLabIDs(md string) []LabSpan {
 			inComment = !strings.Contains(line, "-->")
 		case strings.HasPrefix(trim, "<!--") && !strings.Contains(trim, "-->"):
 			inComment = true
-		case admonOpen.MatchString(line), idHeading.MatchString(line), refDef.MatchString(line):
+		case refDef.MatchString(line):
+		case admonOpen.MatchString(line):
+			// only the quoted title is prose; Material renders inline markdown in it
+			if q := strings.IndexByte(line, '"'); q >= 0 {
+				out = append(out, scanLine(line[q:], off+q)...)
+			}
 		default:
 			out = append(out, scanLine(line, off)...)
 		}
@@ -138,25 +144,29 @@ func isWordByte(b byte) bool {
 	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
 
-// partOfAName reports whether the ID at [i,j) is part of a path or a file name ("tests/lab/results/L4-x.md",
-// "L4-error-arista_eos.md", "L4.md") and not a mention. A dash between two IDs ("L4-L5") is a range.
+func isNameByte(b byte) bool { return isWordByte(b) || b == '.' || b == '-' || b == '/' }
+
+// partOfAName reports whether the ID at [i,j) is part of a file name or a path ("L4-error-arista_eos.md",
+// "L4.md", "tests/lab/results/L4-x.md") and not a mention. The word the ID sits in, up to the spaces and
+// punctuation round it, is a name when it ends in a file extension or when a "/" joins it to a segment that
+// is not itself an ID. So "L4/L13", "L26c-L27", "foo-L4" and the variant "L29-reload" are mentions.
 func partOfAName(line string, i, j int) bool {
-	if i > 0 {
-		switch p := line[i-1]; {
-		case p == '/' || p == '_' || p == '.':
-			return true
-		case p == '-' && i > 1 && (line[i-2] < '0' || line[i-2] > '9'):
-			return true
-		}
+	s, e := i, j
+	for s > 0 && isNameByte(line[s-1]) {
+		s--
 	}
-	if j < len(line) {
-		switch n := line[j]; {
-		case n == '/' || n == '_':
-			return true
-		case n == '-' && j+1 < len(line) && line[j+1] >= 'a' && line[j+1] <= 'z':
-			return true
-		case n == '.' && j+1 < len(line) && isWordByte(line[j+1]):
-			return true
+	for e < len(line) && isNameByte(line[e]) {
+		e++
+	}
+	tok := strings.TrimRight(line[s:e], ".")
+	if fileExt.MatchString(tok) {
+		return true
+	}
+	if strings.Contains(tok, "/") {
+		for _, seg := range strings.Split(tok, "/") {
+			if seg != "" && !idSegment.MatchString(seg) {
+				return true
+			}
 		}
 	}
 	return false

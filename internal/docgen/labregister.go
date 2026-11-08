@@ -33,21 +33,21 @@ var (
 
 // claimRewordings say a few rows in site words. The spec's first sentence for each names the lab's own
 // machine, when a person is free, or a command the product no longer has, none of which belongs on a public
-// page. From is how the spec's shortened claim starts, so a row the spec has since changed is not
-// reworded from a stale text.
+// page. From is the spec's whole shortened claim the rewording was written against, so any edit to the
+// spec's row stops the rewording until it is read again.
 var claimRewordings = map[string]struct{ From, Text string }{
-	"L53": {"The SSH host key each platform presents", "The SSH host key each platform presents to the device scan, and what the scan does to the device."},
-	"L60": {"A YubiKey's PIV applet", "A YubiKey's PIV applet through `libykcs11` under purego, on the lab's dedicated machine."},
-	"L62": {"A real TPM 2.0", "A real TPM 2.0 through `/dev/tpmrm0` on the lab's dedicated machine, for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file."},
-	"L86": {"An admin call's touch", "An admin call's touch on a real YubiKey, on the lab's dedicated machine."},
-	"L91": {"`port49 hwkey status`", "`port49 hwkey status` and `setup` on a real YubiKey, on the lab's dedicated machine."},
+	"L53": {"The SSH host key each platform presents to `port49 devices trust`'s scan (plan 9a), and what the scan does to the device.", "The SSH host key each platform presents, whether a console command shows the same key so an operator can check it out of band, whether it survives a reload, and what an SSH key exchange abandoned before authentication does to the device."},
+	"L60": {"A YubiKey's PIV applet through `libykcs11` under purego, on the SER8 (needs Ryan present, with a YubiKey 5).", "A YubiKey's PIV applet through `libykcs11` under purego, on the lab's dedicated machine."},
+	"L62": {"A real TPM 2.0 through `/dev/tpmrm0` on the SER8 for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on …", "A real TPM 2.0 through `/dev/tpmrm0` on the lab's dedicated machine, for a non-root user in `tss`: whether `issued_key_store: tpm` creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file."},
+	"L86": {"An admin call's touch on a real YubiKey, on the SER8 (needs Ryan present).", "An admin call's touch on a real YubiKey, on the lab's dedicated machine."},
+	"L91": {"`port49 hwkey status` and `setup` on a real YubiKey, on the SER8 (needs Ryan at the SER8, where he is away long-term from 2026-11-02; the agent never runs ykman, and nothing writes to the token).", "`port49 hwkey status` and `setup` on a real YubiKey, on the lab's dedicated machine."},
 }
 
 // LabRegisterText is the lab register page: an introduction, then one section per register row, in
 // numeric order, anchored "#l15". resultsDir is tests/lab/results; a row lists every note whose name
 // leads with its ID. The register must hold each ID the page links.
 func LabRegisterText(reg map[string]LabRow, resultsDir string) (string, error) {
-	notes, err := notesByID(resultsDir)
+	notes, existing, err := notesByID(resultsDir)
 	if err != nil {
 		return "", err
 	}
@@ -78,11 +78,11 @@ func LabRegisterText(reg map[string]LabRow, resultsDir string) (string, error) {
 			}
 		}
 		claim := shortClaim(row.Claim)
-		if o, ok := claimRewordings[id]; ok && strings.HasPrefix(claim, o.From) {
+		if o, ok := claimRewordings[id]; ok && claim == o.From {
 			claim = o.Text
 		}
 		fmt.Fprintf(&b, "\n### %s {#%s}\n\n%s %s\n\n", id, strings.ToLower(id), status, claim)
-		if ns := notes[id]; len(ns) > 0 {
+		if ns := noteList(notes[id], row.Status, existing); len(ns) > 0 {
 			links := make([]string, len(ns))
 			for i, n := range ns {
 				links[i] = fmt.Sprintf("[%s](%s%s)", n, resultsURL, n)
@@ -95,23 +95,55 @@ func LabRegisterText(reg map[string]LabRow, resultsDir string) (string, error) {
 	return LinkLabIDs(b.String(), reg, "")
 }
 
+var citedNote = regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9._-]*\.md`)
+
+// noteList is the notes a row lists: those whose name leads with its ID and every results note its status
+// cell names (a row can rest on another ID's note: the spec's L19 cites L8's). A name that is not a file in
+// the results directory, and a glob, is left out. Sorted, each once.
+func noteList(byName []string, status string, existing map[string]bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(n string) {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, n := range byName {
+		add(n)
+	}
+	for _, m := range citedNote.FindAllStringSubmatchIndex(status, -1) {
+		if m[0] > 0 && status[m[0]-1] == '*' {
+			continue
+		}
+		if n := status[m[0]:m[1]]; existing[n] {
+			add(n)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // notesByID maps a lab ID to the results notes that lead with it, in name order.
-func notesByID(dir string) (map[string][]string, error) {
+// It also returns every .md file name in the directory.
+func notesByID(dir string) (map[string][]string, map[string]bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := map[string][]string{}
+	existing := map[string]bool{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
+		existing[e.Name()] = true
 		ids, _ := NoteParts(e.Name())
 		for _, id := range ids {
 			out[id] = append(out[id], e.Name())
 		}
 	}
-	return out, nil
+	return out, existing, nil
 }
 
 // shortClaim is the first sentence of a claim cell without its bold marks, cut at a word and ended with an
