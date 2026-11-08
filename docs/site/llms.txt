@@ -1,6 +1,6 @@
 # port49
 
-> port49 is a TACACS+ server that gives unmodified network devices certificate-based or OIDC-based identity.
+> port49 lets you sign in to network devices with your SSO or a certificate instead of a shared TACACS+ password, with no changes to the devices.
 
 ## Start here
 
@@ -9,7 +9,7 @@
 
 ## Home
 
-- [Home](https://blanketfish.github.io/port49/): port49 is a TACACS+ server that gives unmodified network devices certificate-based or OIDC-based identity.
+- [Home](https://blanketfish.github.io/port49/): port49 lets you sign in to network devices with your SSO or a certificate instead of a shared TACACS+ password, with no changes to the devices.
 
 ## Concepts
 
