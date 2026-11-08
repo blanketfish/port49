@@ -29,7 +29,7 @@ var sessionMethods = set(`
 	SupersedeTokens SupersedeAll SupersededAt
 	PutOnce TakeOnce PutOIDCOwner OIDCOwner PutMFAProof GetMFAProof
 	NoteSignInAttempt UndoSignInAttempt ClearSignInAttempts
-	MembershipPrincipals
+	MembershipPrincipals MembershipSeals
 `)
 
 func set(names string) map[string]bool {

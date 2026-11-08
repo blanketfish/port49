@@ -1059,6 +1059,11 @@ type Backend struct {
 	// Task 6, R1: 0 catches in 10000 rounds unstaggered). Memory's login is
 	// one critical section and leaves it off.
 	Stagger bool
+	// Sealed says the store is the sealing layer over a backend: it seals
+	// the Sealed part itself, so a property that writes a chosen header
+	// there (MembershipSealsListsTheLive) is not meaningful, and the layer's
+	// own test (crypt_test.go) covers its key ids.
+	Sealed bool
 }
 
 func (b Backend) raceRounds() int {
@@ -1135,6 +1140,7 @@ func Run(t *testing.T, b Backend) {
 		{"MembershipKeyClaimedTwiceIsAmbiguous", MembershipKeyClaimedTwiceIsAmbiguous},
 		{"MembershipRefusalSupersedes", MembershipRefusalSupersedes},
 		{"MembershipPrincipalsListsTheLive", MembershipPrincipalsListsTheLive},
+		{"MembershipSealsListsTheLive", MembershipSealsListsTheLive},
 		{"MembershipExpires", MembershipExpires},
 		{"MembershipForgetRemovesThePin", MembershipForgetRemovesThePin},
 		{"MembershipForgetBeatsAnInFlightVerification", MembershipForgetBeatsAnInFlightVerification},

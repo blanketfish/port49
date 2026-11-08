@@ -4,6 +4,7 @@ package memory
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -1831,6 +1832,21 @@ func (s *Store) MembershipPrincipals(context.Context) ([]string, error) {
 		}
 	}
 	sort.Strings(out)
+	return out, nil
+}
+
+// MembershipSeals is MembershipPrincipals with each record's version and
+// the key id its sealed part names (decision 57).
+func (s *Store) MembershipSeals(context.Context) ([]store.MembershipSeal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.MembershipSeal
+	for p := range s.memberships {
+		if e, ok := s.liveMembershipLocked(p); ok && e.forgottenAt.IsZero() {
+			out = append(out, store.MembershipSeal{Principal: p, KeyID: store.SealedKeyID(e.m.Sealed), Version: e.ver})
+		}
+	}
+	slices.SortFunc(out, func(a, b store.MembershipSeal) int { return cmp.Compare(a.Principal, b.Principal) })
 	return out, nil
 }
 

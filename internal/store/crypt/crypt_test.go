@@ -699,7 +699,7 @@ func TestSetContextPolicyThroughTheSealingLayer(t *testing.T) {
 func TestTheSealingLayerHoldsEveryProperty(t *testing.T) {
 	storetest.Run(t, storetest.Backend{New: func(_ *testing.T, clock func() time.Time) store.Store {
 		return Wrap(memory.New(clock), keys(), nil)
-	}})
+	}, Sealed: true})
 }
 
 // The sealing layer seals every field the authorizer trusts, bound to the
@@ -2354,5 +2354,24 @@ func TestAReceiptBodyThatDoesNotDecodeNamesNoByteOfIt(t *testing.T) {
 	_, err = s.GetReceipt(ctx, rk)
 	if !errors.Is(err, errReceiptBody) || strings.Contains(err.Error(), "invalid character") {
 		t.Fatalf("a receipt body that does not decode: %v", err)
+	}
+}
+
+// The crypt layer marks the records sealed under its current key; the
+// others are what a re-seal opens (decision 57).
+func TestMembershipSealsMarkTheCurrentKey(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	k := keys() // Current v2, Previous v1
+	at := time.Now().Add(-time.Minute).UTC()
+	for p, ks := range map[string]Keys{"user:old@corp.example.com": {Current: *k.Previous}, "user:new@corp.example.com": k} {
+		if err := Wrap(inner, ks, nil).PutPin(ctx, store.Membership{Principal: p, EntryID: "uuid:" + p, VerifiedAt: at},
+			store.PinExpect{Absent: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Wrap(inner, k, nil).MembershipSeals(ctx)
+	if err != nil || len(got) != 2 || !got[0].Current || got[0].KeyID != "v2" || got[1].Current || got[1].KeyID != "v1" {
+		t.Fatalf("the listing (new, then old): %+v, %v", got, err)
 	}
 }

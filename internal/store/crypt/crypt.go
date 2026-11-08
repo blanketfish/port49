@@ -343,10 +343,7 @@ func OnUnopenable(f func(record, keyID string, why error)) Option {
 // the store writes it, and a line must not echo up to 255 bytes of it
 // (pre-flight M44).
 func SealedKeyID(sealed []byte) string {
-	if len(sealed) < 1 || len(sealed) < 1+int(sealed[0]) {
-		return ""
-	}
-	return LineKeyID(string(sealed[1 : 1+int(sealed[0])]))
+	return LineKeyID(store.SealedKeyID(sealed))
 }
 
 // LineKeyID is id as a line may echo it: itself within the key-id charset
@@ -1263,6 +1260,16 @@ func (w *wrapped) MembershipByKey(ctx context.Context, mapKey string) (store.Mem
 
 func (w *wrapped) MembershipPrincipals(ctx context.Context) ([]string, error) {
 	return w.inner.MembershipPrincipals(ctx)
+}
+
+// MembershipSeals marks each record sealed under the current key: a re-seal
+// opens only the others (decision 57).
+func (w *wrapped) MembershipSeals(ctx context.Context) ([]store.MembershipSeal, error) {
+	ss, err := w.inner.MembershipSeals(ctx)
+	for i := range ss {
+		ss[i].Current = ss[i].KeyID == w.keys.Current.ID
+	}
+	return ss, err
 }
 
 // DeleteMembership removes the record whatever it holds, and returns it
