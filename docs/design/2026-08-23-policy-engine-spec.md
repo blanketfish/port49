@@ -6569,6 +6569,15 @@ it removed nothing), and by `policy diff` where no widening in the diff is the o
 prints the entry beside the change it acknowledges, so review sees the reason. An entry with no
 reason is refused at load.
 
+Corrected 2026-11-08: `acknowledge:` covers only a regex-constrained change (a deny removed or
+rewritten wider, and the permits meeting it) and an adapter edit. It does not clear an expansion
+past a literal deny: that is cleared only by a passing `permit` test over that deny, and an
+`acknowledge:` entry naming a literal deny is reported `acknowledge_stale` while the run still
+fails. The code is the stricter reading (`internal/policy/diff.go:893-896` clears an `EXPANDS`
+only from tests; `diff.go:941-950` consults `acknowledgment()` only for regex-constrained
+widenings), and the sentences above ("acknowledges that rule's removal", "no widening in the diff
+is the one it names") are to be read that way.
+
 The narrowings — such a permit removed, such a deny added, or a permit meeting a deny the change
 added — are reported and do not fail.
 
