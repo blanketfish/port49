@@ -11950,8 +11950,12 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
    `encryption.previous` `Stale`, and the pass writes each Stale pin again, sealed under `current`,
    by `PutPin` at the version it read. A pin that a forget, a re-pin or another region's pass
    changed since the read stands (`ErrConflict`); the pass counts it as still under `previous` and
-   the next pass reads it again. A directory store that does not answer ends the pass, said once an
-   hour; the next pass starts from the listing. A single shared store keeps no pin without a lease
+   the next pass reads it again. A directory store that does not answer, a refusal of the broker's
+   identity or an ended ctx ends the pass, said once an hour (a cancel silently); the next pass
+   starts from the listing. A write that fails any other way is counted as still under `previous`,
+   told by name under the same cap as ruling 2, and the pass goes on. The pass has a budget of half
+   `broker.refresh_interval`, so it cannot hold off the stamping refresh; one that runs out leaves
+   the gauges and says so once an hour, and the next pass goes on from the pins already re-sealed. A single shared store keeps no pin without a lease
    (its membership record lives max(`broker.directory.grace`, 24h) and every verification rewrites
    it) and runs no pin pass.
 2. **A pin that opens under neither key** is never deleted or rewritten. It is counted, and said

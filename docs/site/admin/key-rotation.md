@@ -165,11 +165,20 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   store. The gauges are absent until a runner completes its first pass after it starts. They are also
   absent on a single shared store, where a membership record has a lease (the 24 hours above) and there
   is no pin to re-seal. A pass that moves pins says `directory store: the re-seal sealed N pins under
-  the current key; M are left under encryption.previous`. If the directory store stops answering,
-  refuses the broker's identity, or a write fails other than by conflict, the pass says
+  the current key; M are left under encryption.previous`. If the directory store stops answering or
+  refuses the broker's identity, the pass says
   `directory store: the re-seal of pins stopped: <error>; the next pass starts again` and changes no
   gauge. A cancel (shutdown, or the keyspace handed over) stops the pass silently and changes no gauge
-  either. Each pin is one compare-and-swap, so nothing is left half-written.
+  either. A write that fails any other way does not stop the pass: that pin is counted in
+  `port49_directory_pins_sealed_previous`, it is named once an hour as
+  `directory store: <principal>'s pin could not be written under the current key (...)`, and the pass
+  goes on with the pins after it. Each pin is one compare-and-swap, so nothing is left half-written.
+  The pass has a budget of half `refresh_interval`, so it never holds off the stamping refresh. A pass
+  that runs out of it says
+  `directory store: the re-seal of pins ran out of its <budget> budget after sealing N pins; the next pass goes on from there`
+  once an hour and changes no gauge. A large fleet can take several intervals to finish its first pass.
+  While step 2 is rolling out, expect `the re-seal sealed N pins` lines in every region, because
+  regions on different `current` keys move pins back and forth; finish step 2 promptly.
 - **A pin that opens under neither key** is counted in `port49_directory_pins_unopenable` (alert
   [port49_directory_pins_unopenable](../reference/alerts.md#port49_directory_pins_unopenable), on the
   keyspace holder). It means a key was retired while it still sealed pins. Reading the pin fails with an
@@ -179,9 +188,12 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   mint and refresh fail for that principal. From the code (not measured), sessions already open are
   denied `context_stale` once `session.staleness_ceiling` has passed. The pass never deletes or
   rewrites such a pin. It says `directory store: <principal>'s pin does not open (...)` once an hour,
-  for at most 20 principals a pass; the count's line says how many more are not named. Put the retired
-  key back as `previous` and restart: nothing was deleted, and the next pass re-seals the pin. If that
-  key is gone, `port49 directory forget <principal>` frees the principal, and the person's next sign-in
+  for at most 20 principals a pass (the first 20 in sorted order); the count's line says how many more
+  are not named. When the cause is an unknown key, the line says to put the retired key back as
+  `previous` and restart; for any other open error it says the record does not match its seal and to run
+  `port49 directory forget <principal>`, because the record was changed outside port49 and no key
+  helps. Putting the retired key back as `previous` and restarting deletes nothing, and the next pass
+  re-seals the pin. If that key is gone, `port49 directory forget <principal>` frees the principal, and the person's next sign-in
   pins them again. Any admin with `forget_principals` whose own pin opens can run it, and every pin that
   opens is on `current` after a pass. Confirm that the person who signs in is the same person, as on
   [Stores](../operate/stores.md). There is no offline forget on `port49-broker`.

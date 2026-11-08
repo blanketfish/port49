@@ -15,6 +15,8 @@ func init() {
 		"forget_principals", "no offline forget",
 		"port49_directory_pins_sealed_previous", "port49_directory_pins_unopenable",
 		"port49_directory_pins_reseal_last_complete_timestamp_seconds", "the re-seal of pins stopped",
+		"ran out of its <budget> budget", "could not be written under the current key",
+		"finish step 2 promptly", "the first 20 in sorted order", "does not match its seal",
 		"port49_store_keyspace_held", "Rotating again",
 		"Always give a new key a new id", "issuance: this broker's issuing CA", "reference/config/port49d.md",
 	)
