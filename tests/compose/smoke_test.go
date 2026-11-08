@@ -209,7 +209,6 @@ func TestComposeSmoke(t *testing.T) {
 	// Both services report healthy through their own `healthcheck --ready` (plan 13, Task 10), which
 	// runs inside the container, so the image has the subcommand and the config path it names.
 	for _, svc := range []string{"port49d", "port49-broker"} {
-		svc := svc
 		shapetest.WaitFor(t, svc+" reports healthy", 2*time.Minute, func() bool {
 			id := strings.TrimSpace(s.run("ps", "-q", svc))
 			out, err := exec.Command("docker", "inspect", "-f", "{{.State.Health.Status}}", id).CombinedOutput()

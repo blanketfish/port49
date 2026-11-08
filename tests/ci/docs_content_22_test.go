@@ -68,7 +68,22 @@ func TestTheRunbookLinksAndDoesNotRestate(t *testing.T) {
 
 // A line that runs `port49 token`, or `port49 workload token` without the library around it, puts the
 // token on standard output, which is the agent's context.
-var runsToken = regexp.MustCompile("(^|[\\s;|&$(`/])port49\\s+(workload\\s+)?token\\b")
+var runsToken = regexp.MustCompile("(^|[\\s;|&$(`/])port49\\s+([\"']?workload[\"']?\\s+)?[\"']?token\\b")
+
+// The mint is caught however the shell quotes the word, and ordinary prose and other subcommands are not.
+func TestRunsTokenSeesTheQuotedForms(t *testing.T) {
+	for _, line := range []string{"port49 token leaf1", "port49 'token' leaf1", `port49 "token" leaf1`,
+		"port49 workload token leaf1", "port49 workload 'token' leaf1", "x=$(port49 'token' leaf1)"} {
+		if !runsToken.MatchString(line) {
+			t.Errorf("%q is a mint and runsToken misses it", line)
+		}
+	}
+	for _, line := range []string{"port49 login", "port49 tokens", "port49 revoke --list"} {
+		if runsToken.MatchString(line) {
+			t.Errorf("%q is not a mint and runsToken matches it", line)
+		}
+	}
+}
 
 func TestTheAgentPagesNeverRunPortTokenToStdout(t *testing.T) {
 	pages, err := filepath.Glob(filepath.Join(docsRoot, "agents", "*.md"))
