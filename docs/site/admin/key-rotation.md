@@ -175,7 +175,7 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   goes on with the pins after it. Each pin is one compare-and-swap, so nothing is left half-written.
   The pass has a budget of half `refresh_interval`, so it never holds off the stamping refresh. A pass
   that runs out of it says
-  `directory store: the re-seal of pins ran out of its <budget> budget after sealing N pins; the next pass goes on from there`
+  `directory store: the re-seal of pins ran out of its <budget> budget after sealing N pins (M did not open); the next pass goes on from there`
   once an hour and changes no gauge. A large fleet can take several intervals to finish its first pass.
   While step 2 is rolling out, expect `the re-seal sealed N pins` lines in every region, because
   regions on different `current` keys move pins back and forth; finish step 2 promptly.

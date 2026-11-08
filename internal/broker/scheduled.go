@@ -193,9 +193,10 @@ func (b *Broker) pinPass(ctx context.Context) {
 	switch {
 	case !held, ctx.Err() != nil:
 		return
-	case errors.Is(err, context.DeadlineExceeded) && pctx.Err() != nil:
+	case err != nil && pctx.Err() != nil: // the budget ended it, the parent live; etcd may wrap the deadline
 		b.sayOnce("pin_reseal_budget", time.Hour, "directory store: the re-seal of pins ran out of its %s budget "+
-			"after sealing %d pins; the next pass goes on from there", b.PinBudget, rep.Sealed)
+			"after sealing %d pins (%d did not open); the next pass goes on from there", b.PinBudget, rep.Sealed,
+			rep.Unopened)
 		return
 	case err != nil:
 		b.sayOnce("pin_reseal_pass", time.Hour, "directory store: the re-seal of pins stopped: %s; the next pass "+

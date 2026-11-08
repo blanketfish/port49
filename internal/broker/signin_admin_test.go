@@ -847,7 +847,8 @@ type blocking struct {
 
 func (r *blocking) ResealPins(ctx context.Context, _ func(string, error)) (store.PinReseal, bool, error) {
 	<-ctx.Done()
-	return store.PinReseal{Sealed: r.n}, true, ctx.Err()
+	// etcd wraps a deadline that ends a call as unavailable (etcd.go:289).
+	return store.PinReseal{Sealed: r.n, Unopened: 2}, true, fmt.Errorf("%w: %v", store.ErrUnavailable, ctx.Err())
 }
 
 // S2: a pass that runs out of its budget leaves the gauges as they were and
@@ -868,7 +869,7 @@ func TestAPinPassThatRunsOutOfItsBudgetSaysSoOnceAndLeavesTheGauges(t *testing.T
 		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 2 || at != float64(ended) {
 		t.Fatalf("a pass out of budget moved the gauges: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
 	}
-	const want = "directory store: the re-seal of pins ran out of its 20ms budget after sealing 4 pins; " +
+	const want = "directory store: the re-seal of pins ran out of its 20ms budget after sealing 4 pins (2 did not open); " +
 		"the next pass goes on from there"
 	if n := strings.Count(f.logs(), want); n != 1 {
 		t.Fatalf("the budget line was said %d times, want 1:\n%s", n, f.logs())
