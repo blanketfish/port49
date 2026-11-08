@@ -1,5 +1,6 @@
 # Qualification suite: contributor procedures
 
+<!-- --8<-- [start:procedures] -->
 The mock tier (`make qual`) replays each vetted firmware's measured behavior against a real
 in-process port49d: no images, no lab, any runner. A mock exists only for a firmware the lab has
 run. The lab run is `make lab-qualify`; `make qual-vet` wraps it. Details of the run itself are in
@@ -29,7 +30,7 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
    - each device fact.
 
    A claim is measured only when a note for **this** firmware measured it (decision 52, ruling 4).
-   On Junos the command cells are `not_applicable` (L18), so `genprofile` records the engine gap
+   On Junos the command cells are `not_applicable` (L18, open), so `genprofile` records the engine gap
    `command_authorization_not_sent`; that is expected, not a failure.
 
    The TLS login is played the way the device defaults, per-request (`tls_token_login`), and
@@ -83,3 +84,4 @@ Any engine gap it needs becomes an `engine_gaps` entry, plus Go in `internal/dev
 1. `make lab-regress`.
 2. `make qual-vet` for every profile whose golden is pending.
 3. Commit.
+<!-- --8<-- [end:procedures] -->

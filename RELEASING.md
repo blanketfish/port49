@@ -1,5 +1,6 @@
 # Releasing port49
 
+<!-- --8<-- [start:release] -->
 A release is a `v*` tag on a commit that is on `main`. The `release` workflow
 (`.github/workflows/release.yml`) does the rest: it checks the tag against every version file, builds
 the packages, image, chart, Python package and Galaxy collection, and publishes each from a job that
@@ -21,7 +22,7 @@ PEP 440 version. The docs site states the same on its Versions page.
 1. **PyPI trusted publisher.** Project `port49`, repository `blanketfish/port49`, workflow
    `release.yml`, environment `pypi`.
 2. **Environments** (Settings, Environments):
-   - `release` (the goreleaser, image and chart jobs): the maintainer (Ryan Wendt) as the **required reviewer**, so
+   - `release` (the goreleaser, image and chart jobs): the maintainer as the **required reviewer**, so
      no tag publishes without approval.
    - `pypi` and `galaxy`: created beside it.
    - Each of `release`, `pypi` and `galaxy`: deployment branches and tags restricted to the **`v*`
@@ -49,3 +50,4 @@ PEP 440 version. The docs site states the same on its Versions page.
 2. Merge to `main`. The tag must be on `main`; the workflow refuses it otherwise.
 3. The maintainer pushes the tag; nobody else, and no automation, does. The maintainer approves the `release` environment when the run asks.
 4. Check the draft release's assets and provenance attestations, then let the last job publish it.
+<!-- --8<-- [end:release] -->
