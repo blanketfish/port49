@@ -73,6 +73,7 @@
 - [Decision log](https://blanketfish.github.io/port49/reference/decision-log/): The fields of the decision log, one line per decision, and how to query it.
 - [Metrics](https://blanketfish.github.io/port49/reference/metrics/): Every metric port49 exports, with its type, labels and meaning.
 - [Alerts](https://blanketfish.github.io/port49/reference/alerts/): Every shipped alert rule: its severity, its expression and why its threshold is what it is.
+- [Lab register](https://blanketfish.github.io/port49/reference/lab-register/): What each L-number on this site means, whether the lab has measured it, and the results notes that say so.
 
 ## Contributing
 

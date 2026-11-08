@@ -215,6 +215,9 @@ func Pages(root string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if out[LabRegisterPage], err = LabRegisterText(reg, filepath.Join(root, "tests", "lab", "results")); err != nil {
+		return nil, err
+	}
 	for _, p := range DevicePages {
 		ev, err := EvidenceFor(filepath.Join(root, "tests", "lab", "results"), p)
 		if err != nil {

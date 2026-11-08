@@ -119,6 +119,7 @@ nav:
       - Decision log: reference/decision-log.md
       - Metrics: reference/metrics.md
       - Alerts: reference/alerts.md
+      - Lab register: reference/lab-register.md
   - Contributing:
       - contributing/index.md
       - Qualification: contributing/qualification.md

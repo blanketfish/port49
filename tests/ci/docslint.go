@@ -84,6 +84,10 @@ type lintRule struct {
 
 var labResultPath = regexp.MustCompile(`tests/lab/results/[A-Za-z0-9._/-]+`)
 
+// noteLinkText matches [name.md](URL/tests/lab/results/name.md): group 1 is the text, group 3 the file the
+// link goes to.
+var noteLinkText = regexp.MustCompile(`\[([A-Za-z0-9._-]+\.md)\]\(([^)\s]*tests/lab/results/([A-Za-z0-9._-]+\.md))\)`)
+
 // labNoteExists reports whether m, a match of labResultPath, names a file in the repository, by a path
 // with no ".." segment. A
 // trailing dot or dash is the sentence's, not the path's. Only an existing note's file name may carry a
@@ -161,8 +165,17 @@ func LintText(name string, text []byte) []Finding {
 	for _, r := range lintRules {
 		src := s
 		if r.name == "lab_host" {
+			// A link written with its note's file name, [load-beehive-gates.md](.../results/load-beehive-gates.md),
+			// names that file: its text is the path's last segment.
+			src = noteLinkText.ReplaceAllStringFunc(s, func(m string) string {
+				sub := noteLinkText.FindStringSubmatch(m)
+				if sub[1] != sub[3] || !labNoteExists("tests/lab/results/"+sub[3]) {
+					return m
+				}
+				return strings.Repeat(" ", len(sub[1])+2) + m[len(sub[1])+2:]
+			})
 			// An existing results note's file name (load-beehive-gates.md) is a path, not a host.
-			src = labResultPath.ReplaceAllStringFunc(s, func(m string) string {
+			src = labResultPath.ReplaceAllStringFunc(src, func(m string) string {
 				if !labNoteExists(m) {
 					return m
 				}

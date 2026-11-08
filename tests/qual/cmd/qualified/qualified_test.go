@@ -19,13 +19,28 @@ import (
 const fixtures = "../../../../internal/devicemock/testdata"
 
 func TestTheCommittedListIsTheGeneratedOne(t *testing.T) {
-	got, err := Build("../../../..")
+	got, err := BuildLinked("../../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want, _ := os.ReadFile("../../../../docs/qualified-platforms.md")
 	if got != string(want) {
 		t.Fatal("docs/qualified-platforms.md is stale: run make qualified-platforms")
+	}
+}
+
+// The page is included into the device index on the site and is read on GitHub, so each lab ID links the
+// register page by its absolute site URL, with ", open" still beside an open row's ID.
+func TestEveryLabIDOfTheListLinksTheRegisterByItsSiteURL(t *testing.T) {
+	got, err := BuildLinked("../../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[L18](" + docgen.LabRegisterSiteURL + "#l18), open"; !strings.Contains(got, want) {
+		t.Errorf("the list does not hold %q", want)
+	}
+	if bare := docgen.BareLabIDs(got); len(bare) != 0 {
+		t.Errorf("the list holds %d lab IDs that are not linked", len(bare))
 	}
 }
 

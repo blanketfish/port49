@@ -280,7 +280,7 @@ func EvidenceTable(ev []Evidence, reg map[string]LabRow) (string, error) {
 	var b strings.Builder
 	b.WriteString(Header + "\n\n| Entry | Platform | Image | Date | Note |\n|---|---|---|---|---|\n")
 	for _, e := range ev {
-		entry, err := RenderLabIDs(e.ID, reg)
+		entry, err := RenderLabIDs(e.ID, reg, RegisterLinkFrom("admin/devices/x.md"))
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", e.File, err)
 		}

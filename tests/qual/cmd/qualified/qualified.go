@@ -135,6 +135,24 @@ func checkCited(where, text string, reg map[string]docgen.LabRow) error {
 	return nil
 }
 
+// BuildLinked is Build with every lab ID linked to its section of the lab register page, by the site's
+// absolute URL: the page is included into the site and read on GitHub, and a relative link works on one.
+func BuildLinked(repoRoot string) (string, error) {
+	out, err := Build(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	spec, err := os.ReadFile(filepath.Join(repoRoot, specPath))
+	if err != nil {
+		return "", err
+	}
+	reg, err := docgen.LabRegister(spec)
+	if err != nil {
+		return "", err
+	}
+	return docgen.LinkLabIDs(out, reg, docgen.LabRegisterSiteURL)
+}
+
 // Build returns the Markdown page. A row exists only where a profile loads, which
 // needs every note it cites, and its golden loads. The spec's lab register decides
 // how a cell cites a row (cite); a repository without it builds no page.

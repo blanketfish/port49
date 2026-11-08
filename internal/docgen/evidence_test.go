@@ -194,8 +194,8 @@ func TestEvidenceTableRendersTheRegisterStatus(t *testing.T) {
 	}
 	for _, want := range []string{
 		"| Entry | Platform | Image | Date | Note |",
-		"[L4 (open)](" + specLabURL + ")",
-		"[L5 (closed)](" + specLabURL + ")",
+		"[L4 (open)](../../reference/lab-register.md#l4)",
+		"[L5 (closed)](../../reference/lab-register.md#l5)",
 		"[L4-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-arista_eos.md)",
 		`vEOS \| 4.31.2F`,
 	} {

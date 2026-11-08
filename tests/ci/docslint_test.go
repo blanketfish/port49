@@ -73,6 +73,25 @@ func TestLabResultPathExemptionNeedsTheNoteToExist(t *testing.T) {
 	}
 }
 
+// A link to a results note may be written with the note's file name (the lab register page lists notes so).
+// The text passes only when it is the very file the link goes to and that note exists.
+func TestALinkTextNamingAnExistingNoteCarriesAHostNamePastTheLint(t *testing.T) {
+	const url = "https://github.com/blanketfish/port49/blob/main/tests/lab/results/"
+	if fs := LintText("a.md", []byte("[load-beehive-ram.md]("+url+"load-beehive-ram.md)")); len(fs) != 0 {
+		t.Errorf("an existing note linked by its file name: got %v", fs)
+	}
+	for name, text := range map[string]string{
+		"a note that does not exist":  "[load-beehive-invented.md](" + url + "load-beehive-invented.md)",
+		"text that is not the target": "[load-beehive-ram.md](" + url + "load-beehive-gates.md)",
+		"text with more than a name":  "[the beehive load-beehive-ram.md](" + url + "load-beehive-ram.md)",
+		"a link to somewhere else":    "[load-beehive-ram.md](https://example.com/load-beehive-ram.md)",
+	} {
+		if fs := LintText("a.md", []byte(text)); len(fs) == 0 || fs[0].Rule != "lab_host" {
+			t.Errorf("%s: got %v, want lab_host", name, fs)
+		}
+	}
+}
+
 func TestThePagesPassTheLint(t *testing.T) {
 	pages, err := DocSources(repoRoot)
 	if err != nil {

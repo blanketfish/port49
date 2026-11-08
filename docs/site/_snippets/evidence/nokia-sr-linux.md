@@ -2,7 +2,7 @@
 
 | Entry | Platform | Image | Date | Note |
 |---|---|---|---|---|
-| [L76 (closed)](https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md#15-lab-register) | nokia_srlinux | SR Linux 26.7.2-519 | 2026-11-07 | [L76-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L76-nokia_srlinux.md) |
-| [L87 (closed)](https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md#15-lab-register) | nokia_srlinux | SR Linux 26.7.2-519 | 2026-11-04 | [L87-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L87-nokia_srlinux.md) |
-| [L88 (closed)](https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md#15-lab-register) | nokia_srlinux | SR Linux 26.7.2-519 | 2026-11-04 | [L88-nokia_srlinux-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux-tls.md) |
-| [L88 (closed)](https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md#15-lab-register) | nokia_srlinux | SR Linux 26.7.2-519 | 2026-11-04 | [L88-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux.md) |
+| [L76 (closed)](../../reference/lab-register.md#l76) | nokia_srlinux | SR Linux 26.7.2-519 | 2026-11-07 | [L76-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L76-nokia_srlinux.md) |
+| [L87 (closed)](../../reference/lab-register.md#l87) | nokia_srlinux | SR Linux 26.7.2-519 | 2026-11-04 | [L87-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L87-nokia_srlinux.md) |
+| [L88 (closed)](../../reference/lab-register.md#l88) | nokia_srlinux | SR Linux 26.7.2-519 | 2026-11-04 | [L88-nokia_srlinux-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux-tls.md) |
+| [L88 (closed)](../../reference/lab-register.md#l88) | nokia_srlinux | SR Linux 26.7.2-519 | 2026-11-04 | [L88-nokia_srlinux.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux.md) |

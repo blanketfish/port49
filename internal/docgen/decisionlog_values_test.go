@@ -41,11 +41,11 @@ func TestAReasonCodeListedTwiceInTheSpecIsRefused(t *testing.T) {
 
 func TestAnOpenLabIDRendersWithItsStatusAndALink(t *testing.T) {
 	reg := map[string]LabRow{"L4": {ID: "L4", Open: true}, "L9": {ID: "L9"}}
-	got, err := RenderLabIDs("a `L4` claim, see L9 and (L4).", reg)
+	got, err := RenderLabIDs("a `L4` claim, see L9 and (L4).", reg, "lab-register.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"[L4 (open)](" + specLabURL + ")", "[L9 (closed)](" + specLabURL + ")"} {
+	for _, want := range []string{"[L4 (open)](lab-register.md#l4)", "[L9 (closed)](lab-register.md#l9)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("RenderLabIDs = %q, want it to hold %q", got, want)
 		}
@@ -53,7 +53,7 @@ func TestAnOpenLabIDRendersWithItsStatusAndALink(t *testing.T) {
 	if strings.Contains(got, "`L4`") {
 		t.Errorf("a code-span ID stays in its span: %q", got)
 	}
-	if _, err := RenderLabIDs("see L99", reg); err == nil {
+	if _, err := RenderLabIDs("see L99", reg, "lab-register.md"); err == nil {
 		t.Error("an ID that is not in the register is an error")
 	}
 }

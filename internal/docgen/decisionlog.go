@@ -37,10 +37,14 @@ const specIntro = "The meanings are the policy-engine spec's own text, so a sect
 
 var labIDRef = regexp.MustCompile(`\bL[0-9]+[a-z]?\b`)
 
-// RenderLabIDs writes each lab ID in s as a link to the lab register with its status: "L4 (open)". An ID the
+// reasonPageLabBase is how the pages in docs/site/reference link the lab register page beside them.
+const reasonPageLabBase = "lab-register.md"
+
+// RenderLabIDs writes each lab ID in s as a link to its section of the lab register page with its status:
+// "L4 (open)". base is the relative path from the generated page to that page (RegisterLinkFrom). An ID the
 // register does not hold is an error. A code span that holds only the ID loses its backticks; an ID that is part
 // of a path or a file name is left alone.
-func RenderLabIDs(s string, reg map[string]LabRow) (string, error) {
+func RenderLabIDs(s string, reg map[string]LabRow, base string) (string, error) {
 	var b strings.Builder
 	last := 0
 	for _, m := range labIDRef.FindAllStringIndex(s, -1) {
@@ -67,7 +71,7 @@ func RenderLabIDs(s string, reg map[string]LabRow) (string, error) {
 			start, end = start-1, end+1
 		}
 		b.WriteString(s[last:start])
-		fmt.Fprintf(&b, "[%s (%s)](%s)", id, status, specLabURL)
+		fmt.Fprintf(&b, "[%s (%s)](%s#%s)", id, status, base, strings.ToLower(id))
 		last = end
 	}
 	b.WriteString(s[last:])
@@ -196,7 +200,7 @@ func labRenderer(spec []byte) func(string) (string, error) {
 				return "", err
 			}
 		}
-		return RenderLabIDs(s, reg)
+		return RenderLabIDs(s, reg, reasonPageLabBase)
 	}
 }
 

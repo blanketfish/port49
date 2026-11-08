@@ -11,6 +11,8 @@ import (
 type LabRow struct {
 	ID   string
 	Open bool
+	// Claim and Status are the row's second and last cells as the spec writes them.
+	Claim, Status string
 }
 
 var labID = regexp.MustCompile(`^L[0-9]+[a-z]?$`)
@@ -43,7 +45,8 @@ func LabRegister(spec []byte) (map[string]LabRow, error) {
 			return nil, fmt.Errorf("lab register: %s appears twice", id)
 		}
 		status := strings.TrimPrefix(strings.TrimSpace(cells[len(cells)-1]), "**")
-		rows[id] = LabRow{ID: id, Open: !strings.HasPrefix(status, "closed")}
+		rows[id] = LabRow{ID: id, Open: !strings.HasPrefix(status, "closed"),
+			Claim: strings.TrimSpace(cells[1]), Status: strings.TrimSpace(cells[len(cells)-1])}
 	}
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("lab register: no rows under \"## 15. Lab register\"")
