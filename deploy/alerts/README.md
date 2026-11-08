@@ -69,6 +69,7 @@ threshold when you change the setting it follows.
 | design §15: "a store client certificate within 30 days of expiry" | `port49_store_client_cert_expiring` | ticket | none | Thirty days is the stated lead time. |
 | design §15: "`port49_crypt_store_key_unknown` at 1" | `port49_crypt_store_key_unknown` | page | none | Records written under the missing key cannot open; fix the key and start again. |
 | design §15: "any increase of `port49_crypt_open_failures_total{record="token"}`" | `port49_crypt_token_open_failures` | ticket | none | The counter is the only witness; the token is dropped from its candidates with no error. |
+| design §15: "`port49_directory_pins_unopenable` above 0 on the replica holding the keyspace" | `port49_directory_pins_unopenable` | ticket | none | One principal is locked out until the key that sealed the pin is back as `encryption.previous` or the pin is forgotten; the pass never deletes it. Gated on `port49_store_keyspace_held == 1`, since a replica that handed over keeps its last value. |
 | design §15: "any increase of `port49_store_feed_rescans_total`" | `port49_store_feed_rescans` | ticket | none | A rescan means a watch fell behind compaction; repeated, the feed is too slow. |
 | design §15: "`port49_ledger_pending` above 0 for a minute" | `port49_ledger_pending` | ticket | 1m | A write takes a round trip; a minute is a record that cannot be written. |
 | design §15: "`port49_ledger_behind` at 1" | `port49_ledger_behind` | ticket | 1m | One minute rides out a feed reconnect. |

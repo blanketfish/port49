@@ -343,10 +343,7 @@ func OnUnopenable(f func(record, keyID string, why error)) Option {
 // the store writes it, and a line must not echo up to 255 bytes of it
 // (pre-flight M44).
 func SealedKeyID(sealed []byte) string {
-	if len(sealed) < 1 || len(sealed) < 1+int(sealed[0]) {
-		return ""
-	}
-	return LineKeyID(string(sealed[1 : 1+int(sealed[0])]))
+	return LineKeyID(store.SealedKeyID(sealed))
 }
 
 // LineKeyID is id as a line may echo it: itself within the key-id charset
@@ -395,12 +392,18 @@ func (w *wrapped) openErr(record string, sealed []byte, err error) error {
 	if w.onUnopenable != nil {
 		w.onUnopenable(record, SealedKeyID(sealed), err)
 	}
-	// err is already ErrUnknownKey when neither key id matched, and a GCM or
-	// JSON failure when the key matched and the bytes did not; both are
-	// wrapped as they are, so `errors.Is(err, ErrUnknownKey)` distinguishes
-	// "wrong key" from "tampered record" at the call site.
+	// err is already ErrUnknownKey when neither key id matched, and a GCM
+	// failure when the key matched and the bytes did not; both are wrapped as
+	// they are, so `errors.Is(err, ErrUnknownKey)` distinguishes "wrong key"
+	// from "tampered record" at the call site. A body that opens and does not
+	// decode arrives as a sentinel (errMembershipBody, errReceiptBody), never
+	// the decoder's error, which quotes a plaintext byte.
 	return fmt.Errorf("crypt: opening %s: %w", record, err)
 }
+
+// errReceiptBody is a receipt whose sealed part opens and does not decode:
+// the decoder's own error would quote a plaintext byte into a log line.
+var errReceiptBody = errors.New("crypt: a receipt's sealed part does not decode")
 
 // errExpiryMoved is a token whose plaintext expiry is not the one sealed
 // with it. sealToken writes them equal, so a store write moved it, and an
@@ -529,7 +532,7 @@ func (w *wrapped) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Re
 	}
 	var rs receiptSecret
 	if err := json.Unmarshal(b, &rs); err != nil {
-		return store.Receipt{}, w.openErr("receipt", r.Sealed, err)
+		return store.Receipt{}, w.openErr("receipt", r.Sealed, errReceiptBody)
 	}
 	r.CredentialSHA256, r.Status, r.CtxID, r.FirstRedeemedAt, r.Sealed =
 		rs.CredentialSHA256, rs.Status, rs.CtxID, rs.FirstRedeemedAt, nil
@@ -1161,6 +1164,7 @@ type membershipSecret struct {
 var (
 	errVerifiedMoved   = errors.New("crypt: a membership's plaintext verified_at differs from its sealed one")
 	errMembershipMoved = errors.New("crypt: a membership's plaintext map keys or refusal differ from its sealed ones")
+	errMembershipBody  = errors.New("crypt: a membership's sealed part does not decode")
 	// errKeyNotSealed is a key the index points at a record whose sealed
 	// list does not hold it: a store write, answered as no membership.
 	errKeyNotSealed = fmt.Errorf("crypt: a membership key its sealed record does not list: %w", store.ErrNotFound)
@@ -1214,7 +1218,7 @@ func (w *wrapped) openMembership(m store.Membership, err error) (store.Membershi
 	}
 	var ms membershipSecret
 	if err := json.Unmarshal(b, &ms); err != nil {
-		return store.Membership{}, w.openErr("membership", m.Sealed, err)
+		return store.Membership{}, w.openErr("membership", m.Sealed, errMembershipBody)
 	}
 	if !ms.VerifiedAt.Equal(m.VerifiedAt) {
 		return store.Membership{}, w.openErr("membership", m.Sealed, errVerifiedMoved)
@@ -1222,6 +1226,10 @@ func (w *wrapped) openMembership(m store.Membership, err error) (store.Membershi
 	if ms.Refused != m.Refused || !slices.Equal(ms.MapKeys, m.MapKeys) {
 		return store.Membership{}, w.openErr("membership", m.Sealed, errMembershipMoved)
 	}
+	// Stale, as a second factor's is: opened under the previous key, so the
+	// scheduled pass seals the pin again before encryption.previous is
+	// retired (decision 57).
+	m.Stale = w.keys.Previous != nil && store.SealedKeyID(m.Sealed) == w.keys.Previous.ID
 	m.DN, m.EntryID, m.Username, m.GroupDNs, m.GroupNames, m.Sealed = ms.DN, ms.EntryID, ms.Username, ms.GroupDNs,
 		ms.GroupNames, nil
 	return m, nil
@@ -1252,6 +1260,16 @@ func (w *wrapped) MembershipByKey(ctx context.Context, mapKey string) (store.Mem
 
 func (w *wrapped) MembershipPrincipals(ctx context.Context) ([]string, error) {
 	return w.inner.MembershipPrincipals(ctx)
+}
+
+// MembershipSeals marks each record sealed under the current key: a re-seal
+// opens only the others (decision 57).
+func (w *wrapped) MembershipSeals(ctx context.Context) ([]store.MembershipSeal, error) {
+	ss, err := w.inner.MembershipSeals(ctx)
+	for i := range ss {
+		ss[i].Current = ss[i].KeyID == w.keys.Current.ID
+	}
+	return ss, err
 }
 
 // DeleteMembership removes the record whatever it holds, and returns it

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/blanketfish/port49/internal/broker/api"
@@ -667,6 +668,145 @@ func TestTheSignInOpsNeedTheVerifier(t *testing.T) {
 	}
 }
 
+// resealing is a store as the scheduled pass sees it: ResealPins tells
+// each of unopened and answers rep, held, err.
+type resealing struct {
+	store.Store
+	rep      store.PinReseal
+	held     bool
+	err      error
+	unopened []string
+}
+
+func (r *resealing) ResealPins(_ context.Context, unopened func(string, error)) (store.PinReseal, bool, error) {
+	for _, p := range r.unopened {
+		unopened(p, errors.New("crypt: opening membership: crypt: sealed under an unknown key"))
+	}
+	return r.rep, r.held, r.err
+}
+
+// series fails the test unless each gauge has want series (0: absent).
+func series(t *testing.T, want int, gs ...*prometheus.GaugeVec) {
+	t.Helper()
+	for _, g := range gs {
+		if n := testutil.CollectAndCount(g); n != want {
+			t.Fatalf("a pin gauge has %d series, want %d", n, want)
+		}
+	}
+}
+
+// The scheduled pass re-seals the directory's pins (decision 57): a pass
+// that completes sets the three gauges and says what it did; one the store
+// stops changes none; a store with no pins has none of them.
+func TestTheScheduledPassReSealsPinsAndGaugesWhatIsLeft(t *testing.T) {
+	ctx := context.Background()
+	f, _ := newSignInFixture(t)
+	m := f.b.Metrics
+	gauges := []*prometheus.GaugeVec{m.DirectoryPinsSealedPrevious, m.DirectoryPinsUnopenable,
+		m.DirectoryPinsResealLastComplete}
+	if _, err := f.b.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	series(t, 0, gauges...) // a shared store: no ResealPins
+	r := &resealing{Store: f.b.Store, held: false}
+	f.b.Store = r
+	if _, err := f.b.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	series(t, 0, gauges...) // a router with no directory of its own
+	r.held, r.rep, r.unopened = true, store.PinReseal{Sealed: 3, Previous: 1, Unopened: 1},
+		[]string{"user:carol@example.com"}
+	if _, err := f.b.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ended := f.b.Now().Unix()
+	series(t, 1, gauges...)
+	if p, u, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious), testutil.ToFloat64(m.DirectoryPinsUnopenable),
+		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 1 || at != float64(ended) {
+		t.Fatalf("after a complete pass: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
+	}
+	f.now = f.now.Add(time.Hour)
+	r.rep, r.err, r.unopened = store.PinReseal{Sealed: 1}, fmt.Errorf("%w: cut", store.ErrUnavailable), nil
+	if _, err := f.b.RefreshDirectory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, u, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious), testutil.ToFloat64(m.DirectoryPinsUnopenable),
+		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 1 || at != float64(ended) {
+		t.Fatalf("a stopped pass moved the gauges: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
+	}
+	logs := f.logs()
+	for _, want := range []string{
+		"directory store: the re-seal sealed 3 pins under the current key; 1 are left under encryption.previous",
+		"directory store: user:carol@example.com's pin does not open",
+		"`port49 directory forget user:carol@example.com`",
+		"directory store: 1 pins open under neither encryption key",
+		"directory store: the re-seal of pins stopped",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("the log lacks %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "more are not named") {
+		t.Errorf("one unopenable pin was said as more than the named ones:\n%s", logs)
+	}
+}
+
+// A pass the store refuses or the context cancels, like one it cannot reach,
+// leaves all three gauges as the last complete pass set them.
+func TestAStoppedPinPassLeavesAllThreeGaugesWhatEverStoppedIt(t *testing.T) {
+	for name, stop := range map[string]struct {
+		err    error
+		cancel bool
+	}{
+		"unavailable": {err: fmt.Errorf("%w: cut", store.ErrUnavailable)},
+		"refused":     {err: fmt.Errorf("%w: no", store.ErrRefused)},
+		"canceled":    {err: context.Canceled, cancel: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := newSignInFixture(t)
+			m := f.b.Metrics
+			r := &resealing{Store: f.b.Store, held: true, rep: store.PinReseal{Sealed: 3, Previous: 1, Unopened: 2}}
+			f.b.Store = r
+			f.b.pinPass(context.Background())
+			ended := f.b.Now().Unix()
+			f.now = f.now.Add(time.Hour)
+			r.rep, r.err = store.PinReseal{Sealed: 9, Previous: 7, Unopened: 5}, stop.err
+			ctx := context.Background()
+			if stop.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			f.b.pinPass(ctx)
+			if p, u, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious), testutil.ToFloat64(m.DirectoryPinsUnopenable),
+				testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 2 || at != float64(ended) {
+				t.Fatalf("a stopped pass moved the gauges: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
+			}
+		})
+	}
+}
+
+// Pre-flight S4: a lost key strands every pin, so a pass names at most 20
+// and counts the rest.
+func TestThePinPassNamesAtMostTwentyUnopenablePins(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	var ps []string
+	for i := range 21 {
+		ps = append(ps, fmt.Sprintf("user:p%02d@example.com", i))
+	}
+	f.b.Store = &resealing{Store: f.b.Store, held: true, rep: store.PinReseal{Unopened: 21}, unopened: ps}
+	if _, err := f.b.RefreshDirectory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logs := f.logs()
+	if !strings.Contains(logs, "user:p19@example.com's pin does not open") ||
+		strings.Contains(logs, "user:p20@example.com's pin") ||
+		!strings.Contains(logs, "21 pins open under neither encryption key") ||
+		!strings.Contains(logs, "; 1 more are not named") {
+		t.Fatalf("the lines for 21 unopenable pins:\n%s", logs)
+	}
+}
+
 // The scheduled pass checks the store, and re-seals when it is well.
 func TestTheScheduledPassChecksAndReSealsTheEnrollmentStore(t *testing.T) {
 	ctx := context.Background()
@@ -695,5 +835,103 @@ func TestTheScheduledPassChecksAndReSealsTheEnrollmentStore(t *testing.T) {
 	}
 	if f.b.EnrollmentStoreLost() == "" || revOf(t, f.b.Enrollments, alicePrincipal).Rev != rev {
 		t.Fatal("the pass re-sealed a store with no mark")
+	}
+}
+
+// blocking is a store whose ResealPins seals n pins and then waits for its
+// ctx, as a pass over a directory too slow to finish does.
+type blocking struct {
+	store.Store
+	n int
+}
+
+func (r *blocking) ResealPins(ctx context.Context, _ func(string, error)) (store.PinReseal, bool, error) {
+	<-ctx.Done()
+	// etcd wraps a deadline that ends a call as unavailable (etcd.go:289).
+	return store.PinReseal{Sealed: r.n, Unopened: 2}, true, fmt.Errorf("%w: %v", store.ErrUnavailable, ctx.Err())
+}
+
+// S2: a pass that runs out of its budget leaves the gauges as they were and
+// says so once an hour; the parent's cancel says nothing.
+func TestAPinPassThatRunsOutOfItsBudgetSaysSoOnceAndLeavesTheGauges(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	m := f.b.Metrics
+	r := &resealing{Store: f.b.Store, held: true, rep: store.PinReseal{Sealed: 3, Previous: 1, Unopened: 2}}
+	f.b.Store = r
+	f.b.pinPass(context.Background())
+	ended := f.b.Now().Unix()
+	f.b.Store = &blocking{Store: r.Store, n: 4}
+	f.b.PinBudget = 20 * time.Millisecond
+	f.now = f.now.Add(time.Minute)
+	f.b.pinPass(context.Background())
+	f.b.pinPass(context.Background()) // within the hour: not said again
+	if p, u, at := testutil.ToFloat64(m.DirectoryPinsSealedPrevious), testutil.ToFloat64(m.DirectoryPinsUnopenable),
+		testutil.ToFloat64(m.DirectoryPinsResealLastComplete); p != 1 || u != 2 || at != float64(ended) {
+		t.Fatalf("a pass out of budget moved the gauges: sealed_previous %v, unopenable %v, last_complete %v", p, u, at)
+	}
+	const want = "directory store: the re-seal of pins ran out of its 20ms budget after sealing 4 pins (2 did not open); " +
+		"the next pass goes on from there"
+	if n := strings.Count(f.logs(), want); n != 1 {
+		t.Fatalf("the budget line was said %d times, want 1:\n%s", n, f.logs())
+	}
+}
+
+func TestAPinPassTheParentCancelsSaysNothing(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	f.b.Store = &blocking{Store: f.b.Store, n: 4}
+	f.b.PinBudget = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	f.b.pinPass(ctx)
+	if l := f.logs(); strings.Contains(l, "re-seal of pins") {
+		t.Fatalf("a parent cancel was said:\n%s", l)
+	}
+}
+
+// tellingStore tells the unopened callback the error it is given for each of
+// three principals.
+type tellingStore struct {
+	store.Store
+	told map[string]error
+}
+
+func (r *tellingStore) ResealPins(_ context.Context, unopened func(string, error)) (store.PinReseal, bool, error) {
+	for _, p := range []string{"user:a@example.com", "user:b@example.com", "user:c@example.com"} {
+		unopened(p, r.told[p])
+	}
+	return store.PinReseal{Previous: 1, Unopened: 2}, true, nil
+}
+
+// M2: the advice follows the cause. A lost key says to put it back; a
+// record that does not match its seal says to forget it; a write that failed
+// is not called unopenable.
+func TestThePinAdviceFollowsTheCause(t *testing.T) {
+	f, _ := newSignInFixture(t)
+	f.b.Store = &tellingStore{Store: f.b.Store, told: map[string]error{
+		"user:a@example.com": fmt.Errorf("crypt: %w", crypt.ErrUnknownKey),
+		"user:b@example.com": errors.New("crypt: message authentication failed"),
+		"user:c@example.com": fmt.Errorf("%w: etcd: cut", store.ErrPinNotWritten),
+	}}
+	f.b.pinPass(context.Background())
+	lines := strings.Split(f.logs(), "\n")
+	find := func(p string) string {
+		for _, l := range lines {
+			if strings.Contains(l, p) {
+				return l
+			}
+		}
+		t.Fatalf("no line for %s:\n%s", p, f.logs())
+		return ""
+	}
+	if l := find("user:a@example.com"); !strings.Contains(l, "put the key that sealed it back as encryption.previous") {
+		t.Errorf("a lost key: %s", l)
+	}
+	if l := find("user:b@example.com"); strings.Contains(l, "put the key") ||
+		!strings.Contains(l, "the record does not match its seal; run `port49 directory forget user:b@example.com`") {
+		t.Errorf("a record that does not match its seal: %s", l)
+	}
+	if l := find("user:c@example.com"); strings.Contains(l, "does not open") || strings.Contains(l, "put the key") ||
+		!strings.Contains(l, "could not be written") {
+		t.Errorf("a write that failed: %s", l)
 	}
 }

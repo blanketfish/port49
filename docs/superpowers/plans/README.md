@@ -8685,6 +8685,35 @@ per run, not on every retry).
   (a generator needs `daemonDefaults` moved into data); Material for MkDocs reaches end of life on 2027-05-05, so decide the
   Zensical move before then.
 
+## Fix #52 — pin re-seal on encryption rotation
+
+Plan: `docs/superpowers/plans/2026-11-08-pin-reseal.md`.
+
+- **Decision 57:** the scheduled directory pass re-seals directory pins after an `encryption:` rotation, as it does
+  second factors, so a second rotation no longer strands pins.
+- **The listing:** the runner lists every pin with the key it is sealed under, 500 a page, and opens only the pins not
+  under `current`.
+- **The pass:** each pin still under `previous` is written again under `current` by a compare on the revision read; a
+  pin changed in between is left as its writer wrote it. A pass stops on an unavailable or refused store or a cancel,
+  and leaves the gauges alone.
+- **The gauges:** `port49_directory_pins_sealed_previous`, `port49_directory_pins_unopenable` and
+  `port49_directory_pins_reseal_last_complete_timestamp_seconds`, set only by a pass that completes on the keyspace
+  holder, and present only on a split.
+- **The alert:** ticket alert `port49_directory_pins_unopenable`, gated on `port49_store_keyspace_held == 1`.
+
+**Left:**
+1. **An offline `port49-broker forget`** (Ruling 1). After this plan, a pin strands only when step 3 runs against a
+   nonzero gauge, which putting the key back undoes, or when a key is lost, which a forget by any admin whose pin opens
+   cures. Revisit only if a lab or field case shows every admin stranded with the key lost.
+2. **The count in `port49 store status` or the admin API.** The gauges and the broker lines answer at 3am. A status
+   field would need a broker API change, and the runner is the only process that knows the count.
+3. **A gauge for second factors still under `previous`.** The second-factor pass says only `could not open N`. Its
+   step-3 condition stays "wait for a pass". A matching gauge is a small follow-up in the same shape.
+4. **An alert on a pin re-seal that never completes.** `port49_directory_refresh_last_complete_timestamp_seconds`
+   already alerts on a pass that never completes, and the pin pass is that pass's tail.
+5. **Clearing a former holder's gauges when it hands over the keyspace.** The alert gate and the page's "read the
+   holder" cover it. Deleting the series when the duties end would be a runner change with no operator gain.
+
 ---
 
 Plans 8–11 are small and may be merged into a neighbour when written. Renumber nothing;

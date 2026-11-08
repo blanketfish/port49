@@ -58,7 +58,7 @@ var pools = map[string]Pool{
 	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token, "GetLift": Token,
 	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
 	"PutMembership": Token, "PutPin": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
-	"MembershipPrincipals": Token, "DeleteMembership": Token,
+	"MembershipPrincipals": Token, "MembershipSeals": Token, "DeleteMembership": Token,
 	"PutOnce": Token, "TakeOnce": Token, "PutOIDCOwner": Token, "OIDCOwner": Token, "PutLogout": Token,
 	"GetLogout": Token, "PutMFAProof": Token, "GetMFAProof": Token,
 	"NoteSignInAttempt": Token, "UndoSignInAttempt": Token, "ClearSignInAttempts": Token,
@@ -821,6 +821,11 @@ func (g *guarded) GetMembership(ctx context.Context, principal string) (m store.
 
 func (g *guarded) MembershipByKey(ctx context.Context, mapKey string) (m store.Membership, err error) {
 	err = g.do(ctx, Token, func(ctx context.Context) (e error) { m, e = g.inner.MembershipByKey(ctx, mapKey); return })
+	return
+}
+
+func (g *guarded) MembershipSeals(ctx context.Context) (ss []store.MembershipSeal, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { ss, e = g.inner.MembershipSeals(ctx); return })
 	return
 }
 

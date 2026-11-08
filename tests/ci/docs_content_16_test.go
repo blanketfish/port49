@@ -10,10 +10,14 @@ func init() {
 	mustSay["admin/key-rotation.md"] = append(mustSay["admin/key-rotation.md"],
 		"port49_key_secret_files_changed", "single_device", "init-issuer", "rotate-issuer",
 		"forget-issuer", "encryption.previous", "port49 keys status", "port49_key_version_devices",
-		"every 30 seconds", "Directory pins are never re-sealed", "ErrUnknownKey", "held_refused",
-		"A store that holds pins can rotate again only after re-sealing them", "Before step 1, re-seal",
-		"in place of K3", "After step 2, no key choice opens every pin", "record=\"membership\"", "port49 directory forget",
-		"forget_principals", "The admin has to be able to open their own pin", "no offline forget",
+		"every 30 seconds", "ErrUnknownKey", "held_refused",
+		"record=\"membership\"", "port49 directory forget",
+		"forget_principals", "no offline forget",
+		"port49_directory_pins_sealed_previous", "port49_directory_pins_unopenable",
+		"port49_directory_pins_reseal_last_complete_timestamp_seconds", "the re-seal of pins stopped",
+		"ran out of its <budget> budget", "could not be written under the current key",
+		"finish step 2 promptly", "the first 20 in sorted order", "does not match its seal",
+		"port49_store_keyspace_held", "Rotating again",
 		"Always give a new key a new id", "issuance: this broker's issuing CA", "reference/config/port49d.md",
 	)
 }

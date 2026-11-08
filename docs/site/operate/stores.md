@@ -94,7 +94,7 @@ processes at each (`encryption` needs a restart):
 
 1. Add the new key as `encryption.previous` everywhere. Nothing is sealed under it yet, but every region can now open what is.
 2. Make the new key `encryption.current` and the old one `encryption.previous`, everywhere.
-3. Remove the old key from `encryption.previous`, everywhere.
+3. Remove the old key from `encryption.previous`, everywhere, once [Key rotation](../admin/key-rotation.md#the-encryption-key)'s waits are over; on a split that includes `port49_directory_pins_sealed_previous` at 0 on the keyspace holder, from a pass that ended after the last step-2 restart.
 
 The ids must differ, because the id labels every record the key seals.
 

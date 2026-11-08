@@ -194,3 +194,11 @@ func (l *lazyMembers) DeleteMembership(ctx context.Context, p string) (store.Mem
 	}
 	return s.DeleteMembership(ctx, p)
 }
+
+func (l *lazyMembers) MembershipSeals(ctx context.Context) ([]store.MembershipSeal, error) {
+	s, err := l.get()
+	if err != nil {
+		return nil, err
+	}
+	return s.MembershipSeals(ctx)
+}

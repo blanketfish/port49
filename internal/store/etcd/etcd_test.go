@@ -79,7 +79,7 @@ func TestTheSealingLayerOverEtcdHoldsEveryProperty(t *testing.T) {
 	t.Parallel()
 	storetest.Run(t, storetest.Backend{New: func(t *testing.T, clock func() time.Time) store.Store {
 		return crypt.Wrap(onShared(t, clock), sealKeys, nil)
-	}, RaceRounds: backend.RaceRounds, Stagger: backend.Stagger})
+	}, RaceRounds: backend.RaceRounds, Stagger: backend.Stagger, Sealed: true})
 }
 
 var sealKeys = crypt.Keys{Current: crypt.NewKey("k1", [32]byte{1})}

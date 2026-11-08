@@ -711,6 +711,35 @@ tests:
       - eval_time: 5m
         alertname: port49_crypt_token_open_failures
         exp_alerts: []
+  # port49_directory_pins_unopenable
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_pins_unopenable{instance=\"a\"}", values: "1+0x30"}
+      - {series: "port49_store_keyspace_held{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_directory_pins_unopenable
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "ticket"}
+            exp_annotations:
+              summary: "A directory pin opens under neither encryption key: its principal cannot bind, mint or refresh."
+              runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_directory_pins_unopenable"
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_pins_unopenable{instance=\"a\"}", values: "0+0x30"}
+      - {series: "port49_store_keyspace_held{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_directory_pins_unopenable
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_pins_unopenable{instance=\"a\"}", values: "1+0x30"}
+      - {series: "port49_store_keyspace_held{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_directory_pins_unopenable
+        exp_alerts: []
   # port49_store_feed_rescans
   - interval: 1m
     input_series:

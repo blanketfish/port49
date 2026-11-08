@@ -116,13 +116,17 @@ type Broker struct {
 	// PerLoginMFA is what this broker verifies for per_login_mfa (plan 9c;
 	// decision 45): nil verifies hardware_key_touch never, and idp_mfa while
 	// a human OIDC verifier is configured.
-	PerLoginMFA   *MFAVerifiers
-	mfaMu         sync.RWMutex // PerLoginMFA's roots are swapped at SIGHUP (SetAttestationRoots)
-	Minter        *token.Minter
-	Store         store.Store
-	Log           decision.Emitter
-	Metrics       *metrics.Metrics
-	Now           func() time.Time
+	PerLoginMFA *MFAVerifiers
+	mfaMu       sync.RWMutex // PerLoginMFA's roots are swapped at SIGHUP (SetAttestationRoots)
+	Minter      *token.Minter
+	Store       store.Store
+	Log         decision.Emitter
+	Metrics     *metrics.Metrics
+	Now         func() time.Time
+	// PinBudget bounds the scheduled pass's re-seal of directory pins so it
+	// cannot hold off the next stamping refresh: port49d sets it to half
+	// broker.refresh_interval. Zero is no bound.
+	PinBudget     time.Duration
 	MaxSessionAge time.Duration
 	BatchMax      int
 	// CeilingWarning is session.ceiling_warning, told to the agent by

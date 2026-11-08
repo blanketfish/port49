@@ -11,6 +11,7 @@ import (
 	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/printsafe"
 	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
 )
 
 // RefreshDirectory is the scheduled refresh (spec §5.1.3; plan 7g Ruling
@@ -120,6 +121,7 @@ func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 	if b.PasswordSignIn != nil {
 		b.enrollmentPass(ctx)
 	}
+	b.pinPass(ctx)
 	return rep, err
 }
 
@@ -140,6 +142,82 @@ func (b *Broker) enrollmentPass(ctx context.Context) {
 	if _, err := b.ResealSecondFactors(ctx); err != nil {
 		b.sayOnce("sign_in_reseal_pass", time.Hour, "sign-in: the re-seal of second factors stopped: %s; the next pass "+
 			"starts again", printsafe.Line(err.Error(), 300))
+	}
+}
+
+// PinResealer is the store whose directory pins the scheduled pass seals
+// again: placement's, on a directory store of its own (decision 57).
+type PinResealer interface {
+	ResealPins(ctx context.Context, unopened func(principal string, err error)) (store.PinReseal, bool, error)
+}
+
+// pinLinesNamed is how many unopenable pins one pass names: a lost key
+// strands every pin, and the count's line says the rest.
+const pinLinesNamed = 20
+
+// pinPass is the directory pins' share of the scheduled pass (decision
+// 57): the re-seal, its gauges set from a pass that completed on a store
+// that holds pins and left as they were by one that stopped, each line said
+// at most once an hour. A shared store keeps no pin without a lease and
+// has none of it.
+func (b *Broker) pinPass(ctx context.Context) {
+	r, ok := b.Store.(PinResealer)
+	if !ok {
+		return
+	}
+	pctx := ctx
+	if b.PinBudget > 0 {
+		var cancel context.CancelFunc
+		pctx, cancel = context.WithTimeout(ctx, b.PinBudget)
+		defer cancel()
+	}
+	named := 0
+	rep, held, err := r.ResealPins(pctx, func(principal string, err error) {
+		if named++; named > pinLinesNamed {
+			return
+		}
+		p, why := printsafe.Line(principal, 300), printsafe.Line(err.Error(), 300)
+		switch {
+		case errors.Is(err, store.ErrPinNotWritten):
+			b.sayOnce("pin_reseal "+principal, time.Hour, "directory store: %s's pin could not be written under the "+
+				"current key (%s): it is left under encryption.previous, and the next pass tries again", p, why)
+		case errors.Is(err, crypt.ErrUnknownKey):
+			b.sayOnce("pin_reseal "+principal, time.Hour, "directory store: %s's pin does not open (%s): it is left "+
+				"as it is; put the key that sealed it back as encryption.previous and restart, or run `port49 "+
+				"directory forget %s`", p, why, p)
+		default:
+			b.sayOnce("pin_reseal "+principal, time.Hour, "directory store: %s's pin does not open (%s): it is left "+
+				"as it is; the record does not match its seal; run `port49 directory forget %s`", p, why, p)
+		}
+	})
+	switch {
+	case !held, ctx.Err() != nil:
+		return
+	case err != nil && pctx.Err() != nil: // the budget ended it, the parent live; etcd may wrap the deadline
+		b.sayOnce("pin_reseal_budget", time.Hour, "directory store: the re-seal of pins ran out of its %s budget "+
+			"after sealing %d pins (%d did not open); the next pass goes on from there", b.PinBudget, rep.Sealed,
+			rep.Unopened)
+		return
+	case err != nil:
+		b.sayOnce("pin_reseal_pass", time.Hour, "directory store: the re-seal of pins stopped: %s; the next pass "+
+			"starts again", printsafe.Line(err.Error(), 300))
+		return
+	}
+	b.Metrics.DirectoryPinsSealedPrevious.WithLabelValues().Set(float64(rep.Previous))
+	b.Metrics.DirectoryPinsUnopenable.WithLabelValues().Set(float64(rep.Unopened))
+	b.Metrics.DirectoryPinsResealLastComplete.WithLabelValues().Set(float64(b.Now().Unix()))
+	if rep.Sealed > 0 {
+		b.logf("directory store: the re-seal sealed %d pins under the current key; %d are left under "+
+			"encryption.previous", rep.Sealed, rep.Previous)
+	}
+	if rep.Unopened > 0 {
+		more := ""
+		if n := rep.Unopened - pinLinesNamed; n > 0 {
+			more = fmt.Sprintf("; %d more are not named", n)
+		}
+		b.sayOnce("pin_reseal_unopened", time.Hour, "directory store: %d pins open under neither encryption key; "+
+			"their principals cannot bind, mint or refresh until the key is back as encryption.previous or each "+
+			"is forgotten%s", rep.Unopened, more)
 	}
 }
 

@@ -674,3 +674,53 @@ func MembershipForgetOfAnAbsentRecordLeavesAPermanentTombstone(t *testing.T, b B
 		t.Fatalf("a verification from before the forget wrote the pin back: %v", err)
 	}
 }
+
+// MembershipSealsListsTheLive: every live, unforgotten record, with the key
+// id its sealed part's header names and the version GetMembership reads
+// (decision 57). An expired record and a forget's tombstone are not listed.
+func MembershipSealsListsTheLive(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	sealed := func(id string) []byte { return append([]byte{byte(len(id))}, id+"-not-a-ciphertext"...) }
+	const alice, bob, carol = "user:alice@corp.example.com", "user:bob@corp.example.com", "user:carol@corp.example.com"
+	if err := s.PutPin(ctx, store.Membership{Principal: bob, EntryID: "uuid:b", VerifiedAt: t0, Sealed: sealed("k2")},
+		store.PinExpect{Absent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutMembership(ctx, store.Membership{Principal: alice, EntryID: "uuid:a", VerifiedAt: t0,
+		Sealed: sealed("k1")}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutMembership(ctx, store.Membership{Principal: "user:gone@corp.example.com", VerifiedAt: t0,
+		Sealed: sealed("k1")}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutPin(ctx, store.Membership{Principal: carol, EntryID: "uuid:c", VerifiedAt: t0, Sealed: sealed("k1")},
+		store.PinExpect{Absent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteMembership(ctx, carol); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	now = now.Add(2 * time.Minute)
+	mu.Unlock()
+	got, err := s.MembershipSeals(ctx)
+	if err != nil || len(got) != 2 || got[0].Principal != alice || got[1].Principal != bob {
+		t.Fatalf("the listing: %+v, %v", got, err)
+	}
+	// The sealing layer seals the part itself, so the key ids and Current
+	// are its own (TestMembershipSealsMarkTheCurrentKey); a bare backend
+	// reports the header written above.
+	if !b.Sealed && (got[0].KeyID != "k1" || got[1].KeyID != "k2") {
+		t.Fatalf("the key ids: %+v", got)
+	}
+	for _, e := range got {
+		m, err := s.GetMembership(ctx, e.Principal)
+		if err != nil || e.Version == 0 || e.Version != m.Version || (!b.Sealed && e.Current) {
+			t.Fatalf("%s listed at version %d (current %v), read at %d: %v", e.Principal, e.Version, e.Current, m.Version, err)
+		}
+	}
+}

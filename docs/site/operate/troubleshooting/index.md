@@ -243,6 +243,7 @@ Alerts: **page** [port49_store_directory_unreachable](../../reference/alerts.md#
 [port49_store_keyspace_unheld](../../reference/alerts.md#port49_store_keyspace_unheld),
 [port49_store_client_cert_expiring](../../reference/alerts.md#port49_store_client_cert_expiring),
 [port49_crypt_token_open_failures](../../reference/alerts.md#port49_crypt_token_open_failures),
+[port49_directory_pins_unopenable](../../reference/alerts.md#port49_directory_pins_unopenable),
 [port49_store_feed_rescans](../../reference/alerts.md#port49_store_feed_rescans),
 [port49_ledger_pending](../../reference/alerts.md#port49_ledger_pending),
 [port49_ledger_behind](../../reference/alerts.md#port49_ledger_behind),

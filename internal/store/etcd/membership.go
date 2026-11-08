@@ -1,6 +1,7 @@
 package etcd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -343,17 +344,40 @@ func (s *Store) MembershipByKey(ctx context.Context, mapKey string) (store.Membe
 	return *found, nil
 }
 
-// MembershipPrincipals pages mb/ as eachIndexed pages ix/: 500 at a time,
-// a record that does not decode skipped and said.
+// MembershipPrincipals pages mb/ (eachMembership).
 func (s *Store) MembershipPrincipals(ctx context.Context) ([]string, error) {
+	var out []string
+	if err := s.eachMembership(ctx, func(r membershipRec, _ int64) { out = append(out, r.Principal) }); err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// MembershipSeals pages mb/ as MembershipPrincipals does, with each record's
+// mod revision and the key id its sealed part names (decision 57).
+func (s *Store) MembershipSeals(ctx context.Context) ([]store.MembershipSeal, error) {
+	var out []store.MembershipSeal
+	if err := s.eachMembership(ctx, func(r membershipRec, mod int64) {
+		out = append(out, store.MembershipSeal{Principal: r.Principal, KeyID: store.SealedKeyID(r.Sealed),
+			Version: uint64(mod)})
+	}); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b store.MembershipSeal) int { return cmp.Compare(a.Principal, b.Principal) })
+	return out, nil
+}
+
+// eachMembership pages mb/ as eachIndexed pages ix/: 500 at a time,
+// a record that does not decode skipped and said.
+func (s *Store) eachMembership(ctx context.Context, fn func(r membershipRec, mod int64)) error {
 	prefix := s.k.family(famMembership)
 	end := clientv3.GetPrefixRangeEnd(prefix)
 	now := s.now()
-	var out []string
 	for from := prefix; ; {
 		resp, err := s.tok.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500))
 		if err != nil {
-			return nil, unavailable(err)
+			return unavailable(err)
 		}
 		for _, kv := range resp.Kvs {
 			var r membershipRec
@@ -362,7 +386,7 @@ func (s *Store) MembershipPrincipals(ctx context.Context) ([]string, error) {
 				continue
 			}
 			if alive(r.ExpiresAt, now) && !r.tombstone() {
-				out = append(out, r.Principal)
+				fn(r, kv.ModRevision)
 			}
 		}
 		if !resp.More || len(resp.Kvs) == 0 {
@@ -370,8 +394,7 @@ func (s *Store) MembershipPrincipals(ctx context.Context) ([]string, error) {
 		}
 		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}
-	sort.Strings(out)
-	return out, nil
+	return nil
 }
 
 // getLive reads key into v on the token pool, ErrNotFound when absent or

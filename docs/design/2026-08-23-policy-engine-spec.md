@@ -10437,7 +10437,8 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   key `Stale`, and each scheduled directory pass (`RefreshDirectory`, every `refresh_interval`)
   seals stale records again under the current key. A record that opens under neither key is never
   "not enrolled": the sign-in is `503 store_unavailable`, and the broker's line names `port49
-  directory reset-second-factor`.
+  directory reset-second-factor`. *Amended by decision 57 (2026-11-08):* the same pass re-seals the
+  directory store's pins.
 - **12. The entry's own.** A second factor is the entry's, not just the principal's. The record
   keeps the entry's id. A sign-in whose entry has another id (a re-created entry, after 7g's
   `port49 directory forget`) is refused `failed: second_factor` with the one sentence of ruling 7
@@ -10969,7 +10970,9 @@ reason and cost.
   one that this region's copy holds is put back from the copy, never read as unpinned; a pin to
   another entry than this region's record answers no groups, so grace serves nothing. With the
   directory cut a first bind, a refusal's record and a forget fail closed (`store_unavailable`),
-  and a pinned member's refresh is served from the cached pin, said.
+  and a pinned member's refresh is served from the cached pin, said. *Amended by decision 57
+  (2026-11-08):* the scheduled pass writes again a pin that opened under `encryption.previous`, by a
+  compare on its version, so a rotation strands none.
 - **Back-channel logouts are directory records (R26).** A logout received in any region refuses,
   everywhere, every mint and refresh it names: each port49-broker loads the logout records before it
   serves, follows them, and checks a mint against its copy; each region's runner reaches a logout it
@@ -11935,6 +11938,42 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
     (devices M3).
 13. **The `mfaTokenKey` once-record is removed.** The nonce-bound challenge is taken once
     already (the controller's moot verdict, plan ruling 12).
+
+**57. Directory pins are re-sealed at a key rotation (issue #52; Ryan 2026-11-07; plan
+`2026-11-08-pin-reseal`).** Amends decision 47 ruling 11 and decision 51 R13.
+
+1. **The pass.** The scheduled directory pass (`RefreshDirectory`, every `refresh_interval`; on
+   port49-broker the runner's alone) re-seals the directory store's pins as it re-seals second
+   factors. The store lists every live pin with its version and the key id its sealed part names,
+   in pages (`MembershipSeals`); the pass opens only the pins not under `current`, so a pass with
+   every pin on `current` reads no pin. The crypt layer marks a membership it opened under
+   `encryption.previous` `Stale`, and the pass writes each Stale pin again, sealed under `current`,
+   by `PutPin` at the version it read. A pin that a forget, a re-pin or another region's pass
+   changed since the read stands (`ErrConflict`); the pass counts it as still under `previous` and
+   the next pass reads it again. A directory store that does not answer, a refusal of the broker's
+   identity or an ended ctx ends the pass, said once an hour (a cancel silently); the next pass
+   starts from the listing. A write that fails any other way is counted as still under `previous`,
+   told by name under the same cap as ruling 2, and the pass goes on. The pass has a budget of half
+   `broker.refresh_interval`, so it cannot hold off the stamping refresh; one that runs out leaves
+   the gauges and says so once an hour, and the next pass goes on from the pins already re-sealed. A single shared store keeps no pin without a lease
+   (its membership record lives max(`broker.directory.grace`, 24h) and every verification rewrites
+   it) and runs no pin pass.
+2. **A pin that opens under neither key** is never deleted or rewritten. It is counted, and said
+   once an hour per principal, naming `encryption.previous` and `port49 directory forget`, for at
+   most 20 principals a pass; the count's line says how many more are not named.
+3. **The count.** `port49_directory_pins_sealed_previous` (pins the last complete pass left under
+   `previous`, conflicts included), `port49_directory_pins_unopenable` (pins that opened under
+   neither key) and `port49_directory_pins_reseal_last_complete_timestamp_seconds`: gauges with no
+   label, set by a pass that completes, unchanged by one that stops, absent until the first and
+   where the store holds no pins. A replica that hands over the keyspace keeps its last values, so
+   they are read on the holder (`port49_store_keyspace_held` 1). Rotation's step 3 waits, after
+   step 2 has finished everywhere, for a pass that completed after the last step-2 restart with
+   `port49_directory_pins_sealed_previous` 0. Alert: `port49_directory_pins_unopenable > 0 and
+   on(instance) port49_store_keyspace_held == 1` (ticket).
+4. **No offline forget.** A pin is stranded only by a step 3 run against a nonzero gauge, which
+   putting the key back as `previous` undoes, or by a lost key, which a forget by any admin whose
+   own pin opens cures; the pass keeps every pin that opens on `current`. An offline forget would
+   be a path around the touch-gated, recorded broker API.
 
 ---
 

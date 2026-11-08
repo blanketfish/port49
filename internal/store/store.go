@@ -1091,6 +1091,11 @@ type Store interface {
 	// refused ones included, sorted: the set a policy refresh supersedes
 	// group members' tokens over.
 	MembershipPrincipals(ctx context.Context) ([]string, error)
+	// MembershipSeals is MembershipPrincipals with each record's version and
+	// the key id its sealed part names, read in the same pages: the listing a
+	// re-seal pass reads, so that it opens only the records not under the
+	// current key (decision 57). Sorted by principal.
+	MembershipSeals(ctx context.Context) ([]MembershipSeal, error)
 	// DeleteMembership removes principal's record, refused or not, and with
 	// it the entry the principal is pinned to, and returns what it held; or
 	// ErrNotFound when no live record is held. Its mapping keys are left to
@@ -1306,6 +1311,11 @@ type Membership struct {
 	Server     string
 	Site       string
 	Sealed     []byte // written by internal/store/crypt; nil in plaintext form
+	// Stale is a record opened under the previous encryption key: the
+	// scheduled pass seals the directory's pin again (decision 57).
+	// Written by internal/store/crypt's reads; a write ignores it, and a
+	// broker snapshot's cached pins carry it as it was read.
+	Stale bool
 	// Version is the backend's version of the record GetMembership read: what
 	// a PinExpect names. Zero when written, and in answers that name no
 	// single record.
@@ -1318,6 +1328,41 @@ type Membership struct {
 type PinExpect struct {
 	Absent, Forgotten bool
 	Version           uint64
+}
+
+// MembershipSeal is one live, unforgotten membership record as
+// MembershipSeals lists it (decision 57): its principal, its version (what
+// a PinExpect names), and the key id its sealed part names
+// (SealedKeyID). Current is the crypt layer's: the key id is its current
+// key's. A backend leaves it false.
+type MembershipSeal struct {
+	Principal, KeyID string
+	Version          uint64
+	Current          bool
+}
+
+// PinReseal is one complete pass of the directory pins' re-seal (decision
+// 57): pins sealed again under the current key, pins still under the
+// previous one (a write that met a newer pin, left for the next pass), and
+// pins that opened under neither key, left as they are.
+type PinReseal struct {
+	Sealed, Previous, Unopened int
+}
+
+// ErrPinNotWritten is what the re-seal pass tells its callback for a pin it
+// opened but could not write again (decision 57): the pin is still under the
+// previous key, counted as such, and the pass goes on. The cause is wrapped.
+var ErrPinNotWritten = errors.New("store: the pin could not be written under the current key")
+
+// SealedKeyID is the key id the header of a record internal/store/crypt
+// sealed names (len(id) ‖ id ‖ ...), "" when it is too short to name one.
+// It is the raw header, which whoever can write the store writes:
+// crypt.SealedKeyID is the form a log line may echo.
+func SealedKeyID(sealed []byte) string {
+	if len(sealed) < 1 || len(sealed) < 1+int(sealed[0]) {
+		return ""
+	}
+	return string(sealed[1 : 1+int(sealed[0])])
 }
 
 // MapKey is the index key of one certificate-mapping value: a hash, so the

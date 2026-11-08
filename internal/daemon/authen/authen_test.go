@@ -556,6 +556,10 @@ func (noStore) MembershipPrincipals(context.Context) ([]string, error) {
 	panic("store called")
 }
 
+func (noStore) MembershipSeals(context.Context) ([]store.MembershipSeal, error) {
+	panic("store called")
+}
+
 func (noStore) DeleteMembership(context.Context, string) (store.Membership, error) {
 	panic("store called")
 }

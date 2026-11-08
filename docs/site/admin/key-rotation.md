@@ -108,7 +108,7 @@ refused at load. Pick another name for the set.
 
 ## The `encryption:` key
 
-port49 seals tokens, receipts, contexts and second-factor records at rest under `encryption.current`.
+port49 seals tokens, receipts, contexts, directory memberships and pins, and second-factor records at rest under `encryption.current`.
 `encryption.previous` is an optional second key that records can still be opened with, which is what makes
 rotation possible. The ids label every sealed record, so the new key needs a **new id**. port49 refuses a
 `previous` whose id equals `current`'s, but it cannot see a new secret put under an old id: records
@@ -151,66 +151,57 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   from the candidates and counted in `port49_crypt_open_failures_total{record="token"}`, a session's context is
   denied `store_unavailable`, and a second factor is never treated as "not enrolled". For that second factor an
   operator runs `port49 directory reset-second-factor`.
-- **Directory pins are never re-sealed. On a directory store that holds pins (a split, or more than one
-  region), do not run step 3 at all: keep the old key as `encryption.previous`.** A pin is kept with no
-  expiry, and an unchanged pin is never written again, so a pin sealed under the old key stays sealed under
-  it. Drop that key and reading the pin fails with an unknown-key error (`ErrUnknownKey`). That failure is
-  not "not found" and not "unavailable", so the pin write for that principal fails too, and a broker on
-  the split cannot mint or refresh for anyone pinned before the rotation. The hourly directory check
-  does **not** warn about this, because the recorded current key is the new one and is held. What you see:
-  the broker's scheduled refresh line `broker: refresh: the directory failed for <principal> (crypt: opening
-  membership: ...); its contexts are left unstamped and unrevoked`, the counter
-  `port49_crypt_open_failures_total{record="membership"}` rising, and bind, mint and refresh failing for
-  the pinned principals. From the code (not measured), sessions already open are left as they are until
-  `session.staleness_ceiling` (4 hours by default) and then denied `context_stale`.
-  The cure is to put the old key back as `previous` and restart; nothing was deleted.
-- **A store that holds pins can rotate again only after re-sealing them.** A process opens a record only
-  if it was sealed under `current` or `previous`, and there is one `previous` slot. Call the keys K1 (the
-  original), K2 (the first rotation's) and K3 (the next one's). After the first rotation, `current` is K2,
-  `previous` is K1, and every pin not written since is still sealed under K1. The second rotation's step 1
-  puts K3 in the `previous` slot, which drops K1 and strands every pin still under it. Nothing tells you
-  which key sealed a pin, so you cannot check for this beforehand; you re-seal instead.
-
-    **Before step 1, re-seal.** While K1 still opens every pin, `port49 directory forget <principal>`
-    deletes a pin and leaves a tombstone, and the person's next sign-in writes a fresh pin sealed under the
-    current key, K2, which the second rotation keeps. Start with two admins, each forgetting the other, so
-    that neither depends on a pin left under K1. Then do every other pinned principal; that is the only way
-    to rotate again with nobody locked out. Also let 24 hours pass, or the step-3 wait if that is longer, after
-    the first rotation's step 2 finished everywhere, so that no region still holds a session copy of a
-    membership sealed under K1.
-    The costs:
-
-    - Until the person signs in again, the pin protects nothing. A pin exists so a principal cannot
-      silently move to another directory entry, so confirm that the person who signs in is the same
-      person, as on [Stores](../operate/stores.md).
-    - Each forget is one call for one principal; there is no bulk form. It needs the `forget_principals`
-      right, and each use takes a security-key press.
-    - **The admin has to be able to open their own pin.** The forget call first resolves the caller's own
-      membership, to check the right, and an admin whose own pin does not open is refused there. There is
-      no offline forget on `port49-broker`. Before step 1 every pin opens, which is why the re-seal comes
-      first.
-
-    **At step 1, if principals were missed.** Step 1 seals nothing under K3, so it can be undone. A
-    principal still pinned under K1 fails as soon as K1 is gone: bind, mint and refresh fail for them, the
-    scheduled refresh line above names them, and `port49_crypt_open_failures_total{record="membership"}`
-    rises. Then put K1 back as `previous` in place of K3, everywhere, and restart: with K2 and K1 held
-    every record opens again, and nothing is lost by dropping K3. Re-seal the principals you missed, and
-    run step 1 again.
-
-    **After step 2, no key choice opens every pin.** K1, K2 and K3 have all sealed records now, and only
-    two can be held:
-
-    - `current` K3, `previous` K2 (step 2 as written): every pin still under K1 is stranded.
-    - `current` K3, `previous` K1: everything under K2 is stranded instead. That includes the pins you
-      re-sealed and every other pin written under K2, membership copies and contexts, and the second
-      factors the scheduled pass has not yet moved to K3.
-    - `current` K2, `previous` K1: everything sealed under K3 since step 2 is stranded, including the
-      second factors the pass has already moved. On a split, the broker's start is refused as well,
-      because the directory store was last written under K3.
-
-    So after step 2, each principal still under K1 has one way out: a forget run by an admin whose own pin
-    opens. This region's own session copy of that principal's record is deleted by the forget only if it
-    opens; otherwise it keeps failing until its 24-hour lease ends.
+- **Directory pins** (on a directory store of its own: a split, or more than one region) are re-sealed
+  by the same scheduled pass. A pin has no expiry, so it never ages out. Instead, the runner lists every
+  pin with the key it is sealed under, in pages of 500, and opens only the pins not under `current`. It
+  writes each one still sealed under `previous` again under `current`, by a compare on the revision it
+  read. A pin that a `port49 directory forget`, a re-pin or another region's runner changed in between
+  is left as that writer wrote it, and the next pass reads it again. **After step 2 has finished
+  everywhere, wait for a pass that ended after the last step-2 restart**
+  (`port49_directory_pins_reseal_last_complete_timestamp_seconds` later than that restart) **with
+  `port49_directory_pins_sealed_previous` at 0.** Read both on the replica that holds the keyspace
+  (`port49_store_keyspace_held` 1). A replica that handed the keyspace over keeps the values of its
+  last pass until it restarts. Any region's holder will do, because they all read the one directory
+  store. The gauges are absent until a runner completes its first pass after it starts. They are also
+  absent on a single shared store, where a membership record has a lease (the 24 hours above) and there
+  is no pin to re-seal. A pass that moves pins says `directory store: the re-seal sealed N pins under
+  the current key; M are left under encryption.previous`. If the directory store stops answering or
+  refuses the broker's identity, the pass says
+  `directory store: the re-seal of pins stopped: <error>; the next pass starts again` and changes no
+  gauge. A cancel (shutdown, or the keyspace handed over) stops the pass silently and changes no gauge
+  either. A write that fails any other way does not stop the pass: that pin is counted in
+  `port49_directory_pins_sealed_previous`, it is named once an hour as
+  `directory store: <principal>'s pin could not be written under the current key (...)`, and the pass
+  goes on with the pins after it. Each pin is one compare-and-swap, so nothing is left half-written.
+  The pass has a budget of half `refresh_interval`, so it never holds off the stamping refresh. A pass
+  that runs out of it says
+  `directory store: the re-seal of pins ran out of its <budget> budget after sealing N pins (M did not open); the next pass goes on from there`
+  once an hour and changes no gauge. A large fleet can take several intervals to finish its first pass.
+  While step 2 is rolling out, expect `the re-seal sealed N pins` lines in every region, because
+  regions on different `current` keys move pins back and forth; finish step 2 promptly.
+- **A pin that opens under neither key** is counted in `port49_directory_pins_unopenable` (alert
+  [port49_directory_pins_unopenable](../reference/alerts.md#port49_directory_pins_unopenable), on the
+  keyspace holder). It means a key was retired while it still sealed pins. Reading the pin fails with an
+  unknown-key error (`ErrUnknownKey`). Each pass opens it again, so
+  `port49_crypt_open_failures_total{record="membership"}` rises at least once per pass for each such pin, and more with traffic, because bind, mint and
+  refresh open it too. Bind,
+  mint and refresh fail for that principal. From the code (not measured), sessions already open are
+  denied `context_stale` once `session.staleness_ceiling` has passed. The pass never deletes or
+  rewrites such a pin. It says `directory store: <principal>'s pin does not open (...)` once an hour,
+  for at most 20 principals a pass (the first 20 in sorted order); the count's line says how many more
+  are not named. When the cause is an unknown key, the line says to put the retired key back as
+  `previous` and restart; for any other open error it says the record does not match its seal and to run
+  `port49 directory forget <principal>`, because the record was changed outside port49 and no key
+  helps. Putting the retired key back as `previous` and restarting deletes nothing, and the next pass
+  re-seals the pin. If that key is gone, `port49 directory forget <principal>` frees the principal, and the person's next sign-in
+  pins them again. Any admin with `forget_principals` whose own pin opens can run it, and every pin that
+  opens is on `current` after a pass. Confirm that the person who signs in is the same person, as on
+  [Stores](../operate/stores.md). There is no offline forget on `port49-broker`.
+- **Rotating again.** There is one `previous` slot, so a rotation's step 1 drops whatever key
+  `previous` held. Begin a rotation only after the last one's step 3. The waits above gate that step,
+  so every pin is then under `current`. Only pins have a gauge. A second factor is under `current` once
+  a pass has completed without the `could not open N second factors` line and without
+  `sign-in: the re-seal of second factors stopped`.
 - **Backups and exports need every key that sealed their records.** An etcd snapshot and a Velero backup
   are the raw stores, and each record in them keeps the key that was current when that record was written.
   An enrollment export (`port49-broker export-enrollments`) keeps each record's seal too, and seals only
