@@ -98,15 +98,22 @@ const specPath = "docs/design/2026-08-23-policy-engine-spec.md"
 
 var registerID = regexp.MustCompile(`\bL[0-9]+[a-z]?\b`)
 
+// citedID is a register ID with the " cell" that may follow it ("L76 cell b").
+var citedID = regexp.MustCompile(`\bL[0-9]+[a-z]?\b(?: cell\b)?`)
+
 // cite appends ", open" to every register ID in text that reg reads as open: the docs lint refuses
 // an open row asserted, and a cell that cites one says so. A closed or unknown ID is left alone
 // (checkCited refuses an unknown one before any page is built).
 func cite(text string, reg map[string]docgen.LabRow) string {
-	return registerID.ReplaceAllStringFunc(text, func(id string) string {
-		if reg[id].Open {
-			return id + ", open"
+	return citedID.ReplaceAllStringFunc(text, func(m string) string {
+		id, cell := strings.CutSuffix(m, " cell")
+		if !reg[id].Open {
+			return m
 		}
-		return id
+		if cell {
+			return id + ", open; cell" // "L76, open; cell b": the lint reads "ID, open" beside the ID
+		}
+		return id + ", open"
 	})
 }
 

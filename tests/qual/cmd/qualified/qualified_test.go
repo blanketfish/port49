@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -187,8 +189,8 @@ func TestBuildFailsWithoutTheRegister(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "docs/design/2026-08-23-policy-engine-spec.md")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Build(dir); err == nil {
-		t.Fatal("a build without the spec's register makes an uncited page")
+	if _, err := Build(dir); !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "policy-engine-spec.md") {
+		t.Fatalf("a build without the spec's register fails naming the spec: %v", err)
 	}
 }
 
@@ -207,7 +209,7 @@ func TestAnOpenRegisterRowIsCitedAsOpen(t *testing.T) {
 	if c := command(steps, true, "QUAL; as L18", fakeRegister("L18")); c != "— (QUAL; as L18, open)" {
 		t.Fatalf("a QUAL citation of an open row: %s", c)
 	}
-	if c := command(steps, true, "L76 cell b", fakeRegister("L76")); c != "— (L76, open cell b)" {
+	if c := command(steps, true, "L76 cell b", fakeRegister("L76")); c != "— (L76, open; cell b)" {
 		t.Fatalf("a cell citation of an open row: %s", c)
 	}
 }

@@ -48,10 +48,12 @@ tacacs-server host <PORT49_1> tls vrf <MGMT_VRF> single-connection port <TLS_POR
 - Set `intermediates_file` for EOS: it sends its leaf alone, and without the intermediate the chain does not verify ([L73-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md), cell e).
 - Set the TLS port explicitly. With none set EOS dials 300, so the `port` you set must match port49d's RFC 9887 listener ([L73-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md), cell a).
 - Configure the host by the address its certificate names: EOS refuses a server certificate that does not name the configured address, with a `bad_certificate` alert ([L73-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md), cell d).
-- The EOS reference adds `ip tacacs vrf <MGMT_VRF> source-interface <SOURCE_INTERFACE>`; the lab's own startup config pinned none, and the clause loaded as shipped, in the default VRF, on vEOS and cEOS ([L88-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_ceos.md)).
 - Keep a path that does not need port49 for an ERROR: the local account is thrown out by the exec authorization ([L4-error-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-arista_eos.md)).
 
 ## Unmeasured
+
+!!! warning "Unmeasured: the source-interface clause"
+    The EOS reference adds `ip tacacs vrf <MGMT_VRF> source-interface <SOURCE_INTERFACE>`; the lab's own startup config pinned none. The reference README reports that the clause loaded as shipped, in the default VRF, on vEOS and cEOS, which this page cannot confirm against a note line. Check that port49 sees the source address you pinned.
 
 !!! warning "Unmeasured: other EOS releases and hardware"
     The lab ran vEOS-lab 4.31.2F over TCP and cEOS-lab 4.36.3M over TCP and RFC 9887. What other releases and hardware do is unknown.
