@@ -340,3 +340,41 @@ func TestARefusedPinReadEndsThePassAndIsNotCountedUnopened(t *testing.T) {
 		t.Fatalf("alice's pin is under %q after a refused pass", id)
 	}
 }
+
+// failingPut is a directory whose pin write for one principal always fails
+// with a plain error, neither unavailable, refused nor a conflict.
+type failingPut struct {
+	Members
+	principal string
+}
+
+func (f *failingPut) PutPin(ctx context.Context, m store.Membership, expect store.PinExpect) error {
+	if m.Principal == f.principal {
+		return errors.New("etcd: a record does not decode")
+	}
+	return f.Members.PutPin(ctx, m, expect)
+}
+
+// S1: a pin whose write always fails is counted under Previous (it is still
+// under the old key) and told; the pass goes on and seals the pins after it.
+func TestAPinWhoseWriteFailsIsCountedAndThePassGoesOn(t *testing.T) {
+	const carol = "user:carol@example.com"
+	dir := memory.New(clock)
+	pinned(t, sealedRegion(dir, window("k1"), nil), pinFor(alice, "uuid:a"), pinFor(bob, "uuid:b"), pinFor(carol, "uuid:c"))
+	r := sealedRegion(dir, window("k2", "k1"), func(m Members) Members { return &failingPut{Members: m, principal: bob} })
+	var told []string
+	rep, err := reseal(t, r, func(p string, err error) {
+		if !errors.Is(err, store.ErrPinNotWritten) {
+			t.Errorf("told %s with %v, want ErrPinNotWritten", p, err)
+		}
+		told = append(told, p)
+	})
+	if err != nil || rep != (store.PinReseal{Sealed: 2, Previous: 1}) || !slices.Equal(told, []string{bob}) {
+		t.Fatalf("the pass: %+v, told %v, %v", rep, told, err)
+	}
+	for p, want := range map[string]string{alice: "k2", bob: "k1", carol: "k2"} {
+		if id := sealedUnder(t, dir, p); id != want {
+			t.Errorf("%s's pin is under %q, want %q", p, id, want)
+		}
+	}
+}

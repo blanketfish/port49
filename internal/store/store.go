@@ -1349,6 +1349,11 @@ type PinReseal struct {
 	Sealed, Previous, Unopened int
 }
 
+// ErrPinNotWritten is what the re-seal pass tells its callback for a pin it
+// opened but could not write again (decision 57): the pin is still under the
+// previous key, counted as such, and the pass goes on. The cause is wrapped.
+var ErrPinNotWritten = errors.New("store: the pin could not be written under the current key")
+
 // SealedKeyID is the key id the header of a record internal/store/crypt
 // sealed names (len(id) ‖ id ‖ ...), "" when it is too short to name one.
 // It is the raw header, which whoever can write the store writes:

@@ -1229,7 +1229,7 @@ func (w *wrapped) openMembership(m store.Membership, err error) (store.Membershi
 	// Stale, as a second factor's is: opened under the previous key, so the
 	// scheduled pass seals the pin again before encryption.previous is
 	// retired (decision 57).
-	m.Stale = w.keys.Previous != nil && SealedKeyID(m.Sealed) == LineKeyID(w.keys.Previous.ID)
+	m.Stale = w.keys.Previous != nil && store.SealedKeyID(m.Sealed) == w.keys.Previous.ID
 	m.DN, m.EntryID, m.Username, m.GroupDNs, m.GroupNames, m.Sealed = ms.DN, ms.EntryID, ms.Username, ms.GroupDNs,
 		ms.GroupNames, nil
 	return m, nil

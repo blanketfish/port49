@@ -309,10 +309,16 @@ func (p *placed) PutPin(ctx context.Context, m store.Membership, expect store.Pi
 // another region changed since the read stands; that one is counted in
 // Previous and the next pass reads it again. A pin that opens under
 // neither key is told to unopened and counted, and never written or
-// deleted. A directory that does not answer or refuses the broker's
-// identity, or a ctx that ends, ends the
-// pass with that error: each pin is one compare, so nothing is left
-// half-written. held is false where the router has no directory of its
+// deleted. A pin whose write fails with any other error (not a conflict) is
+// counted in Previous, since it is still under the old key, and told to
+// unopened with an error that wraps store.ErrPinNotWritten; the pass goes
+// on, and the cap on names is the caller's, shared with the unopenable.
+// A directory that does not answer or refuses the broker's identity, or a
+// ctx that ends, ends the pass with that error: each pin is one compare,
+// so nothing is left half-written. The map-key claimant registration that
+// putPin makes ahead of the compare (etcd's registerKey) predates this
+// pass; it is not compared, and it is harmless, since MembershipByKey
+// filters on the record's own MapKeys. held is false where the router has no directory of its
 // own, which holds no pins.
 func (p *placed) ResealPins(ctx context.Context, unopened func(principal string, err error)) (rep store.PinReseal,
 	held bool, err error) {
@@ -357,8 +363,13 @@ func (p *placed) ResealPins(ctx context.Context, unopened func(principal string,
 			rep.Sealed++
 		case errors.Is(err, store.ErrConflict):
 			rep.Previous++
+		case errors.Is(err, store.ErrUnavailable), errors.Is(err, store.ErrRefused), ctx.Err() != nil:
+			return rep, true, cmp.Or(err, ctx.Err())
 		default:
-			return rep, true, err
+			rep.Previous++ // still under the old key: the gauge errs toward waiting
+			if unopened != nil {
+				unopened(s.Principal, fmt.Errorf("%w: %w", store.ErrPinNotWritten, err))
+			}
 		}
 	}
 	return rep, true, nil
