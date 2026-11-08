@@ -8529,6 +8529,9 @@ the generated config, reason-code, decision-log, metrics and alerts references, 
 (`.superpowers/sdd/plan-13-preflight.md`, 0C/15I/13M, all applied): Ryan approved the Pages job's `id-token` (2026-11-07); the
 site URL, the version banner (`main` until `v0.1.0`, then final `vX.Y.Z` tags only; a pre-release tag never deploys), Material 9.8.0 (end of life 2027-05-05) and the
 healthcheck's liveness default were ruled; the docs job pins Python 3.13; the README's wording stays Ryan's before go-public).
+**Executed 2026-11-07 to 2026-11-08** on `feature/user-and-admin-docs`, each task reviewed; all twenty-five tasks done, no
+page is a stub (`TestNoPageIsAStub`), the site builds strict, and the task 25 source-map check found two hand-offs with no
+page, both now written (see "Plan 13 — As built", below). PR pending.
 
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
 GitHub Action — written when the repository goes public. Six sections:
@@ -8639,6 +8642,43 @@ From plan 11b (Plan 11b — As built, above):
   hang's `-only=` workaround belong in the contributor guide.
 
 **Leaves for later:** nothing. **Lab:** none.
+
+### Plan 13 — As built
+
+Executed on `feature/user-and-admin-docs` (PR pending). No spec change, no lab run, no register row closed.
+
+**Operator-facing notes** (each checked against the tree):
+- **The site** is MkDocs Material, built `--strict`, at https://blanketfish.github.io/port49/. It deploys from
+  `.github/workflows/docs.yml` only from a public repository; while the repository is private the workflow builds
+  on every pull request and deploys nothing. Six sections (Concepts, Operate, Administer, AI agents, Reference,
+  Contributing), and an `llms.txt` that names the pages.
+- **`--version`:** `port49`, `port49d`, `port49-broker` and `port49-inventory` print their name and version; `port49 version`
+  prints the same line ([Versions](../../site/operate/versions.md)).
+- **`healthcheck`:** `port49d`, `port49-broker` and `port49-inventory` have it, for an image with no shell; the default asks
+  `/healthz` (liveness) and `--ready` asks `/readyz`. The compose healthchecks run `healthcheck --ready` (CI:
+  `tests/ci/compose_healthcheck_test.go`; the compose smoke run is Task 10's CI job).
+- **`runbook_url` on every alert**, opening that alert's section of the alerts reference.
+- **The version banner:** the site says "This site describes port49 as it is on main, not a release." until the first
+  release. Deploys come from `main` before `v0.1.0`; from the first final `vX.Y.Z` tag on, a tag deploys, the banner names
+  the version and `main` stops deploying. A pre-release tag never deploys.
+- **`make docs`** regenerates the config, reason-code, decision-log, metrics and alerts references, the device evidence
+  tables and `llms.txt` from the code and the spec (commit the result; CI fails a stale page); **`make docs-build`** builds the site
+  strictly in a hashed-requirements virtualenv (`bin/docs-venv`), and `PORT49_DOCS_SITE=site go test ./tests/ci/ -run '^TestTheBuiltSite'`
+  lints the built output.
+
+**Found by the closing source-map check:** two roadmap hand-offs had no page. Both are now on `operate/stores.md`: the
+`deadline_on_entry` outcome of `port49_store_calls_total` (counted apart, not toward opening a circuit), and the plan 11a
+pending-logout note (the runner says a failed logout's remedy and the "pending until the directory store answers" line once
+per run, not on every retry).
+
+**Left:**
+- **The README's wording** awaits Ryan's review before go-public.
+- **Decision 4's settings, at go-public:** Pages source "GitHub Actions", the `github-pages` environment's branch and tag
+  restriction, `docs` among the `main` ruleset's required checks, and one external link check over the built site
+  (`RELEASING.md`, one-time setup items 7 to 9).
+- **Later:** each release's own pages (for example `mike`) wait for 1.0; the config reference's defaults are written by hand
+  (a generator needs `daemonDefaults` moved into data); Material for MkDocs reaches end of life on 2027-05-05, so decide the
+  Zensical move before then.
 
 ---
 

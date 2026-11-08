@@ -117,6 +117,20 @@ func TestEveryPageHasATitleAndADescription(t *testing.T) {
 	}
 }
 
+// Task 1 wrote every page as a stub marked `status: stub`; each content task removes the mark when it
+// finishes the page. A red here means a page task is unfinished: finish the page, do not drop the test.
+func TestNoPageIsAStub(t *testing.T) {
+	for _, page := range sitePages(t) {
+		fm := frontMatter(t, page)
+		if fm == nil {
+			continue
+		}
+		if status, _ := fm["status"].(string); status == "stub" {
+			t.Errorf("%s is still a stub (front matter status: stub)", page)
+		}
+	}
+}
+
 // A run-together name in the first line (`docs-servequal`) would silently drop two targets from .PHONY.
 func TestTheMakefileDeclaresTheDocsTargetsPhony(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
