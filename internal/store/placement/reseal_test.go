@@ -240,8 +240,11 @@ func TestADirectoryCutMidPassEndsItAndLeavesNothingHalfWritten(t *testing.T) {
 	var rc *racing
 	ended := sealedRegion(dir, window("k2", "k1"), func(m Members) Members { rc = &racing{Members: m}; return rc })
 	rc.during = cancel
-	if _, _, err := ended.ResealPins(ctx, nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("a pass whose ctx ended after a read that answered: %v, want context.Canceled", err)
+	if rep, _, err := ended.ResealPins(ctx, nil); !errors.Is(err, context.Canceled) || rep != (store.PinReseal{}) {
+		t.Fatalf("a pass whose ctx ended after a read that answered: %+v, %v, want context.Canceled and nothing counted", rep, err)
+	}
+	if id := sealedUnder(t, dir, bob); id != "k1" {
+		t.Fatalf("bob's pin, read just before the ctx ended, was written (now under %q)", id)
 	}
 	if rep, err := reseal(t, r, nil); err != nil || rep != (store.PinReseal{Sealed: 1}) {
 		t.Fatalf("the next pass: %+v, %v", rep, err)
@@ -275,5 +278,65 @@ func TestWithoutThePassTheSecondRotationStrandsPins(t *testing.T) {
 	pinned(t, sealedRegion(dir, window("k1"), nil), pinFor(alice, "uuid:a"))
 	if _, err := crypt.Wrap(dir, window("k2", "k3"), nil).GetMembership(ctx, alice); !errors.Is(err, crypt.ErrUnknownKey) {
 		t.Fatalf("a pin under k1 read under (k2, k3): %v, want ErrUnknownKey", err)
+	}
+}
+
+// before is a directory that runs f once, ahead of its first pin read.
+type before struct {
+	Members
+	f func()
+}
+
+func (b *before) GetMembership(ctx context.Context, p string) (store.Membership, error) {
+	if f := b.f; f != nil {
+		b.f = nil
+		f()
+	}
+	return b.Members.GetMembership(ctx, p)
+}
+
+// A pin forgotten between the listing and the read is neither written nor
+// counted as unopened: the tombstone stands.
+func TestAPinForgottenSinceTheListingIsNeitherWrittenNorCounted(t *testing.T) {
+	ctx := context.Background()
+	dir := memory.New(clock)
+	pinned(t, sealedRegion(dir, window("k1"), nil), pinFor(alice, "uuid:a"))
+	var told []string
+	var b *before
+	r := sealedRegion(dir, window("k2", "k1"), func(m Members) Members { b = &before{Members: m}; return b })
+	b.f = func() {
+		if _, err := crypt.Wrap(dir, window("k2", "k1"), nil).DeleteMembership(ctx, alice); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := reseal(t, r, func(p string, _ error) { told = append(told, p) })
+	if err != nil || rep != (store.PinReseal{}) || len(told) != 0 {
+		t.Fatalf("the pass: %+v, told %v, %v", rep, told, err)
+	}
+	if _, err := dir.GetMembership(ctx, alice); !errors.Is(err, store.ErrForgotten) {
+		t.Fatalf("the forgotten pin's record after the pass: %v, want the tombstone", err)
+	}
+}
+
+// refusing is a directory whose pin reads are refused this identity.
+type refusing struct{ Members }
+
+func (refusing) GetMembership(context.Context, string) (store.Membership, error) {
+	return store.Membership{}, fmt.Errorf("%w: role revoked", store.ErrRefused)
+}
+
+// A directory that refuses the broker's identity mid-pass is the pass's
+// error, not "opens under neither key": nothing is told, counted or written.
+func TestARefusedPinReadEndsThePassAndIsNotCountedUnopened(t *testing.T) {
+	dir := memory.New(clock)
+	pinned(t, sealedRegion(dir, window("k1"), nil), pinFor(alice, "uuid:a"))
+	var told []string
+	r := sealedRegion(dir, window("k2", "k1"), func(m Members) Members { return refusing{m} })
+	rep, err := reseal(t, r, func(p string, _ error) { told = append(told, p) })
+	if !errors.Is(err, store.ErrRefused) || rep != (store.PinReseal{}) || len(told) != 0 {
+		t.Fatalf("the pass: %+v, told %v, %v, want ErrRefused and nothing counted", rep, told, err)
+	}
+	if id := sealedUnder(t, dir, alice); id != "k1" {
+		t.Fatalf("alice's pin is under %q after a refused pass", id)
 	}
 }

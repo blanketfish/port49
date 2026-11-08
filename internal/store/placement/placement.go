@@ -309,7 +309,8 @@ func (p *placed) PutPin(ctx context.Context, m store.Membership, expect store.Pi
 // another region changed since the read stands; that one is counted in
 // Previous and the next pass reads it again. A pin that opens under
 // neither key is told to unopened and counted, and never written or
-// deleted. A directory that does not answer, or a ctx that ends, ends the
+// deleted. A directory that does not answer or refuses the broker's
+// identity, or a ctx that ends, ends the
 // pass with that error: each pin is one compare, so nothing is left
 // half-written. held is false where the router has no directory of its
 // own, which holds no pins.
@@ -340,7 +341,7 @@ func (p *placed) ResealPins(ctx context.Context, unopened func(principal string,
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 			continue // forgotten or gone since the listing (ErrForgotten is an ErrNotFound)
-		case errors.Is(err, store.ErrUnavailable), ctx.Err() != nil:
+		case errors.Is(err, store.ErrUnavailable), errors.Is(err, store.ErrRefused), ctx.Err() != nil:
 			return rep, true, cmp.Or(err, ctx.Err())
 		case err != nil:
 			rep.Unopened++
