@@ -44,6 +44,6 @@ A row says only what its golden shows port49 answering. Everything else is on th
 
 ## Reference configurations
 
---8<-- "deploy/device-aaa/README.md:3:32"
+--8<-- "deploy/device-aaa/README.md:reference"
 
 The files are in [`deploy/device-aaa/`](https://github.com/blanketfish/port49/tree/main/deploy/device-aaa) in the repository.
