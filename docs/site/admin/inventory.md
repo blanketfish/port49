@@ -47,8 +47,12 @@ you.
 attribute the device does not have is decided by the scope's `on_missing:` ([Policy](policy.md)), which is why a
 connector's `map` is worth checking before the first sync.
 
-port49d re-reads the file at SIGHUP and keeps the previous inventory when the new one does not load or is refused by
-the removal bound below.
+port49d watches the file on the policy watch ticker (`broker.policy_watch_interval`, 5s by default) and re-reads it at
+SIGHUP. A change loads once two reads in a row agree, so an edit takes effect within two intervals: write the file
+atomically (to a new name, then rename), so a half-written file is never read. A file that does not load, or is
+refused by the removal bound below, leaves the previous inventory serving and sets `port49_inventory_file_refused`.
+The inventory service is different: it re-reads its own configuration only at a restart, and a SIGHUP to it starts a
+sync.
 
 ## The inventory service
 
@@ -71,7 +75,8 @@ A source is synced:
 release sends a refused delivery again at its defaults
 ([NetBox](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-netbox.md),
 [Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-nautobot.md)). The scheduled sync is the
-backstop: a newly racked device is un-admittable for up to one `interval` when a webhook is lost.
+backstop: a newly racked device is un-admittable for up to one `interval` when a webhook is lost, and a webhook that
+arrives while the service is shutting down triggers nothing (the startup sync covers it).
 
 ### A NetBox source
 
@@ -112,10 +117,19 @@ kind is a refusal at start, never a half-started service. The key list is in the
 
 What the connector does that a hand-written file would not:
 
-- **It reads the release first** (`/api/status/`) and picks a mapping profile for it; a source can name a
-  `profile:` itself. The releases a lab run measured are in the notes
+- **It reads the release first** (`/api/status/`) and picks a mapping profile for it. The measured releases are
+  **NetBox 3.7, NetBox 4.x, Nautobot 1.6, and Nautobot 2.x and 3.x**. **A release outside that list refuses every
+  sync** until the source sets `profile:`, with
+  `<product> <version> is a release no lab run measured (spec §15 L27, L30: <measured list>); set profile to read it with a measured release's fields, at your own risk`.
+  The last good bundle keeps serving meanwhile, but new devices are not admitted until you act. After a NetBox
+  or Nautobot major upgrade, check that the next sync succeeds. The notes
   ([NetBox](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-netbox.md),
-  [Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md)).
+  [Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md))
+  record what each release was measured to do.
+- **Removals are confirmed.** A device the last read kept and this read lacks is asked for by name before it counts
+  as removed (up to 256 of them; past that the whole list is read a second time and both reads must agree). One that
+  is still there makes the sync fail, so a list that shifts under paging, a rename or a delete at a page boundary,
+  never reads as a removal.
 - **GraphQL first, REST as the fallback** (`api: auto`). A GraphQL list is taken only when its length equals REST's
   `count` before and after it and no device appears twice, so a server cap or a page lost to a concurrent delete
   fails the sync instead of looking like devices removed.

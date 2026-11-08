@@ -36,8 +36,9 @@ Four rules carry the design:
    host can only ever obtain its own name. A shared provisioner lets any enrolled host ask for another's.
 3. **The certificate must name the CA's CRL.** port49 applies step-ca's CRL, which carries a critical issuing
    distribution point, only to a certificate whose CRL distribution points name it exactly. A certificate without
-   that name is undecided, and the broker refuses it with **503 `certificate_status_unavailable`**, not accepts
-   it. The template below adds the extension. Replace its URL with the name your CA's CRL carries (`crl.idpURL`
+   that name is undecided, and the broker refuses it with **503 `certificate_status_unavailable`** (under
+   `broker.certificate_status.on_unavailable: refuse`, the default; `allow` would admit it and say so). The template
+   below adds the extension. Replace its URL with the name your CA's CRL carries (`crl.idpURL`
    when set, otherwise `https://<the first of ca.json's dnsNames>/1.0/crl`) and check it with
    `step crl inspect`. This was measured on step-ca ([L48](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md)).
 4. **For an immediate stop, use `port49 revoke`** ([Revocation](revocation.md)) rather than waiting for the CA's CRL
@@ -64,13 +65,8 @@ broker:
 ```
 
 Enrolling, renewing, the broker policy snippet, what `port49 policy test` says about it and what to do on a bad
-day are in the guide that follows. It is the example's own README, included as written, so its numbering
-is its own. Section 7a there covers host keys: they are OpenSSH's job, and the guide uses `accept-new` and
-`known_hosts`.
-
-## The Oxidized guide
-
---8<-- "examples/oxidized/README.md:8:260"
+day are in the Oxidized guide at the end of this page. Its section 7a covers host keys: they are OpenSSH's job, and
+the guide uses `accept-new` and `known_hosts`.
 
 ## The workload directory
 
@@ -144,10 +140,10 @@ directory: workload certificates map by spiffe_id (weak, pinned to <issuers>) th
 | The directory is down past `grace` | refused `directory_unavailable`, and `port49 workload` exits **75** | restore the directory; pre-warm keeps recently mapped workloads working until then |
 | The directory is down longer than `session.staleness_ceiling` | live device sessions deny `context_stale` | the same |
 
-Keep pre-warm on, since it is what lets a mapped workload mint through a short directory outage. A cached workload
-has to be re-pointed (a host rebuilt with a new directory entry, say) is released with
+Keep pre-warm on, since it is what lets a mapped workload mint through a short directory outage. A workload whose
+entry changed identity (a host rebuilt with a new directory entry, say) is released from its pin with
 `port49 directory forget spiffe://example.com/host/backup-01`. It is run through your agent and needs the
-`forget_principals` right.
+`forget_principals` right and a press of your security key.
 
 The workload's login name comes from the subject that lists its SPIFFE ID (`username:`), else from the entry's
 `username_attribute`. The entry needs a unique canonical one either way.
@@ -161,7 +157,7 @@ and on Samba `dsdb_json_audit` at level 5. port49 prescribes no deny ACL; the me
 
 **A person's entry is never a workload.** An entry that holds a SPIFFE ID in `attribute` is refused as a person, and
 the reverse. Still, writing a SPIFFE ID onto a person's entry takes effect at the next directory refresh, whereas
-`port49 revoke user:<principal>` is immediate; until the refresh the entry could serve both domains. Only a
+`port49 revoke --principal user:<email>` is immediate; until the refresh the entry could serve both domains. Only a
 directory administrator can open that window, which is the same person who could add the user to any group.
 Revoke the person, then fix the entry ([Revocation](revocation.md)).
 
@@ -177,8 +173,15 @@ and the broker verifies it against the cluster's published keys.
 !!! warning "Unmeasured"
     Managed Kubernetes services (GKE, EKS, AKS) are unmeasured: whether their token issuers, discovery and key
     endpoints behave as the kind cluster did is unknown until they are measured (lab register entry L70, open).
-    The guide below is measured on kind only; read each claim for the cell that backs it.
+    The Kubernetes guide below is measured on kind only; read each claim for the cell that backs it.
 
-## The Kubernetes guide
+## The guides in full
+
+Everything from here to the end of the page is two example READMEs verbatim, the Oxidized one first and the
+Kubernetes one after it. Each numbers its own sections from 1, so the second "1." below is the Kubernetes guide's
+"What it is". Section headings of the Oxidized guide run from "What runs where" to "What L49 measured, and what it
+did not".
+
+--8<-- "examples/oxidized/README.md:8:260"
 
 --8<-- "examples/kubernetes/README.md:16:151"

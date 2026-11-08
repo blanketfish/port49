@@ -48,8 +48,10 @@ The person's ID token is accepted in exactly two places:
 
 Anywhere else, presenting it is refused **401 `trust_domain_unresolved`**, with a message saying that a person's ID
 token is not accepted there, and `/v1/refresh` refuses it too. A stolen ID token therefore cannot be replayed at the
-broker to act as the person; at worst, within five minutes, it can be exchanged once for a certificate, which is what
-the provider's own lifetime and `max_token_age` bound. (`max_token_age` is 2h by default; `clock_skew` is 1m.)
+broker to act as the person. Even at `POST /v1/certificate` it is bound to the request: the token's nonce must name
+the public key of the certificate request, and the request must be signed by that key, so a thief without the signer's
+private key gets `sign_in_not_bound`. A sign-in is also exchanged once; a second exchange gets `sign_in_spent`.
+(`max_token_age` is 2h by default; `clock_skew` is 1m.)
 
 ### What a provider may name
 
@@ -65,7 +67,7 @@ the provider's own lifetime and `max_token_age` bound. (`max_token_age` is 2h by
   The broker says each state once, for example:
 
   ```text
-  identity: <issuer>: no key refreshed within broker.identity.jwks_max_age (<age>; the last at <time>); every token from it is refused identity_provider_unavailable until a fetch succeeds; certificate logins and live device sessions are unaffected; to accept the held keys meanwhile, raise broker.identity.jwks_max_age (up to 720h) and restart <process>
+  identity: <issuer>: no key refreshed within broker.identity.jwks_max_age (<jwks_max_age>; the last at <time>); every token from it is refused identity_provider_unavailable until a fetch succeeds; certificate logins and live device sessions are unaffected; to accept the held keys meanwhile, raise broker.identity.jwks_max_age (up to 720h) and restart <process>
   ```
 
 - `HTTPS_PROXY` and `NO_PROXY` are honoured for the provider's requests, and the start line says how each issuer is
@@ -87,9 +89,12 @@ broker, and the broker ends the person's port49 sessions. Configure the client i
 A logout token that carries both `sid` and `sub` is handled as two logouts: the one for that `sid`, then the one for
 that `sub`. **The consequence is that every session of that `sub` ends**, not just the one that signed out. This was
 measured: one token revoked by `sid` and then by `sub`, and both sessions' ID tokens were refused
-`credential_revoked` ([L45](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L45-keycloak.md), ruling B,
-spec decision 39). A logout leaves no standing mark, so signing in again works at once. In the decision log the revoke
-has origin `backchannel_logout <issuer>`.
+`credential_revoked` (cells 6a to 6e of the
+[Arista EOS end-to-end run](https://github.com/blanketfish/port49/blob/main/tests/lab/results/oidc-e2e-arista_eos.md);
+the token shapes and the no-retry result are in
+[L45](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L45-keycloak.md); ruling B, spec decision 39).
+A logout leaves no standing mark, so the person can sign in again after `clock_skew` (1m). In the decision log the
+revoke has origin `backchannel_logout <issuer>`.
 
 The broker keeps the logout record for `max_token_age` plus twice `clock_skew` (on an issuing broker,
 `max(max_token_age, 24h)` plus twice `clock_skew`, since certificates live that long). If it cannot write the record
@@ -97,28 +102,39 @@ the answer is **503**, and the provider is the one to retry. **Keycloak does not
 
 ### When a logout did not land
 
-You will see the 503 in the provider's event log, and the broker's log says which form of recovery applies. Both go
-through your agent ([Revocation](revocation.md)).
+The provider's event log shows the 503, and the broker's log carries the recovery, spelled out for the principal. It
+begins
 
-**Form 1: the logout wrote its record.** Re-apply it and then lift it, so the person is not locked out:
-
-```sh
-port49 revoke --principal user:alice@example.com
-port49 revoke --lift --principal user:alice@example.com
-port49 revoke --list
+```text
+logout: a logout token from <issuer> could not be applied: the store did not answer; answered 503 so the provider may retry; if it does not, once the store returns: <form>
 ```
 
-The `--list` shows what is in force. The first command ends the person's sessions; the lift removes the standing mark
-so they can sign in again.
+and goes on with one of two forms. Both are run through your agent ([Revocation](revocation.md)) and need the
+`revoke_others` and `lift_revocations` rights.
 
-**Form 2: nothing was written.** Revoke unconditionally, and lift it only after the time the command prints:
+**Form 1: the logout wrote its record** (a later step failed). The form is conditional on the decision log, which
+holds a revoke record with origin `backchannel_logout`:
 
-```sh
-port49 revoke --sid <sid> --sid-issuer <issuer>
+```text
+if the decision log has a revoke record with origin backchannel_logout for <principal> just before this line, end its contexts with `port49 revoke --principal <principal>`, then `port49 revoke --lift --principal <principal>` so they may log in again; a lift can be lost across a <process> stop, so last check that `port49 revoke --list` shows no mark for <principal>
 ```
 
-That needs the `revoke_others` right and a key touch. On an issuing broker there is also a faster path: revoke each
-issued certificate by `--cert-issuer <DN> --cert-serial <HEX>`.
+**Form 2: nothing was written**, so no logout record refuses the person's held ID token or issued certificate. The
+revoke is unconditional, and **the lift waits for the time the line prints**, when that token or certificate has
+expired (the line's `<time>` is the record's lifetime from now):
+
+```text
+end <principal>'s contexts with `port49 revoke --principal <principal>` (api: revoke_others), and lift it with `port49 revoke --lift --principal <principal>` (api: lift_revocations) only after <time>: no logout record refuses the session's held ID token or issued certificate until then; last check that `port49 revoke --list` shows no mark for <principal>
+```
+
+A token that carries `sid` and `sub` gets this form, once per principal the decision log's mint records name for that
+`sub`. Lifting early lets the person's held token mint again. On an issuing broker the line adds a shorter path:
+revoke each certificate issued to the principal with `port49 revoke --cert-issuer <DN> --cert-serial <HEX>` (the DN
+and serial from each broker's issue records), and lift the mark after `max_token_age` plus twice `clock_skew` instead.
+
+For a token that names only a `sid`, the line first offers `port49 revoke --sid <sid> --sid-issuer <issuer>` (needs
+`revoke_others` and a press of your security key). It ends that one session, as a logout by `sid` does, and leaves
+no mark to lift.
 
 ## The directory
 
