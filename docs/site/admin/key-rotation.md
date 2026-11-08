@@ -165,14 +165,17 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   store. The gauges are absent until a runner completes its first pass after it starts. They are also
   absent on a single shared store, where a membership record has a lease (the 24 hours above) and there
   is no pin to re-seal. A pass that moves pins says `directory store: the re-seal sealed N pins under
-  the current key; M are left under encryption.previous`. If the directory store stops answering, the
-  pass says `directory store: the re-seal of pins stopped: <error>; the next pass starts again` and
-  changes no gauge. Each pin is one compare-and-swap, so nothing is left half-written.
+  the current key; M are left under encryption.previous`. If the directory store stops answering,
+  refuses the broker's identity, or a write fails other than by conflict, the pass says
+  `directory store: the re-seal of pins stopped: <error>; the next pass starts again` and changes no
+  gauge. A cancel (shutdown, or the keyspace handed over) stops the pass silently and changes no gauge
+  either. Each pin is one compare-and-swap, so nothing is left half-written.
 - **A pin that opens under neither key** is counted in `port49_directory_pins_unopenable` (alert
   [port49_directory_pins_unopenable](../reference/alerts.md#port49_directory_pins_unopenable), on the
   keyspace holder). It means a key was retired while it still sealed pins. Reading the pin fails with an
   unknown-key error (`ErrUnknownKey`). Each pass opens it again, so
-  `port49_crypt_open_failures_total{record="membership"}` rises once per pass for each such pin. Bind,
+  `port49_crypt_open_failures_total{record="membership"}` rises at least once per pass for each such pin, and more with traffic, because bind, mint and
+  refresh open it too. Bind,
   mint and refresh fail for that principal. From the code (not measured), sessions already open are
   denied `context_stale` once `session.staleness_ceiling` has passed. The pass never deletes or
   rewrites such a pin. It says `directory store: <principal>'s pin does not open (...)` once an hour,
@@ -184,7 +187,9 @@ Do not run step 3 until the records sealed under the old key are gone or re-seal
   [Stores](../operate/stores.md). There is no offline forget on `port49-broker`.
 - **Rotating again.** There is one `previous` slot, so a rotation's step 1 drops whatever key
   `previous` held. Begin a rotation only after the last one's step 3. The waits above gate that step,
-  so every pin and second factor is then under `current`, and the new rotation strands nothing.
+  so every pin is then under `current`. Only pins have a gauge. A second factor is under `current` once
+  a pass has completed without the `could not open N second factors` line and without
+  `sign-in: the re-seal of second factors stopped`.
 - **Backups and exports need every key that sealed their records.** An etcd snapshot and a Velero backup
   are the raw stores, and each record in them keeps the key that was current when that record was written.
   An enrollment export (`port49-broker export-enrollments`) keeps each record's seal too, and seals only
