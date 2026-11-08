@@ -85,8 +85,10 @@ func TestIncludedRegionsFollowTheSnippetSyntax(t *testing.T) {
 		t.Errorf("regions = %v, want %v", got, want)
 	}
 	root := writeTree(t, map[string]string{
-		"docs/site/p.md": "--8<-- \"a.md:2:3\"\n--8<-- \"a.md:5\"\n--8<-- \"a.md\"\n--8<-- \"docs/site/_snippets/s.md\"\n",
-		"a.md":           "1\n2\n3\n4\n5\n6\n",
+		"docs/site/p.md": "--8<-- \"a.md:2:3\"\n--8<-- \"a.md:5\"\n--8<-- \"a.md\"\n--8<-- \"docs/site/_snippets/s.md\"\n" +
+			"```text\n--8<-- \"code.tpl\"\n```\n",
+		"a.md":     "1\n2\n3\n4\n5\n6\n",
+		"code.tpl": "L4 in a listing\n", // pasted into a fence: it renders as code, not prose
 	})
 	got, err = IncludedRegions(root)
 	if err != nil {

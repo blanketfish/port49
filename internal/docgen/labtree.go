@@ -75,9 +75,14 @@ func IncludedRegions(root string) ([]Region, error) {
 		if err != nil {
 			return nil, err
 		}
+		fenced := false
 		for n, line := range lines {
+			if fenceOpen.MatchString(line) {
+				fenced = !fenced
+				continue
+			}
 			m := includeLine.FindStringSubmatch(line)
-			if m == nil {
+			if m == nil || fenced { // an include inside a fence is pasted as code, not read as prose
 				continue
 			}
 			ref := includeRef.FindStringSubmatch(m[1])
