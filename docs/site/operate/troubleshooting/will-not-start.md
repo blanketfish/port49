@@ -32,7 +32,7 @@ table of what you see:
 | Pod `ContainerCreating` for minutes | `kubectl describe pod <pod>` (the Events) | A named Secret or ConfigMap is missing: a kubelet event, never a port49 line. |
 | Pod `Pending` | `kubectl describe pod <pod>` | A named PVC is missing or unbound, or nothing can be scheduled. |
 | port49d refuses to start naming etcd and a version | `kubectl logs --previous <pod>` | A member is below the floor (3.4.24, 3.5.8 or 3.6); upgrade etcd. Every member is listed and checked. |
-| Not Ready, running | `curl :9049/readyz` through a port-forward | A store is unreachable; the body says which. |
+| Not Ready, running | `curl :9049/readyz` through a port-forward | Not serving yet: the body says why (`starting`, `waiting for the store`, `draining`). It does not name the store; `port49 store status` does. |
 | No pod is ever created; the StatefulSet's events say `violates PodSecurity` | `kubectl -n <ns> describe statefulset <name>` | The namespace enforces `restricted`. The data-dir init runs as root, so the namespace must be `baseline`: `kubectl label --overwrite ns <ns> pod-security.kubernetes.io/enforce=baseline`. |
 | Pod `Init:Error` or `Init:CrashLoopBackOff` | `kubectl logs <pod> -c data-dir` and `-c data-dir-owner` | `data-dir-owner` naming a path: a file in the data directory belongs to another uid; run the `chown -R 65532:65532 ...` it prints. Naming a directory that may be mode 0000: `chmod u+rwx` it as root on the volume, then restart. `data-dir` saying the data directory is a symlink: someone replaced it; inspect and remove the link. |
 | `kubectl get externalsecret` shows `SecretSyncedError` | `kubectl describe externalsecret <name>` | The external secrets operator cannot reach its store or a remote key. The Secret keeps its last data, so a new key version never appears and port49d names the missing `secret_ref`. |
@@ -48,14 +48,16 @@ issuance: this broker's issuing CA (<fingerprint>) is behind a promotion: the st
 The chart's `scripts/copy-issuer.sh` cannot fix it: it never overwrites a broker's CA, and this broker
 holds the old one. Copy the three files by hand:
 
-1. Find the broker the line names and this broker's PVC (`kubectl get pvc`; the chart's StatefulSet
-   makes one per ordinal from the claim template `data`). The files live in `state/` inside it.
-2. Start a throwaway debug pod that mounts that PVC. The claim is `ReadWriteOnce`, which one node can
-   mount: if the debug pod cannot attach it because the crash-looping pod holds it, set the debug pod's
-   `nodeName` to that pod's node.
-3. Copy `issuing-ca.pem`, `issuing-ca.key` and `issuing-ca-previous.pem` from the broker the line names
-   into the PVC's `state/` directory. Set the owner to 65532:65532 and the mode to 0600.
-4. Delete the debug pod and let the broker start. Compare the `issuing as ... (sha256:<fingerprint>)`
+1. Find the broker the line names and the two PVCs. The chart's StatefulSet is `<release>-broker` and
+   makes one claim per ordinal, `data-<release>-broker-<ordinal>`. The files live in `state/` inside it.
+2. Start a throwaway debug pod for each PVC. The claims are `ReadWriteOnce`, which one node can mount:
+   set each debug pod's `nodeName` to the node of the broker pod that holds that claim, or the pod stays
+   pending. The image has no shell, so use an image that has one (the chart README's backup note uses a
+   throwaway alpine pod the same way).
+3. Read the three files off the source broker's claim (mount it `readOnly: true`; `kubectl exec ... -- tar c
+   -C /s/state issuing-ca.pem issuing-ca.key issuing-ca-previous.pem` streams them) and write them into
+   `state/` on the crash-looping broker's claim. Set the owner to 65532:65532 and the mode to 0600.
+4. Delete the debug pods and let the broker start. Compare the `issuing as ... (sha256:<fingerprint>)`
    line on every broker; the fingerprints must be identical.
 
 Do not run `init-issuer` on this broker (it would make a different CA), and do not run `forget-issuer`
@@ -83,25 +85,34 @@ that replaces the task, and a Compose `depends_on` with `condition: service_heal
 **Use `--ready` (`/readyz`) only to route or to display:** Compose's own `healthy` in
 `docker compose ps`, a load balancer's member check.
 
-The reason is the 3am case. When the store is down at start, port49d waits for it with its listener
-closed, and `/readyz` answers `503 waiting for the store: the TACACS+ listener stays closed until etcd
-answers`. That wait is the design: port49d comes back by itself when etcd does, and devices find TCP 49
-refused and fall to their local method meanwhile. A supervisor that restarts on `--ready` turns that
-wait into a restart loop. Each restart throws away what the process holds in memory, its cached
-directory membership and pins, and serves from its stored snapshot only up to
-`session.staleness_ceiling`. A store outage must never restart-loop port49d.
+The reason is the 3am case. Whenever port49d waits for its store it keeps its listener closed, and
+`/readyz` answers `503 waiting for the store: the TACACS+ listener stays closed until etcd answers (plan
+7d)`. Two cases differ in how long it waits:
+
+- **A store lost while port49d runs.** It waits with no limit and comes back by itself when etcd does.
+  Devices find TCP 49 refused and fall to their local method meanwhile.
+- **A cold start while the store is down.** It waits `start_timeout` (30 seconds by default; `0` waits as
+  long as it takes), then exits 1, and systemd or compose starts it again.
+
+A supervisor that restarts on `--ready` turns the first case into a restart loop, and in the second
+adds restarts of its own to the ones the exit already causes. Each restart throws away what the process
+holds in memory, its cached directory membership and pins, and serves from its stored snapshot only up
+to `session.staleness_ceiling`. A store outage must never restart-loop port49d.
 
 !!! warning "The shipped compose.yaml probes with `--ready`, and `docker stack deploy` acts on it"
     `compose.yaml` runs `healthcheck --ready` for port49d and the broker, which is right for
     `docker compose`: it only reports `healthy` and restarts nothing on it. **Docker Swarm
     (`docker stack deploy`) restarts a container that turns unhealthy.** Deployed to Swarm as shipped,
     port49d is restarted again and again for as long as the store is down. If you adapt the file to
-    Swarm, remove `--ready` from both `healthcheck` lines so they probe `/healthz`.
+    Swarm, do two things to both `healthcheck` blocks: remove `--ready` so they probe `/healthz`, and
+    raise `retries` from 3 to 6. The shipped `interval: 10s` and `retries: 3` are a 30-second window,
+    which is not enough (next paragraph).
 
 Even `/healthz` has a gap. Between one run of port49d and the next after a store loss, `/healthz` and
-`/readyz` are unbound for seconds. Give a liveness check a failure window of more than 30 seconds; the
-chart uses `/healthz` every 10 seconds and six failures (60 seconds), and the shipped compose healthcheck
-is 10 seconds and three retries, with a 30-second start period.
+`/readyz` are unbound for seconds. Give a check that restarts on failure a window of more than 30
+seconds. The chart does: `/healthz` every 10 seconds with six failures, 60 seconds. Compose's shipped
+healthcheck (10 seconds, three retries, a 30-second start period) does not meet it, and does not need to,
+because compose restarts nothing on it.
 
 On Kubernetes the chart already does this: `/readyz` is the readiness probe, so a not-ready pod leaves
 the Service, and `/healthz` is the liveness probe.

@@ -1,15 +1,9 @@
 ---
 title: Failure matrix
 description: What a device login does when each part of port49 is down.
-# The matrix cites two Cisco IOS XE results notes for rows whose lab entry is only partly closed; the
-# lab check accepts a note only for a platform the page lists.
-platforms:
-  - cisco_iosxe
 ---
 
 # Failure matrix
-
-## How to read it
 
 For each part of port49 that can fail, this matrix gives what the device does, what you see, what to do
 and the test or lab note that shows it. Start with "At 3am", the table of the failures that cost a

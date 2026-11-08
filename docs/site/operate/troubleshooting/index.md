@@ -81,8 +81,12 @@ get around the outage; the devices already fall to local.
 **It means:** it depends on the platform, and on how long the device has been failing.
 
 - **An `ERROR` is final on some platforms.** While port49d answers `ERROR` (its store is failing), Cisco
-  IOS XE refuses the local account, and so does Junos under the reference `authentication-order
-  tacplus`. Cisco IOS XR over TLS does the same
+  IOS XE refuses the local account
+  ([the IOS XE note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md)),
+  and so does Junos under the reference `authentication-order tacplus`
+  ([vJunos-router](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md),
+  [vSRX](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vsrx.md)).
+  Cisco IOS XR over TLS does the same
   ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)). The
   local account works again once port49d closes its listener (about 5.5 seconds at the defaults) or is
   stopped. Nokia SR Linux logs the local account in at once
@@ -91,11 +95,15 @@ get around the outage; the devices already fall to local.
   [IOS XR](../../admin/devices/cisco-ios-xr.md), [Junos](../../admin/devices/juniper-junos.md).
 - **A device that failed over keeps answering locally for a while.** After its servers failed, the device
   itself answers for a window and sends port49 nothing: a token login is refused during it, and
-  break-glass works. Measured: IOS XE 30 to 39 seconds over TCP, and about a minute over TLS on one
-  release (measured once); IOS XR 24 to 46 seconds. XR also accepts any local account's password in that
-  window, including one port49 denies. Expect the window after port49d returns from a stop.
+  break-glass works. Measured (cells f2 and f3 of the closed reference-configuration row): IOS XE 30 to
+  39 seconds over TCP
+  ([the IOS XE note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md)),
+  and about a minute over TLS on one release, measured once; IOS XR 24 to 46 seconds
+  ([the XR note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd.md)). XR
+  also accepts any local account's password in that window, including one port49 denies. Expect the
+  window after port49d returns from a stop.
   [`deploy/device-aaa/README.md`](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/README.md)
-  has the cells and the notes.
+  has the cells and the other notes.
 
 !!! warning "Unmeasured"
     Whether an authentication `ERROR` is final on Cisco IOS XR over plain TCP is not measured (L93,
@@ -162,7 +170,7 @@ answer its scrape) and [port49_target_absent](../../reference/alerts.md#port49_t
 target exists, so every device has lost port49 and falls to local); **ticket**
 [port49_broker_target_absent](../../reference/alerts.md#port49_broker_target_absent).
 
-**Do:** check the process (`systemctl status`, `docker compose ps`, `kubectl get pods`) and
+**Do this:** check the process (`systemctl status`, `docker compose ps`, `kubectl get pods`) and
 `curl :9049/readyz`. Check that the Prometheus job names are `port49d` and `port49-broker`.
 
 **Don't:** read `port49_target_absent` as "port49d is down" before you check the scrape config: a wrong
@@ -173,7 +181,7 @@ job name fires it too. See [monitoring](../monitoring.md#scraping).
 Alerts: **page** [port49_global_cap_shedding](../../reference/alerts.md#port49_global_cap_shedding);
 **ticket** [port49_connections_near_cap](../../reference/alerts.md#port49_connections_near_cap).
 
-**Do:** raise `limits.max_connections` or add replicas. The shed devices were reset on purpose and tried
+**Do this:** raise `limits.max_connections` or add replicas. The shed devices were reset on purpose and tried
 their next server.
 
 **Don't:** restart port49d to clear it. A restart resets every open connection and does not change the
@@ -187,7 +195,7 @@ Alerts: **page** [port49_issuing_ca_missing](../../reference/alerts.md#port49_is
 [port49_issuing_ca_expiring](../../reference/alerts.md#port49_issuing_ca_expiring),
 [port49_key_retirement_within_7d](../../reference/alerts.md#port49_key_retirement_within_7d).
 
-**Do:** for a retirement, read the decision log for the devices still on the key and move them to the
+**Do this:** for a retirement, read the decision log for the devices still on the key and move them to the
 current one before `retire_after`. For a missing CA, copy it from a broker that holds it. See
 [key rotation](../../admin/key-rotation.md).
 
@@ -210,7 +218,7 @@ did not verify); **ticket**
 [port49_devices_generic_platform](../../reference/alerts.md#port49_devices_generic_platform),
 [port49_context_refreshes_failed](../../reference/alerts.md#port49_context_refreshes_failed).
 
-**Do:** for the two pages, read the `admin_touch` or `per_login_mfa` records for the principal and ask the
+**Do this:** for the two pages, read the `admin_touch` or `per_login_mfa` records for the principal and ask the
 person; revoke if it was not them. For a policy ticket, `port49 policy test` names the compositions that
 fail closed, and a refused policy file means an older policy is still serving: fix the file or its
 directory's mode.
@@ -241,7 +249,7 @@ Alerts: **page** [port49_store_directory_unreachable](../../reference/alerts.md#
 [port49_store_health_check_failing](../../reference/alerts.md#port49_store_health_check_failing),
 [port49_context_cache_stale](../../reference/alerts.md#port49_context_cache_stale).
 
-**Do:** run `port49 store status`, then follow [a cut region at 3am](../stores.md#a-cut-region-at-3am).
+**Do this:** run `port49 store status`, then follow [a cut region at 3am](../stores.md#a-cut-region-at-3am).
 While a region cannot read the directory, revocations made elsewhere do not reach it: to cut someone off
 there now, remove their grants from the policy file that region loads, or stop its port49d. For
 `port49_store_health_failures_close` the listeners reopen by themselves once the store answers. For
@@ -261,7 +269,7 @@ Alerts: **page** [port49_tls_server_certificate_expired](../../reference/alerts.
 [port49_crl_next_update_passed](../../reference/alerts.md#port49_crl_next_update_passed),
 [port49_inventory_transport_changed](../../reference/alerts.md#port49_inventory_transport_changed).
 
-**Do:** replace the listener's certificate; the `outcome` label of the handshake alert says why a
+**Do this:** replace the listener's certificate; the `outcome` label of the handshake alert says why a
 handshake failed. See [TLS](../tls.md).
 
 **Don't:** switch devices to plain TCP as a workaround. A device speaks one transport, and the other
@@ -276,7 +284,7 @@ Alerts: **page** [port49_redemption_restore_unjudged](../../reference/alerts.md#
 [port49_oidc_tokens_unavailable](../../reference/alerts.md#port49_oidc_tokens_unavailable),
 [port49_workload_certificates_renewal_late](../../reference/alerts.md#port49_workload_certificates_renewal_late).
 
-**Do:** for `port49_redemption_restore_unjudged`, fix the store or the daemon role's read of
+**Do this:** for `port49_redemption_restore_unjudged`, fix the store or the daemon role's read of
 `meta/witness`; the log line carries the store's own error. Stop port49d only to let devices fall to
 break-glass at once. For a detected restore, follow [backup and restore](../backup-and-restore.md).
 
@@ -294,7 +302,7 @@ and [port49_sign_ins_enrollment_store_lost](../../reference/alerts.md#port49_sig
 [port49_directory_group_names_ambiguous](../../reference/alerts.md#port49_directory_group_names_ambiguous),
 [port49_sign_ins_throttled](../../reference/alerts.md#port49_sign_ins_throttled).
 
-**Do:** for the refresh page, restore the directory servers before the ceiling: at it, every live session
+**Do this:** for the refresh page, restore the directory servers before the ceiling: at it, every live session
 is denied `context_stale`. For a lost enrollment store, restore the file or run `port49 directory import`
 from the export. See [backup and restore](../backup-and-restore.md).
 
@@ -309,7 +317,7 @@ Alerts: **page** [port49_accounting_spool_drops](../../reference/alerts.md#port4
 [port49_accounting_foreign](../../reference/alerts.md#port49_accounting_foreign); **ticket**
 [port49_accounting_spool_disk_slow](../../reference/alerts.md#port49_accounting_spool_disk_slow).
 
-**Do:** for write failures, fix the sink (a full disk, a mode); decisions are not being recorded until you
+**Do this:** for write failures, fix the sink (a full disk, a mode); decisions are not being recorded until you
 do. The `stage` label of the spool alert says where records were discarded. For `foreign`, look for
 break-glass and console logins: a local login during an outage is expected.
 
@@ -328,7 +336,7 @@ Alerts, all **ticket**: [port49_inventory_sync_failing](../../reference/alerts.m
 [port49_inventory_policy_mismatch](../../reference/alerts.md#port49_inventory_policy_mismatch),
 [port49_inventory_privilege_changes](../../reference/alerts.md#port49_inventory_privilege_changes).
 
-**Do:** read the inventory service's log. The fleet keeps authenticating on the snapshot in force, and
+**Do this:** read the inventory service's log. The fleet keeps authenticating on the snapshot in force, and
 nothing fails closed. For `port49_inventory_privilege_changes`, the `inventory_change` record names the
 device: review it.
 
@@ -342,7 +350,7 @@ Alerts: **page** [etcd_no_leader](../../reference/alerts.md#etcd_no_leader); **t
 [etcd_disk_slow](../../reference/alerts.md#etcd_disk_slow),
 [etcd_leader_changes](../../reference/alerts.md#etcd_leader_changes).
 
-**Do:** bring back a quorum. A dark member costs up to 12 seconds; a lost quorum stops the store, and
+**Do this:** bring back a quorum. A dark member costs up to 12 seconds; a lost quorum stops the store, and
 port49d answers `store_unavailable` and then closes its listeners. For a full database, compact and
 defragment as etcd's documentation describes, before it reaches its quota. For a slow disk, see
 [monitoring](../monitoring.md#the-disk-etcd-and-the-spool-need).
@@ -435,10 +443,11 @@ Raising `staleness_ceiling` does not help.
 revocation itself stands in the store and in force, but the file is behind, so a restart would forget a
 mark the file does not hold. `port49 revoke` exits 3 for this.
 
-**Do this:** fix the disk or mount the file lives on. The file is then caught up without another
-revocation, and the gauge falls to 0 when a write has put every mark in force in it. If it stays at 1, run
-the revoke again (`port49 revoke` exits 3 and says to): a later call waits for the earlier write, lists
-every mark in force and rewrites the file.
+**Do this:** fix the disk or mount the file lives on, then run the revoke again (`port49 revoke` exits 3
+and says to). Only a revoke or a lift writes the file, so after a write error, such as a full disk,
+nothing retries on its own and the gauge stays at 1 until you do. The revoke lists every mark in force,
+rewrites the file with all of them, and the gauge falls to 0. After a hung mount returns, the write that
+was in flight finishes the catch-up itself, but run the revoke anyway if the gauge has not fallen.
 
 **Don't:** restart the broker or port49d while it is at 1.
 

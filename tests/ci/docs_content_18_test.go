@@ -24,6 +24,7 @@ func init() {
 	)
 	mustSay["operate/troubleshooting/will-not-start.md"] = append(mustSay["operate/troubleshooting/will-not-start.md"],
 		"--ready", "/healthz", "docker stack deploy", "service_healthy", "debug pod",
+		"start_timeout", "`retries` from 3 to 6",
 	)
 	mustSay["operate/monitoring.md"] = append(mustSay["operate/monitoring.md"],
 		"task_id", "global_cap", "10 ms", "etcd_disk_slow", "port49_accounting_spool_disk_slow",
@@ -107,37 +108,60 @@ func joinedLiterals(e ast.Expr) (string, bool) {
 var (
 	youSee      = regexp.MustCompile("^\\*\\*You see:\\*\\* `([^`]+)`")
 	placeholder = regexp.MustCompile(`<[^>]*>`)
+	wildcard    = `(?:%[svdq]|[^ ]+)`
 )
 
-// quotedLines is the code span of each "**You see:**" in the "A log line says" section of the 3am index.
+// quotedLinesOf is the code span of each "**You see:**" in the "A log line says" section of the 3am
+// index, and the lines of that section that start a "**You see:**" without a whole code span on the same
+// line (a wrapped span would otherwise be skipped).
+func quotedLinesOf(text string) (spans, bad []string) {
+	in := false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "## ") {
+			in = strings.HasPrefix(line, "## A log line says")
+			continue
+		}
+		if !in || !strings.HasPrefix(line, "**You see:**") {
+			continue
+		}
+		if m := youSee.FindStringSubmatch(line); m != nil {
+			spans = append(spans, m[1])
+		} else {
+			bad = append(bad, line)
+		}
+	}
+	return spans, bad
+}
+
+func TestAWrappedYouSeeIsAnError(t *testing.T) {
+	text := "## A log line says\n\n**You see:** `a line that wraps\nonto a second line`\n\n**You see:** `fine`\n"
+	spans, bad := quotedLinesOf(text)
+	if len(spans) != 1 || spans[0] != "fine" || len(bad) != 1 {
+		t.Errorf("spans %q, bad %q: want the one whole span and the wrapped one reported", spans, bad)
+	}
+}
+
 func quotedLines(t *testing.T) []string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(docsRoot, filepath.FromSlash(indexPage)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []string
-	in := false
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(line, "## ") {
-			in = strings.HasPrefix(line, "## A log line says")
-			continue
-		}
-		if m := youSee.FindStringSubmatch(line); in && m != nil {
-			out = append(out, m[1])
-		}
+	spans, bad := quotedLinesOf(string(b))
+	for _, l := range bad {
+		t.Errorf("a **You see:** in the log-line section has no whole code span on its line: %.60s", l)
 	}
-	return out
+	return spans
 }
 
-// lineRegexp is a quoted line as a pattern: each <...> is a wildcard, which also takes the %s or %d
-// of a format string.
+// lineRegexp is a quoted line as a pattern: each <...> is one word or a format verb (%s, %d, %v, %q),
+// not any run of text.
 func lineRegexp(line string) *regexp.Regexp {
 	parts := placeholder.Split(line, -1)
 	for i, p := range parts {
 		parts[i] = regexp.QuoteMeta(p)
 	}
-	return regexp.MustCompile("(?s)" + strings.Join(parts, ".*?"))
+	return regexp.MustCompile("(?s)" + strings.Join(parts, wildcard))
 }
 
 func TestEveryQuotedLogLineIsInTheCode(t *testing.T) {
@@ -163,7 +187,7 @@ func TestEveryQuotedLogLineIsInTheCode(t *testing.T) {
 
 // Every alert, page or ticket, is in the index linked to its section of the alerts reference, so a new
 // rule cannot ship without a family to belong to. At least the page ones must exist in the file.
-func TestEveryPageAlertIsInTheIndex(t *testing.T) {
+func TestEveryAlertIsInTheIndex(t *testing.T) {
 	rules, err := os.ReadFile(filepath.Join(repoRoot, "deploy", "alerts", "port49.rules.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +206,7 @@ func TestEveryPageAlertIsInTheIndex(t *testing.T) {
 			pages++
 		}
 		if want := "../../reference/alerts.md#" + a.Name + ")"; !strings.Contains(string(b), want) {
-			t.Errorf("%s does not link page alert %s (%s)", indexPage, a.Name, want)
+			t.Errorf("%s does not link alert %s (%s)", indexPage, a.Name, want)
 		}
 	}
 	if pages == 0 {
