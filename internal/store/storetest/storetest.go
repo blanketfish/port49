@@ -1061,8 +1061,8 @@ type Backend struct {
 	Stagger bool
 	// Sealed says the store is the sealing layer over a backend: it seals
 	// the Sealed part itself, so a property that writes a chosen header
-	// there (MembershipSealsListsTheLive) is not meaningful, and the layer's
-	// own test (crypt_test.go) covers its key ids.
+	// there (MembershipSealsListsTheLive) does not assert the key ids, and the
+	// layer's own test (crypt_test.go) covers them.
 	Sealed bool
 }
 

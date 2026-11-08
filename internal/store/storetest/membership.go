@@ -679,9 +679,6 @@ func MembershipForgetOfAnAbsentRecordLeavesAPermanentTombstone(t *testing.T, b B
 // id its sealed part's header names and the version GetMembership reads
 // (decision 57). An expired record and a forget's tombstone are not listed.
 func MembershipSealsListsTheLive(t *testing.T, b Backend) {
-	if b.Sealed {
-		t.Skip("the sealing layer writes the sealed part itself; TestMembershipSealsMarkTheCurrentKey covers it")
-	}
 	ctx := context.Background()
 	var mu sync.Mutex
 	now := t0
@@ -711,13 +708,18 @@ func MembershipSealsListsTheLive(t *testing.T, b Backend) {
 	now = now.Add(2 * time.Minute)
 	mu.Unlock()
 	got, err := s.MembershipSeals(ctx)
-	if err != nil || len(got) != 2 || got[0].Principal != alice || got[0].KeyID != "k1" ||
-		got[1].Principal != bob || got[1].KeyID != "k2" {
+	if err != nil || len(got) != 2 || got[0].Principal != alice || got[1].Principal != bob {
 		t.Fatalf("the listing: %+v, %v", got, err)
+	}
+	// The sealing layer seals the part itself, so the key ids and Current
+	// are its own (TestMembershipSealsMarkTheCurrentKey); a bare backend
+	// reports the header written above.
+	if !b.Sealed && (got[0].KeyID != "k1" || got[1].KeyID != "k2") {
+		t.Fatalf("the key ids: %+v", got)
 	}
 	for _, e := range got {
 		m, err := s.GetMembership(ctx, e.Principal)
-		if err != nil || e.Version == 0 || e.Version != m.Version || e.Current {
+		if err != nil || e.Version == 0 || e.Version != m.Version || (!b.Sealed && e.Current) {
 			t.Fatalf("%s listed at version %d (current %v), read at %d: %v", e.Principal, e.Version, e.Current, m.Version, err)
 		}
 	}
