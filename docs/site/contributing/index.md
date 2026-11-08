@@ -34,8 +34,8 @@ make hooks
 
 `make hooks` points this clone's `core.hooksPath` at `.githooks`. That enables two checks on every commit:
 a secret scan of the staged changes (`gitleaks`), and a check that the commit message carries no session
-link or trailer. The setting lives in the clone's git configuration, which its worktrees share, so run it once per clone. Never bypass a finding with
-`--no-verify`; fix it.
+link or trailer. The setting lives in the clone's git configuration, which its worktrees share, so run it
+once per clone. Never bypass a finding with `--no-verify`; fix it.
 
 ## Conventions
 

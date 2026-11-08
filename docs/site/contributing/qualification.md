@@ -36,8 +36,6 @@ The rest of this section is the contributor guide from `tests/qual/README.md`, i
 
 --8<-- "tests/qual/README.md:procedures"
 
-## The lab regression run
-
 --8<-- "tests/lab/README.md:regressions"
 
 ### Working around the NX-OS boot hang

@@ -925,7 +925,7 @@ Every evidence file passes a leak gate before any is written; a failure names th
 of content, never the content.
 
 <!-- --8<-- [start:regressions] -->
-## Regressions (plan 11b)
+## The lab regression run
 
 `make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
 notes. Each entry's `measured_minutes` is its wall time in a full run (the first, commit `2c680dbf`,

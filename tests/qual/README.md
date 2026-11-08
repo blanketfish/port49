@@ -12,7 +12,7 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
 
 ## Vet a new firmware and add its mock
 
-1. Put the image on `/mnt/images`.
+1. Put the image where the lab host keeps its images (for example `/mnt/images`).
 2. Add its `platforms` row in `tests/lab/harness_test.go`: selector, topology, image, version (as
    the device reports it) and a measured `boot`.
 3. Run `make qual-vet P=<sel>`, for example `make qual-vet P=nxos106`. It refuses when
@@ -30,7 +30,7 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
    - each device fact.
 
    A claim is measured only when a note for **this** firmware measured it (decision 52, ruling 4).
-   On Junos the command cells are `not_applicable` (L18, open), so `genprofile` records the engine gap
+   On Junos the command cells are `not_applicable` (L18: `tests/lab/results/L18-juniper_vjunos-router.md`), so `genprofile` records the engine gap
    `command_authorization_not_sent`; that is expected, not a failure.
 
    The TLS login is played the way the device defaults, per-request (`tls_token_login`), and
