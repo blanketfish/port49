@@ -200,13 +200,16 @@ def _mint(device, enable, agent, workload):
         except NoAgent as e:
             if agent is not None:
                 raise
-            raise NoAgent(e.code, f"{e.detail or e.code}; a program with a machine identity of its own passes "
-                          f"workload=port49.Workload(...) instead", device) from None
+            raise NoAgent(e.code, f"{e.detail or e.code} (that is a person's step; a program with a machine "
+                          f"identity of its own passes workload=port49.Workload(...) instead)", device) from None
     try:
         res = workload.tokens([device], enable=enable)
     except Port49Error as e:
         if getattr(e, "results", None) is not None:
             e.results = e.results.without_tokens()
+        if e.device is None:  # a stopped run names no device of its own: name it, as the Agent path does
+            e.device = device
+            e.args = (str(e),)
         raise
     tok = res.tokens.get(device)
     if tok is not None:

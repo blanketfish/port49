@@ -174,6 +174,9 @@ def reaches(root, secret, skip=()):
             if secret.encode() in obj:
                 return True
             continue
+        if isinstance(obj, BaseException):  # its args, its chain, and the locals of its traceback's frames
+            todo += [obj.args, obj.__cause__, obj.__context__]
+            todo += [_locals_of(f) for f in _tb_frames(obj.__traceback__)]
         if isinstance(obj, dict):
             todo += [x for kv in obj.items() for x in kv]
         elif isinstance(obj, (list, tuple, set, frozenset)):
@@ -195,21 +198,44 @@ def reaches(root, secret, skip=()):
     return False
 
 
-def frame_locals(exc):
-    """repr of every local of every frame in exc's traceback and in its causes' and contexts', shown or
-    suppressed."""
-    out, todo, seen = [], [exc], set()
+def _tb_frames(tb):
+    """The frames of traceback tb from connect inward: those above are the test's own, and hold the made-up
+    tokens on self or in a FakeAgent. A traceback that never enters connect (a cause raised and caught deeper)
+    is all of it."""
+    frames = []
+    while tb is not None:
+        frames.append(tb.tb_frame)
+        tb = tb.tb_next
+    for i, f in enumerate(frames):
+        if f.f_code is p49netmiko.connect.__code__:
+            return frames[i:]
+    return frames
+
+
+def _locals_of(frame):
+    """frame's locals, but for connect's own: its agent= is the caller's object, and the tests' FakeAgent
+    holds the token it was made with (a real Agent holds a session, no token). connect's own frame cannot be
+    cleared while it runs, so that is the one place it is read."""
+    held = dict(frame.f_locals)
+    if frame.f_code is p49netmiko.connect.__code__:
+        held.pop("agent", None)
+    return held
+
+
+def in_frames(exc, secret):
+    """Whether secret is reachable from any local of any frame, connect inward, in exc's traceback and in its
+    causes' and contexts', shown or suppressed: objects, not their repr (Token hides its login from repr)."""
+    todo, seen = [exc], set()
     while todo:
         e = todo.pop()
         if e is None or id(e) in seen:
             continue
         seen.add(id(e))
-        tb = e.__traceback__
-        while tb is not None:
-            out.append(repr(tb.tb_frame.f_locals))
-            tb = tb.tb_next
+        for frame in _tb_frames(e.__traceback__):
+            if reaches(_locals_of(frame), secret):
+                return True
         todo += [e.__cause__, e.__context__]
-    return "\n".join(out)
+    return False
 
 
 def permitted(login, enable=None):
@@ -256,9 +282,14 @@ class NetmikoTest(unittest.TestCase):
     def test_a_workloads_failure_after_the_mint_leaves_no_token_in_a_traceback(self):  # #56
         self.made()
         AUTH_FAILS.append(True)
-        with self.assertRaises(Exception) as cm:
+        try:  # not assertRaises, which strips the traceback that is under test
             self.connect(known("ssh-ed25519 AAAA1"), workload=self.workload(permitted(self.login)))
-        self.assertFalse(self.login in frame_locals(cm.exception), "the login in a frame's locals")
+        except Exception as e:
+            caught = e
+        else:
+            self.fail("connect did not raise")
+        self.assertFalse(in_frames(caught, self.login), "the login in a frame's locals")
+        self.assertFalse(reaches(caught, self.login), "the login reachable from the error")
 
     def test_a_workloads_refusal_raises_what_an_agents_does_before_connecting(self):  # #56
         mfa = {"accept": ["hardware_key_touch"], "reuse_for_seconds": 900}
@@ -283,12 +314,18 @@ class NetmikoTest(unittest.TestCase):
         answer = {"stdout": json.dumps({"principal": "p", "results": json.loads(permitted(self.login)["stdout"])["results"],
                                         "refused": [], "stopped": "broker_unavailable"}), "code": 75}
         captured.clear()
-        with self.assertRaises(Temporary) as cm:
+        try:  # not assertRaises, which strips the traceback
             self.connect(known("ssh-ed25519 AAAA1"), workload=self.workload(answer))
-        self.assertEqual(cm.exception.results.tokens, {"leaf1": None})  # the name stays, the token does not
-        self.assertFalse(reaches(cm.exception, self.login), "the login reachable from the error")
-        self.assertFalse(self.login in str(cm.exception) + repr(cm.exception) + repr(cm.exception.args),
-                         "the login in the error's message")  # reaches() does not follow .args
+        except Temporary as e:
+            caught = e
+        else:
+            self.fail("connect did not raise")
+        self.assertEqual(caught.results.tokens, {"leaf1": None})  # the name stays, the token does not
+        self.assertEqual(caught.device, "leaf1")  # named, as the Agent path's errors are
+        self.assertFalse(reaches(caught, self.login), "the login reachable from the error")
+        self.assertFalse(in_frames(caught, self.login), "the login in a frame's locals")  # Workload.tokens' res
+        self.assertFalse(self.login in str(caught) + repr(caught) + repr(caught.args),
+                         "the login in the error's message")
         self.assertEqual(captured, {})
 
     def test_agent_and_workload_together_or_crossed_are_refused_before_minting(self):  # #56, Ruling 2
@@ -342,11 +379,11 @@ class NetmikoTest(unittest.TestCase):
             self.fail("connect did not raise")
         e = caught
         text = "".join(traceback.TracebackException.from_exception(e, capture_locals=True).format())
-        # No loop variable holding a token: this frame is in the traceback frame_locals reads. And the
+        # No loop variable holding a token: this frame is in the traceback in_frames reads. And the
         # assertions are on booleans, so a failure prints no token.
         for name in ("login", "enable"):
             self.assertFalse(getattr(self, name) in text, f"{name} in the formatted traceback")
-            self.assertFalse(getattr(self, name) in frame_locals(e), f"{name} in a frame's locals")
+            self.assertFalse(in_frames(e, getattr(self, name)), f"{name} in a frame's locals")
             self.assertFalse(getattr(self, name) in str(e) + repr(e) + repr(e.args), f"{name} in the exception")
         self.assertIn("_authenticate", text)  # the frames stay, file and line; only their locals go
 
@@ -388,7 +425,7 @@ class NetmikoTest(unittest.TestCase):
         self.assertEqual(type(caught).__name__, "AuthenticationException")
         text = "".join(traceback.TracebackException.from_exception(caught, capture_locals=True).format())
         for name in ("login", "enable"):
-            self.assertFalse(getattr(self, name) in frame_locals(caught), f"{name} in a frame's locals")
+            self.assertFalse(in_frames(caught, getattr(self, name)), f"{name} in a frame's locals")
             self.assertFalse(getattr(self, name) in text, f"{name} in the formatted traceback")
         self.assertTrue("paramiko" in text, "paramiko's frames are in the chain")  # the frames are real ones
 
@@ -420,7 +457,7 @@ class NetmikoTest(unittest.TestCase):
         else:
             self.fail("connect did not raise")
         self.assertIsNotNone(caught.__context__)
-        self.assertFalse(self.login in frame_locals(caught), "the login token in a frame's locals")
+        self.assertFalse(in_frames(caught, self.login), "the login token in a frame's locals")
 
     def test_a_callers_own_exception_keeps_its_frames(self):  # #56: the clearing stops at connect
         def caller_fails():
