@@ -308,6 +308,29 @@ class NetmikoTest(unittest.TestCase):
                 self.assertFalse(netmiko_logger_holds(getattr(self, name)), f"{name} on Netmiko's logger ({how})")
                 self.assertFalse(reaches(caught, getattr(self, name)), f"{name} reachable from the error ({how})")
 
+    def test_a_failed_construction_leaves_another_connections_masking_filter(self):  # #56
+        # Another thread's connection, built inside this construction's window: its filter masks its own
+        # password, and taking it off would log that password in the clear.
+        log = logging.getLogger("netmiko")
+        other_secret = secrets.token_urlsafe(24)
+        other = SecretsFilter({"password": other_secret, "secret": ""})
+        built = FakeConnection.__init__
+
+        def racing(stand_in, **kw):
+            log.addFilter(other)
+            built(stand_in, **kw)
+        self.made()
+        agent = FakeAgent(Token("leaf1", "10.0.0.11", "arista_eos", "alice", self.login, self.enable))
+        with mock.patch.object(FakeConnection, "__init__", racing):
+            try:
+                self.connect(known("ssh-ed25519 AAAA1"), enable=True, session_log="/no/such/dir/s.log", agent=agent)
+            except OSError:
+                pass
+            else:
+                self.fail("connect did not raise")
+        self.assertTrue(other in log.filters, "another connection's masking filter was removed")
+        self.assertFalse(netmiko_logger_holds(self.login), "the failed construction's filter stayed")
+
     def test_a_disconnect_after_a_failed_login_leaves_no_token_on_netmikos_logger(self):  # #56
         self.made()
         AUTH_FAILS.append(True)

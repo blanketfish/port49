@@ -316,8 +316,13 @@ def _connect(device, enable, agent, workload, ssh_config, netmiko_kwargs):
                                   alt_key_file=known, use_keys=False, allow_agent=False, auto_connect=False,
                                   **netmiko_kwargs)
         except BaseException:
+            # Only this construction's filter: one another thread's connection added meanwhile masks that
+            # connection's password, and removing it would log the password in the clear at DEBUG.
+            mine = {tok.login, tok.enable} - {None, ""}
             for f in [f for f in log.filters if f not in before]:
-                log.removeFilter(f)
+                held = getattr(f, "no_log", None)
+                if isinstance(held, dict) and mine & set(held.values()):
+                    log.removeFilter(f)
             raise
         if kh.keys:
             # Only the filed key types are negotiated, on this connect and on every rebuild (Netmiko passes
