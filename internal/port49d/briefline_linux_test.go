@@ -3,12 +3,15 @@
 package port49d
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 // fenceMode is the end of the fence's short mode refusal of a 0666 file: the
@@ -102,6 +105,78 @@ func TestATrustFollowSaysAnIssuerFileTheFenceRefusesWithinTheCut(t *testing.T) {
 	r.l.reload("reload_interval")
 	r.l.reload("reload_interval")
 	lineFrom(t, r.sink.all(), "declined status_unavailable until this is fixed: "+key, fenceMode)
+}
+
+// followCase is a trust follow that fails on r's issuer_file in a way that
+// names a path other than the issuer_file's own. It pins the start error's
+// text, byte for byte as before the short form, and the trust-follow line
+// at the 400-byte cut: the cause and the remedy stay, and it ends uncut.
+func followCase(t *testing.T, r *rotation, ends string) {
+	t.Helper()
+	_, inner := fence.Read(r.issuer, issuerFileMax, "crls issuer_file")
+	if inner == nil {
+		t.Fatal("the fence reads the issuer_file")
+	}
+	_, err := certStatusConfig(config.CertificateStatusConfig{CRLs: []config.CertificateStatusCRL{{Name: "x",
+		URL: "http://127.0.0.1:1/x.crl", IssuerFile: r.issuer}}}, nil, t.TempDir(), "the test anchors", "the test")
+	if want := "crls[0].issuer_file " + r.issuer + ": " + inner.Error(); err == nil || err.Error() != want {
+		t.Errorf("the start error changed:\n got %v\nwant %s", err, want)
+	}
+	if errors.Unwrap(err) == nil {
+		t.Errorf("the start error does not unwrap: %v", err)
+	}
+	r.l.reload("reload_interval")
+	lineFrom(t, r.sink.all(), "the certificate status sources keep the issuers they had: tls_listener.certificate_status.crls[0].issuer_file ", ends)
+}
+
+// A trust follow's line keeps the fence's cause and remedy when the issuer_file
+// is a link to a refused file (the fence names the target, not the path), when
+// a directory on the way is a link in an open directory (a Kubernetes
+// ConfigMap mount), and when a directory above it is missing at a 300-byte
+// path: none of these errors names the issuer_file's own path (#60).
+func TestATrustFollowKeepsTheFencesWordsWhenItNamesAnotherPath(t *testing.T) {
+	t.Run("a link to a refused file", func(t *testing.T) {
+		r := newRotationIn(t, deepEnrollDir(t, 260, "issuer.pem"))
+		target := filepath.Join(safeDir(t), "target.pem")
+		if err := os.WriteFile(target, r.p.ca.PEM(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(target, 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(r.issuer); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, r.issuer); err != nil {
+			t.Fatal(err)
+		}
+		followCase(t, r, fenceMode)
+	})
+	t.Run("a link directory under an open one", func(t *testing.T) {
+		top := deepEnrollDir(t, 260, "ca/issuer.pem")
+		if err := os.Mkdir(filepath.Join(top, "ca"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		r := newRotationIn(t, filepath.Join(top, "ca"))
+		if err := os.Rename(filepath.Join(top, "ca"), filepath.Join(top, "real")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(top, "real"), filepath.Join(top, "ca")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(top, fs.ModeSticky|0o777); err != nil {
+			t.Fatal(err)
+		}
+		followCase(t, r, ", wants no group or other write - chmod go-w it")
+	})
+	t.Run("a missing ancestor at 300 bytes", func(t *testing.T) {
+		dir := deepEnrollDir(t, 300, "issuer.pem")
+		r := newRotationIn(t, dir)
+		if err := os.Rename(dir, dir+"-moved"); err != nil {
+			t.Fatal(err)
+		}
+		followCase(t, r, ": no such file or directory")
+	})
 }
 
 // issuerKeyErr is certStatusConfig's start error for an issuer_file at path

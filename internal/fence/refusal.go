@@ -56,8 +56,18 @@ func (r *Refusal) Unwrap() error { return r.err }
 // shown is a path as a Short names it.
 func shown(p string) string { return printsafe.Tail(p, shortPathMax) }
 
-// Brief is err's text for a line that is cut short. Every Refusal's full text
-// is replaced by its Short, and every fs.PathError's path by its tail, inside
+// Shorter is an error with a short form of its own: its Error is the full
+// text, naming every path whole, and Short is the same words for a line that is
+// cut. *Refusal is one; a caller that wraps a fence error and adds a path of
+// its own (port49d's issuer_file error) is another, so Brief can shorten what
+// the wrapper adds as well (#60).
+type Shorter interface {
+	error
+	Short() string
+}
+
+// Brief is err's text for a line that is cut short. Every Shorter's full text
+// (every Refusal) is replaced by its Short, and every fs.PathError's path by its tail, inside
 // whatever err wraps them in, an errors.Join included. Any other error's text
 // is unchanged.
 func Brief(err error) string {
@@ -70,7 +80,7 @@ func Brief(err error) string {
 		switch x := e.(type) {
 		case nil:
 			return
-		case *Refusal:
+		case Shorter:
 			s = strings.Replace(s, x.Error(), x.Short(), 1)
 			return
 		case *fs.PathError:

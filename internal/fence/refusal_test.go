@@ -67,3 +67,23 @@ func TestBriefShortensOnlyWhatTheFenceNames(t *testing.T) {
 		t.Errorf("nil: %q", got)
 	}
 }
+
+var _ Shorter = (*Refusal)(nil)
+
+// shortWrap is a caller's error with a Short of its own.
+type shortWrap struct{ err error }
+
+func (e shortWrap) Error() string { return "full " + e.err.Error() }
+func (e shortWrap) Short() string { return "short " + Brief(e.err) }
+func (e shortWrap) Unwrap() error { return e.err }
+
+// Brief honours any error with a Short, not only a Refusal, and does not walk
+// into it, because its Short already did (#60).
+func TestBriefHonoursAnyShorter(t *testing.T) {
+	long := "/" + strings.Repeat("d", 100) + "/f"
+	r := &Refusal{full: "the file " + long + " is wrong", short: "the file " + shown(long) + ": wrong - fix it"}
+	got := Brief(fmt.Errorf("a: %w", shortWrap{r}))
+	if want := "a: short the file " + shown(long) + ": wrong - fix it"; got != want {
+		t.Errorf("a wrapper with a Short: %q, want %q", got, want)
+	}
+}
