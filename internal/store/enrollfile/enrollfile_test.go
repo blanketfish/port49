@@ -787,7 +787,7 @@ func TestAnAncestorThatCannotBeSearchedIsNamedInTheReason(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root searches a 0000 directory")
 	}
-	// The inner name is long, so the file's own shown path (its last 56 bytes) cannot reach the locked directory.
+	// The inner name is long, so the file's own shown path (its last 40 bytes) cannot reach the locked directory.
 	inner := filepath.Join(dirFor(t), "locked", strings.Repeat("n", 60))
 	if err := os.MkdirAll(inner, 0o700); err != nil {
 		t.Fatal(err)

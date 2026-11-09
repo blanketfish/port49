@@ -56,7 +56,7 @@
 3. **#55: the step is `port49 ssh <device>`, not `port49 login`** (root cause 3). The message also says that an agent stops and asks a person, and that a workload's proof is a person's touch on its `touch_key`. One text covers both paths, because `MFARequired` cannot reliably tell an `Agent`'s from a `Workload`'s. `token.py` needs no code change, because its relay is `str(e)`. A unit test pins what it relays.
 4. **#57: a test, not a derivation.** Deriving would mean rewriting the loader's per-type refusals (root cause 4) as tables, which is a security-relevant validation change made for a docs page. The test fails on exactly what the issue fears: a verifier key in none of `humansOnlyKeys`, `machinesOnlyKeys` and a new explicit `sharedIdentityKeys`, or in more than one, or a classified key no verifier has. `identityKeyBelongs` keeps its logic.
 5. **#58: product bug. Cut the path, never the reason.**
-   - The reason names the path once, cut from its start to its last 56 bytes (new `printsafe.Tail`), so the file name survives.
+   - The reason names the path once, cut from its start to its last 40 bytes (new `printsafe.Tail`; 56 in the first draft, cut to 40 in Task 5's fix round 2), so the file name survives.
    - The cause no longer repeats the fence's path. A link says so in a fixed sentence. An `fs.PathError` gives its errno text. Any other error keeps today's text.
    - So a link or an unreadable file at any depth gives a reason of at most 300 bytes, which the broker's cut leaves whole. The broker's 300-byte cut stays as the backstop.
 6. **#58, the askpass test: a socket directory under `/tmp`, whatever TMPDIR is.** The directory is private (0700) and made by the test, as an agent's `XDG_RUNTIME_DIR` would be. The open-directory refusal is still asserted. A new case sets a long private directory on purpose and asserts that `listenAskpass` refuses it with its own words and leaves nothing behind.
@@ -68,7 +68,7 @@
 | `port49 explain` on a Junos device | `note: ... a revocation or a session ceiling does not reach a live session there (spec §5.6)` | The same prefix, then all four controls, decision 21, and on a projected Junos the `authorization-time-interval` exception (L36, L40 open) and the `idle-timeout` bound |
 | `port49 policy diff` with a group change and no session test | `subject: backup's group "g" -> machine_group "g"` among upper-case gated lines | `SUBJECT: backup's group "g" -> machine_group "g"; a session test naming the subject acknowledges it` |
 | An Ansible play or Python script reaches a per-login MFA device | "run `port49 token leaf1` at a terminal" | "a person must give it, so an agent stops here and asks one: at a terminal, a person's `port49 ssh leaf1` proves it ..." |
-| A link is planted at a deep enrollment-store path | `sign-in: the enrollment store is lost (store: ...: <path>: it cannot be read (<path>…)` with no cause and no remedy | `... lost (store: the enrollment store is lost: …<last 56 bytes of path>: it is a symbolic link, and the enrollment store is read only as a file of its own: fix its owner and mode, or remove a link; this broker looks again ...)` |
+| A link is planted at a deep enrollment-store path | `sign-in: the enrollment store is lost (store: ...: <path>: it cannot be read (<path>…)` with no cause and no remedy | `... lost (store: the enrollment store is lost: …<last 40 bytes of path>: it is a symbolic link, and the enrollment store is read only as a file of its own: fix its owner and mode, or remove a link; this broker looks again ...)` |
 
 ## Global Constraints
 
@@ -536,7 +536,7 @@
   In `enrollfile.go` (add `"github.com/blanketfish/port49/internal/printsafe"` to the imports; `errors`, `io/fs` and `syscall` are there):
 
   ```go
-  // shownPath is the path as a lost reason names it: its last 56 bytes, so a
+  // shownPath is the path as a lost reason names it: its last 40 bytes (as built), so a
   // deep path never pushes the cause and the remedy past the broker's cut
   // (#58).
   func (f *File) shownPath() string { return printsafe.Tail(f.path, 56) }
@@ -647,17 +647,17 @@
 
 - **`port49 explain`:**
   - On a platform that authorizes sessions only (Junos), the note now names every post-login control that does not reach a live session: the ceiling, a revocation, a username change and the ceiling warning.
-  - On a projected Junos it adds two facts. With `authorization-time-interval` set, one re-authorization was measured (L36), and whether more come is open (L40). The class `idle-timeout` is what ends an idle session.
+  - On Junos (`juniper_junos`, projected or not) it adds that with `authorization-time-interval` set, one re-authorization was measured (L36), and whether more come is open (L40). On a projected Junos it also names the class `idle-timeout` as what ends an idle session. Any other session-only platform is told the device is not known to re-authorize, so not to rely on these controls there.
   - The note's first words are unchanged.
 - **`port49 policy diff`:** a group change no session test acknowledges now prints `SUBJECT:` with the hint, as `PRINCIPAL:` and `USERNAME:` do. An acknowledged one prints `subject (a session test asserts it):`. The gate and the exit code are unchanged.
 - **Python client and Ansible lookup:**
   - A device that asks for a second factor at each login now says that a person must give it, and that an agent stops and asks one.
   - It names `port49 ssh <device>` as the person's step. It no longer names `port49 token`, which prints a token.
   - Code that matches the old text must match on `.code` (`per_login_mfa_required`) instead.
-- **Enrollment store:** when the store's file is a link or cannot be read, the broker's line now always carries the cause and the remedy. A long path is shortened from its start, so the file name is kept.
+- **Enrollment store:** when the store's file is a link or cannot be read, the broker's line now always carries the cause and the remedy. The path is shown by its last 40 bytes, so the file name is kept. A directory above the file that cannot be searched is named, by its last 40 bytes. A file sealed under a key the broker does not hold names the key id by its last 12 bytes, says it is not held, and offers all three remedies: set `encryption.previous`, restore the file, or run `port49 directory reset-second-factor --all`.
 - **Tests:** `make test-rest` passes from a single ext4 TMPDIR under `~/.cache`.
 
 ## Left for later
 
-- A read error the fence words itself, such as a directory others can write or a file over the size limit, keeps the fence's own text, which names the path. Such a reason can still exceed 300 bytes at a deep path. It is not a late-file case these tests reach.
+- A read error the fence words itself, such as a directory others can write or a file over the size limit, keeps the fence's own text, which names the path. Such a reason can exceed 300 bytes, the owner and mode texts even at a short path. Filed as #60, a fix in the fence, which the policy, secret and enrollment reads share.
 - `socketDir` assumes `/tmp`. The tests that call it run on Linux only. A darwin test job would need `os.TempDir()` resolved through its link.
