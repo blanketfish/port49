@@ -112,9 +112,11 @@ from port49 import Workload
 from port49.netmiko import connect
 
 conn = connect("leaf1", enable=True)    # a person's token, through the agent `port49 login` started
+conn.disconnect()
 w = Workload(broker="https://broker.example.com:8443", broker_ca="/etc/port49/ca.pem",
              cert="/etc/port49/w.pem", key="/etc/port49/w.key")
 conn = connect("leaf1", workload=w)     # a machine's token, through `port49 workload token`
+conn.disconnect()
 # a Netmiko connection either way; extra keyword arguments pass to Netmiko
 ```
 
@@ -184,9 +186,9 @@ a deny, `broker_refused`, a lost session.
 
 The token is never in argv, the environment, a log or a `repr`. It is read from the CLI's stdout
 and handed to Netmiko (or Ansible) only. `connect`'s connection holds it only as Netmiko's `password` and
-`secret`, which Netmiko logs in again with. An exception `connect` raises has no locals left in the frames of
-its traceback, or of the tracebacks it chains, below `connect`, so a traceback printed with its locals shows no
-token. Netmiko masks the token in its DEBUG log and session log; everything else the session sends is logged in
+`secret`, which Netmiko logs in again with. An exception `connect` raises has its frames' locals cleared, in its
+traceback and in the tracebacks it chains, except a generator's or coroutine's frame or one still running, which
+hold no token on this path, so a traceback printed with its locals shows no token. Netmiko masks the token in its DEBUG log and session log; everything else the session sends is logged in
 full, so keep DEBUG off in production. No exception, `repr` or failed-parse error carries the
 CLI's stdout. The CLI's stderr (a touch prompt, a sign-in URL) is passed to your stderr as it
 comes; pass `Agent(stderr=file)` to send it elsewhere.

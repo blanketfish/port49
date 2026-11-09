@@ -108,8 +108,8 @@ without `workload=`: either uses a person's session.
 
 **Check:** the play's `debug` of `out.stdout_lines`, or the script's print of `send_command`'s output, prints
 the command's output (the play registers the result and prints that one key; the tasks that hold the token
-stay censored, and the agent never prints the fact, `ansible_password` or the connection's `password`), and the decision log has an `authorize_command` record whose
-`principal` is the agent's and whose `policy.subject` is its subject
+stay censored, and the agent never prints the fact, `ansible_password` or the connection's `password`), and the decision log has an `authorize_command`
+record whose `principal` is the agent's and whose `policy.subject` is its subject
 ([Decision log](../reference/decision-log.md)). A deny ends the run: report its reason code, and see
 [Reason codes](../reference/reason-codes.md) for what to do. Never retry a deny.
 

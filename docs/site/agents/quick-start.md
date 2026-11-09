@@ -297,7 +297,9 @@ token file; a Kubernetes service-account agent is a human's setup ([Workloads](.
 `port49.netmiko.connect` with `workload=` mints through `port49 workload token` with the agent's certificate,
 checks the device's host key under its inventory name before the token is sent
 ([Install the clients](../operate/install/clients.md#netmiko-and-host-keys)), and returns a Netmiko
-connection. The token is in no return value, exception or traceback.
+connection. The token reaches no return value except the connection itself, which holds it as Netmiko's
+`password` and `secret` to log in again, and it is in no exception or traceback. Never print, log or pickle the
+connection's attributes.
 
 ```python
 import port49

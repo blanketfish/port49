@@ -249,8 +249,9 @@ def _clear_frames(exc, stop):
 def connect(device, *, enable=False, agent=None, workload=None, ssh_config=None, **netmiko_kwargs):
     """A Netmiko connection to device, logged in with a port49 token: a Workload's (workload=, a machine's own
     identity) or an Agent's (agent=, default Agent(): a person's), never both. The token goes to Netmiko, as its
-    password and secret, and nowhere else: no return value, closure, exception or traceback local of
-    connect's holds it."""
+    password and secret, and nowhere else: the connection returned is the one return value that holds it (to log
+    in again), and no closure, exception or traceback local of connect's does. Never print, log or pickle the
+    connection's attributes."""
     outer = sys.exc_info()[1]
     try:
         return _connect(device, enable, agent, workload, ssh_config, netmiko_kwargs)
