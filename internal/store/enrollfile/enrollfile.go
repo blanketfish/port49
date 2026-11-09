@@ -49,7 +49,7 @@ type File struct {
 	now             func() time.Time
 
 	mu      sync.Mutex
-	lost    string // why the file did not open; "" when it did, or none is there
+	lost    string // why the file did not open, naming its path once; "" when it did, or none is there
 	present bool   // a file is at path: one opened, one that did not, or one written
 	late    bool   // lost was set by a look after Open, at a file that appeared later: the next look retries it
 	mark    *store.EnrollmentMark
@@ -95,14 +95,14 @@ func (f *File) read() error {
 		// A file that cannot be read (a restore left it root's at 0600, an
 		// I/O error, one over maxFile) does not open: lost, so the broker's
 		// other paths keep serving and only password sign-in refuses (D7).
-		f.present, f.lost = true, readFailure(f.path, err)+": fix its owner and mode, restore it, or "+
-			"run `port49 directory reset-second-factor --all`"
+		f.present, f.lost = true, f.failed(err, "fix its owner and mode, restore it, or "+
+			"run `port49 directory reset-second-factor --all`")
 		return nil
 	}
 	f.present = true
 	body, why := f.open(raw)
 	if why != "" {
-		f.lost = why
+		f.lost = f.shownPath() + ": " + why
 		return nil
 	}
 	f.load(body)
@@ -129,7 +129,7 @@ func (f *File) pickUpLate() error {
 	}
 	why := ""
 	if err != nil {
-		why = readFailure(f.path, err) + ": fix its owner and mode, or remove a link"
+		why = f.failed(err, "fix its owner and mode, or remove a link")
 	} else {
 		var body store.EnrollmentBody
 		if body, why = f.open(raw); why == "" {
@@ -137,17 +137,33 @@ func (f *File) pickUpLate() error {
 			f.load(body)
 			return nil
 		}
+		why = f.shownPath() + ": " + why
 	}
 	f.present, f.lost, f.late = true, why, true
-	return fmt.Errorf("%w: %s: %s; this broker looks again at its next recheck, with no restart", store.ErrEnrollmentStoreLost,
-		f.shownPath(), why)
+	return fmt.Errorf("%w: %s; this broker looks again at its next recheck, with no restart", store.ErrEnrollmentStoreLost, why)
 }
 
-// shownPath is the path as a lost reason names it: its last 40 bytes (the
-// file name and a few directories; the full path is the operator's own
-// configuration), so a deep path never pushes the cause and the remedy past
-// the broker's cut (#58).
+// shownPath is the path as a reason the store words itself names it: its last
+// 40 bytes (the file name and a few directories; the full path is the
+// operator's own configuration), so a deep path never pushes the cause and
+// the remedy past the broker's cut (#58). A fence refusal names its own
+// paths (failed).
 func (f *File) shownPath() string { return printsafe.Tail(f.path, 40) }
+
+// failed is the lost reason for a read of the file that failed with err. A
+// refusal the fence words itself is its Short: the check, the value seen and
+// the one wanted, and the remedy, each path by its tail, so the reason fits
+// the broker's cut at any path length (#60). A link at the path keeps the
+// store's own words, first, because the fence's link refusal is a Refusal
+// wrapping ELOOP. Any other failure names the shown path, readFailure and
+// remedy (#58).
+func (f *File) failed(err error, remedy string) string {
+	var r *fence.Refusal
+	if !errors.Is(err, syscall.ELOOP) && errors.As(err, &r) {
+		return r.Short()
+	}
+	return f.shownPath() + ": " + readFailure(f.path, err) + ": " + remedy
+}
 
 // readFailure is why the file at the path does not read, in words that do
 // not repeat the path, which the fence's own error names again (#58).
@@ -223,7 +239,7 @@ func (f *File) lostErr() error {
 	if f.lost == "" {
 		return nil
 	}
-	return fmt.Errorf("%w: %s: %s", store.ErrEnrollmentStoreLost, f.shownPath(), f.lost)
+	return fmt.Errorf("%w: %s", store.ErrEnrollmentStoreLost, f.lost)
 }
 
 // body is the content for mark, records and unlocks, as written.

@@ -17,6 +17,7 @@ import (
 	"github.com/blanketfish/port49/internal/config"
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/fence"
 	"github.com/blanketfish/port49/internal/oidc"
 	"github.com/blanketfish/port49/internal/store"
 	"github.com/blanketfish/port49/internal/store/crypt"
@@ -256,7 +257,9 @@ func defaultTOTPLabel(listen string) string {
 func openEnrollmentFile(path string, keys crypt.Keys, openFailures *prometheus.CounterVec) (store.Enrollments, error) {
 	f, err := enrollfile.Open(path, keys, time.Now)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", store.ErrEnrollmentStoreLost, err)
+		// The reason is cut at 300 bytes (Broker.CheckEnrollmentStore): the
+		// fence's short form keeps its cause and remedy at any path length (#60).
+		return nil, fmt.Errorf("%w: %s", store.ErrEnrollmentStoreLost, fence.Brief(err))
 	}
 	return &reopenable{Enrollments: crypt.WrapEnrollments(f, keys, openFailures), lost: f.Lost}, nil
 }

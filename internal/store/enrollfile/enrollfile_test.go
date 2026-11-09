@@ -376,9 +376,9 @@ func TestAGroupWritableDirectoryIsRefused(t *testing.T) {
 // not an Open error: the broker's other paths keep serving (review I3).
 func TestAnUnreadableOrOversizedFileIsLostNotAnOpenError(t *testing.T) {
 	ctx := context.Background()
-	check := func(t *testing.T, f *File) {
+	check := func(t *testing.T, f *File, want string) {
 		t.Helper()
-		if f.Lost() == "" || !strings.Contains(f.Lost(), "cannot be read") {
+		if f.Lost() == "" || !strings.Contains(f.Lost(), want) {
 			t.Fatalf("lost: %q", f.Lost())
 		}
 		if _, err := f.GetSecondFactor(ctx, alice); !errors.Is(err, store.ErrEnrollmentStoreLost) {
@@ -398,7 +398,7 @@ func TestAnUnreadableOrOversizedFileIsLostNotAnOpenError(t *testing.T) {
 			t.Fatal(err)
 		}
 		f := openAt(t, path, keys())
-		check(t, f)
+		check(t, f, "cannot be read")
 		// It can still be replaced: the unreadable file is set aside.
 		if err := f.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
 			t.Fatal(err)
@@ -415,7 +415,7 @@ func TestAnUnreadableOrOversizedFileIsLostNotAnOpenError(t *testing.T) {
 		if err := os.Truncate(path, maxFile+1); err != nil {
 			t.Fatal(err)
 		}
-		check(t, openAt(t, path, keys()))
+		check(t, openAt(t, path, keys()), "larger than 67108864 bytes")
 	})
 }
 
@@ -431,7 +431,7 @@ func TestAFileTheFenceRefusesIsLostNamingTheReasonAndNothingOfItsContent(t *test
 		t.Fatal(err)
 	}
 	f := openAt(t, path, keys())
-	if !strings.Contains(f.Lost(), "writable by others") || strings.Contains(f.Lost(), sentinel) {
+	if !strings.Contains(f.Lost(), "wants no group or other write") || strings.Contains(f.Lost(), sentinel) {
 		t.Fatalf("lost: %q", f.Lost())
 	}
 	_, err := f.GetEnrollmentMark(context.Background())
