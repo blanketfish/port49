@@ -3,6 +3,7 @@ package printsafe
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestALineIsOneLineOfPrintableText(t *testing.T) {
@@ -23,6 +24,14 @@ func TestALineIsOneLineOfPrintableText(t *testing.T) {
 		if got := Line(c.in, c.limit); got != c.want {
 			t.Errorf("Line(%q, %d) = %q, want %q", c.in, c.limit, got, c.want)
 		}
+	}
+}
+
+// A cut in the middle of a multibyte character leaves valid UTF-8 and the mark.
+func TestTailCutInsideACharacterIsValidUTF8(t *testing.T) {
+	got := Tail("é"+strings.Repeat("a", 4), 5) // the cut keeps the second byte of é
+	if !utf8.ValidString(got) || !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "aaaa") {
+		t.Fatalf("%q", got)
 	}
 }
 

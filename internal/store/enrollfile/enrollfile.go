@@ -95,7 +95,7 @@ func (f *File) read() error {
 		// A file that cannot be read (a restore left it root's at 0600, an
 		// I/O error, one over maxFile) does not open: lost, so the broker's
 		// other paths keep serving and only password sign-in refuses (D7).
-		f.present, f.lost = true, readFailure(err)+": fix its owner and mode, restore it, or "+
+		f.present, f.lost = true, readFailure(f.path, err)+": fix its owner and mode, restore it, or "+
 			"run `port49 directory reset-second-factor --all`"
 		return nil
 	}
@@ -129,7 +129,7 @@ func (f *File) pickUpLate() error {
 	}
 	why := ""
 	if err != nil {
-		why = readFailure(err) + ": fix its owner and mode, or remove a link"
+		why = readFailure(f.path, err) + ": fix its owner and mode, or remove a link"
 	} else {
 		var body store.EnrollmentBody
 		if body, why = f.open(raw); why == "" {
@@ -150,11 +150,17 @@ func (f *File) shownPath() string { return printsafe.Tail(f.path, 56) }
 
 // readFailure is why the file at the path does not read, in words that do
 // not repeat the path, which the fence's own error names again (#58).
-func readFailure(err error) string {
+//
+// An error that names another path (a directory above the file that cannot
+// be searched) keeps its operation and the tail of that path, so the
+// operator checks the directory that failed.
+func readFailure(path string, err error) string {
 	var pe *fs.PathError
 	switch {
-	case errors.Is(err, syscall.ELOOP): // first: the link refusal wraps a PathError
+	case errors.Is(err, syscall.ELOOP): // first: the link refusal wraps a PathError; reached only from pickUpLate, as read returns ELOOP before it
 		return "it is a symbolic link, and the enrollment store is read only as a file of its own"
+	case errors.As(err, &pe) && pe.Path != path:
+		return "it cannot be read (" + pe.Op + " " + printsafe.Tail(pe.Path, 40) + ": " + pe.Err.Error() + ")"
 	case errors.As(err, &pe):
 		return "it cannot be read (" + pe.Err.Error() + ")"
 	}
@@ -178,9 +184,11 @@ func (f *File) open(raw []byte) (store.EnrollmentBody, string) {
 	plain, err := f.keys.OpenBound(env.Sealed, fileBound)
 	switch {
 	case errors.Is(err, crypt.ErrUnknownKey):
-		return store.EnrollmentBody{}, fmt.Sprintf("it is sealed under key id %q, which this broker does not hold: "+
-			"set encryption.previous to it, restore the file, or run `port49 directory reset-second-factor --all`",
-			crypt.SealedKeyID(env.Sealed))
+		// Short on purpose: with a 64-byte key id (shown by its last 16) and a
+		// shown path, the whole reason, remedy included, fits the broker's
+		// 300-byte cut at start and late (#58).
+		return store.EnrollmentBody{}, fmt.Sprintf("it is sealed under key id %q: set encryption.previous to it, "+
+			"or run `port49 directory reset-second-factor --all`", printsafe.Tail(crypt.SealedKeyID(env.Sealed), 16))
 	case err != nil:
 		return store.EnrollmentBody{}, "it does not unseal (damaged, or changed after it was written): restore " +
 			"the file, or run `port49 directory reset-second-factor --all`"
