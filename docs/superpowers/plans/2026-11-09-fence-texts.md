@@ -120,7 +120,7 @@
 7. **No new reason code, warning or config key is needed.** None is added.
 8. **One helper for every cut line that can carry a fence error:** `briefLine(err error, limit int) string`, which is `printsafe.Line(fence.Brief(err), limit)`, in `internal/port49d/certstatus.go`. It is used at all five sites of root cause 3, so a later site has one call to copy. The cut lengths stay as they are: 300 for the kept CRL, 400 for the trust follow.
 9. **`certStatusConfig` names an issuer_file's path only when the error does not name it already.**
-   - A fence error (`*fence.Refusal` or `*fs.PathError`) names the file itself, so the key in front of it is `crls[N].issuer_file`, without the path. Any other error (the PEM, CA and anchor texts) keeps `crls[N].issuer_file PATH`, as today.
+   - An error whose own text already names the issuer_file's exact path (`strings.Contains(err.Error(), path)`: the fence's refusals of the file itself) gets the key `crls[N].issuer_file`, without the path. Any other error keeps `crls[N].issuer_file PATH`, as today: the PEM, CA and anchor texts, and a fence error that names an ancestor directory, a link or an `openDir` instead of the file. The path is never lost (ruling, fix round 1).
    - This is the trust-follow lines' fix: `Brief` cannot tail a path that the wrapper prints as plain text.
    - It also removes the doubled path from the start error, which still names the path whole in the fence's full text.
    - When the issuer_file is a link, the fence names the target it refused. The key then names the config entry and the fence names the file, which is what the operator has to fix.
@@ -1286,7 +1286,7 @@ Longest reason after the fix, at a 260-byte path, 10-digit uids and the late rea
   - `tls_listener: ...: the certificate status sources keep the issuers they had ...: ...`, when a reload finds a CRL source's issuer_file refused.
 
   They carry the check, the value seen against the value wanted, and the fix. Before, a deep state directory or issuer_file path could cut the fix off.
-- **issuer_file errors name the path once.** An issuer_file the fence refuses is now named `crls[N].issuer_file: <the fence's text>`, at start and at a reload. Before, the path came twice: once in the key, once in the fence's text. Other issuer_file errors (the PEM, CA and anchor checks) still read `crls[N].issuer_file PATH: ...`.
+- **issuer_file errors name the path once.** An issuer_file the fence refuses is now named `crls[N].issuer_file: <the fence's text>`, at start and at a reload. Before, the path came twice: once in the key, once in the fence's text. Other issuer_file errors (the PEM, CA and anchor checks, and a fence error that names an ancestor directory or a link rather than the file) still read `crls[N].issuer_file PATH: ...`.
 - **Every other refusal is unchanged.** Start errors, uncut reload lines and the journal keep the fence's full text, with every path whole: the policy, inventory, secret, TLS and CA files.
 - **Troubleshooting:** the "Directory and password sign-in" section says what such a line means.
 - **No config, metric, reason code or warning changes.** No lab run.

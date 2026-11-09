@@ -5,10 +5,9 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
 	"fmt"
-	"io/fs"
 	"slices"
+	"strings"
 
 	"github.com/blanketfish/port49/internal/certstatus"
 	"github.com/blanketfish/port49/internal/config"
@@ -22,15 +21,15 @@ import (
 // carry says it through this.
 func briefLine(err error, limit int) string { return printsafe.Line(fence.Brief(err), limit) }
 
-// issuerKey names the issuer_file of CRL source i in an error. It gives the
-// path only when err does not name it already: a fence error names the file
-// itself, whole in its Error and by its tail in fence.Brief. So a cut line
-// never carries the path whole in front of the short form, and a start error
-// names the path once (#60).
+// issuerKey names the issuer_file of CRL source i in an error. It leaves the
+// path out only when err's own text already names that exact path: the fence
+// names the file whole in its Error and by its tail in fence.Brief, so a cut
+// line never carries the path whole in front of the short form, and a start
+// error names it once. An error that names an ancestor directory, a link or
+// nothing keeps the path, so the operator is never left without the file's
+// name (#60).
 func issuerKey(i int, path string, err error) string {
-	var r *fence.Refusal
-	var pe *fs.PathError
-	if errors.As(err, &r) || errors.As(err, &pe) {
+	if strings.Contains(err.Error(), path) {
 		return fmt.Sprintf("crls[%d].issuer_file", i)
 	}
 	return fmt.Sprintf("crls[%d].issuer_file %s", i, path)

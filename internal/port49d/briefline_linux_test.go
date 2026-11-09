@@ -71,7 +71,11 @@ func TestTheTLSListenerSaysAKeptCRLTheFenceRefusesWithinTheCut(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "state", "tls_listener"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeOpen(t, filepath.Join(dir, "state", "tls_listener", "crl-dev.der"))
+	kept := filepath.Join(dir, "state", "tls_listener", "crl-dev.der")
+	if len(kept) != 260 {
+		t.Fatalf("the kept CRL's path is %d bytes", len(kept))
+	}
+	writeOpen(t, kept)
 	r := newRotationIn(t, dir)
 	lineFrom(t, r.sink.all(), "tls_listener: certificate status: kept CRL dev: the file …", fenceMode)
 }
@@ -98,6 +102,55 @@ func TestATrustFollowSaysAnIssuerFileTheFenceRefusesWithinTheCut(t *testing.T) {
 	r.l.reload("reload_interval")
 	r.l.reload("reload_interval")
 	lineFrom(t, r.sink.all(), "declined status_unavailable until this is fixed: "+key, fenceMode)
+}
+
+// issuerKeyErr is certStatusConfig's start error for an issuer_file at path
+// (the fence refuses or fails before any certificate is read).
+func issuerKeyErr(t *testing.T, path string) string {
+	t.Helper()
+	_, err := certStatusConfig(config.CertificateStatusConfig{CRLs: []config.CertificateStatusCRL{{Name: "x",
+		URL: "http://127.0.0.1:1/x.crl", IssuerFile: path}}}, nil, t.TempDir(), "the test anchors", "the test")
+	if err == nil {
+		t.Fatal("no error for an issuer_file the fence refuses")
+	}
+	return err.Error()
+}
+
+// A start error names the issuer_file's path whatever the fence names: an
+// ancestor that is missing, an ancestor it refuses, or the file itself
+// (named once). The path is left out only when the error's text carries it
+// already (#60).
+func TestAnIssuerFileErrorNeverLosesThePath(t *testing.T) {
+	dir := safeDir(t)
+	// (a) a directory above the file is missing: the error names the directory.
+	missing := filepath.Join(dir, "gone", "issuer.pem")
+	if got := issuerKeyErr(t, missing); !strings.Contains(got, "crls[0].issuer_file "+missing+": ") {
+		t.Errorf("a missing ancestor loses the path: %s", got)
+	}
+	// (b) an ancestor the fence refuses: the error must name the issuer_file's
+	// path, in the key or in the fence's own text.
+	open := filepath.Join(dir, "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(open, "issuer.pem"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	anc := filepath.Join(open, "issuer.pem")
+	got := issuerKeyErr(t, anc)
+	if !strings.Contains(got, anc) || !strings.HasPrefix(got, "crls[0].issuer_file") {
+		t.Errorf("a refused ancestor loses the path: %s", got)
+	}
+	// (c) the file itself, refused: the fence names it, so the key does not.
+	self := filepath.Join(dir, "self.pem")
+	writeOpen(t, self)
+	got = issuerKeyErr(t, self)
+	if n := strings.Count(got, self); n != 1 || !strings.HasPrefix(got, "crls[0].issuer_file: ") {
+		t.Errorf("a refusal of the file itself names the path %d times: %s", n, got)
+	}
 }
 
 // Every LoadPersisted loop in port49d says its errors through
