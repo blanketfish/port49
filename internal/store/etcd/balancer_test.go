@@ -457,6 +457,21 @@ func TestTwoBlockedLegsRepickedTogetherNeverShareTheOneReadyMember(t *testing.T)
 	}
 }
 
+// An Idle member is one that is about to connect: it is waited for like a
+// connecting one.
+func TestAnIdleMemberCountsAsPending(t *testing.T) {
+	set, now := members(t, "a", "b")
+	set("a", connectivity.Ready)
+	set("b", connectivity.Idle)
+	first := &tried{used: map[string]bool{}}
+	first.last.Store("a")
+	second := &tried{used: map[string]bool{}}
+	second.peer.Store(first)
+	if _, err := now().Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), second)}); err != balancer.ErrNoSubConnAvailable {
+		t.Fatalf("with b idle the second leg's pick returned %v, want ErrNoSubConnAvailable", err)
+	}
+}
+
 // With one member ready and every other failed (none connecting) the second
 // leg shares the first's: there is nothing to wait for, and watchLegs moves
 // a leg apart once another member is ready.
