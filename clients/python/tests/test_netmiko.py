@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import secrets
 import shutil
@@ -13,6 +14,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 captured = {}
 EVENTS = []      # "filed" and "authenticated", in the order they happened
@@ -125,7 +127,9 @@ class FakeConnection:
 
 sys.modules["netmiko"] = types.SimpleNamespace(ConnectHandler=lambda **kw: FakeConnection(**kw))
 
-from port49 import HostKeyError, Token, hostkeys  # noqa: E402
+import fakeport49 as fake  # noqa: E402
+from port49 import (Agent, Denied, DeviceFault, HostKeyError, MFARequired, NoAgent, Temporary, Token,  # noqa: E402
+                    Workload, hostkeys)
 from port49 import netmiko as p49netmiko  # noqa: E402
 
 TOKEN = Token("leaf1", "10.0.0.11", "arista_eos", "alice", "LOGINTOKEN", "ENABLETOKEN")
@@ -208,7 +212,111 @@ def frame_locals(exc):
     return "\n".join(out)
 
 
+def permitted(login, enable=None):
+    """`port49 workload token --format json`'s answer for leaf1, permitted."""
+    it = {"device": "leaf1", "verdict": "permit", "address": "10.0.0.11", "platform": "arista_eos",
+          "username": "svc", "login": login, "expires_at": "2026-11-09T10:00:00Z"}
+    if enable:
+        it["enable"] = enable
+    return {"stdout": json.dumps({"principal": "spiffe://example.com/agent/ro", "results": [it], "refused": []})}
+
+
+def refused(item, code=77):
+    return {"stdout": json.dumps({"principal": "spiffe://example.com/agent/ro", "results": [], "refused": [item]}),
+            "code": code}
+
+
 class NetmikoTest(unittest.TestCase):
+    def workload(self, *answers):
+        self.fake_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.fake_dir, True)  # the fake's answers hold the made-up tokens
+        self.err = io.StringIO()
+        return Workload("https://broker.example.com:8443", "/ca.pem", "/w.pem", "/w.key",
+                        port49=fake.make(self.fake_dir, list(answers)), stderr=self.err, timeout=30)
+
+    def made(self):
+        self.login, self.enable = secrets.token_urlsafe(18), secrets.token_urlsafe(18)
+
+    def test_a_workload_mints_once_by_workload_token_and_logs_in_with_it(self):  # #56
+        self.made()
+        conn, _ = self.connect(known("ssh-ed25519 AAAA1"), workload=self.workload(permitted(self.login, self.enable)),
+                               enable=True)
+        argvs = fake.argvs(self.fake_dir)
+        self.assertEqual(len(argvs), 1)
+        self.assertEqual(argvs[0][:2], ["workload", "token"])
+        self.assertIn("--enable", argvs[0])
+        self.assertEqual(fake.device_files(self.fake_dir), [["leaf1"]])
+        self.assertTrue((captured["host"], captured["username"], captured["password"], captured["secret"]) ==
+                        ("10.0.0.11", "svc", self.login, self.enable), "Netmiko not given the minted login")
+        self.lookup.assert_called_once_with("leaf1", "10.0.0.11", port=22, username="svc", ssh_config=None)
+        for name in ("login", "enable"):
+            self.assertFalse(reaches(conn, getattr(self, name), NETMIKO_HOLDS), f"{name} reachable from conn")
+            self.assertFalse(getattr(self, name) in self.err.getvalue(), f"{name} on stderr")
+
+    def test_a_workloads_failure_after_the_mint_leaves_no_token_in_a_traceback(self):  # #56
+        self.made()
+        AUTH_FAILS.append(True)
+        with self.assertRaises(Exception) as cm:
+            self.connect(known("ssh-ed25519 AAAA1"), workload=self.workload(permitted(self.login)))
+        self.assertFalse(self.login in frame_locals(cm.exception), "the login in a frame's locals")
+
+    def test_a_workloads_refusal_raises_what_an_agents_does_before_connecting(self):  # #56
+        mfa = {"accept": ["hardware_key_touch"], "reuse_for_seconds": 900}
+        for item, cls in [
+                ({"device": "leaf1", "verdict": "deny", "reason": "no_grants_matched"}, Denied),
+                ({"device": "leaf1", "verdict": "deny", "reason": "per_login_mfa_required", "per_login_mfa": mfa},
+                 MFARequired),
+                ({"device": "leaf1", "error": "device_unconfigured", "detail": "fixed words"}, DeviceFault)]:
+            captured.clear()
+            with self.assertRaises(cls, msg=item) as cm:
+                self.connect(known("ssh-ed25519 AAAA1"), workload=self.workload(refused(item)))
+            self.assertEqual((cm.exception.device, captured), ("leaf1", {}), item)
+            self.assertEqual(len(fake.argvs(self.fake_dir)), 1)
+        # the deny's reason, as on the Agent path
+        with self.assertRaises(Denied) as cm:
+            self.connect(known(), workload=self.workload(refused({"device": "leaf1", "verdict": "deny",
+                                                                   "reason": "no_grants_matched"})))
+        self.assertEqual(cm.exception.reason, "no_grants_matched")
+
+    def test_a_stopped_workload_run_keeps_no_token_on_its_error(self):  # #56, Ruling 4
+        self.made()
+        answer = {"stdout": json.dumps({"principal": "p", "results": json.loads(permitted(self.login)["stdout"])["results"],
+                                        "refused": [], "stopped": "broker_unavailable"}), "code": 75}
+        captured.clear()
+        with self.assertRaises(Temporary) as cm:
+            self.connect(known("ssh-ed25519 AAAA1"), workload=self.workload(answer))
+        self.assertEqual(cm.exception.results.tokens, {"leaf1": None})  # the name stays, the token does not
+        self.assertFalse(reaches(cm.exception, self.login), "the login reachable from the error")
+        self.assertFalse(self.login in str(cm.exception) + repr(cm.exception) + repr(cm.exception.args),
+                         "the login in the error's message")  # reaches() does not follow .args
+        self.assertEqual(captured, {})
+
+    def test_agent_and_workload_together_or_crossed_are_refused_before_minting(self):  # #56, Ruling 2
+        agent = FakeAgent()
+        w = self.workload(permitted("unused"))
+        with self.assertRaises(ValueError):
+            p49netmiko.connect("leaf1", agent=agent, workload=w)
+        with self.assertRaises(TypeError):
+            p49netmiko.connect("leaf1", agent=w)
+        with self.assertRaises(TypeError):
+            p49netmiko.connect("leaf1", workload=agent)
+        self.assertEqual((fake.argvs(self.fake_dir), agent.asked), ([], []))
+
+    def test_no_agent_and_no_workload_names_workload(self):  # #56, Ruling 2
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        none = Agent(port49=fake.make(d, [{"stdout": fake.item(device="leaf1", error="no_agent",
+                                                                detail="no agent answers: run port49 login"),
+                                            "code": 1}]), stderr=io.StringIO())
+        with mock.patch.object(p49netmiko, "Agent", lambda: none):
+            with self.assertRaises(NoAgent) as cm:
+                p49netmiko.connect("leaf1")
+        self.assertEqual(cm.exception.code, "no_agent")
+        self.assertIn("workload=port49.Workload(...)", str(cm.exception))
+        with self.assertRaises(NoAgent) as cm:  # an agent the caller chose: its own words only
+            p49netmiko.connect("leaf1", agent=none)
+        self.assertNotIn("workload=", str(cm.exception))
+
     def minted(self):
         """A FakeAgent with tokens made now. They live on self, never in a test's local: the test's own
         frame is in the traceback the tests read."""
@@ -326,7 +434,7 @@ class NetmikoTest(unittest.TestCase):
                 self.connect(known("ssh-ed25519 AAAA1"), agent=self.minted())
             self.assertEqual(outer.__traceback__.tb_next.tb_frame.f_locals.get("mine"), "kept")
 
-    def connect(self, kh, device="leaf1", agent=None, **kw):
+    def connect(self, kh, device="leaf1", agent=None, workload=None, **kw):
         remembered = []
 
         def remember(k, t, b, stderr=None, **_):
@@ -340,7 +448,9 @@ class NetmikoTest(unittest.TestCase):
         patchers[1].start()
         for p in patchers:
             self.addCleanup(p.stop)
-        conn = p49netmiko.connect(device, agent=agent or FakeAgent(), **kw)
+        if workload is None:
+            agent = agent or FakeAgent()
+        conn = p49netmiko.connect(device, agent=agent, workload=workload, **kw)
         return conn, remembered
 
     def test_a_known_key_is_the_only_key(self):

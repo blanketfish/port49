@@ -1,9 +1,10 @@
-"""Netmiko through port49 (design §17; decision 46 rulings 13 and 16).
+"""Netmiko through port49 (design §17; decision 46 rulings 13 and 16; #56).
 
-The token comes from your agent through `port49 token --json`; the device's key
-is OpenSSH's known_hosts entry under its inventory name: the only key accepted
-once filed, and filed at first contact, before authentication, unless revoked.
-The token is never printed."""
+The token comes from a Workload through `port49 workload token` (connect's workload=, a machine's own
+identity), or from your agent through `port49 token --json` (agent=, by default a person's). The device's key
+is OpenSSH's known_hosts entry under its inventory name: the only key accepted once filed, and filed at first
+contact, before authentication, unless revoked. The token goes to Netmiko and nowhere else, and is never
+printed."""
 
 import base64
 import inspect
@@ -14,8 +15,8 @@ import tempfile
 import traceback
 
 from . import hostkeys
-from .client import Agent
-from .errors import HostKeyError
+from .client import Agent, Workload
+from .errors import DeviceFault, HostKeyError, NoAgent, Port49Error
 
 DEVICE_TYPES = {"arista_eos": "arista_eos", "cisco_nxos": "cisco_nxos", "cisco_iosxe": "cisco_xe",
                 "juniper_junos": "juniper_junos"}
@@ -188,6 +189,34 @@ _CHANGED = ("the key {address} presents is not the one filed under {name}: eithe
 _SUSPENDABLE = inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR
 
 
+def _mint(device, enable, agent, workload):
+    """The Token connect logs in with: one `port49 workload token` run for device when workload is given
+    (never rerun, decision 46 ruling 11), else agent's `port49 token` (default Agent(), a person's). A
+    Workload's refusal raises what Agent.token raises for it; a stopped run's error keeps its device names and
+    refusals and drops its tokens."""
+    if workload is None:
+        try:
+            return (agent or Agent()).token(device, enable=enable)
+        except NoAgent as e:
+            if agent is not None:
+                raise
+            raise NoAgent(e.code, f"{e.detail or e.code}; a program with a machine identity of its own passes "
+                          f"workload=port49.Workload(...) instead", device) from None
+    try:
+        res = workload.tokens([device], enable=enable)
+    except Port49Error as e:
+        if getattr(e, "results", None) is not None:
+            e.results = e.results.without_tokens()
+        raise
+    tok = res.tokens.get(device)
+    if tok is not None:
+        return tok
+    refusal = res.refused.get(device)
+    if refusal is not None:
+        raise refusal.exception()
+    raise DeviceFault("no_token", "port49 workload token answered nothing for this device", device)
+
+
 def _clear_frames(exc, stop):
     """Clear the locals of every frame in exc's traceback, and in its causes' and contexts', up to stop: the
     exception the caller was handling when it called connect, whose frames are the caller's. connect's
@@ -214,28 +243,35 @@ def _clear_frames(exc, stop):
         todo += [e.__cause__, e.__context__]
 
 
-def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwargs):
-    """A Netmiko connection to device, logged in with a port49 token from agent (default Agent(): a
-    person's). The token goes to Netmiko, as its password and secret, and nowhere else: no return value,
-    closure, exception or traceback local of connect's holds it."""
+def connect(device, *, enable=False, agent=None, workload=None, ssh_config=None, **netmiko_kwargs):
+    """A Netmiko connection to device, logged in with a port49 token: a Workload's (workload=, a machine's own
+    identity) or an Agent's (agent=, default Agent(): a person's), never both. The token goes to Netmiko, as its
+    password and secret, and nowhere else: no return value, closure, exception or traceback local of
+    connect's holds it."""
     outer = sys.exc_info()[1]
     try:
-        return _connect(device, enable, agent, ssh_config, netmiko_kwargs)
+        return _connect(device, enable, agent, workload, ssh_config, netmiko_kwargs)
     except BaseException as e:
         _clear_frames(e, outer)
         raise
 
 
-def _connect(device, enable, agent, ssh_config, netmiko_kwargs):
+def _connect(device, enable, agent, workload, ssh_config, netmiko_kwargs):
     from netmiko import ConnectHandler
 
     owned = OWNED & set(netmiko_kwargs)
     if owned:
         raise ValueError(f"port49.netmiko.connect sets {', '.join(sorted(owned))} itself")
+    if agent is not None and workload is not None:
+        raise ValueError("port49.netmiko.connect takes agent= (a person's) or workload= (a machine's), not both")
+    if isinstance(agent, Workload):
+        raise TypeError("a port49.Workload goes in workload=, not agent=")
+    if workload is not None and not isinstance(workload, Workload):
+        raise TypeError("workload= takes a port49.Workload; a person's Agent goes in agent=")
     if not hostkeys.valid_name(device):
         # Before the mint: nothing is minted for a name known_hosts would misread (pre-flight I6, M14).
         raise HostKeyError("device_name", f"{str(device)[:64]!r}: {hostkeys.NAME_RULE}")
-    tok = (agent or Agent()).token(device, enable=enable)
+    tok = _mint(device, enable, agent, workload)
     device_type = DEVICE_TYPES.get(tok.platform)
     if device_type is None:
         raise ValueError(f"{device}: platform {tok.platform!r} has no Netmiko device type here")
