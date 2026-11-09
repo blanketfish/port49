@@ -111,13 +111,14 @@ func (p *Policy) decideResolved(res Resolution, d admission.Device, line string)
 // platform (Junos), the one request that does come and what bounds the rest.
 // The Junos sentence keys on the platform, not on projection: set 1.0.0's
 // juniper_junos projects nothing and L36 measured the re-authorization on it
-// all the same. Any other platform is told only that none is known.
+// all the same. L36 measured only juniper_junos, so any other platform,
+// juniper_evo included, is told only that none is known.
 func sessionOnlyLimit(platformName string, dialect platform.Dialect) string {
 	const controls = "a session ceiling, a revocation, a username change and the session-ceiling warning each act " +
 		"at the next authorization request"
-	if !strings.HasPrefix(platformName, "juniper_") {
-		return controls + ", and the device is not known to make one after login, so none of them is known to " +
-			"reach a live session there (spec §5.6, §13 decision 21)"
+	if platformName != "juniper_junos" {
+		return controls + ", and the device is not known to make one after login, so do not rely on any of them " +
+			"to reach a live session there (spec §5.6, §13 decision 21)"
 	}
 	out := controls + ", which the device makes after login only where authorization-time-interval is set: one " +
 		"re-authorization an interval after login was measured, and port49 denied a revoked principal there without " +

@@ -108,15 +108,19 @@ func TestExplainStatesDecision21sLimit(t *testing.T) {
 // A platform that is not Junos is told only what is known of it: nothing
 // measured says its device makes an authorization request after login.
 func TestSessionOnlyLimitOnAnotherPlatformClaimsNoJunosFact(t *testing.T) {
-	got := sessionOnlyLimit("some_other_os", platform.Dialect{Supports: []string{"session"}})
-	for _, want := range []string{"is not known to make one", "§13 decision 21"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("want %q in %q", want, got)
+	// juniper_evo is not juniper_junos: L36 measured only the latter.
+	for _, name := range []string{"some_other_os", "juniper_evo"} {
+		got := sessionOnlyLimit(name, platform.Dialect{Supports: []string{"session"}})
+		for _, want := range []string{"is not known to make one", "do not rely on any of them to reach a live session there",
+			"§13 decision 21"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: want %q in %q", name, want, got)
+			}
 		}
-	}
-	for _, bad := range []string{"authorization-time-interval", "makes none after login"} {
-		if strings.Contains(got, bad) {
-			t.Errorf("found %q in %q", bad, got)
+		for _, bad := range []string{"authorization-time-interval", "makes none after login"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("%s: found %q in %q", name, bad, got)
+			}
 		}
 	}
 }
