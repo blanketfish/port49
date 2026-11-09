@@ -58,9 +58,10 @@ var (
 		"second_factor": true, "filter": true, "enrollment": true, "rate_limits": true, "totp_label": true}
 	machinesOnlyKeys = map[string]bool{"spiffe_trust_domains": true, "audience": true, "clients": true, "cluster": true,
 		"jwks": true, "namespaces": true, "directory": true}
-	// sharedIdentityKeys are the keys both lists take (x509, oidc and k8s alike
-	// on either side). Every verifier key is in exactly one of the three sets
-	// (TestEveryIdentityVerifierKeyIsClassified).
+	// sharedIdentityKeys are the keys both lists take: an x509 or oidc
+	// verifier's, on either side (k8s is a machine verifier, identity.go
+	// refuses it on humans). Every verifier key is in exactly one of the three
+	// sets (TestEveryIdentityVerifierKeyIsClassified).
 	sharedIdentityKeys = map[string]bool{"type": true, "trust_anchor_file": true, "issuer": true, "algorithms": true,
 		"ca_file": true}
 )
