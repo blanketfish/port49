@@ -284,6 +284,46 @@ func TestTheSecondLegWaitsForAMemberStillConnectingRatherThanShareTheFirsts(t *t
 	ps[0].Hang(false)
 }
 
+// A hung member (its connection up, nothing coming back) is left by the leg
+// on it within the stall decision 37 names: silent for feedStall while a read
+// is answered, seen on a tick (feedIdle/2), the probe (at most feedStall/2),
+// and the new opening's Created. It goes to a member neither leg is on. Each
+// leg in turn, so both are shown leaving one.
+func TestEachLegLeavesAHungMemberForOneTheOtherIsNotOn(t *testing.T) {
+	s, _, ps := threeBehindProxies(t)
+	tr := traceLegs(t)
+	put, delivered := contextWatch(t, s)
+	put("warm")
+	if !delivered("warm", 5*time.Second) {
+		t.Fatal("the watch delivered nothing on a healthy cluster")
+	}
+	tr.waitApart(t, 6*time.Second)
+	byAddr := map[string]*etcdtest.Proxy{}
+	for _, p := range ps {
+		byAddr[p.Addr()] = p
+	}
+	bound := feedStall + feedIdle/2 + feedStall/2 + 500*time.Millisecond
+	for _, leg := range []int{0, 1} {
+		was := tr.at(leg)
+		p := byAddr[was.on]
+		if p == nil {
+			tr.dump(t)
+			t.Fatalf("leg %d is on %q, which is no member's proxy", leg, was.on)
+		}
+		p.Hang(true)
+		tr.note("leg %d's member %s hung", leg, was.on)
+		hungAt := time.Now()
+		now := tr.waitPlaced(t, leg, was.n, bound)
+		tr.note("leg %d left it in %v", leg, time.Since(hungAt).Round(time.Millisecond))
+		p.Hang(false)
+		if now.on == was.on || now.on == now.other {
+			tr.dump(t)
+			t.Fatalf("leg %d was opened again on %s (it was on %s, the other leg on %s)", leg, now.on, was.on, now.other)
+		}
+		time.Sleep(3 * time.Second) // reconnect settles
+	}
+}
+
 // With every member dark the watch is left alone: it revives when the store
 // returns, and ending it would only add the retry's second to the recovery
 // (CI 41736080508: store_hangs, two of three members paused, took longer to
