@@ -8,10 +8,53 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blanketfish/port49/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
 const repoRoot = "../.."
+
+// Every key of a broker.identity verifier is classified as the humans list's
+// alone, the machines list's alone, or both lists'. internal/config/identity.go
+// refuses the other list's keys inline, per type, so a new verifier field that
+// is in no set, or in two, fails here rather than showing under the wrong
+// list (#57).
+func TestEveryIdentityVerifierKeyIsClassified(t *testing.T) {
+	var all []Key
+	walk(reflect.TypeOf(config.FileSchema()), "", map[reflect.Type]bool{}, refusedNames(), &all)
+	seen := map[string]bool{}
+	for _, k := range all {
+		for _, list := range []string{"broker.identity.humans.[].", "broker.identity.machines.[]."} {
+			if rest, ok := strings.CutPrefix(k.Path, list); ok {
+				first, _, _ := strings.Cut(rest, ".")
+				seen[first] = true
+			}
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no broker.identity verifier keys: the schema walk changed")
+	}
+	sets := map[string]map[string]bool{"humansOnlyKeys": humansOnlyKeys, "machinesOnlyKeys": machinesOnlyKeys,
+		"sharedIdentityKeys": sharedIdentityKeys}
+	for key := range seen {
+		var in []string
+		for name, set := range sets {
+			if set[key] {
+				in = append(in, name)
+			}
+		}
+		if len(in) != 1 {
+			t.Errorf("verifier key %q is in %v: classify it in exactly one, from internal/config/identity.go's refusals", key, in)
+		}
+	}
+	for name, set := range sets {
+		for key := range set {
+			if !seen[key] {
+				t.Errorf("%s names %q, which no verifier has", name, key)
+			}
+		}
+	}
+}
 
 type fixtureDur time.Duration
 
