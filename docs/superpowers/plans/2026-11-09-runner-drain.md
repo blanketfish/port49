@@ -56,7 +56,7 @@
 
 ## Global Constraints
 
-- Python 3.10+ floor, standard library only (`pyproject.toml` `dependencies = []`). `make test-python` runs without paramiko in CI. For local runs, `/home/rwendt/lab-venv/bin/python` has paramiko and netmiko.
+- Python 3.10+ floor, standard library only (`pyproject.toml` `dependencies = []`). `make test-python` runs without paramiko in CI. For local runs, the lab machine's lab venv has paramiko and netmiko.
 - Match `_run.py`'s style: short comments that say why, long lines up to the file's existing width.
 - No Go change, no Ansible change, no reason code, config key, warning or metric.
 - **No token in logs, messages, test output or fixtures.** Never print a token while debugging a test, even a fake one. Assert on it instead (Ruling 6).
