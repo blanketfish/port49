@@ -101,14 +101,14 @@ shared key is the placeholder `<KEY>`: the agent never fetches or writes the rea
 ### 8. A smoke login
 
 Run the one `show` command of [the quick start's worked example](quick-start.md#the-worked-example-one-read-only-agent)
-through the Ansible lookup over `network_cli` (SSH), with `no_log: true` on the mint and on the command task.
-The Python library's `port49.Workload` only mints: it runs no device command, and `port49.netmiko.connect`
-uses a person's session, so the agent never calls it. Running a command with a `Workload` token is the agent's
-own code over SSH, and port49 ships no connector for it. Use the Ansible play here.
+over SSH: through the Ansible lookup over `network_cli`, with `no_log: true` on the mint and on the command
+task, or through `port49.netmiko.connect` with the agent's `port49.Workload`
+([step 4b](quick-start.md#4b-or-run-it-from-python)). Never construct `port49.Agent`, and never call `connect`
+without `workload=`: either uses a person's session.
 
-**Check:** the play's `debug` of `out.stdout_lines` prints the command's output (the example registers the
-result and prints that one key; the tasks that hold the token stay censored, and the agent never prints the
-fact or `ansible_password`), and the decision log has an `authorize_command` record whose
+**Check:** the play's `debug` of `out.stdout_lines`, or the script's print of `send_command`'s output, prints
+the command's output (the play registers the result and prints that one key; the tasks that hold the token
+stay censored, and the agent never prints the fact, `ansible_password` or the connection's `password`), and the decision log has an `authorize_command` record whose
 `principal` is the agent's and whose `policy.subject` is its subject
 ([Decision log](../reference/decision-log.md)). A deny ends the run: report its reason code, and see
 [Reason codes](../reference/reason-codes.md) for what to do. Never retry a deny.

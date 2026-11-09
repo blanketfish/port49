@@ -16,6 +16,7 @@ func init() {
 		"no_grants_matched", "authorize_command", "no_log: true", "port49.Workload", "Never use `port49.Agent`",
 		"An agent runs neither it nor `port49 token`", "show running-config **", "\n      register: out\n", "[WARNING]",
 		"!!! warning \"Unmeasured\"", "L21-arista_eos.md", "never eAPI",
+		"connect(\"leaf1\", workload=workload)", "never call `connect` without `workload=`",
 	)
 	mustSay["agents/setup-runbook.md"] = append(mustSay["agents/setup-runbook.md"],
 		"port49 policy test", "## Stop and ask a human", "merging a policy that grants access",

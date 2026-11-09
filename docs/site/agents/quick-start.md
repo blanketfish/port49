@@ -22,8 +22,9 @@ Every sentence is an instruction, so it says what to do and what never to do.
    [Workloads](../admin/workloads.md) and [Roles and grants](../admin/roles-and-grants.md#machine_group).
 3. **The tooling mints and presents the token. The token never enters the agent's context.** Use the Ansible
    lookup, which reads the token from the `port49` command and hands it to the connection and nowhere else, or
-   the Python library's `port49.Workload`, which only mints: its token goes to the connection code and
-   nowhere else. Never use `port49.Agent`: it holds a person's session. Never run
+   the Python library's `port49.netmiko.connect` with a `port49.Workload`, which mints with the agent's own
+   certificate and hands the token to the Netmiko connection and nowhere else ([step 4b](#4b-or-run-it-from-python)).
+   Never use `port49.Agent`, and never call `connect` without `workload=`: both use a person's session. Never run
    `port49 token`, `port49 workload token` or `port49 ssh` in a shell: on success they print the token (and
    `port49 token --json` the broker's whole answer, token included) on standard output, which is the
    transcript, or they use a person's login. Never print, log or `cat` a token, a certificate's key file, a
@@ -83,8 +84,9 @@ for device, refusal in res.refused.items():
 ```
 
 `port49.Workload` presents the agent's own certificate. `port49.Agent` presents whatever person logged in on
-the machine, so an agent never constructs one. Never print `res` or `res.tokens`: hand each token to the
-connection and nowhere else.
+the machine, so an agent never constructs one. Never print `res` or `res.tokens`, and never take a token out of
+them for a connection of the agent's own: to run a command, use `connect` ([step 4b](#4b-or-run-it-from-python)),
+which mints for itself.
 
 ## `per_login_mfa_required` devices stay human
 
@@ -186,8 +188,8 @@ configuration views, so the denies name the commands. Add the equivalents of you
     interactive SSH session only. Over a transport that sends `show run` as typed, a full-word deny may not bind,
     and a role widened to `show **` would permit it. The allow-list is what protects the agent there.
 
-The agent connects over SSH only: Ansible `network_cli`, never eAPI, `httpapi` or NETCONF. If a play or a
-script would use another transport, stop and ask a human.
+The agent connects over SSH only: Ansible `network_cli` or Netmiko through `port49.netmiko.connect`, never eAPI,
+`httpapi` or NETCONF. If a play or a script would use another transport, stop and ask a human.
 
 The inventory has both devices, and only `leaf1` is in the scope:
 
@@ -290,6 +292,37 @@ code, for example `port49: core1: deny no_grants_matched: <detail>`. On 2.16 to 
 certificate, so always give all four. The Python `Workload` and this lookup take a certificate and key, and no
 token file; a Kubernetes service-account agent is a human's setup ([Workloads](../admin/workloads.md#kubernetes-service-accounts)).
 
+### 4b. Or run it from Python
+
+`port49.netmiko.connect` with `workload=` mints through `port49 workload token` with the agent's certificate,
+checks the device's host key under its inventory name before the token is sent
+([Install the clients](../operate/install/clients.md#netmiko-and-host-keys)), and returns a Netmiko
+connection. The token is in no return value, exception or traceback.
+
+```python
+import port49
+from port49.netmiko import connect
+
+workload = port49.Workload(broker="https://broker.example.com:8443", broker_ca="/etc/port49/ca.pem",
+                           cert="/etc/port49/agent-cert.pem", key="/etc/port49/agent-key.pem")
+try:
+    conn = connect("leaf1", workload=workload)
+except port49.Port49Error as e:
+    print(e.device, e.code)   # a code, never a token
+    raise SystemExit(1)
+try:
+    print(conn.send_command("show version"))   # the command's output, and only that
+finally:
+    conn.disconnect()
+```
+
+A refusal raises before anything connects: `Denied`, whose `.code` and `.reason` are the reason code, or
+`MFARequired` for a device that asks for a person's second factor ([above](#per_login_mfa_required-devices-stay-human)).
+Report the code and stop. Netmiko keeps the token on the connection as `password` (and `secret` with
+`enable=True`) to log in again, so never print `conn`, `vars(conn)` or either attribute. Never call
+`connect` without `workload=`: with none it uses a person's agent (rule 1), and with no person's agent it
+raises `NoAgent`. Each `connect` runs `port49 workload token` once for its one device and never again.
+
 ### 5. What is recorded
 
 Each command the device asks about reaches `port49d`, which writes one `authorize_command` record
@@ -302,6 +335,7 @@ returns the agent's commands and nothing else. A denied command is recorded too,
 
 - Never runs `port49 login`, `port49 ssh`, `port49 token` or `port49 workload token`, and never reads a file
   under the secrets directories ([Secrets](../operate/secrets.md)).
+- Never constructs `port49.Agent`, and never calls `port49.netmiko.connect` without `workload=`.
 - Never runs a command that prints the device's configuration unsanitized (`show running-config`,
   `show startup-config`, `show tech-support`, or the platform's equivalents).
 - Never retries a deny, and never widens its own policy, grant or role.
