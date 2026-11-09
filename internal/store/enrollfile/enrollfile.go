@@ -143,10 +143,11 @@ func (f *File) pickUpLate() error {
 		f.shownPath(), why)
 }
 
-// shownPath is the path as a lost reason names it: its last 56 bytes, so a
-// deep path never pushes the cause and the remedy past the broker's cut
-// (#58).
-func (f *File) shownPath() string { return printsafe.Tail(f.path, 56) }
+// shownPath is the path as a lost reason names it: its last 40 bytes (the
+// file name and a few directories; the full path is the operator's own
+// configuration), so a deep path never pushes the cause and the remedy past
+// the broker's cut (#58).
+func (f *File) shownPath() string { return printsafe.Tail(f.path, 40) }
 
 // readFailure is why the file at the path does not read, in words that do
 // not repeat the path, which the fence's own error names again (#58).
@@ -184,11 +185,12 @@ func (f *File) open(raw []byte) (store.EnrollmentBody, string) {
 	plain, err := f.keys.OpenBound(env.Sealed, fileBound)
 	switch {
 	case errors.Is(err, crypt.ErrUnknownKey):
-		// Short on purpose: with a 64-byte key id (shown by its last 16) and a
-		// shown path, the whole reason, remedy included, fits the broker's
+		// Short on purpose: with a 64-byte key id (shown by its last 12) and a
+		// shown path, the cause and all three remedies fit the broker's
 		// 300-byte cut at start and late (#58).
-		return store.EnrollmentBody{}, fmt.Sprintf("it is sealed under key id %q: set encryption.previous to it, "+
-			"or run `port49 directory reset-second-factor --all`", printsafe.Tail(crypt.SealedKeyID(env.Sealed), 16))
+		return store.EnrollmentBody{}, fmt.Sprintf("sealed under key id %q, not held here: set encryption.previous "+
+			"to it, restore the file, or run `port49 directory reset-second-factor --all`",
+			printsafe.Tail(crypt.SealedKeyID(env.Sealed), 12))
 	case err != nil:
 		return store.EnrollmentBody{}, "it does not unseal (damaged, or changed after it was written): restore " +
 			"the file, or run `port49 directory reset-second-factor --all`"

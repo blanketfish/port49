@@ -719,8 +719,21 @@ func TestAnUnknownKeyReasonFitsTheCutAndKeepsItsRemedy(t *testing.T) {
 	if err != nil {
 		said = err.Error()
 	}
-	if !errors.Is(err, store.ErrEnrollmentStoreLost) || len(said) > 300 || !strings.HasSuffix(said, remedy) {
-		t.Errorf("start: %d bytes, the remedy not whole at the end: %v", len(said), err)
+	whole := func(where, said string) {
+		t.Helper()
+		for _, want := range []string{"not held here", "set encryption.previous to it", "restore the file", remedy} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s: %d bytes, want %q: %s", where, len(said), want, said)
+			}
+		}
+		if len(said) > 300 {
+			t.Errorf("%s: %d bytes, past the broker's cut: %s", where, len(said), said)
+		}
+		t.Logf("%s: %d bytes", where, len(said))
+	}
+	whole("start", said)
+	if !errors.Is(err, store.ErrEnrollmentStoreLost) || !strings.HasSuffix(said, remedy) {
+		t.Errorf("start: the remedy is not whole at the end: %v", err)
 	}
 
 	// late: the file appears after the handle opened.
@@ -735,9 +748,9 @@ func TestAnUnknownKeyReasonFitsTheCutAndKeepsItsRemedy(t *testing.T) {
 	if err != nil {
 		said = err.Error()
 	}
-	if !errors.Is(err, store.ErrEnrollmentStoreLost) || len(said) > 300 || !strings.Contains(said, remedy) ||
-		!strings.Contains(said, "looks again") {
-		t.Errorf("late: %d bytes, the remedy or the retry clause is gone: %v", len(said), err)
+	whole("late", said)
+	if !errors.Is(err, store.ErrEnrollmentStoreLost) || !strings.Contains(said, "looks again") {
+		t.Errorf("late: the retry clause is gone: %v", err)
 	}
 }
 
