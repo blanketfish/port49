@@ -124,14 +124,15 @@ def wait_until_drain_settled(secret):
         time.sleep(0.01)
 
 
-def run_frame(exc):
-    """_run.run's own frame in exc's traceback, or None."""
-    tb = exc.__traceback__
+def frames_below_run(exc):
+    """Every frame in exc's traceback from _run.run's own down to the raise (frames any helper run called
+    holds too), or [] if run is not in it."""
+    tb, frames = exc.__traceback__, []
     while tb is not None:
-        if tb.tb_frame.f_code is _run.run.__code__:
-            return tb.tb_frame
+        if frames or tb.tb_frame.f_code is _run.run.__code__:
+            frames.append(tb.tb_frame)
         tb = tb.tb_next
-    return None
+    return frames
 
 
 class RunnerTest(unittest.TestCase):
@@ -148,6 +149,14 @@ class RunnerTest(unittest.TestCase):
             f.write(CLI.format(python=sys.executable))
         os.chmod(self.cli, 0o700)
         self.err = io.StringIO()
+
+    def assert_unreachable(self, exc):
+        """The answer is reachable from no frame of exc's traceback from run down, nor from any live thread."""
+        frames = frames_below_run(exc)
+        self.assertTrue(frames, "run's frame should be in the traceback")
+        self.assertFalse(any(reaches(dict(f.f_locals), self.secret) for f in frames),
+                         "a frame in the traceback, from run down, holds the answer")
+        self.assertFalse(threads_hold(self.secret), "a live thread, or a frame on its stack, reaches the answer")
 
     def pid(self):
         with open(os.path.join(self.dir, "grandchild.pid"), encoding="utf-8") as f:
@@ -196,10 +205,7 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(caught.code, "timeout")
         self.assertTrue(os.path.exists(os.path.join(self.dir, "grandchild.pid")),
                         "the CLI should have printed its answer before the timeout")
-        frame = run_frame(caught)
-        self.assertIsNotNone(frame, "run's frame should be in the traceback")
-        self.assertFalse(reaches(dict(frame.f_locals), self.secret), "run's frame in the traceback holds the answer")
-        self.assertFalse(threads_hold(self.secret), "a live thread, or a frame on its stack, reaches the answer")
+        self.assert_unreachable(caught)
 
     def test_an_interrupted_run_keeps_no_answer(self):
         real_wait = subprocess.Popen.wait
@@ -217,10 +223,7 @@ class RunnerTest(unittest.TestCase):
             caught = e
         else:
             self.fail("the run should have been interrupted")
-        frame = run_frame(caught)
-        self.assertIsNotNone(frame, "run's frame should be in the traceback")
-        self.assertFalse(reaches(dict(frame.f_locals), self.secret), "run's frame in the traceback holds the answer")
-        self.assertFalse(threads_hold(self.secret), "a live thread, or a frame on its stack, reaches the answer")
+        self.assert_unreachable(caught)
 
     def interrupt_in_reap(self, argv, **kwargs):
         """run() with a Ctrl-C in reap's join, once the drain holds the answer; the KeyboardInterrupt."""
@@ -240,17 +243,11 @@ class RunnerTest(unittest.TestCase):
 
     def test_a_run_interrupted_in_reap_after_exit_keeps_no_answer(self):
         caught = self.interrupt_in_reap([self.cli, "0"])
-        frame = run_frame(caught)
-        self.assertIsNotNone(frame, "run's frame should be in the traceback")
-        self.assertFalse(reaches(dict(frame.f_locals), self.secret), "run's frame in the traceback holds the answer")
-        self.assertFalse(threads_hold(self.secret), "a live thread, or a frame on its stack, reaches the answer")
+        self.assert_unreachable(caught)
 
     def test_a_run_interrupted_in_reap_after_timeout_keeps_no_answer(self):
         caught = self.interrupt_in_reap([self.cli, "30"], timeout=3.0)
-        frame = run_frame(caught)
-        self.assertIsNotNone(frame, "run's frame should be in the traceback")
-        self.assertFalse(reaches(dict(frame.f_locals), self.secret), "run's frame in the traceback holds the answer")
-        self.assertFalse(threads_hold(self.secret), "a live thread, or a frame on its stack, reaches the answer")
+        self.assert_unreachable(caught)
 
     def test_a_truncated_answer_never_reads_as_an_answer(self):
         """run cannot tell a prefix from a whole answer while a grandchild holds the pipe (no EOF), so the
