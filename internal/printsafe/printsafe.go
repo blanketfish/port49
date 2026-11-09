@@ -28,3 +28,12 @@ func Line(s string, limit int) string {
 	}
 	return s
 }
+
+// Tail is Line keeping the end of s: past limit bytes its start is cut and
+// marked, so a path keeps its file name.
+func Tail(s string, limit int) string {
+	if len(s) <= limit {
+		return Line(s, limit)
+	}
+	return "…" + Line(s[len(s)-limit:], limit)
+}

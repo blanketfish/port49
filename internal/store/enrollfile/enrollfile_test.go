@@ -692,3 +692,52 @@ func TestARefusedLateFileThatIsRemovedLeavesNoStaleReason(t *testing.T) {
 		t.Fatalf("a stale reason is still held: %q", why)
 	}
 }
+
+// A late file refused at a deep path keeps its cause and its remedy whole in
+// the lost reason: the path is cut from its start, never the reason from its
+// end, so the broker's 300-byte line still says what is wrong and what to
+// do (#58).
+func TestALateRefusalAtALongPathKeepsItsCauseAndRemedy(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(dirFor(t), strings.Repeat("d", 120), strings.Repeat("e", 120))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "enrollments.json")
+	running := openAt(t, path, keys())
+	real := filepath.Join(dir, "real.json")
+	written(t, real, keys())
+	lost := func(cause string) {
+		t.Helper()
+		_, err := running.GetEnrollmentMark(ctx)
+		if !errors.Is(err, store.ErrEnrollmentStoreLost) {
+			t.Fatalf("not lost: %v", err)
+		}
+		said := err.Error()
+		for _, want := range []string{cause, "fix its owner and mode, or remove a link", "looks again", "/enrollments.json"} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%d bytes, want %q: %s", len(said), want, said)
+			}
+		}
+		if len(said) > 300 || strings.Contains(said, strings.Repeat("d", 120)) {
+			t.Errorf("%d bytes, the path not cut: %s", len(said), said)
+		}
+	}
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	lost("it is a symbolic link")
+	if os.Geteuid() == 0 {
+		return // root reads a 0000 file
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(real, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	lost("permission denied")
+}

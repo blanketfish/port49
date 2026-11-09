@@ -21,6 +21,7 @@ import (
 
 	"github.com/blanketfish/port49/internal/fence"
 	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/printsafe"
 	"github.com/blanketfish/port49/internal/store"
 	"github.com/blanketfish/port49/internal/store/crypt"
 )
@@ -94,7 +95,7 @@ func (f *File) read() error {
 		// A file that cannot be read (a restore left it root's at 0600, an
 		// I/O error, one over maxFile) does not open: lost, so the broker's
 		// other paths keep serving and only password sign-in refuses (D7).
-		f.present, f.lost = true, "it cannot be read ("+err.Error()+"): fix its owner and mode, restore it, or "+
+		f.present, f.lost = true, readFailure(err)+": fix its owner and mode, restore it, or "+
 			"run `port49 directory reset-second-factor --all`"
 		return nil
 	}
@@ -128,7 +129,7 @@ func (f *File) pickUpLate() error {
 	}
 	why := ""
 	if err != nil {
-		why = "it cannot be read (" + err.Error() + "): fix its owner and mode, or remove a link"
+		why = readFailure(err) + ": fix its owner and mode, or remove a link"
 	} else {
 		var body store.EnrollmentBody
 		if body, why = f.open(raw); why == "" {
@@ -139,7 +140,25 @@ func (f *File) pickUpLate() error {
 	}
 	f.present, f.lost, f.late = true, why, true
 	return fmt.Errorf("%w: %s: %s; this broker looks again at its next recheck, with no restart", store.ErrEnrollmentStoreLost,
-		f.path, why)
+		f.shownPath(), why)
+}
+
+// shownPath is the path as a lost reason names it: its last 56 bytes, so a
+// deep path never pushes the cause and the remedy past the broker's cut
+// (#58).
+func (f *File) shownPath() string { return printsafe.Tail(f.path, 56) }
+
+// readFailure is why the file at the path does not read, in words that do
+// not repeat the path, which the fence's own error names again (#58).
+func readFailure(err error) string {
+	var pe *fs.PathError
+	switch {
+	case errors.Is(err, syscall.ELOOP): // first: the link refusal wraps a PathError
+		return "it is a symbolic link, and the enrollment store is read only as a file of its own"
+	case errors.As(err, &pe):
+		return "it cannot be read (" + pe.Err.Error() + ")"
+	}
+	return "it cannot be read (" + err.Error() + ")"
 }
 
 // Lost is why the file did not open, "" when it did.
@@ -194,7 +213,7 @@ func (f *File) lostErr() error {
 	if f.lost == "" {
 		return nil
 	}
-	return fmt.Errorf("%w: %s: %s", store.ErrEnrollmentStoreLost, f.path, f.lost)
+	return fmt.Errorf("%w: %s: %s", store.ErrEnrollmentStoreLost, f.shownPath(), f.lost)
 }
 
 // body is the content for mark, records and unlocks, as written.
