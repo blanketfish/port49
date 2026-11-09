@@ -81,6 +81,9 @@ type legSource interface {
 	probe(ctx context.Context) error
 	// member is the member leg i is on, "" while it is not placed.
 	member(i int) string
+	// pickedAt is when leg i was placed on it (zero while it is not): a pick
+	// can wait for a connection, and a leg is quiet only from its placement.
+	pickedAt(i int) time.Time
 }
 
 type legMsg struct {
@@ -190,10 +193,12 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 			return true
 		}
 		// Both legs on one member go dark together. The balancer shares a
-		// member only when it has no other to give (one was up first), so a
-		// pair found on one is opened apart again: leg 1, from through+1, on
-		// whichever member is then free, and if none is, on the same again.
-		// The tries back off, so a cluster with one live member is not churned.
+		// member only when every other member's connection has failed (a leg
+		// waits for one still connecting: balancer.go, #64), so a pair found on
+		// one is opened apart again once another is back: leg 1, from
+		// through+1, on whichever member is then free, and if none is, on the
+		// same again. The tries back off, so a cluster with one live member is
+		// not churned.
 		var (
 			together bool
 			wait     = relocateMin
@@ -308,7 +313,14 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 				now := time.Now()
 				for i := range legs {
 					l := &legs[i]
-					switch quiet := now.Sub(l.heard); {
+					// A leg is quiet from the later of its start and its placement:
+					// one that waited at the pick for a connection has not been
+					// silent for the wait.
+					since := l.heard
+					if at := src.pickedAt(i); at.After(since) {
+						since = at
+					}
+					switch quiet := now.Sub(since); {
 					case l.failed:
 						if !now.Before(l.reopenAt) {
 							start(i)
@@ -399,6 +411,15 @@ func (c *clientLegs) open(ctx context.Context, i, gen int, from int64) (<-chan c
 	wctx = metadata.AppendToOutgoingContext(wctx, "port49-leg", strconv.Itoa(i)+"."+strconv.Itoa(gen))
 	c.trs[i], c.ctxs[i] = tr, wctx
 	c.mu.Unlock()
+	// The pair's placement lock is the other leg's, or a new one for the first.
+	pm := new(sync.Mutex)
+	if other != nil {
+		if o := other.pair.Load(); o != nil {
+			pm = o
+		}
+		other.pair.CompareAndSwap(nil, pm)
+	}
+	tr.pair.Store(pm)
 	tr.peer.Store(other)
 	if other != nil {
 		other.peer.Store(tr)
@@ -431,6 +452,19 @@ func (c *clientLegs) watchFn() func(context.Context, string, ...clientv3.OpOptio
 		return c.watch
 	}
 	return c.cl.Watch
+}
+
+func (c *clientLegs) pickedAt(i int) time.Time {
+	c.mu.Lock()
+	tr := c.trs[i]
+	c.mu.Unlock()
+	if tr == nil {
+		return time.Time{}
+	}
+	if ns := tr.pickedAt.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
 }
 
 func (c *clientLegs) progress(i int) error {

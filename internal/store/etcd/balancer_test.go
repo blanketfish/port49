@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -240,9 +241,240 @@ func TestTheSecondLegIsNotPlacedOnTheFirstsMemberWhenTheOthersAreSuspect(t *test
 	}
 }
 
-// With one member ready (the others still connecting, or failed) the second
-// leg shares the first's rather than wait: a pick never blocks, and
-// watchLegs moves a leg apart once another member is ready.
+// While another member is still connecting, the second leg does not take the
+// first's member: its pick waits, and gRPC picks again with the next picker,
+// once that member is ready or has failed (#64). A leg with nothing to
+// avoid, a hedged copy and a plain call still take the ready member.
+func TestTheSecondLegWaitsForAMemberStillConnectingRatherThanShare(t *testing.T) {
+	p := readyPicker("a")
+	p.pending = 1
+	first := &tried{used: map[string]bool{}}
+	first.last.Store("a")
+	second := &tried{used: map[string]bool{}}
+	second.peer.Store(first)
+	if _, err := p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), second)}); err != balancer.ErrNoSubConnAvailable {
+		t.Fatalf("the second leg's pick returned %v with another member connecting, want ErrNoSubConnAvailable", err)
+	}
+	if m := second.lastMember(); m != "" {
+		t.Fatalf("a pick that waits recorded member %q", m)
+	}
+	for name, ctx := range map[string]context.Context{
+		"a leg with no peer": withTriedSet(context.Background(), &tried{used: map[string]bool{}}),
+		"a hedged copy":      withTried(context.Background()),
+		"a plain call":       context.Background(),
+	} {
+		if addr, _ := pick(t, p, ctx); addr != "a" {
+			t.Fatalf("%s was placed on %q, want a", name, addr)
+		}
+	}
+}
+
+// fakeChild is a child balancer whose connectivity the test sets.
+type fakeChild struct {
+	cc   balancer.ClientConn
+	addr string // its endpoint's address, learnt at its first update
+}
+
+func (c *fakeChild) UpdateClientConnState(s balancer.ClientConnState) error {
+	c.addr = s.ResolverState.Endpoints[0].Addresses[0].Addr
+	return nil
+}
+func (*fakeChild) ResolverError(error)                                        {}
+func (*fakeChild) UpdateSubConnState(balancer.SubConn, balancer.SubConnState) {}
+func (*fakeChild) Close()                                                     {}
+func (*fakeChild) ExitIdle()                                                  {}
+
+// latestPicker is the ClientConn the hedge balancer reports to: it keeps the
+// newest picker, as the channel does.
+type latestPicker struct {
+	balancer.ClientConn
+	p atomic.Pointer[balancer.Picker]
+}
+
+func (l *latestPicker) UpdateState(s balancer.State) { l.p.Store(&s.Picker) }
+
+// members builds the real hedge balancer (endpointsharding under hedgeCC) over
+// children the test drives: set moves a member to a connectivity state, which
+// publishes a new picker through hedgeCC.UpdateState as a channel's would.
+func members(t *testing.T, addrs ...string) (set func(addr string, st connectivity.State), pickerNow func() balancer.Picker) {
+	t.Helper()
+	cur := &latestPicker{}
+	var eps []resolver.Endpoint
+	for _, a := range addrs {
+		eps = append(eps, resolver.Endpoint{Addresses: []resolver.Address{{Addr: a}}})
+	}
+	var built []*fakeChild
+	b := endpointsharding.NewBalancer(&hedgeCC{ClientConn: cur}, balancer.BuildOptions{},
+		func(cc balancer.ClientConn, _ balancer.BuildOptions) balancer.Balancer {
+			c := &fakeChild{cc: cc}
+			built = append(built, c)
+			return c
+		}, endpointsharding.Options{})
+	t.Cleanup(b.Close)
+	if err := b.UpdateClientConnState(balancer.ClientConnState{ResolverState: resolver.State{Endpoints: eps}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(built) != len(addrs) {
+		t.Fatalf("%d children built for %d endpoints", len(built), len(addrs))
+	}
+	// endpointsharding rotates the endpoints it builds in: tell the children
+	// apart by the address each is given at its first update.
+	byAddr := map[string]*fakeChild{}
+	for _, c := range built {
+		byAddr[c.addr] = c
+	}
+	return func(addr string, st connectivity.State) {
+			c := byAddr[addr]
+			if c == nil {
+				t.Fatalf("no child for %q", addr)
+			}
+			c.cc.UpdateState(balancer.State{ConnectivityState: st, Picker: okPicker{addr}})
+		}, func() balancer.Picker {
+			p := cur.p.Load()
+			if p == nil {
+				t.Fatal("the balancer published no picker")
+			}
+			return *p
+		}
+}
+
+// A failed member is not one to wait for. The peer holds the only ready member
+// and the others are refusing (TransientFailure): the second leg takes the
+// peer's member at once, rather than wait for a member that may not come back
+// for hours. Counting a failed member as pending would stall it (#64).
+func TestTheSecondLegSharesWhenTheOtherMembersHaveFailed(t *testing.T) {
+	set, now := members(t, "a", "b", "c")
+	set("a", connectivity.Ready)
+	set("b", connectivity.TransientFailure)
+	set("c", connectivity.TransientFailure)
+	first := &tried{used: map[string]bool{}}
+	first.last.Store("a")
+	second := &tried{used: map[string]bool{}}
+	second.peer.Store(first)
+	res, err := now().Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), second)})
+	if err != nil {
+		t.Fatalf("the second leg's pick returned %v with every other member failed, want the peer's member", err)
+	}
+	if got := res.Metadata.Get("addr"); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("placed on %v, want a", got)
+	}
+}
+
+// Members that are connecting are waited for, and once they have failed the
+// leg no longer waits: the picker the failure publishes lets it share.
+func TestTheSecondLegStopsWaitingOnceTheConnectingMembersHaveFailed(t *testing.T) {
+	set, now := members(t, "a", "b", "c")
+	set("a", connectivity.Ready)
+	set("b", connectivity.Connecting)
+	set("c", connectivity.Connecting)
+	first := &tried{used: map[string]bool{}}
+	first.last.Store("a")
+	second := &tried{used: map[string]bool{}}
+	second.peer.Store(first)
+	info := balancer.PickInfo{Ctx: withTriedSet(context.Background(), second)}
+	if _, err := now().Pick(info); err != balancer.ErrNoSubConnAvailable {
+		t.Fatalf("with b and c connecting the pick returned %v, want ErrNoSubConnAvailable", err)
+	}
+	set("b", connectivity.TransientFailure)
+	if _, err := now().Pick(info); err != balancer.ErrNoSubConnAvailable {
+		t.Fatalf("with c still connecting the pick returned %v, want ErrNoSubConnAvailable", err)
+	}
+	set("c", connectivity.TransientFailure)
+	res, err := now().Pick(info)
+	if err != nil {
+		t.Fatalf("with b and c failed the pick returned %v, want the peer's member", err)
+	}
+	if got := res.Metadata.Get("addr"); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("placed on %v, want a", got)
+	}
+}
+
+// pairOf returns the two tried-sets of a watch's legs, as clientLegs.open
+// makes them: peers of each other, sharing one placement lock.
+func pairOf() (a, b *tried, pm *sync.Mutex) {
+	a, b, pm = &tried{used: map[string]bool{}}, &tried{used: map[string]bool{}}, new(sync.Mutex)
+	a.peer.Store(b)
+	b.peer.Store(a)
+	a.pair.Store(pm)
+	b.pair.Store(pm)
+	return a, b, pm
+}
+
+// The pair's legs place one at a time: a pick holds the pair's lock for its
+// decision, so a peer's choice is never read before it is recorded.
+func TestALegsPlacementTakesThePairsLock(t *testing.T) {
+	p := readyPicker("a", "b")
+	a, _, pm := pairOf()
+	pm.Lock()
+	done := make(chan struct{})
+	go func() {
+		p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), a)})
+		close(done)
+	}()
+	select {
+	case <-done:
+		pm.Unlock()
+		t.Fatal("a leg was placed while the pair's lock was held by the other")
+	case <-time.After(100 * time.Millisecond):
+	}
+	pm.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pick did not finish once the pair's lock was let go")
+	}
+}
+
+// Two blocked legs run again together on the one picker that has a member
+// ready, with another member still connecting: exactly one takes it and the
+// other waits, never both. Many rounds (the unlocked race showed 1.3% of them
+// sharing), and meant for -race.
+func TestTwoBlockedLegsRepickedTogetherNeverShareTheOneReadyMember(t *testing.T) {
+	p := readyPicker("a")
+	p.pending = 2
+	for round := 0; round < 3000; round++ {
+		a, b, _ := pairOf()
+		var placed atomic.Int32
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for _, tr := range []*tried{a, b} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				if _, err := p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), tr)}); err == nil {
+					placed.Add(1)
+				} else if err != balancer.ErrNoSubConnAvailable {
+					t.Errorf("pick returned %v", err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if n := placed.Load(); n != 1 {
+			t.Fatalf("round %d: %d legs were placed on the one ready member with another connecting, want exactly 1", round, n)
+		}
+	}
+}
+
+// An Idle member is one that is about to connect: it is waited for like a
+// connecting one.
+func TestAnIdleMemberCountsAsPending(t *testing.T) {
+	set, now := members(t, "a", "b")
+	set("a", connectivity.Ready)
+	set("b", connectivity.Idle)
+	first := &tried{used: map[string]bool{}}
+	first.last.Store("a")
+	second := &tried{used: map[string]bool{}}
+	second.peer.Store(first)
+	if _, err := now().Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), second)}); err != balancer.ErrNoSubConnAvailable {
+		t.Fatalf("with b idle the second leg's pick returned %v, want ErrNoSubConnAvailable", err)
+	}
+}
+
+// With one member ready and every other failed (none connecting) the second
+// leg shares the first's: there is nothing to wait for, and watchLegs moves
+// a leg apart once another member is ready.
 func TestTheSecondLegSharesTheOnlyReadyMember(t *testing.T) {
 	first := &tried{used: map[string]bool{}}
 	first.last.Store("a")

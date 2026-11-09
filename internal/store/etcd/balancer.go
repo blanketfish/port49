@@ -49,10 +49,25 @@ type tried struct {
 	// two legs of a watch (twoleg.go) sit on different members.
 	peer atomic.Pointer[tried]
 	last atomic.Value // string: the member the latest pick chose
+	// pickedAt is when that pick chose it (unix nanoseconds, 0 before any): a
+	// pick can wait for a connection, and the leg's stall is measured from
+	// the placement, not from the wait's start (twoleg.go).
+	pickedAt atomic.Int64
+	// pair is held by each of a watch's two legs while it decides its member
+	// (placed), so both see the other's choice: blocked picks run again
+	// together on one picker. Shared by the pair, nil for a hedged call.
+	pair atomic.Pointer[sync.Mutex]
 	// hedged marks the copies of a hedged call (withTried): a copy of it
 	// cancelled after waiting is a suspect member. A leg of a watch, ended by
 	// the watch itself, is not.
 	hedged bool
+}
+
+// place records addr as the member the latest pick chose, and when. The time
+// is stored first: a member seen is a time seen.
+func (t *tried) place(addr string) {
+	t.pickedAt.Store(time.Now().UnixNano())
+	t.last.Store(addr)
 }
 
 // lastMember is the member the latest pick chose, "" before any.
@@ -103,13 +118,17 @@ type hedgeCC struct {
 func (c *hedgeCC) UpdateState(s balancer.State) {
 	if kids := endpointsharding.ChildStatesFromPicker(s.Picker); len(kids) > 0 {
 		var ready []endpointsharding.ChildState
+		pending := 0
 		for _, k := range kids {
-			if k.State.ConnectivityState == connectivity.Ready && len(k.Endpoint.Addresses) > 0 {
+			switch st := k.State.ConnectivityState; {
+			case st == connectivity.Ready && len(k.Endpoint.Addresses) > 0:
 				ready = append(ready, k)
+			case st == connectivity.Connecting || st == connectivity.Idle:
+				pending++
 			}
 		}
 		if len(ready) > 0 {
-			s.Picker = &picker{ready: ready, next: &c.next, sus: &c.sus}
+			s.Picker = &picker{ready: ready, pending: pending, next: &c.next, sus: &c.sus}
 			placingPickers.Add(1)
 		}
 	}
@@ -171,9 +190,13 @@ var onSuspect atomic.Pointer[func()]
 
 type picker struct {
 	ready []endpointsharding.ChildState
-	next  *atomic.Uint32 // the rotation, kept across the pickers of one channel
-	sus   *suspects
-	now   func() time.Time
+	// pending is how many of the channel's other members are connecting, or
+	// idle and about to: not ready yet, and not failed. A leg waits for one
+	// rather than share its peer's member (placed).
+	pending int
+	next    *atomic.Uint32 // the rotation, kept across the pickers of one channel
+	sus     *suspects
+	now     func() time.Time
 }
 
 func (p *picker) clock() time.Time {
@@ -202,7 +225,12 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	t, _ := info.Ctx.Value(triedKey{}).(*tried)
 	k := cands[start]
 	if t != nil {
-		k = p.placed(cands, start, t)
+		var ok bool
+		if k, ok = p.placed(cands, start, t); !ok {
+			// gRPC holds the call and picks again with the channel's next
+			// picker: once a member connecting now is ready, or has failed.
+			return balancer.PickResult{}, balancer.ErrNoSubConnAvailable
+		}
 	}
 	res, err := k.State.Picker.Pick(info)
 	if err != nil || p.sus == nil {
@@ -240,11 +268,21 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 }
 
 // placed is the member among cands for a call with a tried-set: the first
-// from start that no earlier copy (or peer) has used. It never waits: with
-// one member ready the two legs of a watch share it, and watchLegs moves one
-// apart once another is (twoleg.go).
-func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried) endpointsharding.ChildState {
+// from start that no earlier copy (or peer) has used, and false when the
+// call is to wait. Only a leg of a watch waits, and only when its peer's
+// member is the one ready and another member is still connecting: two legs
+// on one member go dark together (#64, CI 42563304174). With every other
+// member failed the legs share it, and watchLegs moves one apart once
+// another is ready (twoleg.go).
+func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried) (endpointsharding.ChildState, bool) {
 	n := len(cands)
+	// The two legs of a watch decide in turn: each must see the other's
+	// placement. Nothing below blocks, so the pair's lock is held only for the
+	// decision, which includes recording the member.
+	if pm := t.pair.Load(); pm != nil {
+		pm.Lock()
+		defer pm.Unlock()
+	}
 	avoid := ""
 	if peer := t.peer.Load(); peer != nil {
 		avoid = peer.lastMember()
@@ -258,8 +296,8 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 		k := cands[(start+j)%n]
 		if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 			t.used[addr] = true
-			t.last.Store(addr)
-			return k
+			t.place(addr)
+			return k, true
 		}
 	}
 	// No candidate is free of the other leg and of this one's earlier members:
@@ -270,22 +308,26 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 		for _, k := range p.ready {
 			if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 				t.used[addr] = true
-				t.last.Store(addr)
-				return k
+				t.place(addr)
+				return k, true
 			}
 		}
 		for _, k := range p.ready {
 			if addr := k.Endpoint.Addresses[0].Addr; addr != avoid {
-				t.last.Store(addr)
+				t.place(addr)
 				t.used = map[string]bool{addr: true}
-				return k
+				return k, true
 			}
 		}
+	}
+	// Here every ready member is the peer's (the loops above take any other).
+	if avoid != "" && p.pending > 0 {
+		return endpointsharding.ChildState{}, false
 	}
 	// Every candidate has had a copy: begin again.
 	k := cands[start]
 	addr := k.Endpoint.Addresses[0].Addr
-	t.last.Store(addr)
+	t.place(addr)
 	t.used = map[string]bool{addr: true}
-	return k
+	return k, true
 }

@@ -89,12 +89,24 @@ func TestOpenNoEndpointsIsNotUnavailable(t *testing.T) {
 // dark the way a dropped link does: its open connection stalls.
 func threeBehindProxies(t *testing.T) (*Store, *etcdtest.Cluster, []*etcdtest.Proxy) {
 	t.Helper()
+	return threeBehindProxiesWith(t, nil)
+}
+
+// threeBehindProxiesWith is threeBehindProxies with before run on the proxies
+// before the store dials them: a proxy hung there holds its member's
+// connection connecting (gRPC waits up to 20 s for the server's handshake)
+// until it is let go, while the others are ready.
+func threeBehindProxiesWith(t *testing.T, before func([]*etcdtest.Proxy)) (*Store, *etcdtest.Cluster, []*etcdtest.Proxy) {
+	t.Helper()
 	c := etcdtest.StartCluster(t)
 	var ps []*etcdtest.Proxy
 	var eps []string
 	for _, e := range c.Endpoints {
 		p := etcdtest.NewProxy(t, strings.TrimPrefix(e, "http://"))
 		ps, eps = append(ps, p), append(eps, "http://"+p.Addr())
+	}
+	if before != nil {
+		before(ps)
 	}
 	s, err := Open(Config{Endpoints: eps, Prefix: etcdtest.Prefix(), CallTimeout: 500 * time.Millisecond})
 	if err != nil {

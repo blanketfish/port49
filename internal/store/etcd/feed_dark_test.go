@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // legTrace records, for a test that logs it only on a failure, where each leg
@@ -16,11 +17,20 @@ import (
 // noted (members hung, writes and their durations). It holds revisions and
 // members, no keys or values.
 type legTrace_ struct {
-	begun time.Time
-	mu    sync.Mutex
-	lines []string
-	apart bool   // the last placement put the legs on different members
-	last  string // the last placement's detail, for a failure message
+	begun  time.Time
+	mu     sync.Mutex
+	lines  []string
+	apart  bool         // the last placement put the legs on different members
+	last   string       // the last placement's detail, for a failure message
+	placed [2]placement // each leg's latest opening
+}
+
+// placement is a leg's latest opening as the trace saw it: how many it has
+// had (across the watch's restarts, whose openings count from 1 again), its
+// member, and the other leg's member at its pick.
+type placement struct {
+	n         int
+	on, other string
 }
 
 func traceLegs(t *testing.T) *legTrace_ {
@@ -35,6 +45,7 @@ func traceLegs(t *testing.T) *legTrace_ {
 		case "open": // "on A, the other on B"
 			if a, b, ok := strings.Cut(strings.TrimPrefix(detail, "on "), ", the other on "); ok {
 				tr.apart, tr.last = a != "" && b != "" && a != b, detail
+				tr.placed[leg] = placement{n: tr.placed[leg].n + 1, on: a, other: b}
 			}
 		}
 	}
@@ -71,11 +82,94 @@ func (tr *legTrace_) waitApart(t *testing.T, d time.Duration) {
 	t.Fatalf("the legs were not on different members within %v (last placement: %s)", d, last)
 }
 
+func (tr *legTrace_) at(leg int) placement {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return tr.placed[leg]
+}
+
+// waitPlaced waits up to d for leg's opening number after+1 or later, and
+// returns it, or fails the test with the trace.
+func (tr *legTrace_) waitPlaced(t *testing.T, leg, after int, d time.Duration) placement {
+	t.Helper()
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		if p := tr.at(leg); p.n > after {
+			return p
+		}
+	}
+	p := tr.at(leg)
+	tr.dump(t)
+	t.Fatalf("leg %d was not opened again within %v (latest: opening %d, on %q)", leg, d, p.n, p.on)
+	return placement{}
+}
+
+// saw reports whether a trace line contains s.
+func (tr *legTrace_) saw(s string) bool {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	for _, l := range tr.lines {
+		if strings.Contains(l, s) {
+			return true
+		}
+	}
+	return false
+}
+
 func (tr *legTrace_) dump(t *testing.T) {
 	t.Helper()
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	t.Logf("placement and delivery since the test began:\n  %s", strings.Join(tr.lines, "\n  "))
+}
+
+// contextWatch runs FollowContexts's loop over s.WatchContexts until the test
+// ends. put writes a context named name, trying again past a dark member;
+// delivered reports whether the feed brought it within d.
+func contextWatch(t *testing.T, s *Store) (put func(name string), delivered func(name string, within time.Duration) bool) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	from := uint64(0)
+	go func() {
+		for ctx.Err() == nil {
+			mu.Lock()
+			after := from
+			mu.Unlock()
+			s.WatchContexts(ctx, after, func(c store.ContextChange) {
+				mu.Lock()
+				seen[c.Key.Username] = true
+				from = max(from, c.Rev)
+				mu.Unlock()
+			}, func(rev uint64) { mu.Lock(); from = max(from, rev); mu.Unlock() }, nil)
+			time.Sleep(time.Second)
+		}
+	}()
+	put = func(name string) {
+		k := store.ContextKey{NAS: "leaf-01", Username: name}
+		for i := 0; i < 20; i++ { // a write may meet the dark member: try again
+			c, cc := context.WithTimeout(ctx, 500*time.Millisecond)
+			err := s.PutContext(c, k, store.Context{CtxID: name, Principal: "user:x", Username: name}, time.Hour)
+			cc()
+			if err == nil {
+				return
+			}
+		}
+		t.Fatalf("could not write %s", name)
+	}
+	delivered = func(name string, within time.Duration) bool {
+		for end := time.Now().Add(within); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+			mu.Lock()
+			ok := seen[name]
+			mu.Unlock()
+			if ok {
+				return true
+			}
+		}
+		return false
+	}
+	return put, delivered
 }
 
 // The context feed has a leg on two of the three members, so one going dark
@@ -148,6 +242,127 @@ func TestAContextFeedFollowsWhicheverMemberGoesDark(t *testing.T) {
 		}
 		p.Hang(false)
 		time.Sleep(3 * time.Second) // reconnect settles
+	}
+}
+
+// The second leg is never placed on the first leg's member while another
+// member's connection is still being made: it waits for that member. Members
+// 1 and 2 are hung before the store dials, so their connections stay
+// connecting while member 0 is ready. The old picker put the second leg on
+// member 0 at once, and member 0 then going dark stalled the feed until a leg moved,
+// 2 s or more (#64, CI 42563304174).
+func TestTheSecondLegWaitsForAMemberStillConnectingRatherThanShareTheFirsts(t *testing.T) {
+	s, _, ps := threeBehindProxiesWith(t, func(ps []*etcdtest.Proxy) { ps[1].Hang(true); ps[2].Hang(true) })
+	tr := traceLegs(t)
+	put, delivered := contextWatch(t, s)
+	// The legs open in either order: whichever is placed first is the first.
+	fl := -1
+	for end := time.Now().Add(5 * time.Second); fl < 0 && time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		if tr.at(0).n > 0 {
+			fl = 0
+		} else if tr.at(1).n > 0 {
+			fl = 1
+		}
+	}
+	if fl < 0 {
+		tr.dump(t)
+		t.Fatal("neither leg was placed within 5s")
+	}
+	ol := 1 - fl
+	first := tr.at(fl)
+	if first.on != ps[0].Addr() {
+		tr.dump(t)
+		t.Fatalf("leg %d was placed on %q with only member 0 (%s) ready", fl, first.on, ps[0].Addr())
+	}
+	time.Sleep(time.Second) // the old picker placed the other leg within milliseconds
+	if p := tr.at(ol); p.n > 0 {
+		tr.dump(t)
+		t.Fatalf("leg %d was placed on %s, the first leg's member, while members 1 and 2 were still connecting", ol, p.on)
+	}
+	ps[1].Hang(false)
+	ps[2].Hang(false)
+	second := tr.waitPlaced(t, ol, 0, 5*time.Second)
+	if second.on == "" || second.on == first.on {
+		tr.dump(t)
+		t.Fatalf("leg %d was placed on %q once members 1 and 2 were ready, leg %d on %s", ol, second.on, fl, first.on)
+	}
+	ps[0].Hang(true) // the first leg's member going dark now costs nothing
+	tr.note("member 0 hung")
+	put("dark")
+	if !delivered("dark", 1500*time.Millisecond) {
+		tr.dump(t)
+		t.Fatal("member 0 dark, the legs apart: the feed had not brought a change written after it went dark in 1.5s")
+	}
+	ps[0].Hang(false)
+}
+
+// A hung member (its connection up, nothing coming back) is left by the leg
+// on it within the stall decision 37 names: silent for feedStall while a read
+// is answered, seen on a tick (feedIdle/2), the probe (at most feedStall/2),
+// and the new opening's Created. It goes to a member neither leg is on. Each
+// leg in turn, so both are shown leaving one.
+func TestEachLegLeavesAHungMemberForOneTheOtherIsNotOn(t *testing.T) {
+	s, _, ps := threeBehindProxies(t)
+	tr := traceLegs(t)
+	put, delivered := contextWatch(t, s)
+	put("warm")
+	if !delivered("warm", 5*time.Second) {
+		t.Fatal("the watch delivered nothing on a healthy cluster")
+	}
+	tr.waitApart(t, 6*time.Second)
+	byAddr := map[string]*etcdtest.Proxy{}
+	for _, p := range ps {
+		byAddr[p.Addr()] = p
+	}
+	bound := feedStall + feedIdle/2 + feedStall/2 + 500*time.Millisecond
+	for _, leg := range []int{0, 1} {
+		was := tr.at(leg)
+		p := byAddr[was.on]
+		if p == nil {
+			tr.dump(t)
+			t.Fatalf("leg %d is on %q, which is no member's proxy", leg, was.on)
+		}
+		p.Hang(true)
+		tr.note("leg %d's member %s hung", leg, was.on)
+		hungAt := time.Now()
+		now := tr.waitPlaced(t, leg, was.n, bound)
+		tr.note("leg %d left it in %v", leg, time.Since(hungAt).Round(time.Millisecond))
+		p.Hang(false)
+		if now.on == was.on || now.on == now.other {
+			tr.dump(t)
+			t.Fatalf("leg %d was opened again on %s (it was on %s, the other leg on %s)", leg, now.on, was.on, now.other)
+		}
+		time.Sleep(3 * time.Second) // reconnect settles
+	}
+}
+
+// A leg that waited at the pick for a connection has not been silent for the
+// wait: once placed it is quiet from its placement, so it is not opened again
+// as one that "heard nothing" (that line, "quiet, opened again" in the trace,
+// would send an operator to a member that was only connecting; #64). Members 1
+// and 2 are hung before the dial, so the second leg waits more than feedStall
+// before they are released.
+func TestALegThatWaitedAtThePickIsNotReopenedAsQuiet(t *testing.T) {
+	s, _, ps := threeBehindProxiesWith(t, func(ps []*etcdtest.Proxy) { ps[1].Hang(true); ps[2].Hang(true) })
+	tr := traceLegs(t)
+	contextWatch(t, s)
+	time.Sleep(feedStall + time.Second) // one leg is placed, the other waits
+	if tr.at(0).n+tr.at(1).n != 1 {
+		tr.dump(t)
+		t.Fatalf("%d legs were placed while members 1 and 2 were hung, want 1", tr.at(0).n+tr.at(1).n)
+	}
+	ps[1].Hang(false)
+	ps[2].Hang(false)
+	tr.note("members 1 and 2 released")
+	ol := 0
+	if tr.at(0).n == 1 {
+		ol = 1
+	}
+	tr.waitPlaced(t, ol, 0, 5*time.Second)
+	time.Sleep(feedStall + time.Second) // the quiet clock would have fired within a tick
+	if tr.saw("quiet, opened again") {
+		tr.dump(t)
+		t.Fatal("a leg was opened again as quiet after it had waited at the pick: its quiet time ran from the wait's start")
 	}
 }
 

@@ -8274,7 +8274,11 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
     both legs are down at once, or on a compaction. A leg that hears nothing for 1 s asks for its
     progress, and one silent for 2 s is opened again on a member neither leg is on, but only while
     a one-key read is answered: with every member dark (no quorum) a stream is left to revive when
-    the store returns. The token pool's other watches (memberships, logouts) are one leg still.
+    the store returns. A leg is never placed on the other's member while another member's
+    connection is up or still being made: it waits for that member (#64). The legs share one only
+    when every other member's connection has failed, which `port49_store_feed_legs_colocated` shows
+    until one is moved apart, or when the client has one endpoint, where they always share and
+    are never moved. The token pool's other watches (memberships, logouts) are one leg still.
     A fence wait that times out is outcome `feed_behind` in `port49_store_calls_total`, not a
     failed call to the circuit: the store answered, and a feed that stays behind is the health
     check's to see (below).
