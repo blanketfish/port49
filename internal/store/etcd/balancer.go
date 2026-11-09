@@ -103,13 +103,17 @@ type hedgeCC struct {
 func (c *hedgeCC) UpdateState(s balancer.State) {
 	if kids := endpointsharding.ChildStatesFromPicker(s.Picker); len(kids) > 0 {
 		var ready []endpointsharding.ChildState
+		pending := 0
 		for _, k := range kids {
-			if k.State.ConnectivityState == connectivity.Ready && len(k.Endpoint.Addresses) > 0 {
+			switch st := k.State.ConnectivityState; {
+			case st == connectivity.Ready && len(k.Endpoint.Addresses) > 0:
 				ready = append(ready, k)
+			case st == connectivity.Connecting || st == connectivity.Idle:
+				pending++
 			}
 		}
 		if len(ready) > 0 {
-			s.Picker = &picker{ready: ready, next: &c.next, sus: &c.sus}
+			s.Picker = &picker{ready: ready, pending: pending, next: &c.next, sus: &c.sus}
 			placingPickers.Add(1)
 		}
 	}
@@ -171,9 +175,13 @@ var onSuspect atomic.Pointer[func()]
 
 type picker struct {
 	ready []endpointsharding.ChildState
-	next  *atomic.Uint32 // the rotation, kept across the pickers of one channel
-	sus   *suspects
-	now   func() time.Time
+	// pending is how many of the channel's other members are connecting, or
+	// idle and about to: not ready yet, and not failed. A leg waits for one
+	// rather than share its peer's member (placed).
+	pending int
+	next    *atomic.Uint32 // the rotation, kept across the pickers of one channel
+	sus     *suspects
+	now     func() time.Time
 }
 
 func (p *picker) clock() time.Time {
@@ -202,7 +210,12 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	t, _ := info.Ctx.Value(triedKey{}).(*tried)
 	k := cands[start]
 	if t != nil {
-		k = p.placed(cands, start, t)
+		var ok bool
+		if k, ok = p.placed(cands, start, t); !ok {
+			// gRPC holds the call and picks again with the channel's next
+			// picker: once a member connecting now is ready, or has failed.
+			return balancer.PickResult{}, balancer.ErrNoSubConnAvailable
+		}
 	}
 	res, err := k.State.Picker.Pick(info)
 	if err != nil || p.sus == nil {
@@ -240,10 +253,13 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 }
 
 // placed is the member among cands for a call with a tried-set: the first
-// from start that no earlier copy (or peer) has used. It never waits: with
-// one member ready the two legs of a watch share it, and watchLegs moves one
-// apart once another is (twoleg.go).
-func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried) endpointsharding.ChildState {
+// from start that no earlier copy (or peer) has used, and false when the
+// call is to wait. Only a leg of a watch waits, and only when its peer's
+// member is the one ready and another member is still connecting: two legs
+// on one member go dark together (#64, CI 42563304174). With every other
+// member failed the legs share it, and watchLegs moves one apart once
+// another is ready (twoleg.go).
+func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried) (endpointsharding.ChildState, bool) {
 	n := len(cands)
 	avoid := ""
 	if peer := t.peer.Load(); peer != nil {
@@ -259,7 +275,7 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 		if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 			t.used[addr] = true
 			t.last.Store(addr)
-			return k
+			return k, true
 		}
 	}
 	// No candidate is free of the other leg and of this one's earlier members:
@@ -271,21 +287,25 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 			if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 				t.used[addr] = true
 				t.last.Store(addr)
-				return k
+				return k, true
 			}
 		}
 		for _, k := range p.ready {
 			if addr := k.Endpoint.Addresses[0].Addr; addr != avoid {
 				t.last.Store(addr)
 				t.used = map[string]bool{addr: true}
-				return k
+				return k, true
 			}
 		}
+	}
+	// Here every ready member is the peer's (the loops above take any other).
+	if avoid != "" && p.pending > 0 {
+		return endpointsharding.ChildState{}, false
 	}
 	// Every candidate has had a copy: begin again.
 	k := cands[start]
 	addr := k.Endpoint.Addresses[0].Addr
 	t.last.Store(addr)
 	t.used = map[string]bool{addr: true}
-	return k
+	return k, true
 }

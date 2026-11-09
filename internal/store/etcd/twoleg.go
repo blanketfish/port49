@@ -190,10 +190,12 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 			return true
 		}
 		// Both legs on one member go dark together. The balancer shares a
-		// member only when it has no other to give (one was up first), so a
-		// pair found on one is opened apart again: leg 1, from through+1, on
-		// whichever member is then free, and if none is, on the same again.
-		// The tries back off, so a cluster with one live member is not churned.
+		// member only when every other member's connection has failed (a leg
+		// waits for one still connecting: balancer.go, #64), so a pair found on
+		// one is opened apart again once another is back: leg 1, from
+		// through+1, on whichever member is then free, and if none is, on the
+		// same again. The tries back off, so a cluster with one live member is
+		// not churned.
 		var (
 			together bool
 			wait     = relocateMin

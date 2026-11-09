@@ -240,9 +240,37 @@ func TestTheSecondLegIsNotPlacedOnTheFirstsMemberWhenTheOthersAreSuspect(t *test
 	}
 }
 
-// With one member ready (the others still connecting, or failed) the second
-// leg shares the first's rather than wait: a pick never blocks, and
-// watchLegs moves a leg apart once another member is ready.
+// While another member is still connecting, the second leg does not take the
+// first's member: its pick waits, and gRPC picks again with the next picker,
+// once that member is ready or has failed (#64). A leg with nothing to
+// avoid, a hedged copy and a plain call still take the ready member.
+func TestTheSecondLegWaitsForAMemberStillConnectingRatherThanShare(t *testing.T) {
+	p := readyPicker("a")
+	p.pending = 1
+	first := &tried{used: map[string]bool{}}
+	first.last.Store("a")
+	second := &tried{used: map[string]bool{}}
+	second.peer.Store(first)
+	if _, err := p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), second)}); err != balancer.ErrNoSubConnAvailable {
+		t.Fatalf("the second leg's pick returned %v with another member connecting, want ErrNoSubConnAvailable", err)
+	}
+	if m := second.lastMember(); m != "" {
+		t.Fatalf("a pick that waits recorded member %q", m)
+	}
+	for name, ctx := range map[string]context.Context{
+		"a leg with no peer": withTriedSet(context.Background(), &tried{used: map[string]bool{}}),
+		"a hedged copy":      withTried(context.Background()),
+		"a plain call":       context.Background(),
+	} {
+		if addr, _ := pick(t, p, ctx); addr != "a" {
+			t.Fatalf("%s was placed on %q, want a", name, addr)
+		}
+	}
+}
+
+// With one member ready and every other failed (none connecting) the second
+// leg shares the first's: there is nothing to wait for, and watchLegs moves
+// a leg apart once another member is ready.
 func TestTheSecondLegSharesTheOnlyReadyMember(t *testing.T) {
 	first := &tried{used: map[string]bool{}}
 	first.last.Store("a")
