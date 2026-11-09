@@ -177,7 +177,7 @@ offline, and when you are, take the file from the broker's administrator, not fr
     after it; and what other processes using the token do to the agent. Whether parallel forks, such
     as several Ansible workers sharing one agent, are asked for one touch or for several when a
     device requires `hardware_key_touch` is a question for [L60](../reference/lab-register.md#l60)'s next session. The agent serializes
-    token requests, but what the key does is not measured. Run `port49 token` once for one such
+    token requests, but what the key does is not measured. A person runs `port49 ssh <device>` once for one such
     device before a play, as the Ansible collection's README says.
 
 !!! warning "Unmeasured"

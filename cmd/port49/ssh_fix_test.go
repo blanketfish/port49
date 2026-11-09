@@ -74,15 +74,27 @@ func TestAnInheritedAskpassPromptHintDoesNotSwallowTheToken(t *testing.T) {
 	}
 }
 
-// The askpass socket is made only in a directory that is 0700 and this user's,
-// whatever the order its caller runs in (task 6 review I-3).
-func TestTheAskpassSocketIsNeverMadeInAnOpenDirectory(t *testing.T) {
-	// A short path: a Unix socket's is limited, and the test's name is long.
-	base, err := os.MkdirTemp("", "p49o")
+// socketDir is a private directory short enough for a Unix socket whatever
+// TMPDIR is: one under /tmp, made 0700 here, as an agent's XDG_RUNTIME_DIR
+// would be (#58). t.TempDir adds the test's name, which a long TMPDIR
+// pushes past the socket's 107 bytes.
+func socketDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "p49s")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(base) })
+	t.Cleanup(func() { os.RemoveAll(d) })
+	if err := os.Chmod(d, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// The askpass socket is made only in a directory that is 0700 and this user's,
+// whatever the order its caller runs in (task 6 review I-3).
+func TestTheAskpassSocketIsNeverMadeInAnOpenDirectory(t *testing.T) {
+	base := socketDir(t)
 	open := filepath.Join(base, "open")
 	if err := os.Mkdir(open, 0o755); err != nil {
 		t.Fatal(err)
@@ -97,13 +109,32 @@ func TestTheAskpassSocketIsNeverMadeInAnOpenDirectory(t *testing.T) {
 	if left, _ := filepath.Glob(filepath.Join(open, "askpass-*")); len(left) != 0 {
 		t.Fatalf("left in the open directory: %v", left)
 	}
-	ln, path, err := listenAskpass(filepath.Join(privateDir(t), "agent.sock"))
+	ln, path, err := listenAskpass(filepath.Join(socketDir(t), "agent.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
 	if fi, err := os.Lstat(path); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("the socket: %v %v", fi, err)
+	}
+}
+
+// A private directory too long for a Unix socket is refused in the
+// product's own words, and nothing is made there (#58).
+func TestAnAskpassSocketPastAUnixSocketsLengthIsRefused(t *testing.T) {
+	long := filepath.Join(socketDir(t), strings.Repeat("l", 100))
+	if err := os.Mkdir(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if ln, _, err := listenAskpass(filepath.Join(long, "agent.sock")); err == nil ||
+		!strings.Contains(err.Error(), "too long for a Unix socket") {
+		if ln != nil {
+			ln.Close()
+		}
+		t.Fatalf("a socket past 107 bytes: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(long, "askpass-*")); len(left) != 0 {
+		t.Fatalf("left behind: %v", left)
 	}
 }
 

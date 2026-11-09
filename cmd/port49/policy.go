@@ -592,8 +592,13 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, s := range d.Subjects {
 		if s.OldGroup != s.NewGroup || s.OldGroupKey != s.NewGroupKey {
-			fmt.Fprintf(stdout, "subject: %s's %s -> %s\n", s.Subject, groupSide(s.OldGroupKey, s.OldGroup),
-				groupSide(s.NewGroupKey, s.NewGroup))
+			// Gated, as every group change is (internal/policy, principals).
+			label, tail := "SUBJECT", "; a session test naming the subject acknowledges it"
+			if s.Acknowledged {
+				label, tail = "subject (a session test asserts it)", ""
+			}
+			fmt.Fprintf(stdout, "%s: %s's %s -> %s%s\n", label, s.Subject, groupSide(s.OldGroupKey, s.OldGroup),
+				groupSide(s.NewGroupKey, s.NewGroup), tail)
 		}
 		if !slices.Equal(s.OldAPI, s.NewAPI) {
 			label, tail := "api", ""

@@ -109,7 +109,9 @@ class AgentTest(unittest.TestCase):
         with self.assertRaises(MFARequired) as cm:
             a.token("core1")
         self.assertEqual(cm.exception.requirement["accept"], ["idp_mfa"])
-        self.assertIn("port49 token core1", str(cm.exception))
+        self.assertIn("port49 ssh core1", str(cm.exception))
+        self.assertNotIn("port49 token", str(cm.exception))
+        self.assertIn("asks one", str(cm.exception))
 
     def test_a_deny_for_a_second_factor_is_mfa_required(self):
         # The CLI never prints this shape from `token --json` (Task 5 gives the code instead), but a

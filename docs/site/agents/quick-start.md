@@ -58,14 +58,16 @@ Three things about that table.
 - **On ansible-core 2.16 to 2.18 the code is in the warning.** Those versions censor the message of a failed
   `no_log` task and show only `censored`. The lookup also raises the same message as a `[WARNING]` line, printed
   beside the censored result: read the code there. On 2.19 and later the task's error holds it.
-- **A second factor is the one refusal whose message may not hold the code, and it tells the agent to do
-  what an agent never does.** A device that asks for a proof the agent cannot give is
-  `per_login_mfa_required`. The Python `MFARequired` message reads
-  ``port49: <device>: asks for <methods> at each login, and it could not be given here (<detail>); run
-  `port49 token <device>` at a terminal, and one proof covers this agent's further logins for its reuse_for``,
+- **A second factor is the one refusal whose message may not hold the code, and it names a person's step.**
+  A device that asks for a proof the agent cannot give is `per_login_mfa_required`. The Python `MFARequired`
+  message reads
+  ``port49: <device>: asks for <methods> at each login, and it could not be given here (<detail>); a person
+  must give it, so an agent stops here and asks one: at a terminal, a person's `port49 ssh <device>` proves it,
+  and the proof covers their port49 agent's further logins for its reuse_for; a workload's proof is a person's touch
+  on its touch_key``,
   and the Ansible lookup raises that same text with `[per_login_mfa_required]` appended when the detail does
-  not hold the code. **That advice is for a person at a terminal. An agent never runs `port49 token`.** It stops
-  and asks a human. Read `.code` and `.reason` in Python, not the advice.
+  not hold the code. **`port49 ssh` is a person's path (rule 1). An agent runs neither it nor `port49 token`.**
+  It stops and asks a human. Read `.code` and `.reason` in Python, not the advice.
 
 In Python, a sweep puts each refusal in `res.refused` instead of raising, so one device does not stop the
 rest. Read the code there:
@@ -103,8 +105,8 @@ Two things in the code decide how that works for an agent, and the second is eas
   `internal/decision/reasons.go` and spec §5.7.
 
 What the agent does on either code: stop, name the device and the code, and ask a human. It never looks for a
-touch key, never asks for a PIN, never starts a sign-in, and never runs the `port49 token` that the
-`MFARequired` message suggests.
+touch key, never asks for a PIN, never starts a sign-in, and never runs `port49 token`, nor the
+`port49 ssh` that the `MFARequired` message names for a person.
 
 ## The worked example: one read-only agent
 

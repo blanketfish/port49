@@ -77,8 +77,10 @@ class MFARequired(Port49Error):
     def __str__(self):
         accept = ", ".join(self.requirement.get("accept", [])) or "a second factor"
         return clean(f"port49: {self.device}: asks for {accept} at each login, and it could not be given here "
-                     f"({self.detail or self.code}); run `port49 token {self.device}` at a terminal, and one proof "
-                     f"covers this agent's further logins for its reuse_for")
+                     f"({self.detail or self.code}); a person must give it, so an agent stops here and asks one: at "
+                     f"a terminal, a person's `port49 ssh {self.device}` proves it, and the proof covers their "
+                     f"port49 agent's further logins for its reuse_for; a workload's proof is a person's touch on its "
+                     f"touch_key")
 
 
 class KeyUnavailable(Port49Error):

@@ -31,7 +31,7 @@ from .errors import HostKeyError
 # leading '@' or '|' as a marker or a hash, so a name holding one could file a key for other devices.
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,252}")
 NAME_RULE = ("port49 takes devices named with letters, digits, '.', '_' and '-' only (decision 42 ruling 8), since "
-             "the name is written into your known_hosts; use `port49 token` and your own client for it")
+             "the name is written into your known_hosts; a device named otherwise has to be renamed in the inventory before port49 can log in to it")
 
 # A UserKnownHostsFile that keeps nothing.
 _KEEPS_NOTHING = ("/dev/null", "none")

@@ -692,3 +692,169 @@ func TestARefusedLateFileThatIsRemovedLeavesNoStaleReason(t *testing.T) {
 		t.Fatalf("a stale reason is still held: %q", why)
 	}
 }
+
+// remedy is the command every unreadable, foreign or damaged store's reason ends on at start.
+const remedy = "`port49 directory reset-second-factor --all`"
+
+// A file sealed under a 64-byte key id (the cap), at a deep path, keeps its
+// whole remedy inside the broker's 300-byte cut, at start and late (#58).
+func TestAnUnknownKeyReasonFitsTheCutAndKeepsItsRemedy(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(dirFor(t), strings.Repeat("d", 120), strings.Repeat("e", 120))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var k [32]byte
+	copy(k[:], "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk")
+	long := crypt.Keys{Current: crypt.NewKey(strings.Repeat("k", 64), k)}
+
+	// start: the file is there when the handle opens.
+	atStart := filepath.Join(dir, "start", "enrollments.json")
+	if err := os.MkdirAll(filepath.Dir(atStart), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	written(t, atStart, long)
+	_, err := openAt(t, atStart, v0Only()).GetEnrollmentMark(ctx)
+	said := ""
+	if err != nil {
+		said = err.Error()
+	}
+	whole := func(where, said string) {
+		t.Helper()
+		for _, want := range []string{"not held here", "set encryption.previous to it", "restore the file", remedy} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s: %d bytes, want %q: %s", where, len(said), want, said)
+			}
+		}
+		if len(said) > 300 {
+			t.Errorf("%s: %d bytes, past the broker's cut: %s", where, len(said), said)
+		}
+		t.Logf("%s: %d bytes", where, len(said))
+	}
+	whole("start", said)
+	if !errors.Is(err, store.ErrEnrollmentStoreLost) || !strings.HasSuffix(said, remedy) {
+		t.Errorf("start: the remedy is not whole at the end: %v", err)
+	}
+
+	// late: the file appears after the handle opened.
+	late := filepath.Join(dir, "late", "enrollments.json")
+	if err := os.MkdirAll(filepath.Dir(late), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	running := openAt(t, late, v0Only())
+	written(t, late, long)
+	_, err = running.GetEnrollmentMark(ctx)
+	said = ""
+	if err != nil {
+		said = err.Error()
+	}
+	whole("late", said)
+	if !errors.Is(err, store.ErrEnrollmentStoreLost) || !strings.Contains(said, "looks again") {
+		t.Errorf("late: the retry clause is gone: %v", err)
+	}
+}
+
+// A file that cannot be read at start, at a deep path, keeps its cause and
+// its remedy whole in the lost reason (#58).
+func TestAnUnreadableFileAtStartAtALongPathKeepsItsCauseAndRemedy(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a 0000 file")
+	}
+	dir := filepath.Join(dirFor(t), strings.Repeat("d", 120), strings.Repeat("e", 120))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "enrollments.json")
+	written(t, path, keys())
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err := openAt(t, path, keys()).GetEnrollmentMark(context.Background())
+	said := ""
+	if err != nil {
+		said = err.Error()
+	}
+	if !errors.Is(err, store.ErrEnrollmentStoreLost) || len(said) > 300 || !strings.HasSuffix(said, remedy) ||
+		!strings.Contains(said, "permission denied") || !strings.Contains(said, "/enrollments.json") ||
+		strings.Contains(said, strings.Repeat("d", 120)) {
+		t.Errorf("%d bytes: %v", len(said), err)
+	}
+}
+
+// A directory above the file that cannot be searched is named in the reason,
+// not only the file: the operator checks the directory that failed (#58).
+func TestAnAncestorThatCannotBeSearchedIsNamedInTheReason(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root searches a 0000 directory")
+	}
+	// The inner name is long, so the file's own shown path (its last 40 bytes) cannot reach the locked directory.
+	inner := filepath.Join(dirFor(t), "locked", strings.Repeat("n", 60))
+	if err := os.MkdirAll(inner, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(inner, "enrollments.json")
+	running := openAt(t, path, keys())
+	locked := filepath.Dir(inner)
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	_, err := running.GetEnrollmentMark(context.Background())
+	said := ""
+	if err != nil {
+		said = err.Error()
+	}
+	if !errors.Is(err, store.ErrEnrollmentStoreLost) || len(said) > 300 || !strings.Contains(said, "lstat …"+strings.Repeat("n", 40)) ||
+		!strings.Contains(said, "permission denied") || !strings.Contains(said, "remove a link") {
+		t.Errorf("%d bytes, the failed directory is not named: %v", len(said), err)
+	}
+}
+
+// A late file refused at a deep path keeps its cause and its remedy whole in
+// the lost reason: the path is cut from its start, never the reason from its
+// end, so the broker's 300-byte line still says what is wrong and what to
+// do (#58).
+func TestALateRefusalAtALongPathKeepsItsCauseAndRemedy(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(dirFor(t), strings.Repeat("d", 120), strings.Repeat("e", 120))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "enrollments.json")
+	running := openAt(t, path, keys())
+	real := filepath.Join(dir, "real.json")
+	written(t, real, keys())
+	lost := func(cause string) {
+		t.Helper()
+		_, err := running.GetEnrollmentMark(ctx)
+		if !errors.Is(err, store.ErrEnrollmentStoreLost) {
+			t.Fatalf("not lost: %v", err)
+		}
+		said := err.Error()
+		for _, want := range []string{cause, "fix its owner and mode, or remove a link", "looks again", "/enrollments.json"} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%d bytes, want %q: %s", len(said), want, said)
+			}
+		}
+		if len(said) > 300 || strings.Contains(said, strings.Repeat("d", 120)) {
+			t.Errorf("%d bytes, the path not cut: %s", len(said), said)
+		}
+	}
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	lost("it is a symbolic link")
+	if os.Geteuid() == 0 {
+		return // root reads a 0000 file
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(real, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	lost("permission denied")
+}

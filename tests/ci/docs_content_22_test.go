@@ -14,7 +14,7 @@ func init() {
 	mustSay["agents/quick-start.md"] = append(mustSay["agents/quick-start.md"],
 		"per_login_mfa_required", "port49 ssh:", "per_login_mfa_unavailable", "applies_to_machines",
 		"no_grants_matched", "authorize_command", "no_log: true", "port49.Workload", "Never use `port49.Agent`",
-		"An agent never runs `port49 token`", "show running-config **", "\n      register: out\n", "[WARNING]",
+		"An agent runs neither it nor `port49 token`", "show running-config **", "\n      register: out\n", "[WARNING]",
 		"!!! warning \"Unmeasured\"", "L21-arista_eos.md", "never eAPI",
 	)
 	mustSay["agents/setup-runbook.md"] = append(mustSay["agents/setup-runbook.md"],

@@ -180,8 +180,8 @@ func (p *Policy) explain(subject string, m *Member, device, line string, now tim
 		}
 		if !dialect.Authorizes("commands") {
 			e.Caveats = append(e.Caveats, fmt.Sprintf("%s does not send per-command authorization (supports: %s): "+
-				"no command in this session is asked of port49, and a revocation or a session ceiling does not "+
-				"reach a live session there (spec §5.6)", d.Platform, strings.Join(dialect.Supports, ", ")))
+				"no command in this session is asked of port49; %s", d.Platform, strings.Join(dialect.Supports, ", "),
+				sessionOnlyLimit(d.Platform, dialect)))
 		}
 		if pr := res.Projection; pr != nil {
 			e.Caveats = append(e.Caveats, fmt.Sprintf("the reply projects these rules as the %s shape (spec §8): what "+

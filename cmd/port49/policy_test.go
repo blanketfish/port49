@@ -1758,8 +1758,20 @@ func TestPolicyDiffNamesAMachineGroup(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(out.String(), `subject: backup's group "backup-hosts" -> machine_group "backup-hosts"`) {
+		!strings.Contains(out.String(), "SUBJECT: backup's group \"backup-hosts\" -> machine_group \"backup-hosts\"; "+
+			"a session test naming the subject acknowledges it\n") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// Acknowledged by a session test naming the subject: lowercase, exit 0.
+	if err := os.WriteFile(newPol, append(body("machine_group"),
+		"tests:\n  - {subject: backup, device: leaf-01, level: readonly}\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "subject (a session test asserts it): backup's group \"backup-hosts\" -> "+
+			"machine_group \"backup-hosts\"\n") {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
 
@@ -1781,8 +1793,8 @@ func TestPolicyDiffNamesNoneForAMissingGroup(t *testing.T) {
 	identity := write("identity.yaml", `{name: backup, identity: "app:backup", username: backup, token_ttl: 5m}`)
 	machines := write("machines.yaml", `{name: backup, machine_group: backup-hosts, token_ttl: 5m}`)
 	for _, tc := range []struct{ old, new, want string }{
-		{machines, identity, `subject: backup's machine_group "backup-hosts" -> none`},
-		{identity, machines, `subject: backup's none -> machine_group "backup-hosts"`},
+		{machines, identity, `SUBJECT: backup's machine_group "backup-hosts" -> none;`},
+		{identity, machines, `SUBJECT: backup's none -> machine_group "backup-hosts";`},
 	} {
 		var out, errb bytes.Buffer
 		if code := run([]string{"policy", "diff", "--old", tc.old, "--new", tc.new, "--inventory", inv}, &out, &errb); code != 1 ||

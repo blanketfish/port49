@@ -12,6 +12,7 @@ import (
 
 	"github.com/blanketfish/port49/internal/admission"
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 func explained(t *testing.T, p *Policy, subject, principal, device, line string, attrs bool) (Explanation, string) {
@@ -79,9 +80,49 @@ func TestExplainSaysWhatTheDeviceWillNotHonor(t *testing.T) {
 		"note: arista_eos does not declare config_commands")
 	_, out = explained(t, p, "svc_oxidized", "", "srx-fw-04", "show chassis hardware", false)
 	mustContain(t, out, "note: juniper_junos does not send per-command authorization",
-		"a revocation or a session ceiling does not reach a live session")
+		"none of them reaches a live session there")
 	_, out = explained(t, p, "noc_tier1", "", "srx-fw-22", "", false)
 	mustContain(t, out, "srx_unpatched selected this device because its version could not be compared")
+}
+
+// Decision 21: on a platform that authorizes sessions only, explain names
+// every post-login control that does not reach a live session, for a
+// command and for the session alike (spec §5.6).
+func TestExplainStatesDecision21sLimit(t *testing.T) {
+	p := spec11(t, spec11Raw(t))
+	for _, line := range []string{"show chassis hardware", ""} {
+		_, out := explained(t, p, "svc_oxidized", "", "srx-fw-04", line, false)
+		mustContain(t, out, "note: juniper_junos does not send per-command authorization",
+			"a session ceiling, a revocation, a username change and the session-ceiling warning each act at the "+
+				"next authorization request", "§13 decision 21")
+		// Junos re-authorizes with authorization-time-interval set (L36) whether
+		// or not the platform set projects; a non-projected Junos has no classes.
+		mustContain(t, out, "authorization-time-interval", "L36-juniper_", "L40, open",
+			"Otherwise none of them reaches a live session there")
+		if strings.Contains(out, "idle-timeout") {
+			t.Errorf("%q: a platform that projects nothing is told of a class idle-timeout:\n%s", line, out)
+		}
+	}
+}
+
+// A platform that is not Junos is told only what is known of it: nothing
+// measured says its device makes an authorization request after login.
+func TestSessionOnlyLimitOnAnotherPlatformClaimsNoJunosFact(t *testing.T) {
+	// juniper_evo is not juniper_junos: L36 measured only the latter.
+	for _, name := range []string{"some_other_os", "juniper_evo"} {
+		got := sessionOnlyLimit(name, platform.Dialect{Supports: []string{"session"}})
+		for _, want := range []string{"is not known to make one", "do not rely on any of them to reach a live session there",
+			"§13 decision 21"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: want %q in %q", name, want, got)
+			}
+		}
+		for _, bad := range []string{"authorization-time-interval", "makes none after login"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("%s: found %q in %q", name, bad, got)
+			}
+		}
+	}
 }
 
 // With no command, explain shows what the login would be told, each attribute

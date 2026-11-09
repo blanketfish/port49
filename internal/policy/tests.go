@@ -105,6 +105,33 @@ func (p *Policy) decideResolved(res Resolution, d admission.Device, line string)
 	return res, prog.Command(raw), nil
 }
 
+// sessionOnlyLimit is spec §13 decision 21's limit as explain and the policy
+// tests state it on a platform that does not authorize commands: the
+// post-login controls that do not reach a live session, and, on a projected
+// platform (Junos), the one request that does come and what bounds the rest.
+// The Junos sentence keys on the platform, not on projection: set 1.0.0's
+// juniper_junos projects nothing and L36 measured the re-authorization on it
+// all the same. L36 measured only juniper_junos, so any other platform,
+// juniper_evo included, is told only that none is known.
+func sessionOnlyLimit(platformName string, dialect platform.Dialect) string {
+	const controls = "a session ceiling, a revocation, a username change and the session-ceiling warning each act " +
+		"at the next authorization request"
+	if platformName != "juniper_junos" {
+		return controls + ", and the device is not known to make one after login, so do not rely on any of them " +
+			"to reach a live session there (spec §5.6, §13 decision 21)"
+	}
+	out := controls + ", which the device makes after login only where authorization-time-interval is set: one " +
+		"re-authorization an interval after login was measured, and port49 denied a revoked principal there without " +
+		"the device ending the session (the session's next command printed an error, '^', instead of output; " +
+		"tests/lab/results/L36-juniper_*.md; whether it asks again is L40, open). " +
+		"Otherwise none of them reaches a live session there"
+	if dialect.Projected() {
+		out += ", and what ends an idle one is the class idle-timeout port49 platform export --classes renders " +
+			"from max_session_age"
+	}
+	return out + " (spec §5.6, §13 decision 21)"
+}
+
 // Caveats are what port49's answer does not promise on this platform (spec
 // §4, "Platform caveat"; §5.6, "Where these controls do not reach"; §12):
 // explain and the policy tests must say so rather than report a decision the
@@ -113,13 +140,13 @@ func Caveats(platformName string, dialect platform.Dialect, o engine.Outcome) []
 	var out []string
 	if dialect.Projected() {
 		out = append(out, fmt.Sprintf("%s does not send per-command authorization (supports: %s): the device "+
-			"decides this command itself, from the session reply's projection of these rules (command_projection: %s), "+
-			"and a revocation or a session ceiling does not reach a live session there (spec §5.6, §8)", platformName,
-			strings.Join(dialect.Supports, ", "), dialect.CommandProjection))
+			"decides this command itself, from the session reply's projection of these rules (command_projection: %s); %s",
+			platformName, strings.Join(dialect.Supports, ", "), dialect.CommandProjection,
+			sessionOnlyLimit(platformName, dialect)))
 	} else if !dialect.Authorizes("commands") {
 		out = append(out, fmt.Sprintf("%s does not send per-command authorization (supports: %s): the device "+
-			"never asks port49 about this command, and a revocation or a session ceiling does not reach a live "+
-			"session there (spec §5.6)", platformName, strings.Join(dialect.Supports, ", ")))
+			"never asks port49 about this command; %s", platformName, strings.Join(dialect.Supports, ", "),
+			sessionOnlyLimit(platformName, dialect)))
 	}
 	if len(o.Pipeline) > 0 && !dialect.PipeAuthorized {
 		out = append(out, fmt.Sprintf("%s applies output modifiers itself after port49 authorizes the bare "+

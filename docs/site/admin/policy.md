@@ -280,7 +280,7 @@ the pull request, so read every `access:` and `widens:` line, and run
 devices each reaches and when each expires.
 
 Only a grant to an existing, unchanged subject is ungated. A **new `group:` or `machine_group:` subject** exits 1
-whatever its grants, on a lowercase `subject: NAME's none -> group ...` line, until a session test names the
+whatever its grants, on a `SUBJECT: NAME's none -> group ...` line, until a session test names the
 subject; a new `identity:` subject is a `PRINCIPAL`. The gate also catches a grant that adds `api:` rights, a new
 identity for an existing subject, a changed group, a `per_login_mfa` weakening no new or changed session test
 asserts, and a privilege raise on a device the subject already reached.
@@ -326,7 +326,10 @@ It resolves a hypothetical decision and prints exactly one reason from the
 exits 0 whether the answer is permit or deny; a nonzero exit is a policy or a name that did not load. Leave out
 `--command` to see the session instead, and add `--show-attributes` to see each session attribute and where
 it came from. It also tells you when the platform cannot enforce the control you asked about, rather than
-reporting a decision the device will not honor.
+reporting a decision the device will not honor. On a platform that authorizes sessions only, that note says that a session ceiling, a revocation, a username change and the session-ceiling warning act at the next authorization request. On Junos (`juniper_junos`) the device makes one after login only if `authorization-time-interval` is set; with it set, Junos asked again once an interval after login, a revoked principal was denied there, and the denial did not end the session ([L36-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md), [L36-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md)). On a projected Junos the note also names what ends an idle session: the class `idle-timeout` that `port49 platform export --classes` renders from `max_session_age`. On any other session-only platform the device is not known to make one after login, and the note says not to rely on these controls there.
+
+!!! warning "Unmeasured: a second re-authorization"
+    Whether Junos re-authorizes an open session more than once, so whether a control made after the first ever reaches it, is unknown ([L40](../reference/lab-register.md#l40), open). Do not rely on these controls to end a live Junos session.
 
 With neither `--policy` nor `--inventory`, `explain` asks the broker through your agent, from the policy in
 force: `port49 explain --device leaf1 --command "show version"`. Explaining another person with `--principal`
