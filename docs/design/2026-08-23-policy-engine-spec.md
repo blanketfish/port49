@@ -7362,7 +7362,10 @@ value the device takes is unmeasured. *As built (plan 12c):* the export renders 
 a class whose every session is `never`; under `user_permissions` delivery every session lands in
 `p49-remote`, so that is one fleet-wide minimum (decision 55 ruling 14). Revocation
 records naming contexts are plan 7a's (`unreached` on the `revoke` record, §5.7); a refresh's are
-plan 7b's. *As built (issue #53, 2026-11-09):* explain's note names all four controls and this decision, and on a projected platform the re-authorization L36 measured (L40 open) and the class idle-timeout.
+plan 7b's. *As built (issue #53, 2026-11-09):* the note that `explain` and `policy test` print on a
+session-only platform names all four controls and this decision. On Junos, projected or not, it adds
+the re-authorization L36 measured (L40 open); on a projected platform it adds the class idle-timeout.
+Any other platform is told only that none is known.
 
 **22. Session-only projection is bits first, regexes second, chosen per grant, with one
 shape refused.** *Measured: L9 and L12 closed 2026-09-29 (`L12-projection-juniper_*.md`).* The generator picks the smallest permission-bit set

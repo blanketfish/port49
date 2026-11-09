@@ -12,6 +12,7 @@ import (
 
 	"github.com/blanketfish/port49/internal/admission"
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 func explained(t *testing.T, p *Policy, subject, principal, device, line string, attrs bool) (Explanation, string) {
@@ -94,8 +95,28 @@ func TestExplainStatesDecision21sLimit(t *testing.T) {
 		mustContain(t, out, "note: juniper_junos does not send per-command authorization",
 			"a session ceiling, a revocation, a username change and the session-ceiling warning each act at the "+
 				"next authorization request", "§13 decision 21")
-		if strings.Contains(out, "authorization-time-interval") {
-			t.Errorf("%q: a platform that is not projected is told a Junos fact:\n%s", line, out)
+		// Junos re-authorizes with authorization-time-interval set (L36) whether
+		// or not the platform set projects; a non-projected Junos has no classes.
+		mustContain(t, out, "authorization-time-interval", "L36-juniper_", "L40, open",
+			"Otherwise none of them reaches a live session there")
+		if strings.Contains(out, "idle-timeout") {
+			t.Errorf("%q: a platform that projects nothing is told of a class idle-timeout:\n%s", line, out)
+		}
+	}
+}
+
+// A platform that is not Junos is told only what is known of it: nothing
+// measured says its device makes an authorization request after login.
+func TestSessionOnlyLimitOnAnotherPlatformClaimsNoJunosFact(t *testing.T) {
+	got := sessionOnlyLimit("some_other_os", platform.Dialect{Supports: []string{"session"}})
+	for _, want := range []string{"is not known to make one", "§13 decision 21"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q in %q", want, got)
+		}
+	}
+	for _, bad := range []string{"authorization-time-interval", "makes none after login"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("found %q in %q", bad, got)
 		}
 	}
 }

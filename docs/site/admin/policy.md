@@ -326,7 +326,7 @@ It resolves a hypothetical decision and prints exactly one reason from the
 exits 0 whether the answer is permit or deny; a nonzero exit is a policy or a name that did not load. Leave out
 `--command` to see the session instead, and add `--show-attributes` to see each session attribute and where
 it came from. It also tells you when the platform cannot enforce the control you asked about, rather than
-reporting a decision the device will not honor. On a platform that authorizes sessions only, such as Junos, that note says that a session ceiling, a revocation, a username change and the session-ceiling warning act at the next authorization request, which the device does not make after login unless `authorization-time-interval` is set.
+reporting a decision the device will not honor. On a platform that authorizes sessions only, such as Junos, that note says that a session ceiling, a revocation, a username change and the session-ceiling warning act at the next authorization request, which the device does not make after login unless `authorization-time-interval` is set. Even then only one re-authorization an interval after login has been measured (L36); whether a second comes is open (L40), so do not rely on these controls to end a live session.
 
 With neither `--policy` nor `--inventory`, `explain` asks the broker through your agent, from the policy in
 force: `port49 explain --device leaf1 --command "show version"`. Explaining another person with `--principal`
