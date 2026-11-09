@@ -10187,7 +10187,7 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   For the current host, an `ansible_connection` naming `network_cli` in either its inventory hostvars or
   the lookup's own variables (where a play's `vars:` override host_vars, as in Ansible) counts, so an
   inventory `ssh` under a play's `network_cli` is checked (review fix round 1, 2026-10-20).
-- **16. The Netmiko example** is `port49.netmiko.connect`.
+- **16. The Netmiko example** is `port49.netmiko.connect`. *As built (#56, 2026-11-09):* `connect(device, workload=Workload(...))` mints through one `port49 workload token` run for the device, and a refusal raises the Agent path's class. `agent=` and `workload=` together, or crossed, are refused before any mint, and with neither it is `Agent()`. The token reaches Netmiko only (as its `password` and `secret`, and in its own log filter, which holds it to mask it until `disconnect()`, and which `connect` takes off Netmiko's logger when the construction fails): `connect` clears the locals of the frames its error passes through, up to the caller's own exception, except a generator's or coroutine's frame or one still running, neither of which holds a token on this path.
 - **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
   rows (§15).
 

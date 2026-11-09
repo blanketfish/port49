@@ -1,19 +1,22 @@
-"""Netmiko through port49 (design §17; decision 46 rulings 13 and 16).
+"""Netmiko through port49 (design §17; decision 46 rulings 13 and 16; #56).
 
-The token comes from your agent through `port49 token --json`; the device's key
-is OpenSSH's known_hosts entry under its inventory name: the only key accepted
-once filed, and filed at first contact, before authentication, unless revoked.
-The token is never printed."""
+The token comes from a Workload through `port49 workload token` (connect's workload=, a machine's own
+identity), or from your agent through `port49 token --json` (agent=, by default a person's). The device's key
+is OpenSSH's known_hosts entry under its inventory name: the only key accepted once filed, and filed at first
+contact, before authentication, unless revoked. The token goes to Netmiko and nowhere else, and is never
+printed."""
 
 import base64
+import inspect
+import logging
 import os
 import shutil
 import sys
 import tempfile
 
 from . import hostkeys
-from .client import Agent
-from .errors import HostKeyError
+from .client import Agent, Workload
+from .errors import DeviceFault, HostKeyError, NoAgent, Port49Error
 
 DEVICE_TYPES = {"arista_eos": "arista_eos", "cisco_nxos": "cisco_nxos", "cisco_iosxe": "cisco_xe",
                 "juniper_junos": "juniper_junos"}
@@ -183,19 +186,103 @@ _CHANGED = ("the key {address} presents is not the one filed under {name}: eithe
             "the address is not the device. Verify the key on its console, then run 'ssh-keygen -R {name}'")
 
 
-def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwargs):
+# Python 3.10 to 3.12 finalize a suspended generator whose frame is cleared; 3.13 and later raise RuntimeError
+# instead, which _clear_frames already catches, so only the older ones need these frames skipped.
+_SUSPENDABLE = (inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR
+                if sys.version_info < (3, 13) else 0)
+
+
+def _mint(device, enable, agent, workload):
+    """The Token connect logs in with: one `port49 workload token` run for device when workload is given
+    (never rerun, decision 46 ruling 11), else agent's `port49 token` (default Agent(), a person's). A
+    Workload's refusal raises what Agent.token raises for it; a stopped run's error keeps its device names and
+    refusals and drops its tokens."""
+    if workload is None:
+        try:
+            return (agent or Agent()).token(device, enable=enable)
+        except NoAgent as e:
+            if agent is not None:
+                raise
+            raise NoAgent(e.code, f"{e.detail or e.code} (that is a person's step; a program with a machine "
+                          f"identity of its own passes workload=port49.Workload(...) instead)", device) from None
+    try:
+        res = workload.tokens([device], enable=enable)
+    except Port49Error as e:
+        if getattr(e, "results", None) is not None:
+            e.results = e.results.without_tokens()
+        if e.device is None:  # a stopped run names no device of its own: name it, as the Agent path does
+            e.device = device
+            e.args = (str(e),)
+        raise
+    tok = res.tokens.get(device)
+    if tok is not None:
+        return tok
+    refusal = res.refused.get(device)
+    if refusal is not None:
+        raise refusal.exception()
+    raise DeviceFault("no_token", "port49 workload token answered nothing for this device", device)
+
+
+def _clear_frames(exc, stop):
+    """Clear the locals of every frame in exc's traceback, and in its causes' and contexts', up to stop: the
+    exception the caller was handling when it called connect, whose frames are the caller's. connect's
+    frames held the token, and Paramiko's hold it as the password; a traceback printed with its locals, or
+    an error tracker that records them, shows none of it. Files and line numbers stay."""
+    todo, seen = [exc], set()
+    while todo:
+        e = todo.pop()
+        if e is None or e is stop or id(e) in seen:
+            continue
+        seen.add(id(e))
+        tb = e.__traceback__
+        while tb is not None:
+            frame = tb.tb_frame
+            # A generator's or coroutine's frame is left alone where clear() would finalize it (see
+            # _SUSPENDABLE). Connect's frames and the libraries' on the login path are plain functions.
+            if not frame.f_code.co_flags & _SUSPENDABLE:
+                try:
+                    frame.clear()
+                except RuntimeError:  # still executing (connect's own), or a suspended generator on 3.13+
+                    pass
+            tb = tb.tb_next
+        todo += [e.__cause__, e.__context__]
+
+
+def connect(device, *, enable=False, agent=None, workload=None, ssh_config=None, **netmiko_kwargs):
+    """A Netmiko connection to device, logged in with a port49 token: a Workload's (workload=, a machine's own
+    identity) or an Agent's (agent=, default Agent(): a person's), never both. The token goes to Netmiko, as its
+    password and secret, and Netmiko's own log filter holds it to mask it, until disconnect(): call disconnect(),
+    or use the connection as a context manager, when done. Nowhere else: the connection returned is the one
+    return value that holds it (to log in again), and no closure, exception or traceback local of connect's
+    does. Never print, log or pickle the connection's attributes."""
+    outer = sys.exc_info()[1]
+    try:
+        return _connect(device, enable, agent, workload, ssh_config, netmiko_kwargs)
+    except BaseException as e:
+        _clear_frames(e, outer)
+        raise
+
+
+def _connect(device, enable, agent, workload, ssh_config, netmiko_kwargs):
     from netmiko import ConnectHandler
 
     owned = OWNED & set(netmiko_kwargs)
     if owned:
         raise ValueError(f"port49.netmiko.connect sets {', '.join(sorted(owned))} itself")
+    if agent is not None and workload is not None:
+        raise ValueError("port49.netmiko.connect takes agent= (a person's) or workload= (a machine's), not both")
+    if isinstance(agent, Workload):
+        raise TypeError("a port49.Workload goes in workload=, not agent=")
+    if workload is not None and not isinstance(workload, Workload):
+        raise TypeError("workload= takes a port49.Workload; a person's Agent goes in agent=")
     if not hostkeys.valid_name(device):
         # Before the mint: nothing is minted for a name known_hosts would misread (pre-flight I6, M14).
         raise HostKeyError("device_name", f"{str(device)[:64]!r}: {hostkeys.NAME_RULE}")
-    tok = (agent or Agent()).token(device, enable=enable)
+    tok = _mint(device, enable, agent, workload)
     device_type = DEVICE_TYPES.get(tok.platform)
     if device_type is None:
         raise ValueError(f"{device}: platform {tok.platform!r} has no Netmiko device type here")
+    address, username = tok.address, tok.username
     try:
         port = int(netmiko_kwargs.get("port", 22))
     except (TypeError, ValueError):
@@ -217,11 +304,26 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
         fd = os.open(known, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="ascii") as f:
             f.write("".join(f"{field} {k}\n" for k in kh.keys))
-        conn = ConnectHandler(device_type=device_type, host=tok.address, username=tok.username,
-                              password=tok.login, secret=tok.enable or "",
-                              ssh_strict=bool(kh.keys), system_host_keys=False, alt_host_keys=True,
-                              alt_key_file=known, use_keys=False, allow_agent=False, auto_connect=False,
-                              **netmiko_kwargs)
+        # Netmiko adds a filter holding password and secret (to mask them in its logs) to its logger before
+        # the work in its __init__ that can raise (session_log), and takes it off only in disconnect(). With no
+        # conn to disconnect, a failed construction would leave it there, with the token, for the process.
+        log = logging.getLogger("netmiko")
+        before = list(log.filters)
+        try:
+            conn = ConnectHandler(device_type=device_type, host=tok.address, username=tok.username,
+                                  password=tok.login, secret=tok.enable or "",
+                                  ssh_strict=bool(kh.keys), system_host_keys=False, alt_host_keys=True,
+                                  alt_key_file=known, use_keys=False, allow_agent=False, auto_connect=False,
+                                  **netmiko_kwargs)
+        except BaseException:
+            # Only this construction's filter: one another thread's connection added meanwhile masks that
+            # connection's password, and removing it would log the password in the clear at DEBUG.
+            mine = {tok.login, tok.enable} - {None, ""}
+            for f in [f for f in log.filters if f not in before]:
+                held = getattr(f, "no_log", None)
+                if isinstance(held, dict) and mine & set(held.values()):
+                    log.removeFilter(f)
+            raise
         if kh.keys:
             # Only the filed key types are negotiated, on this connect and on every rebuild (Netmiko passes
             # disabled_algorithms to each); the caller's own entries are kept.
@@ -245,7 +347,7 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
             except Exception:
                 pass
             _pin(conn, kh, accepted, device, field, lambda: hostkeys.lookup(
-                device, tok.address, port=port, username=tok.username, ssh_config=ssh_config))
+                device, address, port=port, username=username, ssh_config=ssh_config))
         except BaseException as e:
             try:
                 conn.disconnect()

@@ -108,10 +108,26 @@ are the real thing.
 ## Netmiko and host keys
 
 ```python
+from port49 import Workload
 from port49.netmiko import connect
 
-conn = connect("leaf1", enable=True)    # a Netmiko connection; extra keyword arguments pass to Netmiko
+conn = connect("leaf1", enable=True)    # a person's token, through the agent `port49 login` started
+conn.disconnect()
+w = Workload(broker="https://broker.example.com:8443", broker_ca="/etc/port49/ca.pem",
+             cert="/etc/port49/w.pem", key="/etc/port49/w.key")
+conn = connect("leaf1", workload=w)     # a machine's token, through `port49 workload token`
+conn.disconnect()
+# a Netmiko connection either way; extra keyword arguments pass to Netmiko
 ```
+
+- `workload=` runs `port49 workload token` once for the one device, and never again (a workload run is never
+  rerun). A refusal raises what the agent path raises: `Denied`, `MFARequired` (a device that asks for a second
+  factor the run did not prove), `DeviceFault`. A stopped run raises its code's class, and its `.results` names
+  the device and holds no token.
+- `agent=` and `workload=` together are a `ValueError`. A `Workload` as `agent=`, or anything but a `Workload`
+  as `workload=`, is a `TypeError`. All three are raised before anything is minted. With neither, `connect`
+  uses `Agent()`, and with no agent running raises `NoAgent`, naming `workload=`.
+- Host keys are the same on both paths, below.
 
 port49 stores no host key. `connect` keeps the device's key in your OpenSSH `known_hosts`, under
 the device's inventory name (your `HostKeyAlias` if you set one), the entry `port49 ssh` uses. It
@@ -169,6 +185,12 @@ a deny, `broker_refused`, a lost session.
 ## Secrets
 
 The token is never in argv, the environment, a log or a `repr`. It is read from the CLI's stdout
-and handed to Netmiko (or Ansible) only. No exception, `repr` or failed-parse error carries the
+and handed to Netmiko (or Ansible) only. `connect`'s connection holds it as Netmiko's `password` and
+`secret`, which Netmiko logs in again with, and Netmiko's own log filter holds it to mask it, until
+`disconnect()`: call `disconnect()`, or use the connection as a context manager, when done. An exception
+`connect` raises has its frames' locals cleared, in its traceback and in the tracebacks it chains, except a
+generator's or coroutine's frame or one still running, which hold no token on this path, so a traceback printed
+with its locals shows no token. Netmiko masks the token in its DEBUG log and session log; everything else the
+session sends is logged in full, so keep DEBUG off in production. No exception, `repr` or failed-parse error carries the
 CLI's stdout. The CLI's stderr (a touch prompt, a sign-in URL) is passed to your stderr as it
 comes; pass `Agent(stderr=file)` to send it elsewhere.
