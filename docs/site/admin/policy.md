@@ -280,7 +280,7 @@ the pull request, so read every `access:` and `widens:` line, and run
 devices each reaches and when each expires.
 
 Only a grant to an existing, unchanged subject is ungated. A **new `group:` or `machine_group:` subject** exits 1
-whatever its grants, on a lowercase `subject: NAME's none -> group ...` line, until a session test names the
+whatever its grants, on a `SUBJECT: NAME's none -> group ...` line, until a session test names the
 subject; a new `identity:` subject is a `PRINCIPAL`. The gate also catches a grant that adds `api:` rights, a new
 identity for an existing subject, a changed group, a `per_login_mfa` weakening no new or changed session test
 asserts, and a privilege raise on a device the subject already reached.
