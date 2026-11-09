@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blanketfish/port49/internal/printsafe"
 	"github.com/blanketfish/port49/internal/store"
 )
 
@@ -91,12 +92,16 @@ func TestAnEnrollmentFileRefusedAtOpenIsLostWithinTheCut(t *testing.T) {
 			if !errors.Is(err, store.ErrEnrollmentStoreLost) {
 				t.Fatalf("not lost: %v", err)
 			}
-			if len(err.Error()) > 300 {
-				t.Errorf("%d bytes, past the broker's cut: %v", len(err.Error()), err)
+			said := printsafe.Line(err.Error(), 300) // as Broker.CheckEnrollmentStore cuts it
+			if said != err.Error() {
+				t.Errorf("%d bytes, cut: %s", len(err.Error()), said)
+			}
+			if strings.Count(said, "enrollments.json") > 1 {
+				t.Errorf("the path twice: %s", said)
 			}
 			for _, w := range c.wants {
-				if !strings.Contains(err.Error(), w) {
-					t.Errorf("want %q: %v", w, err)
+				if !strings.Contains(said, w) {
+					t.Errorf("want %q: %s", w, said)
 				}
 			}
 		})

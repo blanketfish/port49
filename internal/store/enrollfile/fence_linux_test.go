@@ -110,6 +110,10 @@ func TestAFenceRefusalReachesTheBrokersCutWhole(t *testing.T) {
 			written(t, path, keys())
 			chmodStore(t, filepath.Dir(path), fs.ModeSticky|0o777)
 		}, []string{"lost: the directory …", ": mode drwxrwxrwx (sticky), wants no group or other write - chmod go-w it" + late}},
+		{"directory owner", func(t *testing.T, path string) {
+			written(t, path, keys())
+			fenceSees(t, filepath.Dir(path))
+		}, []string{"lost: the directory …", ": owner uid 4294967295, wants uid 4294967294 or root - chown it" + late}},
 		{"ancestor mode", func(t *testing.T, path string) {
 			written(t, path, keys())
 			chmodStore(t, filepath.Dir(filepath.Dir(path)), 0o777)
