@@ -463,6 +463,24 @@ func TestExplainSaysWhatTheDeviceDoes(t *testing.T) {
 	}
 }
 
+// Decision 21 on a projected Junos: the limit, the re-authorization L36
+// measured once with L40 open, and the idle-timeout that bounds a session.
+func TestExplainStatesDecision21sLimitOnAProjectedJunos(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"]}
+`+subjOK+grantOK)
+	for _, line := range []string{"show version", ""} {
+		e, err := p.Explain("s", "", "srx-fw-04", line, noon)
+		got := strings.Join(e.Caveats, "\n")
+		for _, want := range []string{"a session ceiling, a revocation, a username change and the session-ceiling warning",
+			"authorization-time-interval", "L36-juniper_", "L40, open", "idle-timeout", "§13 decision 21"} {
+			if err != nil || !strings.Contains(got, want) {
+				t.Errorf("%q: want %q in\n%s (%v)", line, want, got, err)
+			}
+		}
+	}
+}
+
 // policy test reports each composition's projection, and a reply past RFC
 // 8907's length with the class line that carries it instead.
 func TestProjectionFindings(t *testing.T) {

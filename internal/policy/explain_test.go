@@ -79,9 +79,25 @@ func TestExplainSaysWhatTheDeviceWillNotHonor(t *testing.T) {
 		"note: arista_eos does not declare config_commands")
 	_, out = explained(t, p, "svc_oxidized", "", "srx-fw-04", "show chassis hardware", false)
 	mustContain(t, out, "note: juniper_junos does not send per-command authorization",
-		"a revocation or a session ceiling does not reach a live session")
+		"none of them reaches a live session there")
 	_, out = explained(t, p, "noc_tier1", "", "srx-fw-22", "", false)
 	mustContain(t, out, "srx_unpatched selected this device because its version could not be compared")
+}
+
+// Decision 21: on a platform that authorizes sessions only, explain names
+// every post-login control that does not reach a live session, for a
+// command and for the session alike (spec §5.6).
+func TestExplainStatesDecision21sLimit(t *testing.T) {
+	p := spec11(t, spec11Raw(t))
+	for _, line := range []string{"show chassis hardware", ""} {
+		_, out := explained(t, p, "svc_oxidized", "", "srx-fw-04", line, false)
+		mustContain(t, out, "note: juniper_junos does not send per-command authorization",
+			"a session ceiling, a revocation, a username change and the session-ceiling warning each act at the "+
+				"next authorization request", "§13 decision 21")
+		if strings.Contains(out, "authorization-time-interval") {
+			t.Errorf("%q: a platform that is not projected is told a Junos fact:\n%s", line, out)
+		}
+	}
 }
 
 // With no command, explain shows what the login would be told, each attribute
