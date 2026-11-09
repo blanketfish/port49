@@ -2,9 +2,11 @@ import io
 import os
 import secrets
 import shutil
+import socket
 import stat
 import sys
 import tempfile
+import threading
 import traceback
 import types
 import unittest
@@ -22,6 +24,35 @@ AUTH_FAILS = []  # set: the next _open fails in a frame that holds the password,
 
 def _authenticate(password):
     raise Exception("Authentication to device failed.")
+
+
+def _raise_holding(password, exc):
+    """Raise exc from a frame that holds the password, as a refusal inside Paramiko's key exchange does."""
+    raise exc
+
+
+try:
+    import paramiko
+except ImportError:  # the real-Paramiko test skips
+    paramiko = None
+
+REAL_SERVER = []  # set: the port of a local SSH server; the next _open logs in to it with real Paramiko
+
+
+def _paramiko_login(kw, port):
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect("127.0.0.1", port=port, username=kw["username"], password=kw["password"],
+                   look_for_keys=False, allow_agent=False, timeout=10, auth_timeout=10, banner_timeout=10)
+
+
+if paramiko is not None:
+    class RefusesPasswords(paramiko.ServerInterface):
+        def get_allowed_auths(self, username):
+            return "password"
+
+        def check_auth_password(self, username, password):
+            return paramiko.AUTH_FAILED
 
 
 class BadHostKeyException(Exception):
@@ -72,7 +103,7 @@ class FakeConnection:
         captured["policy"] = self.key_policy
         captured["disabled"] = {k: list(v) for k, v in self.disabled_algorithms.items()}
         if NEXT_ERROR:
-            raise NEXT_ERROR.pop()
+            _raise_holding(self.kw["password"], NEXT_ERROR.pop())
         key = types.SimpleNamespace(get_name=lambda: PRESENTED[0], get_base64=lambda: PRESENTED[1])
         # Paramiko: the key the connection accepted
         self.remote_conn_pre = types.SimpleNamespace(
@@ -84,6 +115,8 @@ class FakeConnection:
         if AUTH_FAILS:
             AUTH_FAILS.pop()
             _authenticate(self.kw["password"])
+        if REAL_SERVER:
+            _paramiko_login(self.kw, REAL_SERVER.pop())
         EVENTS.append("authenticated")
 
     def disconnect(self):
@@ -113,7 +146,10 @@ def known(*keys, authorities=(), revoked=(), strict=False):
                                "/dev/null")
 
 
-# The connection's own attributes Netmiko logs in with (and the stand-in's copy of its kwargs).
+# The connection's own attributes Netmiko logs in with (and the stand-in's copy of its kwargs). Real
+# Paramiko keeps the token too, at conn.remote_conn_pre._transport.auth_handler.password: the same
+# exposure as conn.password. Whoever holds conn can read it there, by design; the test's scope is
+# closures and tracebacks, not that.
 NETMIKO_HOLDS = {"password", "secret", "kw"}
 
 
@@ -182,9 +218,10 @@ class NetmikoTest(unittest.TestCase):
     def test_the_connection_holds_the_token_only_where_netmiko_logs_in_with_it(self):  # #56
         for kh in (known("ssh-ed25519 AAAA1"), known()):  # a known key, and a first contact
             conn, _ = self.connect(kh, agent=self.minted(), enable=True)
-            self.assertEqual((captured["password"], captured["secret"]), (self.login, self.enable))
-            for secret in (self.login, self.enable):
-                self.assertFalse(reaches(conn, secret, NETMIKO_HOLDS), kh)
+            self.assertTrue(captured["password"] == self.login and captured["secret"] == self.enable,
+                            "Netmiko not given the minted login and enable")
+            for name in ("login", "enable"):  # no loop variable holds a token
+                self.assertFalse(reaches(conn, getattr(self, name), NETMIKO_HOLDS), f"{name} reachable: {kh.keys}")
 
     def test_a_failure_after_the_mint_leaves_no_token_in_a_traceback(self):  # #56
         AUTH_FAILS.append(True)
@@ -204,6 +241,67 @@ class NetmikoTest(unittest.TestCase):
             self.assertFalse(getattr(self, name) in frame_locals(e), f"{name} in a frame's locals")
             self.assertFalse(getattr(self, name) in str(e) + repr(e) + repr(e.args), f"{name} in the exception")
         self.assertIn("_authenticate", text)  # the frames stay, file and line; only their locals go
+
+    @unittest.skipIf(paramiko is None, "paramiko is not importable here")
+    def test_a_real_paramiko_auth_failure_leaves_no_token_in_any_frame(self):  # #56
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        key = paramiko.RSAKey.generate(2048)  # made now; no key file
+        transports = []
+
+        def serve():
+            try:
+                peer, _ = sock.accept()
+                t = paramiko.Transport(peer)
+                transports.append(t)
+                t.add_server_key(key)
+                t.start_server(server=RefusesPasswords())
+                t.join(20)
+            except Exception:
+                pass
+
+        th = threading.Thread(target=serve, daemon=True)
+        th.start()
+
+        def stop():
+            sock.close()
+            for t in transports:
+                t.close()
+            th.join(5)
+        self.addCleanup(stop)
+        REAL_SERVER.append(sock.getsockname()[1])
+        try:
+            self.connect(known("ssh-ed25519 AAAA1"), agent=self.minted())
+        except Exception as e:
+            caught = e
+        else:
+            self.fail("connect did not raise")
+        self.assertEqual(type(caught).__name__, "AuthenticationException")
+        text = "".join(traceback.TracebackException.from_exception(caught, capture_locals=True).format())
+        for name in ("login", "enable"):
+            self.assertFalse(getattr(self, name) in frame_locals(caught), f"{name} in a frame's locals")
+            self.assertFalse(getattr(self, name) in text, f"{name} in the formatted traceback")
+        self.assertTrue("paramiko" in text, "paramiko's frames are in the chain")  # the frames are real ones
+
+    def test_a_generator_frame_in_the_chain_is_left_alone(self):  # #56: 3.10-3.12 finalize a suspended one
+        def gen():
+            held = "x"  # noqa: F841
+            yield 1
+            raise KeyError("from a generator")
+
+        def run():
+            g = gen()
+            next(g)
+            next(g)
+        try:
+            run()
+        except KeyError as e:
+            caught = e
+        p49netmiko._clear_frames(caught, None)  # must not raise
+        tb = caught.__traceback__
+        self.assertEqual(tb.tb_next.tb_next.tb_frame.f_locals.get("held"), "x")  # the generator's kept
+        self.assertEqual(tb.tb_next.tb_frame.f_locals, {})  # a plain frame's cleared
 
     def test_a_host_key_refusal_leaves_no_token_in_its_suppressed_context(self):  # #56
         NEXT_ERROR.append(BadHostKeyException("Host key for server '10.0.0.11' does not match"))
@@ -254,7 +352,8 @@ class NetmikoTest(unittest.TestCase):
         self.assertEqual(captured["mode"], 0o600)
         self.assertFalse(os.path.exists(captured["alt_key_file"]))
         self.assertFalse(captured["system_host_keys"] or captured["use_keys"] or captured["allow_agent"])
-        self.assertEqual((captured["username"], captured["password"], captured["secret"]), ("alice", "LOGINTOKEN", "ENABLETOKEN"))
+        self.assertTrue((captured["username"], captured["password"], captured["secret"]) ==
+                        ("alice", "LOGINTOKEN", "ENABLETOKEN"), "Netmiko not given the minted login")
         self.assertEqual(remembered, [])
 
     def test_a_first_contact_is_filed_under_the_name_before_authentication(self):  # pre-flight C1
@@ -271,7 +370,7 @@ class NetmikoTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, "host_key_revoked")
         self.assertEqual(EVENTS, [])  # neither filed nor authenticated
         self.assertTrue(captured.get("disconnected"))
-        self.assertNotIn("LOGINTOKEN", str(cm.exception))
+        self.assertFalse("LOGINTOKEN" in str(cm.exception), "the token in the error")
 
     def test_another_port_is_filed_in_brackets_for_paramiko(self):
         self.connect(known("ssh-ed25519 AAAA1"), port=2222)
@@ -287,7 +386,7 @@ class NetmikoTest(unittest.TestCase):
         self.assertTrue(captured["ssh_strict"])
         self.assertEqual(captured["known_hosts"], "10.0.0.11 ssh-rsa AAAAB3\n")
         self.assertIn("ssh-keygen -R leaf1", str(cm.exception))
-        self.assertNotIn("LOGINTOKEN", str(cm.exception))
+        self.assertFalse("LOGINTOKEN" in str(cm.exception), "the token in the error")
 
     def test_an_address_moved_to_another_host_is_refused(self):  # Review Focus 2
         NEXT_ERROR.append(BadHostKeyException("Host key for server '10.0.0.11' does not match: got 'AAAA9', "
@@ -295,7 +394,7 @@ class NetmikoTest(unittest.TestCase):
         with self.assertRaises(HostKeyError) as cm:
             self.connect(known("ssh-ed25519 AAAA1"))
         self.assertIn("is not the one 10.0.0.11 presents", str(cm.exception))
-        self.assertNotIn("LOGINTOKEN", str(cm.exception))
+        self.assertFalse("LOGINTOKEN" in str(cm.exception), "the token in the error")
 
     def test_a_certificate_authority_alone_is_refused_before_connecting(self):
         captured.clear()
@@ -552,7 +651,7 @@ class NetmikoTest(unittest.TestCase):
         odd = Token("leaf1", "10.0.0.11", "fortios", "alice", "LOGINTOKEN", None)
         with self.assertRaises(ValueError) as cm:
             self.connect(known(), agent=FakeAgent(odd))
-        self.assertNotIn("LOGINTOKEN", str(cm.exception))
+        self.assertFalse("LOGINTOKEN" in str(cm.exception), "the token in the error")
 
 
 if __name__ == "__main__":

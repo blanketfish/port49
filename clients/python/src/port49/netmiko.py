@@ -6,6 +6,7 @@ once filed, and filed at first contact, before authentication, unless revoked.
 The token is never printed."""
 
 import base64
+import inspect
 import os
 import shutil
 import sys
@@ -184,6 +185,9 @@ _CHANGED = ("the key {address} presents is not the one filed under {name}: eithe
             "the address is not the device. Verify the key on its console, then run 'ssh-keygen -R {name}'")
 
 
+_SUSPENDABLE = inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR
+
+
 def _clear_frames(exc, stop):
     """Clear the locals of every frame in exc's traceback, and in its causes' and contexts', up to stop: the
     exception the caller was handling when it called connect, whose frames are the caller's. connect's
@@ -195,7 +199,18 @@ def _clear_frames(exc, stop):
         if e is None or e is stop or id(e) in seen:
             continue
         seen.add(id(e))
-        traceback.clear_frames(e.__traceback__)  # skips a frame still running (connect's own)
+        tb = e.__traceback__
+        while tb is not None:
+            frame = tb.tb_frame
+            # A generator's or coroutine's frame is left alone: on Python 3.10 to 3.12, clear() on a suspended
+            # one finalizes the generator (3.13 raises instead). Connect's frames and the libraries' on the
+            # login path are plain functions.
+            if not frame.f_code.co_flags & _SUSPENDABLE:
+                try:
+                    frame.clear()
+                except RuntimeError:  # still executing: connect's own
+                    pass
+            tb = tb.tb_next
         todo += [e.__cause__, e.__context__]
 
 
