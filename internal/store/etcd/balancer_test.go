@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -385,6 +386,74 @@ func TestTheSecondLegStopsWaitingOnceTheConnectingMembersHaveFailed(t *testing.T
 	}
 	if got := res.Metadata.Get("addr"); len(got) != 1 || got[0] != "a" {
 		t.Fatalf("placed on %v, want a", got)
+	}
+}
+
+// pairOf returns the two tried-sets of a watch's legs, as clientLegs.open
+// makes them: peers of each other, sharing one placement lock.
+func pairOf() (a, b *tried, pm *sync.Mutex) {
+	a, b, pm = &tried{used: map[string]bool{}}, &tried{used: map[string]bool{}}, new(sync.Mutex)
+	a.peer.Store(b)
+	b.peer.Store(a)
+	a.pair.Store(pm)
+	b.pair.Store(pm)
+	return a, b, pm
+}
+
+// The pair's legs place one at a time: a pick holds the pair's lock for its
+// decision, so a peer's choice is never read before it is recorded.
+func TestALegsPlacementTakesThePairsLock(t *testing.T) {
+	p := readyPicker("a", "b")
+	a, _, pm := pairOf()
+	pm.Lock()
+	done := make(chan struct{})
+	go func() {
+		p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), a)})
+		close(done)
+	}()
+	select {
+	case <-done:
+		pm.Unlock()
+		t.Fatal("a leg was placed while the pair's lock was held by the other")
+	case <-time.After(100 * time.Millisecond):
+	}
+	pm.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pick did not finish once the pair's lock was let go")
+	}
+}
+
+// Two blocked legs run again together on the one picker that has a member
+// ready, with another member still connecting: exactly one takes it and the
+// other waits, never both. Many rounds (the unlocked race showed 1.3% of them
+// sharing), and meant for -race.
+func TestTwoBlockedLegsRepickedTogetherNeverShareTheOneReadyMember(t *testing.T) {
+	p := readyPicker("a")
+	p.pending = 2
+	for round := 0; round < 3000; round++ {
+		a, b, _ := pairOf()
+		var placed atomic.Int32
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for _, tr := range []*tried{a, b} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				if _, err := p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), tr)}); err == nil {
+					placed.Add(1)
+				} else if err != balancer.ErrNoSubConnAvailable {
+					t.Errorf("pick returned %v", err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if n := placed.Load(); n != 1 {
+			t.Fatalf("round %d: %d legs were placed on the one ready member with another connecting, want exactly 1", round, n)
+		}
 	}
 }
 

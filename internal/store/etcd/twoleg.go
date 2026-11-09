@@ -411,6 +411,15 @@ func (c *clientLegs) open(ctx context.Context, i, gen int, from int64) (<-chan c
 	wctx = metadata.AppendToOutgoingContext(wctx, "port49-leg", strconv.Itoa(i)+"."+strconv.Itoa(gen))
 	c.trs[i], c.ctxs[i] = tr, wctx
 	c.mu.Unlock()
+	// The pair's placement lock is the other leg's, or a new one for the first.
+	pm := new(sync.Mutex)
+	if other != nil {
+		if o := other.pair.Load(); o != nil {
+			pm = o
+		}
+		other.pair.CompareAndSwap(nil, pm)
+	}
+	tr.pair.Store(pm)
 	tr.peer.Store(other)
 	if other != nil {
 		other.peer.Store(tr)

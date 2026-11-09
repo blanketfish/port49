@@ -53,6 +53,10 @@ type tried struct {
 	// pick can wait for a connection, and the leg's stall is measured from
 	// the placement, not from the wait's start (twoleg.go).
 	pickedAt atomic.Int64
+	// pair is held by each of a watch's two legs while it decides its member
+	// (placed), so both see the other's choice: blocked picks run again
+	// together on one picker. Shared by the pair, nil for a hedged call.
+	pair atomic.Pointer[sync.Mutex]
 	// hedged marks the copies of a hedged call (withTried): a copy of it
 	// cancelled after waiting is a suspect member. A leg of a watch, ended by
 	// the watch itself, is not.
@@ -272,6 +276,13 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 // another is ready (twoleg.go).
 func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried) (endpointsharding.ChildState, bool) {
 	n := len(cands)
+	// The two legs of a watch decide in turn: each must see the other's
+	// placement. Nothing below blocks, so the pair's lock is held only for the
+	// decision, which includes recording the member.
+	if pm := t.pair.Load(); pm != nil {
+		pm.Lock()
+		defer pm.Unlock()
+	}
 	avoid := ""
 	if peer := t.peer.Load(); peer != nil {
 		avoid = peer.lastMember()
