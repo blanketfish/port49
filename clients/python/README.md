@@ -82,7 +82,7 @@ Every exception is a `Port49Error` with `.code`, `.detail` and `.device`.
 | `no_agent`, `agent_too_old` | `NoAgent` | Run `port49 login`. |
 | `session_over`, `credential_revoked` | `SessionOver` | Run `port49 login` again. |
 | a deny (`verdict: deny`) | `Denied` (`.reason` is the broker's reason, `.verdict`) | Ask for the grant; not retried. |
-| `per_login_mfa_required` | `MFARequired` (`.requirement`) | Run `port49 token DEVICE` at a terminal; one proof covers this agent's further logins for the requirement's `reuse_for_seconds`. |
+| `per_login_mfa_required` | `MFARequired` (`.requirement`) | A person runs `port49 ssh DEVICE` at a terminal; one proof covers their agent's further logins for the requirement's `reuse_for_seconds`. An agent stops and asks a person. |
 | `touch_timeout`, `key_locked`, `key_absent` | `KeyUnavailable` | Touch the key, unlock it, or plug it in; not retried. |
 | `broker_refused` | `BrokerRefused` | The broker refused a proof, or its certificate was refused; not retried. |
 | `revocation_running`, `connection_changed` | `Temporary` | Retried by `Agent`; see below. `Workload` never reruns a run: run it again later. |

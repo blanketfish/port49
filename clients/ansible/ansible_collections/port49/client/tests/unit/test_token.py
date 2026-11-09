@@ -77,6 +77,9 @@ class PluginCase(unittest.TestCase):
                     raise port49.Denied("no_grants_matched", "d\x1b[2J", device, reason="r\x07", verdict="deny\n")
                 if device == "fault":
                     raise port49.DeviceFault("device_unconfigured", "the device has no platform", device)
+                if device == "mfa":
+                    raise port49.MFARequired("per_login_mfa_required", "no proof", device,
+                                             requirement={"accept": ["hardware_key_touch"]})
                 return TOK
 
         class FakeWorkload:
@@ -157,6 +160,15 @@ class Plugin(PluginCase):
         with self.assertRaises(AnsibleError) as cm:
             self.lookup(["denied"])
         self.assertNotIn("[no_grants_matched]", str(cm.exception))  # already named: not repeated
+
+    def test_a_second_factor_names_no_token_printing_command(self):  # #55
+        with self.assertRaises(AnsibleError) as cm:
+            self.lookup(["mfa"])
+        said = str(cm.exception)
+        self.assertNotIn("port49 token", said)
+        self.assertIn("port49 ssh mfa", said)
+        self.assertIn("[per_login_mfa_required]", said)
+        self.assertEqual(WARNINGS, [said])
 
     def test_the_error_is_also_a_warning(self):  # I1: ansible-core 2.16-2.18 censor a no_log failure
         with self.assertRaises(AnsibleError) as cm:

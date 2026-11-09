@@ -83,7 +83,7 @@ lived; each call of the lookup is a mint.
   so a long play re-mints (a second `set_fact`) rather than reusing one. Keep each mint close to
   the work that uses it.
 - **A device that asks for `hardware_key_touch`** wants a touch per mint, and forks mint at once.
-  Run `port49 token <one such device>` before the play, so the agent's `reuse_for` covers the forks.
+  Run `port49 ssh <one such device>` once before the play, so the agent's `reuse_for` covers the forks.
 - **`field`** is `login` (the default), `enable` (needs `enable=true`), `username`, `address`,
   `platform` or `all`, a dict of those plus `expires_at`.
 
@@ -107,7 +107,7 @@ to decide.
 
 A failed lookup raises an Ansible error that names the device and port49's code, for example
 `port49: leaf2: deny no_grants_matched: no grant`. It never carries a token or the CLI's output.
-A deny, a second factor the lookup cannot give (run `port49 token DEVICE` at a terminal first) or a
+A deny, a second factor the lookup cannot give (a person runs `port49 ssh DEVICE` at a terminal first) or a
 device the broker cannot decide fails **that host only**; the play goes on for the others. The
 message always ends in port49's code, in brackets when the detail does not already hold it
 (`port49: leaf2: the device has no platform [device_unconfigured]`). The lookup also raises the
