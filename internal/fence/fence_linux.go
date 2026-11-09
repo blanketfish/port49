@@ -175,7 +175,7 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 	f := os.NewFile(uintptr(fd), target)
 	defer f.Close()
 	return readChecked(f, target, max, "secret file", func(fi fs.FileInfo) error {
-		if err := ownedByUsOrRoot("the secret file "+target, fi); err != nil {
+		if err := ownedByUsOrRoot(named("the secret file", target), fi); err != nil {
 			return err
 		}
 		if perm := fi.Mode().Perm(); perm&0o027 != 0 {
@@ -211,7 +211,7 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 				return fmt.Errorf("the directory %s %w", dir, err)
 			}
 		}
-		excused, err := secretDirWritableByUsAlone("the directory "+dir, di)
+		excused, err := secretDirWritableByUsAlone(named("the directory", dir), di)
 		if err != nil || !excused {
 			return err
 		}
@@ -228,7 +228,7 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 }
 
 // secretDirWritableByUsAlone is writableByUsAlone for the directory holding a
-// secret file, with ruling 11's sticky excuse for a directory we or root own:
+// secret file (s, the subject), with ruling 11's sticky excuse for a directory we or root own:
 // the Vault Agent injector renders into a tmpfs emptyDir that is 01777. It is
 // sound because the file itself must be owned by us or root, and under the
 // sticky bit only the file's owner, the directory's owner or root can rename
@@ -236,11 +236,11 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 // file's owner check then refuses, never substitutes. The sticky bit is the
 // inode's own mode, so the host sees it too, unlike a read-only bind, whose
 // excuse is never extended here. It reports whether the excuse was used.
-func secretDirWritableByUsAlone(what string, fi fs.FileInfo) (excused bool, err error) {
-	if err := ownedByUsOrRoot(what, fi); err != nil {
+func secretDirWritableByUsAlone(s subject, fi fs.FileInfo) (excused bool, err error) {
+	if err := ownedByUsOrRoot(s, fi); err != nil {
 		return false, err
 	}
-	if err := notWritableByOthers(what, fi); err == nil {
+	if err := notWritableByOthers(s, fi); err == nil {
 		return false, nil
 	} else if fi.Mode()&fs.ModeSticky == 0 {
 		return false, err
@@ -288,14 +288,20 @@ func CheckDir(path, what string) error {
 		return err
 	}
 	defer d.Close()
-	return writableByUsAlone("the directory "+dir+", holding the "+what, di)
+	return writableByUsAlone(subject{"the directory " + dir + ", holding the " + what,
+		"the directory " + shown(dir) + ", holding the " + what}, di)
 }
 
-// linkRefused is the refusal of a link in a file's own name, wrapping err so
-// errors.Is(err, syscall.ELOOP) still holds.
+// linkRefused is the refusal of a link in a file's own name: a Refusal
+// wrapping err, so errors.Is(err, syscall.ELOOP) still holds.
 func linkRefused(path, what string, err error) error {
-	return fmt.Errorf("%s is a symbolic link; a%s %s is read only as a file of its own: %w", path, article(what),
-		what, err)
+	return &Refusal{
+		full: fmt.Sprintf("%s is a symbolic link; a%s %s is read only as a file of its own: %v", path, article(what),
+			what, err),
+		short: fmt.Sprintf("the file %s: a symbolic link, wants the %s itself - put the file in place of the link",
+			shown(path), what),
+		err: err,
+	}
 }
 
 // ReadSigned reads a file whose bytes a signature vouches for, from a shared
@@ -330,14 +336,14 @@ func readIn(dir, base string, max int64, what string) ([]byte, error) {
 	f := os.NewFile(uintptr(fd), target)
 	defer f.Close()
 	return readChecked(f, target, max, what, func(fi fs.FileInfo) error {
-		if err := writableByUsAlone("the file "+target, fi); err != nil {
+		if err := writableByUsAlone(named("the file", target), fi); err != nil {
 			return err
 		}
 		// The directory holding the file is never excused by a read-only
 		// mount (dirWritableByUsAlone is for a link's directory alone): a
 		// read-only bind of a host directory others can write is writable on
 		// the host.
-		return writableByUsAlone("the directory "+dir, di)
+		return writableByUsAlone(named("the directory", dir), di)
 	})
 }
 
@@ -349,7 +355,11 @@ func readChecked(f *os.File, target string, max int64, what string, check func(f
 		return nil, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", target)
+		return nil, &Refusal{
+			full: fmt.Sprintf("%s is not a regular file", target),
+			short: fmt.Sprintf("the path %s: %s, wants a regular file - put the %s itself there", shown(target),
+				kindOf(fi.Mode()), what),
+		}
 	}
 	if check != nil {
 		if err := check(fi); err != nil {
@@ -361,7 +371,11 @@ func readChecked(f *os.File, target string, max int64, what string, check func(f
 		return nil, err
 	}
 	if int64(len(raw)) > max {
-		return nil, fmt.Errorf("%s is larger than %d bytes; it is not a%s %s", target, max, article(what), what)
+		return nil, &Refusal{
+			full: fmt.Sprintf("%s is larger than %d bytes; it is not a%s %s", target, max, article(what), what),
+			short: fmt.Sprintf("the file %s: larger than %d bytes, the most a%s %s may be - restore it", shown(target),
+				max, article(what), what),
+		}
 	}
 	return raw, nil
 }
@@ -372,6 +386,28 @@ func article(word string) string {
 		return "n"
 	}
 	return ""
+}
+
+// subject is what a refusal names: in full for its Error, and by its paths'
+// tails for its Short (#60).
+type subject struct{ full, short string }
+
+// named is the subject "kind path".
+func named(kind, p string) subject { return subject{kind + " " + p, kind + " " + shown(p)} }
+
+// kindOf names what a path that is not a regular file is, for a Short.
+func kindOf(m fs.FileMode) string {
+	switch {
+	case m.IsDir():
+		return "a directory"
+	case m&fs.ModeNamedPipe != 0:
+		return "a named pipe"
+	case m&fs.ModeSocket != 0:
+		return "a socket"
+	case m&fs.ModeDevice != 0:
+		return "a device"
+	}
+	return "not a regular file"
 }
 
 // resolvePolicyPath follows path one component at a time to the name with no
@@ -417,14 +453,19 @@ func resolvePolicyPath(path string) (string, error) {
 			continue
 		}
 		if links++; links > maxLinks {
-			return "", fmt.Errorf("%s passes through more than %d symbolic links", path, maxLinks)
+			return "", &Refusal{
+				full: fmt.Sprintf("%s passes through more than %d symbolic links", path, maxLinks),
+				short: fmt.Sprintf("the path %s: more than %d symbolic links, wants at most %d - shorten the chain",
+					shown(path), maxLinks, maxLinks),
+			}
 		}
 		if !checked[resolved] {
 			d, di, err := openDir(resolved)
 			if err != nil {
 				return "", err
 			}
-			err = dirWritableByUsAlone("the directory "+resolved+", holding the symbolic link "+next, d, di)
+			err = dirWritableByUsAlone(subject{"the directory " + resolved + ", holding the symbolic link " + next,
+				"the directory " + shown(resolved) + " holding the link " + shown(next)}, d, di)
 			d.Close()
 			if err != nil {
 				return "", err
@@ -458,14 +499,14 @@ func ancestorWritableByUsAlone(dir, path string) error {
 		return err
 	}
 	defer d.Close()
-	what := "the directory " + dir + " (above " + path + ")"
+	s := subject{"the directory " + dir + " (above " + path + ")", "the directory " + shown(dir) + " above " + shown(path)}
 	if di.Mode()&fs.ModeSticky != 0 {
-		return ownedByUsOrRoot(what, di)
+		return ownedByUsOrRoot(s, di)
 	}
 	// A shared ancestor (/srv, /home/team) is not ours to chmod: the way out
 	// is a directory only root or this user can write.
-	return dirWritableByUsAloneAdvising(what, d, di, fmt.Sprintf("chmod go-w it, or, if others share it, move the file "+
-		"under directories only root or uid %d can write", Geteuid()))
+	return dirWritableByUsAloneAdvising(s, d, di, fmt.Sprintf("chmod go-w it, or, if others share it, move the file "+
+		"under directories only root or uid %d can write", Geteuid()), "chmod go-w it, or move the file out from under it")
 }
 
 // openDir opens dir for fstat and openat alone, without following a link in
@@ -484,12 +525,12 @@ func openDir(dir string) (*os.File, fs.FileInfo, error) {
 }
 
 // writableByUsAlone refuses what this process's user or root is not the only one
-// able to write.
-func writableByUsAlone(what string, fi fs.FileInfo) error {
-	if err := ownedByUsOrRoot(what, fi); err != nil {
+// able to write; s is the subject it names.
+func writableByUsAlone(s subject, fi fs.FileInfo) error {
+	if err := ownedByUsOrRoot(s, fi); err != nil {
 		return err
 	}
-	return notWritableByOthers(what, fi)
+	return notWritableByOthers(s, fi)
 }
 
 // dirWritableByUsAlone is writableByUsAlone for a directory holding a link in
@@ -502,17 +543,17 @@ func writableByUsAlone(what string, fi fs.FileInfo) error {
 // where a read-only bind of a host directory others can write would let them
 // rename a stale policy over it. Read-only is asked of the descriptor opened,
 // not a path, and the owner is still checked.
-func dirWritableByUsAlone(what string, d *os.File, fi fs.FileInfo) error {
-	return dirWritableByUsAloneAdvising(what, d, fi, "chmod go-w it")
+func dirWritableByUsAlone(s subject, d *os.File, fi fs.FileInfo) error {
+	return dirWritableByUsAloneAdvising(s, d, fi, "chmod go-w it", "chmod go-w it")
 }
 
 // dirWritableByUsAloneAdvising is dirWritableByUsAlone with the remedy a
-// mode refusal ends on.
-func dirWritableByUsAloneAdvising(what string, d *os.File, fi fs.FileInfo, advice string) error {
-	if err := ownedByUsOrRoot(what, fi); err != nil {
+// mode refusal ends on, in full and in its Short.
+func dirWritableByUsAloneAdvising(s subject, d *os.File, fi fs.FileInfo, advice, shortAdvice string) error {
+	if err := ownedByUsOrRoot(s, fi); err != nil {
 		return err
 	}
-	if err := notWritableByOthersAdvising(what, fi, advice); err == nil {
+	if err := notWritableByOthersAdvising(s, fi, advice, shortAdvice); err == nil {
 		return nil
 	} else if ro, rerr := ReadOnlyFS(d); rerr != nil || !ro {
 		return err
@@ -520,14 +561,17 @@ func dirWritableByUsAloneAdvising(what string, d *os.File, fi fs.FileInfo, advic
 	return nil
 }
 
-func ownedByUsOrRoot(what string, fi fs.FileInfo) error {
+func ownedByUsOrRoot(s subject, fi fs.FileInfo) error {
 	uid, ok := FileOwner(fi)
 	if !ok {
-		return fmt.Errorf("%s: cannot read its owner", what)
+		return &Refusal{full: s.full + ": cannot read its owner", short: s.short + ": cannot read its owner"}
 	}
 	if euid := Geteuid(); uid != uint32(euid) && uid != 0 {
-		return fmt.Errorf("%s is owned by uid %d; whoever can write it decides who gets access, "+
-			"so it must belong to the user this process runs as (uid %d) or to root - chown it", what, uid, euid)
+		return &Refusal{
+			full: fmt.Sprintf("%s is owned by uid %d; whoever can write it decides who gets access, "+
+				"so it must belong to the user this process runs as (uid %d) or to root - chown it", s.full, uid, euid),
+			short: fmt.Sprintf("%s: owner uid %d, wants uid %d or root - chown it", s.short, uid, euid),
+		}
 	}
 	return nil
 }
@@ -567,13 +611,14 @@ func gidIsOurs(gid uint32) bool {
 	return false
 }
 
-func notWritableByOthers(what string, fi fs.FileInfo) error {
-	return notWritableByOthersAdvising(what, fi, "chmod go-w it")
+func notWritableByOthers(s subject, fi fs.FileInfo) error {
+	return notWritableByOthersAdvising(s, fi, "chmod go-w it", "chmod go-w it")
 }
 
 // notWritableByOthersAdvising refuses a group- or world-writable mode, a
-// directory's shown as one (drwxrwxrwx) and advice its last words.
-func notWritableByOthersAdvising(what string, fi fs.FileInfo, advice string) error {
+// directory's shown as one (drwxrwxrwx) and advice its last words, shortAdvice
+// those of its Short.
+func notWritableByOthersAdvising(s subject, fi fs.FileInfo, advice, shortAdvice string) error {
 	if fi.Mode().Perm()&0o022 != 0 {
 		mode := fi.Mode().Perm().String()
 		if fi.IsDir() {
@@ -582,8 +627,11 @@ func notWritableByOthersAdvising(what string, fi fs.FileInfo, advice string) err
 				mode += " (sticky)"
 			}
 		}
-		return fmt.Errorf("%s is mode %v, writable by others than its owner; whoever can write it "+
-			"decides who gets access - %s", what, mode, advice)
+		return &Refusal{
+			full: fmt.Sprintf("%s is mode %v, writable by others than its owner; whoever can write it "+
+				"decides who gets access - %s", s.full, mode, advice),
+			short: fmt.Sprintf("%s: mode %v, wants no group or other write - %s", s.short, mode, shortAdvice),
+		}
 	}
 	return nil
 }
