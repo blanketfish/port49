@@ -103,6 +103,18 @@ func (tr *legTrace_) waitPlaced(t *testing.T, leg, after int, d time.Duration) p
 	return placement{}
 }
 
+// saw reports whether a trace line contains s.
+func (tr *legTrace_) saw(s string) bool {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	for _, l := range tr.lines {
+		if strings.Contains(l, s) {
+			return true
+		}
+	}
+	return false
+}
+
 func (tr *legTrace_) dump(t *testing.T) {
 	t.Helper()
 	tr.mu.Lock()
@@ -321,6 +333,36 @@ func TestEachLegLeavesAHungMemberForOneTheOtherIsNotOn(t *testing.T) {
 			t.Fatalf("leg %d was opened again on %s (it was on %s, the other leg on %s)", leg, now.on, was.on, now.other)
 		}
 		time.Sleep(3 * time.Second) // reconnect settles
+	}
+}
+
+// A leg that waited at the pick for a connection has not been silent for the
+// wait: once placed it is quiet from its placement, so it is not opened again
+// as one that "heard nothing" (that line, "quiet, opened again" in the trace,
+// would send an operator to a member that was only connecting; #64). Members 1
+// and 2 are hung before the dial, so the second leg waits more than feedStall
+// before they are released.
+func TestALegThatWaitedAtThePickIsNotReopenedAsQuiet(t *testing.T) {
+	s, _, ps := threeBehindProxiesWith(t, func(ps []*etcdtest.Proxy) { ps[1].Hang(true); ps[2].Hang(true) })
+	tr := traceLegs(t)
+	contextWatch(t, s)
+	time.Sleep(feedStall + time.Second) // one leg is placed, the other waits
+	if tr.at(0).n+tr.at(1).n != 1 {
+		tr.dump(t)
+		t.Fatalf("%d legs were placed while members 1 and 2 were hung, want 1", tr.at(0).n+tr.at(1).n)
+	}
+	ps[1].Hang(false)
+	ps[2].Hang(false)
+	tr.note("members 1 and 2 released")
+	ol := 0
+	if tr.at(0).n == 1 {
+		ol = 1
+	}
+	tr.waitPlaced(t, ol, 0, 5*time.Second)
+	time.Sleep(feedStall + time.Second) // the quiet clock would have fired within a tick
+	if tr.saw("quiet, opened again") {
+		tr.dump(t)
+		t.Fatal("a leg was opened again as quiet after it had waited at the pick: its quiet time ran from the wait's start")
 	}
 }
 

@@ -81,6 +81,9 @@ type legSource interface {
 	probe(ctx context.Context) error
 	// member is the member leg i is on, "" while it is not placed.
 	member(i int) string
+	// pickedAt is when leg i was placed on it (zero while it is not): a pick
+	// can wait for a connection, and a leg is quiet only from its placement.
+	pickedAt(i int) time.Time
 }
 
 type legMsg struct {
@@ -310,7 +313,14 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 				now := time.Now()
 				for i := range legs {
 					l := &legs[i]
-					switch quiet := now.Sub(l.heard); {
+					// A leg is quiet from the later of its start and its placement:
+					// one that waited at the pick for a connection has not been
+					// silent for the wait.
+					since := l.heard
+					if at := src.pickedAt(i); at.After(since) {
+						since = at
+					}
+					switch quiet := now.Sub(since); {
 					case l.failed:
 						if !now.Before(l.reopenAt) {
 							start(i)
@@ -433,6 +443,19 @@ func (c *clientLegs) watchFn() func(context.Context, string, ...clientv3.OpOptio
 		return c.watch
 	}
 	return c.cl.Watch
+}
+
+func (c *clientLegs) pickedAt(i int) time.Time {
+	c.mu.Lock()
+	tr := c.trs[i]
+	c.mu.Unlock()
+	if tr == nil {
+		return time.Time{}
+	}
+	if ns := tr.pickedAt.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
 }
 
 func (c *clientLegs) progress(i int) error {

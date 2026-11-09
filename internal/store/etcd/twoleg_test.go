@@ -63,7 +63,8 @@ func (s *scripted) member(i int) string {
 	m, _ := s.memberOf[i].Load().(string)
 	return m
 }
-func (s *scripted) progress(i int) error { s.asked.Add(1); return nil }
+func (s *scripted) pickedAt(int) time.Time { return time.Time{} }
+func (s *scripted) progress(i int) error   { s.asked.Add(1); return nil }
 func (s *scripted) probe(context.Context) error {
 	if s.probeOK.Load() {
 		return nil

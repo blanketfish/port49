@@ -49,10 +49,21 @@ type tried struct {
 	// two legs of a watch (twoleg.go) sit on different members.
 	peer atomic.Pointer[tried]
 	last atomic.Value // string: the member the latest pick chose
+	// pickedAt is when that pick chose it (unix nanoseconds, 0 before any): a
+	// pick can wait for a connection, and the leg's stall is measured from
+	// the placement, not from the wait's start (twoleg.go).
+	pickedAt atomic.Int64
 	// hedged marks the copies of a hedged call (withTried): a copy of it
 	// cancelled after waiting is a suspect member. A leg of a watch, ended by
 	// the watch itself, is not.
 	hedged bool
+}
+
+// place records addr as the member the latest pick chose, and when. The time
+// is stored first: a member seen is a time seen.
+func (t *tried) place(addr string) {
+	t.pickedAt.Store(time.Now().UnixNano())
+	t.last.Store(addr)
 }
 
 // lastMember is the member the latest pick chose, "" before any.
@@ -274,7 +285,7 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 		k := cands[(start+j)%n]
 		if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 			t.used[addr] = true
-			t.last.Store(addr)
+			t.place(addr)
 			return k, true
 		}
 	}
@@ -286,13 +297,13 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 		for _, k := range p.ready {
 			if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 				t.used[addr] = true
-				t.last.Store(addr)
+				t.place(addr)
 				return k, true
 			}
 		}
 		for _, k := range p.ready {
 			if addr := k.Endpoint.Addresses[0].Addr; addr != avoid {
-				t.last.Store(addr)
+				t.place(addr)
 				t.used = map[string]bool{addr: true}
 				return k, true
 			}
@@ -305,7 +316,7 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 	// Every candidate has had a copy: begin again.
 	k := cands[start]
 	addr := k.Endpoint.Addresses[0].Addr
-	t.last.Store(addr)
+	t.place(addr)
 	t.used = map[string]bool{addr: true}
 	return k, true
 }
