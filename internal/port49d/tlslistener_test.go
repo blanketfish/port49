@@ -868,10 +868,13 @@ type rotation struct {
 	newCA            *testpki.CA
 }
 
-func newRotation(t *testing.T) *rotation {
+func newRotation(t *testing.T) *rotation { return newRotationIn(t, safeDir(t)) }
+
+// newRotationIn is newRotation with its issuer, CRL and state directory in
+// dir.
+func newRotationIn(t *testing.T, dir string) *rotation {
 	t.Helper()
 	r := &rotation{p: writeDevicePKI(t), sink: &lineSink{}}
-	dir := safeDir(t)
 	now := time.Now()
 	r.issuer, r.crlFile = filepath.Join(dir, "issuer.pem"), filepath.Join(dir, "dev.crl")
 	os.WriteFile(r.issuer, r.p.ca.PEM(), 0o600)

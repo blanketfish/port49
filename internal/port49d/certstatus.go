@@ -5,7 +5,9 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
 
 	"github.com/blanketfish/port49/internal/certstatus"
@@ -13,6 +15,26 @@ import (
 	"github.com/blanketfish/port49/internal/fence"
 	"github.com/blanketfish/port49/internal/printsafe"
 )
+
+// briefLine is err on one line of at most limit bytes, with a fence refusal
+// in its short form (fence.Brief), so the cut never takes a refusal's cause,
+// values or remedy (#60). Every line that cuts an error a fence read can
+// carry says it through this.
+func briefLine(err error, limit int) string { return printsafe.Line(fence.Brief(err), limit) }
+
+// issuerKey names the issuer_file of CRL source i in an error. It gives the
+// path only when err does not name it already: a fence error names the file
+// itself, whole in its Error and by its tail in fence.Brief. So a cut line
+// never carries the path whole in front of the short form, and a start error
+// names the path once (#60).
+func issuerKey(i int, path string, err error) string {
+	var r *fence.Refusal
+	var pe *fs.PathError
+	if errors.As(err, &r) || errors.As(err, &pe) {
+		return fmt.Sprintf("crls[%d].issuer_file", i)
+	}
+	return fmt.Sprintf("crls[%d].issuer_file %s", i, path)
+}
 
 // issuerFileMax bounds an issuer_file's read: one certificate is a few
 // kilobytes.
@@ -36,7 +58,7 @@ func certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certifi
 		key := fmt.Sprintf("crls[%d].issuer_file %s", i, src.IssuerFile)
 		issuer, err := readIssuerFile(src.IssuerFile)
 		if err != nil {
-			return certstatus.Config{}, fmt.Errorf("%s: %w", key, err)
+			return certstatus.Config{}, fmt.Errorf("%s: %w", issuerKey(i, src.IssuerFile, err), err)
 		}
 		under := slices.ContainsFunc(anchors, func(a *x509.Certificate) bool {
 			return bytes.Equal(issuer.Raw, a.Raw) || issuer.CheckSignatureFrom(a) == nil
