@@ -1,9 +1,11 @@
 import io
 import os
+import secrets
 import shutil
 import stat
 import sys
 import tempfile
+import traceback
 import types
 import unittest
 from unittest import mock
@@ -15,6 +17,11 @@ EVENTS = []      # "filed" and "authenticated", in the order they happened
 CLIENT = {}      # what the fake's _build_ssh_client returns
 NEXT_ERROR = []  # what the next connection raises, as Paramiko would
 PRESENTED = ("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")
+AUTH_FAILS = []  # set: the next _open fails in a frame that holds the password, as Paramiko's auth does
+
+
+def _authenticate(password):
+    raise Exception("Authentication to device failed.")
 
 
 class BadHostKeyException(Exception):
@@ -74,6 +81,9 @@ class FakeConnection:
             # Paramiko: no key held for the address, so the policy is asked, after the key exchange
             # and before authentication.
             self.key_policy.missing_host_key(None, self.kw["host"], key)
+        if AUTH_FAILS:
+            AUTH_FAILS.pop()
+            _authenticate(self.kw["password"])
         EVENTS.append("authenticated")
 
     def disconnect(self):
@@ -103,7 +113,121 @@ def known(*keys, authorities=(), revoked=(), strict=False):
                                "/dev/null")
 
 
+# The connection's own attributes Netmiko logs in with (and the stand-in's copy of its kwargs).
+NETMIKO_HOLDS = {"password", "secret", "kw"}
+
+
+def reaches(root, secret, skip=()):
+    """Whether secret is reachable from root through attributes, containers, bound methods and closures,
+    root's skip attributes aside: what a caller could read off it."""
+    seen, todo = set(), [root]
+    while todo:
+        obj = todo.pop()
+        if id(obj) in seen or isinstance(obj, (types.ModuleType, type)):
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, str):
+            if secret in obj:
+                return True
+            continue
+        if isinstance(obj, (bytes, bytearray)):
+            if secret.encode() in obj:
+                return True
+            continue
+        if isinstance(obj, dict):
+            todo += [x for kv in obj.items() for x in kv]
+        elif isinstance(obj, (list, tuple, set, frozenset)):
+            todo += list(obj)
+        if isinstance(obj, types.FunctionType):
+            for cell in obj.__closure__ or ():
+                try:
+                    todo.append(cell.cell_contents)
+                except ValueError:  # an empty cell
+                    pass
+            todo += [obj.__defaults__, obj.__kwdefaults__]
+        elif isinstance(obj, types.MethodType):
+            todo += [obj.__self__, obj.__func__]
+        d = getattr(obj, "__dict__", None)
+        if isinstance(d, dict):
+            todo += [v for k, v in d.items() if not (obj is root and k in skip)]
+        for slot in getattr(type(obj), "__slots__", ()):
+            todo.append(getattr(obj, slot, None))
+    return False
+
+
+def frame_locals(exc):
+    """repr of every local of every frame in exc's traceback and in its causes' and contexts', shown or
+    suppressed."""
+    out, todo, seen = [], [exc], set()
+    while todo:
+        e = todo.pop()
+        if e is None or id(e) in seen:
+            continue
+        seen.add(id(e))
+        tb = e.__traceback__
+        while tb is not None:
+            out.append(repr(tb.tb_frame.f_locals))
+            tb = tb.tb_next
+        todo += [e.__cause__, e.__context__]
+    return "\n".join(out)
+
+
 class NetmikoTest(unittest.TestCase):
+    def minted(self):
+        """A FakeAgent with tokens made now. They live on self, never in a test's local: the test's own
+        frame is in the traceback the tests read."""
+        self.login, self.enable = secrets.token_urlsafe(18), secrets.token_urlsafe(18)
+        return FakeAgent(Token("leaf1", "10.0.0.11", "arista_eos", "alice", self.login, self.enable))
+
+    def test_the_connection_holds_the_token_only_where_netmiko_logs_in_with_it(self):  # #56
+        for kh in (known("ssh-ed25519 AAAA1"), known()):  # a known key, and a first contact
+            conn, _ = self.connect(kh, agent=self.minted(), enable=True)
+            self.assertEqual((captured["password"], captured["secret"]), (self.login, self.enable))
+            for secret in (self.login, self.enable):
+                self.assertFalse(reaches(conn, secret, NETMIKO_HOLDS), kh)
+
+    def test_a_failure_after_the_mint_leaves_no_token_in_a_traceback(self):  # #56
+        AUTH_FAILS.append(True)
+        # try/except, not assertRaises: assertRaises strips the traceback, which is what is under test.
+        try:
+            self.connect(known("ssh-ed25519 AAAA1"), agent=self.minted())
+        except Exception as e:
+            caught = e
+        else:
+            self.fail("connect did not raise")
+        e = caught
+        text = "".join(traceback.TracebackException.from_exception(e, capture_locals=True).format())
+        # No loop variable holding a token: this frame is in the traceback frame_locals reads. And the
+        # assertions are on booleans, so a failure prints no token.
+        for name in ("login", "enable"):
+            self.assertFalse(getattr(self, name) in text, f"{name} in the formatted traceback")
+            self.assertFalse(getattr(self, name) in frame_locals(e), f"{name} in a frame's locals")
+            self.assertFalse(getattr(self, name) in str(e) + repr(e) + repr(e.args), f"{name} in the exception")
+        self.assertIn("_authenticate", text)  # the frames stay, file and line; only their locals go
+
+    def test_a_host_key_refusal_leaves_no_token_in_its_suppressed_context(self):  # #56
+        NEXT_ERROR.append(BadHostKeyException("Host key for server '10.0.0.11' does not match"))
+        try:  # not assertRaises, which strips the traceback
+            self.connect(known("ssh-ed25519 AAAA1"), agent=self.minted())
+        except HostKeyError as e:
+            caught = e
+        else:
+            self.fail("connect did not raise")
+        self.assertIsNotNone(caught.__context__)
+        self.assertFalse(self.login in frame_locals(caught), "the login token in a frame's locals")
+
+    def test_a_callers_own_exception_keeps_its_frames(self):  # #56: the clearing stops at connect
+        def caller_fails():
+            mine = "kept"  # noqa: F841
+            raise KeyError("the caller's own")
+        try:
+            caller_fails()
+        except KeyError as outer:
+            AUTH_FAILS.append(True)
+            with self.assertRaises(Exception):
+                self.connect(known("ssh-ed25519 AAAA1"), agent=self.minted())
+            self.assertEqual(outer.__traceback__.tb_next.tb_frame.f_locals.get("mine"), "kept")
+
     def connect(self, kh, device="leaf1", agent=None, **kw):
         remembered = []
 

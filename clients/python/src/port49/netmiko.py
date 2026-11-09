@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import traceback
 
 from . import hostkeys
 from .client import Agent
@@ -183,7 +184,34 @@ _CHANGED = ("the key {address} presents is not the one filed under {name}: eithe
             "the address is not the device. Verify the key on its console, then run 'ssh-keygen -R {name}'")
 
 
+def _clear_frames(exc, stop):
+    """Clear the locals of every frame in exc's traceback, and in its causes' and contexts', up to stop: the
+    exception the caller was handling when it called connect, whose frames are the caller's. connect's
+    frames held the token, and Paramiko's hold it as the password; a traceback printed with its locals, or
+    an error tracker that records them, shows none of it. Files and line numbers stay."""
+    todo, seen = [exc], set()
+    while todo:
+        e = todo.pop()
+        if e is None or e is stop or id(e) in seen:
+            continue
+        seen.add(id(e))
+        traceback.clear_frames(e.__traceback__)  # skips a frame still running (connect's own)
+        todo += [e.__cause__, e.__context__]
+
+
 def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwargs):
+    """A Netmiko connection to device, logged in with a port49 token from agent (default Agent(): a
+    person's). The token goes to Netmiko, as its password and secret, and nowhere else: no return value,
+    closure, exception or traceback local of connect's holds it."""
+    outer = sys.exc_info()[1]
+    try:
+        return _connect(device, enable, agent, ssh_config, netmiko_kwargs)
+    except BaseException as e:
+        _clear_frames(e, outer)
+        raise
+
+
+def _connect(device, enable, agent, ssh_config, netmiko_kwargs):
     from netmiko import ConnectHandler
 
     owned = OWNED & set(netmiko_kwargs)
@@ -196,6 +224,7 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
     device_type = DEVICE_TYPES.get(tok.platform)
     if device_type is None:
         raise ValueError(f"{device}: platform {tok.platform!r} has no Netmiko device type here")
+    address, username = tok.address, tok.username
     try:
         port = int(netmiko_kwargs.get("port", 22))
     except (TypeError, ValueError):
@@ -245,7 +274,7 @@ def connect(device, *, enable=False, agent=None, ssh_config=None, **netmiko_kwar
             except Exception:
                 pass
             _pin(conn, kh, accepted, device, field, lambda: hostkeys.lookup(
-                device, tok.address, port=port, username=tok.username, ssh_config=ssh_config))
+                device, address, port=port, username=username, ssh_config=ssh_config))
         except BaseException as e:
             try:
                 conn.disconnect()
