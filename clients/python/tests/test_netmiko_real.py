@@ -20,6 +20,11 @@ class RealNetmikoTest(unittest.TestCase):
                            text=True, timeout=120)
         self.assertEqual((r.returncode, r.stdout), (0, ""), r.stdout + r.stderr[-500:])
 
+    def test_a_failed_construction_leaves_no_token_on_netmikos_logger(self):  # #56
+        r = subprocess.run([sys.executable, os.path.join(HERE, "real_netmiko_logger.py")], capture_output=True,
+                           text=True, timeout=120)
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stdout + r.stderr[-500:])
+
 
 if __name__ == "__main__":
     unittest.main()

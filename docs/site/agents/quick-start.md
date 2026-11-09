@@ -298,8 +298,9 @@ token file; a Kubernetes service-account agent is a human's setup ([Workloads](.
 checks the device's host key under its inventory name before the token is sent
 ([Install the clients](../operate/install/clients.md#netmiko-and-host-keys)), and returns a Netmiko
 connection. The token reaches no return value except the connection itself, which holds it as Netmiko's
-`password` and `secret` to log in again, and it is in no exception or traceback. Never print, log or pickle the
-connection's attributes.
+`password` and `secret` to log in again, and Netmiko's own log filter holds it to mask it, until `disconnect()`.
+Call `disconnect()`, or use the connection as a context manager, when done. It is in no exception or traceback.
+Never print, log or pickle the connection's attributes.
 
 ```python
 import port49
