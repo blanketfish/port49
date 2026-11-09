@@ -192,5 +192,7 @@ and handed to Netmiko (or Ansible) only. `connect`'s connection holds it as Netm
 generator's or coroutine's frame or one still running, which hold no token on this path, so a traceback printed
 with its locals shows no token. Netmiko masks the token in its DEBUG log and session log; everything else the
 session sends is logged in full, so keep DEBUG off in production. No exception, `repr` or failed-parse error carries the
-CLI's stdout. The CLI's stderr (a touch prompt, a sign-in URL) is passed to your stderr as it
+CLI's stdout. Once a call returns or raises, the library keeps no copy of the CLI's stdout, even if a program the CLI
+started (a wrapper's background job) holds that stdout open: the library reads and drops whatever that program prints
+until it closes it, and never closes the pipe under it. The CLI's stderr (a touch prompt, a sign-in URL) is passed to your stderr as it
 comes; pass `Agent(stderr=file)` to send it elsewhere.

@@ -1,9 +1,11 @@
 """Running the port49 CLI (decision 46 rulings 8 and 12).
 
-stdout is read whole and never logged: on success it holds a token. stderr is
-the person's: it is written to the caller's stderr as it comes, a byte at a
-time if need be, so "touch your key now" or a sign-in prompt with no newline
-is seen at once; its last 2 KiB are kept for an error's words."""
+stdout is read whole and never logged: on success it holds a token. Once run
+returns or raises, the drain thread holds none of it, even while a grandchild
+keeps the pipe open (#62). stderr is the person's: it is written to the
+caller's stderr as it comes, a byte at a time if need be, so "touch your key
+now" or a sign-in prompt with no newline is seen at once; its last 2 KiB are
+kept for an error's words."""
 
 import codecs
 import os
@@ -42,7 +44,8 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
     except FileNotFoundError:
         raise NotInstalled("not_installed", f"{argv[0]} is not on PATH: install port49, or pass port49=<path>") from None
     tail = bytearray()
-    out_buf = bytearray()  # one copy: the answer is parsed from it as it is
+    lock = threading.Lock()
+    held = [bytearray()]  # the answer: the drain's until take() hands it to run, then [None] (#62)
     size = [0]
     decoder = codecs.getincrementaldecoder("utf-8")("replace")  # a character may span two reads
 
@@ -66,15 +69,16 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
             chunk = os.read(p.stdout.fileno(), 65536)
             if not chunk:
                 return
-            size[0] += len(chunk)
-            if size[0] <= MAX_STDOUT:
-                out_buf.extend(chunk)
-            elif out_buf:
-                out_buf.clear()  # over the cap: keep draining, hold nothing
+            with lock:
+                if held[0] is not None:  # once run has the answer, a grandchild's writes are read and dropped
+                    size[0] += len(chunk)
+                    if size[0] <= MAX_STDOUT:
+                        held[0].extend(chunk)
+                    else:
+                        held[0].clear()  # over the cap: keep draining, hold nothing
+            del chunk  # blocked in the next read, this frame holds no part of the answer
 
     threads = [threading.Thread(target=pump, daemon=True), threading.Thread(target=drain, daemon=True)]
-    for t in threads:
-        t.start()
 
     def reap():
         """Join the readers, boundedly: a wrapper's grandchild may still hold the pipes. The
@@ -86,15 +90,31 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
             p.stdout.close()
             p.stderr.close()
 
-    try:
-        code = p.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        p.kill()
-        p.wait()
+    # The answer is handed from the drain to run inline, here and below, so no helper frame ever holds it, and
+    # run builds its result without passing the answer through a frame of any other function. One copy: the
+    # answer is parsed from it as it is.
+    answer = ran = None
+    try:  # opened before the readers start: no way out after Popen skips the handler below
+        for t in threads:
+            t.start()
+        try:
+            code = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            reap()
+            raise Port49Error("timeout", f"{argv[0]} {argv[1]} did not finish within {timeout}s and was ended") from None
         reap()
-        raise Port49Error("timeout", f"{argv[0]} {argv[1]} did not finish within {timeout}s and was ended") from None
-    reap()
-    if size[0] > MAX_STDOUT:
-        raise Port49Error("answer_too_large", f"{argv[0]} {argv[1]} printed more than {MAX_STDOUT} bytes and the "
-                          f"answer was dropped (it exited {code}, and may have minted){oversize_hint}")
-    return Ran(code, out_buf, printable(tail.decode("utf-8", "replace"), TAIL))
+        with lock:  # after reap: the drain has had its REAP to read the CLI's last bytes
+            answer, held[0] = held[0], None
+        if size[0] > MAX_STDOUT:  # the drain cleared the answer at the cap: answer is empty
+            raise Port49Error("answer_too_large", f"{argv[0]} {argv[1]} printed more than {MAX_STDOUT} bytes and the "
+                              f"answer was dropped (it exited {code}, and may have minted){oversize_hint}")
+        ran = Ran(code, None, printable(tail.decode("utf-8", "replace"), TAIL))
+        ran.stdout = answer
+        return ran
+    except BaseException:  # no way out but the return skips this: the traceback holds this frame, never the answer
+        with lock:
+            held[0] = None
+        answer = ran = None
+        raise
