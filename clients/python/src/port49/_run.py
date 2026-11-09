@@ -18,7 +18,7 @@ TAIL = 2048
 # A fleet's answer grows with the fleet (a 6000-device sweep is 1.3 MB): 64 MiB holds some 200,000
 # devices. An answer over it is an error of its own, never read as "no answer".
 MAX_STDOUT = 64 << 20
-REAP = 1.0# how long to wait for the readers once the child is killed
+REAP = 1.0  # how long to wait for the readers once the child is killed
 
 
 class Ran:
@@ -98,20 +98,22 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
             p.stdout.close()
             p.stderr.close()
 
+    answer = None
     try:
-        code = p.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        p.kill()
-        p.wait()
+        try:
+            code = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            reap()
+            raise Port49Error("timeout", f"{argv[0]} {argv[1]} did not finish within {timeout}s and was ended") from None
         reap()
-        take()  # what the ended run printed goes with no one: this frame is in the traceback
-        raise Port49Error("timeout", f"{argv[0]} {argv[1]} did not finish within {timeout}s and was ended") from None
-    except BaseException:  # an interrupt mid-wait: its traceback holds this frame, never the answer
+        answer = take()  # after reap: the drain has had its REAP to read the CLI's last bytes
+        if size[0] > MAX_STDOUT:  # the drain cleared the answer at the cap: answer is empty
+            raise Port49Error("answer_too_large", f"{argv[0]} {argv[1]} printed more than {MAX_STDOUT} bytes and the "
+                              f"answer was dropped (it exited {code}, and may have minted){oversize_hint}")
+        return Ran(code, answer, printable(tail.decode("utf-8", "replace"), TAIL))
+    except BaseException:  # no way out but the return skips this: the traceback holds this frame, never the answer
         take()
+        answer = None
         raise
-    reap()
-    answer = take()  # after reap: the drain has had its REAP to read the CLI's last bytes
-    if size[0] > MAX_STDOUT:  # the drain cleared the answer at the cap: answer is empty
-        raise Port49Error("answer_too_large", f"{argv[0]} {argv[1]} printed more than {MAX_STDOUT} bytes and the "
-                          f"answer was dropped (it exited {code}, and may have minted){oversize_hint}")
-    return Ran(code, answer,printable(tail.decode("utf-8", "replace"), TAIL))

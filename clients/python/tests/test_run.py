@@ -18,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-from port49 import _run  # noqa: E402
+from port49 import _run, client  # noqa: E402
 from port49.errors import Port49Error  # noqa: E402
 
 # A CLI that prints its answer, leaves a grandchild holding its stdout (and nothing else of the run's), records
@@ -81,18 +81,47 @@ def reaches(root, secret):
     return False
 
 
-def threads_hold(secret):
-    """Whether any live thread but the main one reaches secret: its Thread object (its target and the target's
-    closure) or a local of any frame on its stack."""
+def thread_objects_hold(secret):
+    """Whether any live thread but the main one reaches secret through its Thread object (its target and the
+    target's closure)."""
     main = threading.main_thread()
-    if any(t is not main and reaches(t, secret) for t in threading.enumerate()):
-        return True
+    return any(t is not main and reaches(t, secret) for t in threading.enumerate())
+
+
+def frames_hold(secret):
+    """Whether a local of any frame on the stack of any thread but the main one reaches secret."""
+    main = threading.main_thread()
     for ident, frame in sys._current_frames().items():
         while ident != main.ident and frame is not None:
             if reaches(dict(frame.f_locals), secret):
                 return True
             frame = frame.f_back
     return False
+
+
+def threads_hold(secret):
+    """Whether any live thread but the main one reaches secret: its Thread object or a frame on its stack."""
+    return thread_objects_hold(secret) or frames_hold(secret)
+
+
+def wait_until_drain_settled(secret):
+    """Block until the drain holds the answer in its closure and its frame has dropped the chunk it read: the
+    state a Ctrl-C meets while a grandchild keeps the pipe open. Polls the state itself, never a fixed sleep.
+    (A running thread has dropped its Thread._target, so the drain's closure shows only as free variables in
+    its own frame's locals: the drain's frame is the one to look at.)"""
+
+    def settled():
+        for frame in sys._current_frames().values():
+            if frame.f_code.co_name == "drain" and frame.f_code.co_filename == _run.run.__code__.co_filename:
+                local = dict(frame.f_locals)
+                return "chunk" not in local and reaches(local, secret)
+        return False
+
+    deadline = time.monotonic() + 10
+    while not settled():
+        if time.monotonic() > deadline:
+            raise AssertionError("the drain never settled holding the answer")
+        time.sleep(0.01)
 
 
 def run_frame(exc):
@@ -176,13 +205,9 @@ class RunnerTest(unittest.TestCase):
         real_wait = subprocess.Popen.wait
 
         def interrupted(proc, timeout=None):
-            """The CLI exits, the drain has the answer, and then Ctrl-C."""
+            """The CLI exits, the drain has the answer and has dropped its chunk, and then Ctrl-C."""
             real_wait(proc)
-            deadline = time.monotonic() + 10
-            while not threads_hold(self.secret):
-                if time.monotonic() > deadline:
-                    raise AssertionError("the drain never read the answer")
-                time.sleep(0.01)
+            wait_until_drain_settled(self.secret)
             raise KeyboardInterrupt
 
         try:
@@ -196,6 +221,44 @@ class RunnerTest(unittest.TestCase):
         self.assertIsNotNone(frame, "run's frame should be in the traceback")
         self.assertFalse(reaches(dict(frame.f_locals), self.secret), "run's frame in the traceback holds the answer")
         self.assertFalse(threads_hold(self.secret), "a live thread, or a frame on its stack, reaches the answer")
+
+    def interrupt_in_reap(self, argv, **kwargs):
+        """run() with a Ctrl-C in reap's join, once the drain holds the answer; the KeyboardInterrupt."""
+        real_join = threading.Thread.join
+
+        def joined(thread, timeout=None):
+            real_join(thread, timeout)
+            wait_until_drain_settled(self.secret)
+            raise KeyboardInterrupt
+
+        try:
+            with mock.patch.object(threading.Thread, "join", joined):
+                _run.run(argv, stderr=self.err, **kwargs)
+        except KeyboardInterrupt as e:
+            return e
+        self.fail("the run should have been interrupted")
+
+    def test_a_run_interrupted_in_reap_after_exit_keeps_no_answer(self):
+        caught = self.interrupt_in_reap([self.cli, "0"])
+        frame = run_frame(caught)
+        self.assertIsNotNone(frame, "run's frame should be in the traceback")
+        self.assertFalse(reaches(dict(frame.f_locals), self.secret), "run's frame in the traceback holds the answer")
+        self.assertFalse(threads_hold(self.secret), "a live thread, or a frame on its stack, reaches the answer")
+
+    def test_a_run_interrupted_in_reap_after_timeout_keeps_no_answer(self):
+        caught = self.interrupt_in_reap([self.cli, "30"], timeout=3.0)
+        frame = run_frame(caught)
+        self.assertIsNotNone(frame, "run's frame should be in the traceback")
+        self.assertFalse(reaches(dict(frame.f_locals), self.secret), "run's frame in the traceback holds the answer")
+        self.assertFalse(threads_hold(self.secret), "a live thread, or a frame on its stack, reaches the answer")
+
+    def test_a_truncated_answer_never_reads_as_an_answer(self):
+        """run cannot tell a prefix from a whole answer while a grandchild holds the pipe (no EOF), so the
+        parse must fail closed: no proper prefix of a JSON object is itself a JSON object."""
+        whole = b'{"verdict": "permit", "login": "' + self.secret + b'", "detail": {"a": [1, 2]}}\n'
+        reads = [client.answer(_run.Ran(0, bytearray(whole[:n]), "")) is not None for n in range(len(whole) - 1)]
+        self.assertFalse(any(reads), "a truncated answer parsed as an answer")
+        self.assertTrue(client.answer(_run.Ran(0, bytearray(whole), "")) is not None, "the whole answer should parse")
 
 
 if __name__ == "__main__":
