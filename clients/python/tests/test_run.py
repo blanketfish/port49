@@ -126,11 +126,13 @@ def wait_until_drain_settled(secret):
 
 def frames_below_run(exc):
     """Every frame in exc's traceback from _run.run's own down to the raise (frames any helper run called
-    holds too), or [] if run is not in it."""
+    holds too), or [] if run is not in it. This file's own frames (the patched wait or join that raises, whose
+    closure is the test case and so holds the secret) are left out."""
     tb, frames = exc.__traceback__, []
     while tb is not None:
         if frames or tb.tb_frame.f_code is _run.run.__code__:
-            frames.append(tb.tb_frame)
+            if tb.tb_frame.f_code.co_filename != __file__:
+                frames.append(tb.tb_frame)
         tb = tb.tb_next
     return frames
 
@@ -247,6 +249,25 @@ class RunnerTest(unittest.TestCase):
 
     def test_a_run_interrupted_in_reap_after_timeout_keeps_no_answer(self):
         caught = self.interrupt_in_reap([self.cli, "30"], timeout=3.0)
+        self.assert_unreachable(caught)
+
+    def test_a_run_interrupted_while_the_readers_start_keeps_no_answer(self):
+        real_start, starts = threading.Thread.start, []
+
+        def started(thread):
+            real_start(thread)
+            starts.append(thread)
+            if len(starts) == 2:  # the drain is running: the pump started first
+                wait_until_drain_settled(self.secret)
+                raise KeyboardInterrupt
+
+        try:
+            with mock.patch.object(threading.Thread, "start", started):
+                _run.run([self.cli, "0"], stderr=self.err)
+        except KeyboardInterrupt as e:
+            caught = e
+        else:
+            self.fail("the run should have been interrupted")
         self.assert_unreachable(caught)
 
     def test_a_truncated_answer_never_reads_as_an_answer(self):

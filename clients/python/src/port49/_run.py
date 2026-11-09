@@ -85,8 +85,6 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
         return answer
 
     threads = [threading.Thread(target=pump, daemon=True), threading.Thread(target=drain, daemon=True)]
-    for t in threads:
-        t.start()
 
     def reap():
         """Join the readers, boundedly: a wrapper's grandchild may still hold the pipes. The
@@ -99,7 +97,9 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
             p.stderr.close()
 
     answer = None
-    try:
+    try:  # opened before the readers start: no way out after Popen skips the handler below
+        for t in threads:
+            t.start()
         try:
             code = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
