@@ -236,8 +236,8 @@ func TestAContextFeedFollowsWhicheverMemberGoesDark(t *testing.T) {
 // The second leg is never placed on the first leg's member while another
 // member's connection is still being made: it waits for that member. Members
 // 1 and 2 are hung before the store dials, so their connections stay
-// connecting while member 0 is ready. The old picker put leg 1 on member 0
-// at once, and member 0 then going dark stalled the feed until a leg moved,
+// connecting while member 0 is ready. The old picker put the second leg on
+// member 0 at once, and member 0 then going dark stalled the feed until a leg moved,
 // 2 s or more (#64, CI 42563304174).
 func TestTheSecondLegWaitsForAMemberStillConnectingRatherThanShareTheFirsts(t *testing.T) {
 	s, _, ps := threeBehindProxiesWith(t, func(ps []*etcdtest.Proxy) { ps[1].Hang(true); ps[2].Hang(true) })
@@ -279,7 +279,7 @@ func TestTheSecondLegWaitsForAMemberStillConnectingRatherThanShareTheFirsts(t *t
 	put("dark")
 	if !delivered("dark", 1500*time.Millisecond) {
 		tr.dump(t)
-		t.Fatal("member 0 dark, leg 1 apart: the feed had not brought a change written after it went dark in 1.5s")
+		t.Fatal("member 0 dark, the legs apart: the feed had not brought a change written after it went dark in 1.5s")
 	}
 	ps[0].Hang(false)
 }
