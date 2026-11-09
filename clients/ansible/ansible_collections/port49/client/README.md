@@ -83,7 +83,7 @@ lived; each call of the lookup is a mint.
   so a long play re-mints (a second `set_fact`) rather than reusing one. Keep each mint close to
   the work that uses it.
 - **A device that asks for `hardware_key_touch`** wants a touch per mint, and forks mint at once.
-  Run `port49 ssh <one such device>` once before the play, so the agent's `reuse_for` covers the forks.
+  A person runs `port49 ssh <one such device>` once before the play (it logs in to the device; exit at once), so the agent's `reuse_for` covers the forks.
 - **`field`** is `login` (the default), `enable` (needs `enable=true`), `username`, `address`,
   `platform` or `all`, a dict of those plus `expires_at`.
 

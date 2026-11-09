@@ -63,7 +63,7 @@ Three things about that table.
   message reads
   ``port49: <device>: asks for <methods> at each login, and it could not be given here (<detail>); a person
   must give it, so an agent stops here and asks one: at a terminal, a person's `port49 ssh <device>` proves it,
-  and the proof covers their agent's further logins for its reuse_for; a workload's proof is a person's touch
+  and the proof covers their port49 agent's further logins for its reuse_for; a workload's proof is a person's touch
   on its touch_key``,
   and the Ansible lookup raises that same text with `[per_login_mfa_required]` appended when the detail does
   not hold the code. **`port49 ssh` is a person's path (rule 1). An agent runs neither it nor `port49 token`.**

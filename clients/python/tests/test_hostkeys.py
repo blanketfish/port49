@@ -135,6 +135,7 @@ class HostKeysTest(unittest.TestCase):
             with self.assertRaises(HostKeyError, msg=repr(name)) as cm:
                 hostkeys.lookup(name, "10.0.0.11", ssh_config=self.config())
             self.assertEqual(cm.exception.code, "device_name")
+            self.assertNotIn("port49 token", str(cm.exception))  # #55: no token-printing command in an agent's error
         self.assertTrue(hostkeys.valid_name("a" * 253))
         self.assertTrue(hostkeys.valid_name("core-sw01.dc1"))
 
