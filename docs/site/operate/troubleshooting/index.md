@@ -309,7 +309,7 @@ from the export. When the broker's line names a check instead (an owner, a mode,
 names. For example, after a restore left `/var/lib/port49/enrollments.json` owned by uid 1000, it reads
 `the file /var/lib/port49/enrollments.json: owner uid 1000, wants uid 999 or root - chown it`. The line names each
 path by its last 32 bytes, so a deeper path starts with `…`. The file is `enrollments.json` in
-`broker.state_dir`, or beside `broker.revocations_file` when that is unset. See [backup and restore](../backup-and-restore.md).
+`broker.state_dir`, or beside `broker.revocations_file` when `broker.state_dir` is unset. See [backup and restore](../backup-and-restore.md).
 
 **Don't:** run `init-enrollments` to fix a lost store on an install that had enrolled people: it makes an
 empty store, and everyone enrolls again. Restore the export instead. Don't use the escapes in the alert (`session.staleness_ceiling: 0s`, or stopping port49d) as a
