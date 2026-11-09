@@ -376,9 +376,9 @@ func TestAGroupWritableDirectoryIsRefused(t *testing.T) {
 // not an Open error: the broker's other paths keep serving (review I3).
 func TestAnUnreadableOrOversizedFileIsLostNotAnOpenError(t *testing.T) {
 	ctx := context.Background()
-	check := func(t *testing.T, f *File) {
+	check := func(t *testing.T, f *File, want string) {
 		t.Helper()
-		if f.Lost() == "" || !strings.Contains(f.Lost(), "cannot be read") {
+		if f.Lost() == "" || !strings.Contains(f.Lost(), want) {
 			t.Fatalf("lost: %q", f.Lost())
 		}
 		if _, err := f.GetSecondFactor(ctx, alice); !errors.Is(err, store.ErrEnrollmentStoreLost) {
@@ -398,7 +398,7 @@ func TestAnUnreadableOrOversizedFileIsLostNotAnOpenError(t *testing.T) {
 			t.Fatal(err)
 		}
 		f := openAt(t, path, keys())
-		check(t, f)
+		check(t, f, "cannot be read")
 		// It can still be replaced: the unreadable file is set aside.
 		if err := f.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
 			t.Fatal(err)
@@ -415,7 +415,7 @@ func TestAnUnreadableOrOversizedFileIsLostNotAnOpenError(t *testing.T) {
 		if err := os.Truncate(path, maxFile+1); err != nil {
 			t.Fatal(err)
 		}
-		check(t, openAt(t, path, keys()))
+		check(t, openAt(t, path, keys()), "larger than 67108864 bytes")
 	})
 }
 
@@ -431,7 +431,7 @@ func TestAFileTheFenceRefusesIsLostNamingTheReasonAndNothingOfItsContent(t *test
 		t.Fatal(err)
 	}
 	f := openAt(t, path, keys())
-	if !strings.Contains(f.Lost(), "writable by others") || strings.Contains(f.Lost(), sentinel) {
+	if !strings.Contains(f.Lost(), "wants no group or other write") || strings.Contains(f.Lost(), sentinel) {
 		t.Fatalf("lost: %q", f.Lost())
 	}
 	_, err := f.GetEnrollmentMark(context.Background())
@@ -729,6 +729,9 @@ func TestAnUnknownKeyReasonFitsTheCutAndKeepsItsRemedy(t *testing.T) {
 		if len(said) > 300 {
 			t.Errorf("%s: %d bytes, past the broker's cut: %s", where, len(said), said)
 		}
+		if n := strings.Count(said, "/enrollments.json"); n != 1 {
+			t.Errorf("%s: the store's path is named %d times, want once: %s", where, n, said)
+		}
 		t.Logf("%s: %d bytes", where, len(said))
 	}
 	whole("start", said)
@@ -752,6 +755,33 @@ func TestAnUnknownKeyReasonFitsTheCutAndKeepsItsRemedy(t *testing.T) {
 	if !errors.Is(err, store.ErrEnrollmentStoreLost) || !strings.Contains(said, "looks again") {
 		t.Errorf("late: the retry clause is gone: %v", err)
 	}
+}
+
+// A damaged file's reason, which is the store's own words and not the
+// fence's, names the store's path exactly once, at start and late (#60).
+func TestADamagedFilesReasonNamesThePathOnce(t *testing.T) {
+	ctx := context.Background()
+	named := func(where string, err error) {
+		t.Helper()
+		if !errors.Is(err, store.ErrEnrollmentStoreLost) {
+			t.Fatalf("%s: not lost: %v", where, err)
+		}
+		if n := strings.Count(err.Error(), "/enrollments.json"); n != 1 || !strings.Contains(err.Error(), "does not unseal") {
+			t.Errorf("%s: the path is named %d times, or the cause is gone: %v", where, n, err)
+		}
+	}
+	atStart := filepath.Join(dirFor(t), "enrollments.json")
+	written(t, atStart, keys())
+	tamper(t, atStart)
+	_, err := openAt(t, atStart, keys()).GetEnrollmentMark(ctx)
+	named("start", err)
+
+	late := filepath.Join(dirFor(t), "enrollments.json")
+	running := openAt(t, late, keys())
+	written(t, late, keys())
+	tamper(t, late)
+	_, err = running.GetEnrollmentMark(ctx)
+	named("late", err)
 }
 
 // A file that cannot be read at start, at a deep path, keeps its cause and

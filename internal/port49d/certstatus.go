@@ -7,12 +7,59 @@ import (
 	"encoding/pem"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/blanketfish/port49/internal/certstatus"
 	"github.com/blanketfish/port49/internal/config"
 	"github.com/blanketfish/port49/internal/fence"
 	"github.com/blanketfish/port49/internal/printsafe"
 )
+
+// briefLine is err on one line of at most limit bytes, with a fence refusal
+// in its short form (fence.Brief), so the cut never takes a refusal's cause,
+// values or remedy (#60). Every line that cuts an error a fence read can
+// carry says it through this.
+func briefLine(err error, limit int) string { return printsafe.Line(fence.Brief(err), limit) }
+
+// issuerKey names the issuer_file of CRL source i in an error. It leaves the
+// path out only when err's own text already names that exact path: the fence
+// names the file whole in its Error and by its tail in fence.Brief, so a cut
+// line never carries the path whole in front of the short form, and a start
+// error names it once. An error that names an ancestor directory, a link or
+// nothing keeps the path, so the operator is never left without the file's
+// name (#60).
+func issuerKey(i int, path string, err error) string {
+	if strings.Contains(err.Error(), path) {
+		return fmt.Sprintf("crls[%d].issuer_file", i)
+	}
+	return fmt.Sprintf("crls[%d].issuer_file %s", i, path)
+}
+
+// issuerFileError is the error of reading CRL source i's issuer_file. Error
+// is the key and the cause whole, for a start error or a reload line. Short is
+// the same for a cut line: the key names the file by its tail and the cause
+// is fence.Brief's, so a cut never takes the cause or remedy of a fence
+// refusal that names another path, a link's target or a directory above the
+// file (#60). It unwraps to the read error.
+type issuerFileError struct {
+	i    int
+	path string
+	err  error
+}
+
+func (e *issuerFileError) Error() string { return issuerKey(e.i, e.path, e.err) + ": " + e.err.Error() }
+func (e *issuerFileError) Unwrap() error { return e.err }
+
+// Short names the path by its last 32 bytes, unless the cause already names
+// that tail.
+func (e *issuerFileError) Short() string {
+	cause := fence.Brief(e.err)
+	tail := printsafe.Tail(e.path, 32)
+	if strings.Contains(cause, tail) {
+		return fmt.Sprintf("crls[%d].issuer_file: %s", e.i, cause)
+	}
+	return fmt.Sprintf("crls[%d].issuer_file %s: %s", e.i, tail, cause)
+}
 
 // issuerFileMax bounds an issuer_file's read: one certificate is a few
 // kilobytes.
@@ -36,7 +83,7 @@ func certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certifi
 		key := fmt.Sprintf("crls[%d].issuer_file %s", i, src.IssuerFile)
 		issuer, err := readIssuerFile(src.IssuerFile)
 		if err != nil {
-			return certstatus.Config{}, fmt.Errorf("%s: %w", key, err)
+			return certstatus.Config{}, &issuerFileError{i: i, path: src.IssuerFile, err: err}
 		}
 		under := slices.ContainsFunc(anchors, func(a *x509.Certificate) bool {
 			return bytes.Equal(issuer.Raw, a.Raw) || issuer.CheckSignatureFrom(a) == nil

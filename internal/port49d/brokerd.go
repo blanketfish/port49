@@ -30,7 +30,6 @@ import (
 	"github.com/blanketfish/port49/internal/healthcheck"
 	"github.com/blanketfish/port49/internal/inventory"
 	"github.com/blanketfish/port49/internal/policy"
-	"github.com/blanketfish/port49/internal/printsafe"
 	"github.com/blanketfish/port49/internal/session"
 	"github.com/blanketfish/port49/internal/store"
 	"github.com/blanketfish/port49/internal/store/crypt"
@@ -768,7 +767,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 			func(format string, args ...any) { fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...) })
 		checker.OnNewEntry(brk.OnCRLEntry)
 		for _, err := range checker.LoadPersisted() {
-			brokerSay("broker: certificate status: %s", printsafe.Line(err.Error(), 300))
+			brokerSay("broker: certificate status: %s", briefLine(err, 300))
 		}
 		for _, a := range anchors {
 			if line := anchorCoverLine(a, ccfg, cs.OnUnavailable); line != "" {

@@ -212,10 +212,10 @@ func (l *tlsListener) followTrust(why string) {
 		l.followFailed = msg
 		if rotated {
 			l.say("tls_listener: %s: the certificate status sources keep the issuers they had, and devices under a "+
-				"new CA are declined status_unavailable until this is fixed: %s", why, printsafe.Line(err.Error(), 400))
+				"new CA are declined status_unavailable until this is fixed: %s", why, briefLine(err, 400))
 		} else {
 			l.say("tls_listener: %s: the certificate status sources keep the issuers they had: %s", why,
-				printsafe.Line(err.Error(), 400))
+				briefLine(err, 400))
 		}
 	}
 }
@@ -571,7 +571,7 @@ func tlsListenerOf(cfg config.Config, m *metrics.Metrics, say func(string, ...an
 		}
 		checker = certstatus.New(ccfg, time.Now, m, say)
 		for _, err := range checker.LoadPersisted() {
-			say("tls_listener: certificate status: %s", printsafe.Line(err.Error(), 300))
+			say("tls_listener: certificate status: %s", briefLine(err, 300))
 		}
 		l.status, l.cached = deviceStatus(checker)
 		l.follow = followStatus(checker, statusConfig, ccfg, anchors, inters, say)

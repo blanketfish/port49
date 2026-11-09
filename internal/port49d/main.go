@@ -1282,7 +1282,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 				func(format string, args ...any) { fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...) })
 			checker.OnNewEntry(brk.OnCRLEntry)
 			for _, err := range checker.LoadPersisted() {
-				fmt.Fprintf(stderr, "port49d: broker: certificate status: %s\n", printsafe.Line(err.Error(), 300))
+				fmt.Fprintf(stderr, "port49d: broker: certificate status: %s\n", briefLine(err, 300))
 			}
 			for _, a := range anchors {
 				if line := anchorCoverLine(a, ccfg, cs.OnUnavailable); line != "" {
