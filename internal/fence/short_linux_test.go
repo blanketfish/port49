@@ -84,6 +84,15 @@ func policyFile(t *testing.T, p string, perm fs.FileMode) string {
 	return p
 }
 
+// swapAfterResolve runs f in ReadSecret between resolving the path and
+// checking the directory: the window the fence's own seam names.
+func swapAfterResolve(t *testing.T, f func()) {
+	t.Helper()
+	old := AfterResolve
+	t.Cleanup(func() { AfterResolve = old })
+	AfterResolve = f
+}
+
 func symlinkT(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
@@ -127,8 +136,8 @@ func TestEveryFenceRefusalHasAShortFormThatKeepsItsCause(t *testing.T) {
 		{"directory, asked by CheckDir", func(t *testing.T) ([]string, error) {
 			p := policyFile(t, deepFile(t, "policy.yaml"), 0o600)
 			chmodT(t, filepath.Dir(p), 0o777|fs.ModeSticky)
-			return []string{filepath.Dir(p)}, CheckDir(p, "revocations file")
-		}, []string{"the directory …", ", holding the revocations file: mode drwxrwxrwx (sticky), wants no group or other write - chmod go-w it"}},
+			return []string{filepath.Dir(p)}, CheckDir(p, longest)
+		}, []string{"the directory …", ", holding the " + longest + ": mode drwxrwxrwx (sticky), wants no group or other write - chmod go-w it"}},
 		{"ancestor mode", func(t *testing.T) ([]string, error) {
 			p := policyFile(t, deepFile(t, "policy.yaml"), 0o600)
 			mid := filepath.Dir(filepath.Dir(p))
@@ -202,6 +211,38 @@ func TestEveryFenceRefusalHasAShortFormThatKeepsItsCause(t *testing.T) {
 			_, err := ReadSecret(p, filepath.Dir(p), 1<<10)
 			return []string{p}, err
 		}, []string{"the secret file …", ": owner uid 4294967295, wants uid 4294967294 or root - chown it"}},
+		{"secret directory owner", func(t *testing.T) ([]string, error) {
+			p := policyFile(t, deepFile(t, "k1"), 0o600)
+			// the walk checks the holding directory as an ancestor first; only a swap after it reaches the rule
+			swapAfterResolve(t, func() { ownedBy(t, filepath.Dir(p)) })
+			_, err := ReadSecret(p, filepath.Dir(p), 1<<10)
+			return []string{filepath.Dir(p)}, err
+		}, []string{"the directory …", ": owner uid 4294967295, wants uid 4294967294 or root - chown it"}},
+		{"secret directory mode", func(t *testing.T) ([]string, error) {
+			p := policyFile(t, deepFile(t, "k1"), 0o600)
+			swapAfterResolve(t, func() { chmodT(t, filepath.Dir(p), 0o777) })
+			_, err := ReadSecret(p, filepath.Dir(p), 1<<10)
+			return []string{filepath.Dir(p)}, err
+		}, []string{"the directory …", ": mode drwxrwxrwx, wants no group or other write - chmod go-w it"}},
+		{"directory owner, in readIn", func(t *testing.T) ([]string, error) {
+			dir := deepDir(t, pathLen, "policy.yaml")
+			policyFile(t, filepath.Join(dir, "policy.yaml"), 0o600)
+			ownedBy(t, dir)
+			_, err := readIn(dir, "policy.yaml", maxPolicySize, "policy file")
+			return []string{dir}, err
+		}, []string{"the directory …", ": owner uid 4294967295, wants uid 4294967294 or root - chown it"}},
+		{"directory owner, asked by CheckDir", func(t *testing.T) ([]string, error) {
+			p := policyFile(t, deepFile(t, "policy.yaml"), 0o600)
+			ownedBy(t, filepath.Dir(p))
+			return []string{filepath.Dir(p)}, CheckDir(p, longest)
+		}, []string{"the directory …", ", holding the " + longest + ": owner uid 4294967295, wants uid 4294967294 or root - chown it"}},
+		{"file owner unreadable", func(t *testing.T) ([]string, error) {
+			p := policyFile(t, deepFile(t, "policy.yaml"), 0o600)
+			defer func(f func(fs.FileInfo) (uint32, bool)) { FileOwner = f }(FileOwner)
+			FileOwner = func(fi fs.FileInfo) (uint32, bool) { return 0, !fi.Mode().IsRegular() }
+			_, err := Read(p, maxPolicySize, "policy file")
+			return []string{p}, err
+		}, []string{"the file …", ": cannot read its owner"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			paths, err := c.build(t)
@@ -215,6 +256,10 @@ func TestEveryFenceRefusalHasAShortFormThatKeepsItsCause(t *testing.T) {
 			}
 			if len(short) > shortMax {
 				t.Errorf("%d bytes, past %d: %s", len(short), shortMax, short)
+			}
+			// the cut is a backstop: a worst case stands whole and ends on its remedy
+			if short != r.short || strings.HasSuffix(short, "…") || !strings.HasSuffix(short, c.wants[len(c.wants)-1]) {
+				t.Errorf("cut, or not ending on its remedy (%d bytes): %s", len(short), short)
 			}
 			for _, w := range c.wants {
 				if !strings.Contains(short, w) {
@@ -364,6 +409,28 @@ func TestTheFullTextOfEveryOtherRefusalIsUnchanged(t *testing.T) {
 		ownedBy(t, p)
 		_, err := ReadSecret(p, filepath.Dir(p), 1<<10)
 		check(t, err, ownerText("the secret file "+p))
+	})
+	t.Run("secret directory owner", func(t *testing.T) {
+		p := policyFile(t, filepath.Join(safeDir(t), "k1"), 0o600)
+		dir := filepath.Dir(p)
+		swapAfterResolve(t, func() { ownedBy(t, dir) })
+		_, err := ReadSecret(p, dir, 1<<10)
+		check(t, err, ownerText("the directory "+dir))
+	})
+	t.Run("secret directory mode", func(t *testing.T) {
+		p := policyFile(t, filepath.Join(safeDir(t), "k1"), 0o600)
+		dir := filepath.Dir(p)
+		swapAfterResolve(t, func() { chmodT(t, dir, 0o777) })
+		_, err := ReadSecret(p, dir, 1<<10)
+		check(t, err, modeText("the directory "+dir, "drwxrwxrwx", "chmod go-w it"))
+	})
+	t.Run("directory owner, in readIn and CheckDir", func(t *testing.T) {
+		p := policyFile(t, filepath.Join(safeDir(t), "policy.yaml"), 0o600)
+		dir := filepath.Dir(p)
+		ownedBy(t, dir)
+		_, err := readIn(dir, "policy.yaml", maxPolicySize, "policy file")
+		check(t, err, ownerText("the directory "+dir))
+		check(t, CheckDir(p, "revocations file"), ownerText("the directory "+dir+", holding the revocations file"))
 	})
 	t.Run("no owner", func(t *testing.T) {
 		p := policyAt(t, 0o600, 0o700)

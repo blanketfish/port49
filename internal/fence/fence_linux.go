@@ -504,7 +504,10 @@ func ancestorWritableByUsAlone(dir, path string) error {
 		return ownedByUsOrRoot(s, di)
 	}
 	// A shared ancestor (/srv, /home/team) is not ours to chmod: the way out
-	// is a directory only root or this user can write.
+	// is a directory only root or this user can write. This Short is the
+	// tightest of the fence's, 191 of shortMax's 192 bytes at its worst case:
+	// a longer shortAdvice loses its remedy to the cut (the "ancestor mode" case
+	// of TestEveryFenceRefusalHasAShortFormThatKeepsItsCause fails first).
 	return dirWritableByUsAloneAdvising(s, d, di, fmt.Sprintf("chmod go-w it, or, if others share it, move the file "+
 		"under directories only root or uid %d can write", Geteuid()), "chmod go-w it, or move the file out from under it")
 }

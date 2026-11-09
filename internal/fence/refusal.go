@@ -1,16 +1,17 @@
 package fence
 
 import (
-	"errors"
 	"io/fs"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // shortPathMax is how much of a path a Short keeps: its last 32 bytes, the
 // file name and a directory or two. Two of them, the cause, the values and
-// the remedy stay within shortMax.
+// the remedy stay within shortMax. The tightest is the ancestor mode refusal,
+// at 191 bytes: a longer path tail or wording drops its remedy.
 const shortPathMax = 32
 
 // shortMax bounds a Short. The enrollment store's late reason puts 99 bytes
@@ -33,29 +34,58 @@ type Refusal struct {
 
 func (r *Refusal) Error() string { return r.full }
 
-// Short is the refusal in at most shortMax bytes.
-func (r *Refusal) Short() string { return printsafe.Line(r.short, shortMax) }
+// Short is the refusal in at most shortMax bytes, its ellipsis included. The
+// cut is a backstop, never the design: every refusal's worst case fits whole
+// with its remedy (TestEveryFenceRefusalHasAShortFormThatKeepsItsCause), and a
+// longer wording must be shortened there, not left to the cut, which drops the
+// end, where the remedy is.
+func (r *Refusal) Short() string {
+	s := r.short
+	if len(s) <= shortMax {
+		return printsafe.Line(s, shortMax)
+	}
+	n := shortMax - len("…")
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n-- // never split a rune
+	}
+	return printsafe.Line(s[:n], shortMax) + "…"
+}
 
 func (r *Refusal) Unwrap() error { return r.err }
 
 // shown is a path as a Short names it.
 func shown(p string) string { return printsafe.Tail(p, shortPathMax) }
 
-// Brief is err's text for a line that is cut short. A Refusal's full text is
-// replaced by its Short, and an fs.PathError's path by its tail, inside
-// whatever err wraps them in. Any other error's text is unchanged.
+// Brief is err's text for a line that is cut short. Every Refusal's full text
+// is replaced by its Short, and every fs.PathError's path by its tail, inside
+// whatever err wraps them in, an errors.Join included. Any other error's text
+// is unchanged.
 func Brief(err error) string {
 	if err == nil {
 		return ""
 	}
 	s := err.Error()
-	var r *Refusal
-	if errors.As(err, &r) {
-		return strings.Replace(s, r.Error(), r.Short(), 1)
+	var walk func(error)
+	walk = func(e error) {
+		switch x := e.(type) {
+		case nil:
+			return
+		case *Refusal:
+			s = strings.Replace(s, x.Error(), x.Short(), 1)
+			return
+		case *fs.PathError:
+			s = strings.Replace(s, x.Error(), x.Op+" "+shown(x.Path)+": "+x.Err.Error(), 1)
+			return
+		}
+		switch u := e.(type) {
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap())
+		case interface{ Unwrap() []error }:
+			for _, c := range u.Unwrap() {
+				walk(c)
+			}
+		}
 	}
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return strings.Replace(s, pe.Error(), pe.Op+" "+shown(pe.Path)+": "+pe.Err.Error(), 1)
-	}
+	walk(err)
 	return s
 }
