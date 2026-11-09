@@ -4,6 +4,7 @@ booleans with words of their own, and leaks are found by walking objects, never 
 
 import io
 import os
+import _thread
 import secrets
 import shutil
 import signal
@@ -124,14 +125,50 @@ def wait_until_drain_settled(secret):
         time.sleep(0.01)
 
 
+TEST_CLOSURES = {"interrupted", "joined", "started"}  # the patched wait, join and start that raise below
+
+
+class InterruptingLock:
+    """A lock whose first use on the main thread waits for the drain to hold the answer, and whose first release
+    there raises KeyboardInterrupt after the lock is let go: a Ctrl-C just after run's swap of the answer. It
+    holds nothing of the test: the wait is a class attribute set by the test."""
+
+    settle = None
+    fired = False
+
+    def __init__(self):
+        self.real = _thread.allocate_lock()
+        self.arm = False
+
+    def __enter__(self):
+        if threading.current_thread() is threading.main_thread() and not InterruptingLock.fired:
+            self.arm = True
+            InterruptingLock.settle()
+        return self.real.acquire()
+
+    def __exit__(self, *exc):
+        self.real.release()
+        if self.arm:
+            self.arm = False
+            InterruptingLock.fired = True
+            raise KeyboardInterrupt
+
+
+class InterruptedRan:
+    """A Ran whose construction is interrupted: whatever run hands it is in this frame's locals."""
+
+    def __init__(self, code, stdout, stderr_tail):
+        raise KeyboardInterrupt
+
+
 def frames_below_run(exc):
     """Every frame in exc's traceback from _run.run's own down to the raise (frames any helper run called
-    holds too), or [] if run is not in it. This file's own frames (the patched wait or join that raises, whose
-    closure is the test case and so holds the secret) are left out."""
+    holds too), or [] if run is not in it. The tests' own raising stand-ins named in TEST_CLOSURES are left
+    out: their closure is the test case, which holds the secret."""
     tb, frames = exc.__traceback__, []
     while tb is not None:
         if frames or tb.tb_frame.f_code is _run.run.__code__:
-            if tb.tb_frame.f_code.co_filename != __file__:
+            if tb.tb_frame.f_code.co_name not in TEST_CLOSURES:
                 frames.append(tb.tb_frame)
         tb = tb.tb_next
     return frames
@@ -263,6 +300,32 @@ class RunnerTest(unittest.TestCase):
 
         try:
             with mock.patch.object(threading.Thread, "start", started):
+                _run.run([self.cli, "0"], stderr=self.err)
+        except KeyboardInterrupt as e:
+            caught = e
+        else:
+            self.fail("the run should have been interrupted")
+        self.assert_unreachable(caught)
+
+    def test_a_run_interrupted_just_after_the_swap_keeps_no_answer(self):
+        """Ctrl-C as the lock that guards the answer's handoff is let go."""
+        InterruptingLock.fired = False
+        self.addCleanup(setattr, InterruptingLock, "settle", None)
+        InterruptingLock.settle = staticmethod(lambda: wait_until_drain_settled(self.secret))
+        try:
+            shim = types.SimpleNamespace(Lock=InterruptingLock, Thread=threading.Thread)  # only run's own lock
+            with mock.patch.object(_run, "threading", shim):
+                _run.run([self.cli, "0"], stderr=self.err)
+        except KeyboardInterrupt as e:
+            caught = e
+        else:
+            self.fail("the run should have been interrupted")
+        self.assertTrue(InterruptingLock.fired, "the interrupt should have fired in the handoff")
+        self.assert_unreachable(caught)
+
+    def test_a_run_interrupted_in_building_its_result_keeps_no_answer(self):
+        try:
+            with mock.patch.object(_run, "Ran", InterruptedRan):
                 _run.run([self.cli, "0"], stderr=self.err)
         except KeyboardInterrupt as e:
             caught = e

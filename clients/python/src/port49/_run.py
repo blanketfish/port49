@@ -77,13 +77,6 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
                         held[0].clear()  # over the cap: keep draining, hold nothing
             del chunk  # blocked in the next read, this frame holds no part of the answer
 
-    def take():
-        """The answer, handed from the drain to run: the drain keeps no reference to it after. One copy:
-        the answer is parsed from it as it is."""
-        with lock:
-            answer, held[0] = held[0], None
-        return answer
-
     threads = [threading.Thread(target=pump, daemon=True), threading.Thread(target=drain, daemon=True)]
 
     def reap():
@@ -96,7 +89,10 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
             p.stdout.close()
             p.stderr.close()
 
-    answer = None
+    # The answer is handed from the drain to run inline, here and below, so no helper frame ever holds it, and
+    # run builds its result without passing the answer through a frame of any other function. One copy: the
+    # answer is parsed from it as it is.
+    answer = ran = None
     try:  # opened before the readers start: no way out after Popen skips the handler below
         for t in threads:
             t.start()
@@ -108,12 +104,16 @@ def run(argv, *, stdin=None, timeout=None, stderr=None, oversize_hint=""):
             reap()
             raise Port49Error("timeout", f"{argv[0]} {argv[1]} did not finish within {timeout}s and was ended") from None
         reap()
-        answer = take()  # after reap: the drain has had its REAP to read the CLI's last bytes
+        with lock:  # after reap: the drain has had its REAP to read the CLI's last bytes
+            answer, held[0] = held[0], None
         if size[0] > MAX_STDOUT:  # the drain cleared the answer at the cap: answer is empty
             raise Port49Error("answer_too_large", f"{argv[0]} {argv[1]} printed more than {MAX_STDOUT} bytes and the "
                               f"answer was dropped (it exited {code}, and may have minted){oversize_hint}")
-        return Ran(code, answer, printable(tail.decode("utf-8", "replace"), TAIL))
+        ran = Ran(code, None, printable(tail.decode("utf-8", "replace"), TAIL))
+        ran.stdout = answer
+        return ran
     except BaseException:  # no way out but the return skips this: the traceback holds this frame, never the answer
-        take()
-        answer = None
+        with lock:
+            held[0] = None
+        answer = ran = None
         raise
