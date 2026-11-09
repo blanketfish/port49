@@ -1,10 +1,11 @@
 """Running the port49 CLI (decision 46 rulings 8 and 12).
 
-stdout is read whole and never logged: on success it holds a token. Once run returns or raises, the drain thread
-holds none of it, though a grandchild keeps the pipe open (#62). stderr is
-the person's: it is written to the caller's stderr as it comes, a byte at a
-time if need be, so "touch your key now" or a sign-in prompt with no newline
-is seen at once; its last 2 KiB are kept for an error's words."""
+stdout is read whole and never logged: on success it holds a token. Once run
+returns or raises, the drain thread holds none of it, even while a grandchild
+keeps the pipe open (#62). stderr is the person's: it is written to the
+caller's stderr as it comes, a byte at a time if need be, so "touch your key
+now" or a sign-in prompt with no newline is seen at once; its last 2 KiB are
+kept for an error's words."""
 
 import codecs
 import os
