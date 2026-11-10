@@ -57,6 +57,32 @@ func TestAfterRunFailsAnEntryWhoseVerdictChanged(t *testing.T) {
 	}
 }
 
+// The entry closure in run() must end in afterRun: a closure that stops at notesRewritten (or at diffNotes)
+// leaves the verdict check unwired while afterRun's own test stays green.
+func TestRunsEntryClosureEndsInAfterRun(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	i := strings.Index(src, "func run() int {")
+	if i < 0 {
+		t.Fatal("run() moved")
+	}
+	body := src[i:]
+	if j := strings.Index(body, "\n}\n"); j >= 0 {
+		body = body[:j]
+	}
+	if !strings.Contains(body, "return afterRun(e, start, notediff)") {
+		t.Error("run()'s entry closure does not end in `return afterRun(e, start, notediff)`")
+	}
+	for _, bypass := range []string{"notesRewritten(", "diffNotes(", "checkVerdicts("} {
+		if strings.Contains(body, bypass) {
+			t.Errorf("run() calls %s itself: the judging steps belong in afterRun", bypass)
+		}
+	}
+}
+
 func TestCheckVerdictsRefusesANoteHEADDoesNotHave(t *testing.T) {
 	gitRepo(t, map[string]string{"results/L1-x.md": wiringNote})
 	if err := os.WriteFile("results/L2-new.md", []byte(wiringNote), 0o644); err != nil {

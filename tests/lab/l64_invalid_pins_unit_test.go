@@ -72,6 +72,27 @@ func TestL64SetupErrorsGoThroughSetupFault(t *testing.T) {
 	}
 }
 
+// No cell setup step may end the cell with a bare `return false,` whatever its spelling (err.Error(),
+// fmt.Sprint(err), a string): that records FAIL for a cell that measured nothing. L64b's two are deliberate (its
+// first sets e.invalid on the line above, its second sets e.reloadFailed); everything after the L64c cell, and
+// replaced(), has none.
+func TestNoCellEndsInABareFalseBeforeMeasuring(t *testing.T) {
+	src := readLab(t, "l64_l65_test.go")
+	from, mid, end := strings.Index(src, `e.cell("L64a"`), strings.Index(src, `e.replaced("L64c"`), strings.LastIndex(src, "l64WriteNotes(e, versions)\n}")
+	if from < 0 || mid < from || end < mid {
+		t.Fatal("the cell region markers moved: update this pin")
+	}
+	if n := strings.Count(src[from:mid], "return false,"); n != 2 {
+		t.Errorf("L64a..L64b hold %d bare `return false,`, want the 2 deliberate ones in L64b", n)
+	}
+	if n := strings.Count(src[mid:end], "return false,"); n != 0 {
+		t.Errorf("the cells after L64b hold %d bare `return false,`: a setup failure must go through e.setupFault", n)
+	}
+	if n := strings.Count(funcBody(t, src, "func (e *l64Env) replaced("), "return false,"); n != 0 {
+		t.Errorf("replaced() holds %d bare `return false,`", n)
+	}
+}
+
 // L44's AD CS bind names private copies (the file fence refuses in-tree paths): l44_test.go builds no external
 // bind from the in-tree broker files.
 func TestL44BuildsNoInTreeExternalBind(t *testing.T) {
