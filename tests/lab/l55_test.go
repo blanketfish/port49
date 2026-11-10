@@ -44,6 +44,26 @@ func l55Word(accepted bool) string {
 	return "refused"
 }
 
+// l55Header is the observation table's header. Each cell states its step's outcome, so the column is
+// `outcome`: lab-regress compares an outcome cell on its full text and an `observed` cell on its verdict
+// words only, which a swap of two parts' outcomes leaves the same.
+const l55Header = "| step | outcome |\n|---|---|\n"
+
+// The cells below join two outcomes with "; ". lab-regress sorts a cell's ';' parts and normalises
+// "port <number>" away (the ephemeral port moves every run), so each part names its subject in words: then
+// "accepted; refused" turning into "refused; accepted" is a change it sees.
+
+// l55ControlCell is step 2's control: the realm's own redirect, then another host's.
+func l55ControlCell(ownAccepted, otherAccepted bool) string {
+	return "the realm's own redirect " + l55Word(ownAccepted) + "; http://evil.example/callback " + l55Word(otherAccepted)
+}
+
+// l55RegistrationCell is one step 2 registration: the registered port's redirect, then an ephemeral port's.
+func l55RegistrationCell(registered, ephemeral int, registeredAccepted, ephemeralAccepted bool) string {
+	return fmt.Sprintf("registered port %d %s; ephemeral port %d %s",
+		registered, l55Word(registeredAccepted), ephemeral, l55Word(ephemeralAccepted))
+}
+
 // l55Browser is a browser of its own: a fresh cookie jar, so no SSO session.
 func (k *keycloak) l55Browser() *http.Client {
 	c := keycloakClient(k.ca)
@@ -224,7 +244,7 @@ func TestL55PublicClient(t *testing.T) {
 	k := startKeycloak(t)
 	ev, evPath := oidcEvidence(t, k, "L55-keycloak")
 	var obs strings.Builder
-	obs.WriteString("| step | observed |\n|---|---|\n")
+	obs.WriteString(l55Header)
 	cell := func(step, what string) {
 		fmt.Fprintf(&obs, "| %s | %s |\n", step, wideCell(what))
 		ev(step, what)
@@ -251,7 +271,7 @@ func TestL55PublicClient(t *testing.T) {
 	if !k.authorizeAccepted(t, kcRedirect, nil) || k.authorizeAccepted(t, "http://evil.example/callback", nil) {
 		t.Fatal("INVALID: the realm's own redirect was not accepted, or another host's was; l55Accepted cannot tell")
 	}
-	cell("2. control: the realm's own redirect, and http://evil.example/callback", "accepted; refused")
+	cell("2. control: the realm's own redirect, and http://evil.example/callback", l55ControlCell(true, false))
 	_, orig := k.redirects(t)
 	defer k.setRedirects(t, orig)
 	ephemeral := l55FreePort(t)
@@ -260,12 +280,11 @@ func TestL55PublicClient(t *testing.T) {
 			cell("2. registration "+reg, "not taken by the admin API")
 			continue
 		}
-		var parts []string
-		for _, port := range []int{18749, ephemeral} {
-			parts = append(parts, fmt.Sprintf("port %d %s", port,
-				l55Word(k.authorizeAccepted(t, fmt.Sprintf("http://127.0.0.1:%d/callback", port), nil))))
+		at := func(port int) bool {
+			return k.authorizeAccepted(t, fmt.Sprintf("http://127.0.0.1:%d/callback", port), nil)
 		}
-		cell("2. registration "+reg, strings.Join(parts, "; "))
+		registeredOK := at(18749)
+		cell("2. registration "+reg, l55RegistrationCell(18749, ephemeral, registeredOK, at(ephemeral)))
 	}
 	if !k.setRedirects(t, []string{kcRedirect}) {
 		t.Fatal("INVALID: the realm's own redirect could not be put back; no note is written")

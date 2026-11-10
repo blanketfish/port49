@@ -579,3 +579,50 @@ func TestL64AnExcerptKeepsOnlyTheLinesThatSayWhatSSHDecided(t *testing.T) {
 		}
 	}
 }
+
+// TestL64SSHFaultBeforeTheDevice: a `port49 ssh` that failed to start, or ended without ssh ever running (no
+// ssh -v output), is a fault before the device and records INVALID (#48); a run ssh did make, even a refused
+// one, is the device's verdict and stays a measurement.
+func TestL64SSHFaultBeforeTheDevice(t *testing.T) {
+	ssh := "debug1: Reading configuration data\nHost key verification failed.\n"
+	cases := []struct {
+		name  string
+		r     l64SSHRun
+		fault bool
+	}{
+		{"did not start", l64SSHRun{err: errors.Join(errL64Start, errors.New("no such file"))}, true},
+		{"port49 died before ssh", l64SSHRun{exit: 1, stderr: "port49: broker unreachable\n"}, true},
+		{"no output at all", l64SSHRun{exit: 2}, true},
+		{"ssh refused the key", l64SSHRun{exit: 255, stderr: ssh}, false},
+		{"ssh logged in", l64SSHRun{exit: 0, stderr: "debug1: x\n", stdout: "ok\n"}, false},
+		{"deadline", l64SSHRun{err: context.DeadlineExceeded, exit: 0}, false},
+	}
+	for _, c := range cases {
+		if got := l64SSHFault(c.r) != ""; got != c.fault {
+			t.Errorf("%s: fault = %v, want %v", c.name, got, c.fault)
+		}
+	}
+}
+
+func TestL64NoteSSHMarksTheCellInvalid(t *testing.T) {
+	e := &l64Env{}
+	e.noteSSH(l64SSHRun{exit: 1, stderr: "port49: no agent\n"})
+	if e.invalid == "" {
+		t.Fatal("a fault before the device must set invalid, which cell() records as INVALID")
+	}
+	e = &l64Env{}
+	e.noteSSH(l64SSHRun{exit: 255, stderr: "debug1: x\nHost key verification failed.\n"})
+	if e.invalid != "" {
+		t.Fatalf("a real refusal stays a measurement: %q", e.invalid)
+	}
+}
+
+// TestL64SetupFaultIsInvalid: replaced()'s setup errors (no filed key, a key that would not generate, a
+// known_hosts that would not write) measured nothing, so the cell is INVALID, not FAIL (#48).
+func TestL64SetupFaultIsInvalid(t *testing.T) {
+	e := &l64Env{}
+	pass, obs := e.setupFault("the fresh key failed")
+	if pass || obs == "" || e.invalid == "" {
+		t.Fatalf("pass=%v obs=%q invalid=%q", pass, obs, e.invalid)
+	}
+}

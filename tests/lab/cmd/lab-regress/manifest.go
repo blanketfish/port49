@@ -26,6 +26,11 @@ type Entry struct {
 	// TimeoutMinutes is the binary's -test.timeout; zero means 120 minutes a
 	// platform, make lab's budget (timeoutFor).
 	TimeoutMinutes int `yaml:"timeout_minutes"`
+	// Verdicts is "none" for an entry whose notes state no claim verdict (observation-only notes): lab-regress
+	// compares verdicts for every other entry and refuses a note that parses none.
+	Verdicts string `yaml:"verdicts"`
+	// NoVerdictNotes names the observation-only notes of an entry whose other notes do state verdicts.
+	NoVerdictNotes []string `yaml:"no_verdict_notes"`
 }
 
 // Exclusion records a closed row the runner does not rerun, and why. It is

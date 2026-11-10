@@ -11,6 +11,7 @@
 # (TestEveryClosedRowIsRunOrExcluded: a closed row is in an entry's rows or here).
 entries:
   - id: L10
+    verdicts: none
     measured_minutes: 9.5
     run: '^TestL10ServiceAndAttributeSpellings$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
@@ -22,6 +23,7 @@ entries:
   # and the L71 rerun rewrites those notes whole, so the other order would wipe them
   # (TestTheL71EntryRunsBeforeEveryL73Entry).
   - id: L71
+    verdicts: none
     measured_minutes: 11.0
     run: '^TestL71TLSClientSupport$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
@@ -31,19 +33,19 @@ entries:
   # TestL73 writes the L71 note of its platform: it appends an addendum to one that exists, so
   # a rerun grows L71-<platform>.md and notediff shows it. The help-only platform (iolxe1718)
   # asks L71's question alone; its entry exists for that note. XRd's L73 was measured 2026-10-21.
-  - {id: L73-vjunos26, measured_minutes: 7.0, run: '^TestL73$', platforms: vjunos26, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+  - {id: L73-vjunos26, no_verdict_notes: [tests/lab/results/L71-juniper_vjunos-router.md],measured_minutes: 7.0, run: '^TestL73$', platforms: vjunos26, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
      notes: [tests/lab/results/L73-juniper_vjunos-router.md, tests/lab/results/L71-juniper_vjunos-router.md]}
-  - {id: L73-iosxe1718, measured_minutes: 10.6, run: '^TestL73$', platforms: iosxe1718, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+  - {id: L73-iosxe1718, no_verdict_notes: [tests/lab/results/L71-cisco_iosxe.md],measured_minutes: 10.6, run: '^TestL73$', platforms: iosxe1718, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
      notes: [tests/lab/results/L73-cisco_iosxe.md, tests/lab/results/L71-cisco_iosxe.md]}
-  - {id: L73-nxos106, measured_minutes: 15.7, run: '^TestL73$', platforms: nxos106, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+  - {id: L73-nxos106, no_verdict_notes: [tests/lab/results/L71-cisco_nxos.md],measured_minutes: 15.7, run: '^TestL73$', platforms: nxos106, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
      notes: [tests/lab/results/L73-cisco_nxos.md, tests/lab/results/L71-cisco_nxos.md]}
-  - {id: L73-ceos436, measured_minutes: 7.1, run: '^TestL73$', platforms: ceos436, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+  - {id: L73-ceos436, no_verdict_notes: [tests/lab/results/L71-arista_ceos.md],measured_minutes: 7.1, run: '^TestL73$', platforms: ceos436, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
      notes: [tests/lab/results/L73-arista_ceos.md, tests/lab/results/L71-arista_ceos.md]}
-  - {id: L73-iolxe1718, measured_minutes: 0.6, run: '^TestL73$', platforms: iolxe1718, rows: [L71], env: {PORT49_LAB_REMEASURE: L71},
+  - {id: L73-iolxe1718, verdicts: none, measured_minutes: 0.6, run: '^TestL73$', platforms: iolxe1718, rows: [L71], env: {PORT49_LAB_REMEASURE: L71},
      notes: [tests/lab/results/L71-cisco_iol-xe.md]}
-  - {id: L73-xrd261, measured_minutes: 9.7, run: '^TestL73$', platforms: xrd261, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
+  - {id: L73-xrd261, no_verdict_notes: [tests/lab/results/L71-cisco_xrd.md],measured_minutes: 9.7, run: '^TestL73$', platforms: xrd261, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
      notes: [tests/lab/results/L73-cisco_xrd.md, tests/lab/results/L71-cisco_xrd.md]}
-  - {id: L76-srlinux, measured_minutes: 3.0, run: '^TestL76$', platforms: srlinux, rows: [L76], env: {PORT49_LAB_REMEASURE: L76},
+  - {id: L76-srlinux,measured_minutes: 3.0, run: '^TestL76$', platforms: srlinux, rows: [L76], env: {PORT49_LAB_REMEASURE: L76},
      notes: [tests/lab/results/L76-nokia_srlinux.md]}
   - {id: L80-nxos106, measured_minutes: 7.4, target: lab-qualify, run: '^TestQualify$', platforms: nxos106, rows: [L80],
      env: {PORT49_LAB_QUALIFY: "1", PORT49_LAB_REMEASURE: L80},
@@ -51,6 +53,7 @@ entries:
   - {id: L74-L75-L79, measured_minutes: 18.9, target: lab-regions, run: '^TestRegions$', rows: [L74, L75, L79], env: {PORT49_LAB_REMEASURE: "L74,L75,L79"},
      timeout_minutes: 120, notes: [tests/lab/results/L74-regions.md, tests/lab/results/L75-regions.md, tests/lab/results/L79-regions.md]}
   - id: L5
+    verdicts: none
     measured_minutes: 26.1
     run: '^TestL5Watchdog$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
@@ -72,6 +75,7 @@ entries:
     env: {PORT49_LAB_REMEASURE: L8}
     notes: [tests/lab/results/L8-arista_eos.md, tests/lab/results/L8-juniper_vjunos-router.md, tests/lab/results/L8-juniper_vsrx.md, tests/lab/results/L8-cisco_nxos.md, tests/lab/results/L8-cisco_iosxe.md]
   - id: L3
+    no_verdict_notes: [tests/lab/results/L3-cisco_nxos.md]
     measured_minutes: 9.0
     run: '^TestL3Enable$'
     platforms: eos,nxos,iosxe
