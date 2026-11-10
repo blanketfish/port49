@@ -2174,12 +2174,15 @@ func randomHex(t *testing.T) string {
 func TestPolicyDiffHidesWhatTheWholeCommandHid(t *testing.T) {
 	for name, c := range map[string]struct {
 		prefix, deny string
+		// whole: the value is absent from all output. A custom pattern's
+		// rule echo in a REFUSED line shows it by that rule's own words.
+		whole bool
 	}{
-		"punctuated keyword": {"", `show (password * %s`},
-		"snmp community":     {"", `snmp-server community! * %s`},
-		"positional from":    {"platforms: {juniper_junos: {redact: [{match: [set, '**'], from: 3}]}}\n", `set * %s`},
+		"punctuated keyword": {"", `show (password * %s`, true},
+		"snmp community":     {"", `snmp-server community! * %s`, true},
+		"positional from":    {"platforms: {juniper_junos: {redact: [{match: [set, '**'], from: 3}]}}\n", `set * %s`, false},
 		"keyword abbreviated by a placeholder word": {
-			"platforms: {juniper_junos: {redact: [{match: ['**'], after: anycast-key}]}}\n", `show * %s`},
+			"platforms: {juniper_junos: {redact: [{match: ['**'], after: anycast-key}]}}\n", `show * %s`, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sec := randomHex(t)
@@ -2205,7 +2208,11 @@ func TestPolicyDiffHidesWhatTheWholeCommandHid(t *testing.T) {
 				"--new", write("new.yaml", `, deny: ["`+fmt.Sprintf(c.deny, sec)+`"]`), "--inventory", inv}, &out, &errb)
 			// The lines that quote a probed command; the rule echo in a refusal
 			// message is a separate path with its own tests.
-			if lines := grepLines(out.String()+errb.String(), "narrows:"); strings.Contains(lines, sec) {
+			lines := grepLines(out.String()+errb.String(), "narrows:")
+			if c.whole {
+				lines = out.String() + errb.String()
+			}
+			if strings.Contains(lines, sec) {
 				t.Fatalf("the diff prints the hidden value; the command lines:\n%s", strings.ReplaceAll(lines, sec, "<VALUE>"))
 			}
 			if !strings.Contains(out.String(), "narrows:") {

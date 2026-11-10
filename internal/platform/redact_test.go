@@ -798,3 +798,22 @@ func TestASecondRedactionDocumentIsRefused(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// RedactProseElements splits on Unicode space as RedactProse does (strings.Fields),
+// so a value after a keyword and a no-break space, a \v or U+2003 is hidden as
+// it is in prose (issue 20).
+func TestRedactProseElementsSplitsOnUnicodeSpace(t *testing.T) {
+	rules := []Redaction{{Match: []string{"**"}, After: "password"}}
+	for _, sep := range []string{" ", "\v", " "} {
+		text := "show password" + sep + "VALUE"
+		if strings.Contains(RedactProse(rules, text), "VALUE") {
+			t.Fatalf("RedactProse leaves the value after %q", sep)
+		}
+		at := strings.Index(text, "VALUE")
+		spans := [][2]int{{0, 4}, {5, 13}, {at, at + 5}}
+		got := RedactProseElements(rules, text, spans)
+		if !slices.Equal(got, []bool{false, false, true}) {
+			t.Errorf("separator %q: hidden %v, want only the value", sep, got)
+		}
+	}
+}

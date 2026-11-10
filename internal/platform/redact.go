@@ -718,7 +718,21 @@ func RedactProseElements(patterns []Redaction, text string, spans [][2]int) []bo
 			}
 		}
 	}
-	fields := regexp.MustCompile(`\S+`).FindAllStringIndex(text, -1)
+	// Split as strings.Fields does, which RedactProse uses: on Unicode
+	// space, NBSP and \v included.
+	var fields [][]int
+	start := -1
+	for i, r := range text {
+		switch {
+		case unicode.IsSpace(r) && start >= 0:
+			fields, start = append(fields, []int{start, i}), -1
+		case !unicode.IsSpace(r) && start < 0:
+			start = i
+		}
+	}
+	if start >= 0 {
+		fields = append(fields, []int{start, len(text)})
+	}
 	words := make([]string, len(fields))
 	for i, f := range fields {
 		words[i] = text[f[0]:f[1]]
