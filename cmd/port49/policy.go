@@ -699,14 +699,14 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		on := c.Subject + " on " + strings.Join(c.Devices, ", ") + from(c.At)
 		if !c.New.Permit {
 			narrow++
-			fmt.Fprintf(stdout, "narrows: %s: %s was permitted by %s (%s), now %s\n", on, out.quote(c.Command),
+			fmt.Fprintf(stdout, "narrows: %s: %s was permitted by %s (%s), now %s\n", on, out.command(c),
 				out.quote(c.Old.Decided.Rule), c.Old.Decided.Role, c.New.Reason)
 			continue
 		}
 		widen++
 		permitted := fmt.Sprintf("now permitted by %s (%s)", out.quote(c.New.Decided.Rule), c.New.Decided.Role)
 		if !c.Gated {
-			fmt.Fprintf(stdout, "widens: %s: %s was %s, %s\n", on, out.quote(c.Command), c.Old.Reason, permitted)
+			fmt.Fprintf(stdout, "widens: %s: %s was %s, %s\n", on, out.command(c), c.Old.Reason, permitted)
 			continue
 		}
 		label := "EXPANDS"
@@ -725,7 +725,7 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		default:
 			was = fmt.Sprintf("denied by %s (%s)", out.quote(c.Old.Deny.Rule), c.Old.Deny.Role)
 		}
-		fmt.Fprintf(stdout, "%s: %s: %s was %s, %s\n", label, on, out.quote(c.Command), was, permitted)
+		fmt.Fprintf(stdout, "%s: %s: %s was %s, %s\n", label, on, out.command(c), was, permitted)
 	}
 	for _, r := range d.Regex {
 		on := r.Subject + " on " + strings.Join(r.Devices, ", ") + from(r.At)
@@ -1253,4 +1253,41 @@ func projectionText(shape string, bits []string, template string) string {
 		return shape + " (no bits)"
 	}
 	return shape + " (bits " + strings.Join(bits, " ") + ")"
+}
+
+// command is a diff change's probed command as a line prints it. The whole
+// vector is redacted first, the placeholder one element, so a keyword's
+// reach holds across it; then the placeholder prints bare, outside the
+// quotes (it is port49's text, and a word-level rule reads `cli` as an
+// abbreviation of `client-secret` and would hide it; issue 20), and each run
+// of other arguments is quoted together.
+func (r *redacting) command(c policy.Change) string {
+	if len(c.Shown) == 0 {
+		return r.quote(c.Command)
+	}
+	vector := make([]string, len(c.Shown))
+	for i, a := range c.Shown {
+		if c.Vector[i] == engine.OtherArgument {
+			a = engine.OtherArgument
+		}
+		vector[i] = a
+	}
+	red, _ := platform.RedactRule(r.rules, vector)
+	var parts, run []string
+	flush := func() {
+		if len(run) > 0 {
+			parts = append(parts, r.quote(strings.Join(run, " ")))
+			run = nil
+		}
+	}
+	for i, a := range red {
+		if c.Vector[i] == engine.OtherArgument {
+			flush()
+			parts = append(parts, policy.OtherArgumentText)
+			continue
+		}
+		run = append(run, policy.DisplayArg(a))
+	}
+	flush()
+	return strings.Join(parts, " ")
 }

@@ -2084,3 +2084,71 @@ func TestDiffPrintsTheCeilingLine(t *testing.T) {
 		t.Fatalf("removed: code %d\n%s", code, out)
 	}
 }
+
+// The probe vector's placeholder is port49's own text: a word-level redaction
+// rule read `cli` as an abbreviation of `client-secret` and hid the three
+// words of `<any other argument>` (issue 20). The line prints the placeholder
+// outside the quoted command.
+func TestPolicyDiffPrintsThePlaceholderOutsideTheQuotes(t *testing.T) {
+	dir := t.TempDir()
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(inv, []byte("devices:\n  - {name: jx-01, platform: juniper_junos, addresses: [10.0.0.2]}\n"+
+		"key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: k}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, deny string) string {
+		path := filepath.Join(dir, name)
+		body := "platform_set: 1.3.0\nscopes: [{name: all_devices, match: {}}]\n" +
+			"roles: [{name: r, privilege: readonly, permit: [\"show **\"]" + deny + "}]\n" +
+			"subjects: [{name: noc, identity: \"user:noc@example.com\", username: noc, token_ttl: 60s}]\n" +
+			"grants: [{subject: noc, scope: all_devices, roles: [r]}]\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	var out, errb bytes.Buffer
+	run([]string{"policy", "diff", "--old", write("old.yaml", ""), "--new", write("new.yaml", `, deny: ["show cli **"]`),
+		"--inventory", inv}, &out, &errb)
+	got := out.String()
+	if !strings.Contains(got, `narrows: noc on jx-01: "show cli" <any other argument> was permitted by "show **" (r)`) {
+		t.Errorf("the placeholder line is not printed outside the quotes:\n%s", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "narrows:") && strings.Contains(line, platform.Redacted) {
+			t.Errorf("a narrows line hides the placeholder: %s", line)
+		}
+	}
+	if !strings.Contains(got, `narrows: noc on jx-01: "show cli" was permitted by "show **" (r)`) {
+		t.Errorf("a vector with no placeholder no longer prints as before:\n%s", got)
+	}
+}
+
+// What a rule hides stays hidden when the placeholder sits between a keyword
+// and the argument it hides, and the placeholder prints bare wherever it is.
+func TestDiffCommandKeepsRedactionAcrossThePlaceholder(t *testing.T) {
+	r := &redacting{rules: []platform.Redaction{{Match: []string{"**"}, After: "client-secret"}}}
+	const other = "<any other argument>"
+	for name, c := range map[string]struct {
+		vector []string
+		want   string
+	}{
+		"keyword, placeholder, value": {[]string{"show", "client-secret", engine.OtherArgument, "hunter2"},
+			`"show client-secret" ` + other + ` "` + platform.Redacted + `"`},
+		"abbreviation then placeholder": {[]string{"show", "cli", engine.OtherArgument}, `"show cli" ` + other},
+		"only the placeholder":          {[]string{engine.OtherArgument}, other},
+		"placeholder in the middle":     {[]string{"show", engine.OtherArgument, "detail"}, `"show" ` + other + ` "detail"`},
+		"no placeholder":                {[]string{"show", "version", "a b"}, `"show version \"a b\""`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ch := policy.Change{Vector: c.vector, Shown: c.vector, Command: "unused"}
+			got := r.command(ch)
+			if got != c.want {
+				t.Fatalf("got %s, want %s", got, c.want)
+			}
+			if strings.Contains(got, "hunter2") {
+				t.Fatal("the hidden argument is printed")
+			}
+		})
+	}
+}
