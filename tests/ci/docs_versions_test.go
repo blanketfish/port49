@@ -1,6 +1,7 @@
 package ci
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,9 +90,9 @@ func TestTheSiteIsVersionedByMike(t *testing.T) {
 				if opts["alias_type"] != "copy" {
 					t.Errorf("the mike plugin's alias_type is %v, want copy", opts["alias_type"])
 				}
-				// Material draws its own selector; mike's would add a second one
-				if opts["version_selector"] != false {
-					t.Errorf("the mike plugin's version_selector is %v, want false (Material's dropdown is the selector)", opts["version_selector"])
+				// Material's base.html draws its dropdown only while the mike plugin's selector is on
+				if v, set := opts["version_selector"]; set && v != true {
+					t.Errorf("the mike plugin's version_selector is %v, want it unset or true: false hides Material's dropdown", v)
 				}
 			}
 		}
@@ -136,5 +137,30 @@ func TestEveryDeepLinkToTheSiteNamesAVersion(t *testing.T) {
 	}
 	if checked < 100 {
 		t.Errorf("checked only %d deep links: the scan is not looking where the links are", checked)
+	}
+}
+
+// The dropdown is drawn only when the built page's __config names the mike provider: Material
+// leaves "version" null when the mike plugin's version_selector is false, which shipped once with
+// no dropdown on the live site.
+func TestTheBuiltSiteDrawsTheVersionDropdown(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(builtSiteDir(t), "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := regexp.MustCompile(`<script id="__config" type="application/json">([^<]*)</script>`).FindSubmatch(b)
+	if cfg == nil {
+		t.Fatal("the built index.html has no __config block")
+	}
+	var c struct {
+		Version *struct {
+			Provider string `json:"provider"`
+		} `json:"version"`
+	}
+	if err := json.Unmarshal(cfg[1], &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Version == nil || c.Version.Provider != "mike" {
+		t.Errorf("the built page's __config version is %+v, want provider mike: Material draws no dropdown", c.Version)
 	}
 }
