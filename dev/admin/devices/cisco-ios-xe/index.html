@@ -1,0 +1,2949 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Configuring Cisco IOS XE to authenticate and authorize logins through port49, and what the lab measured on it.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/admin/devices/cisco-ios-xe/">
+      
+      
+        <link rel="prev" href="../arista-eos/">
+      
+      
+        <link rel="next" href="../cisco-nx-os/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Cisco IOS XE - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cisco-ios-xe" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Cisco IOS XE
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#reference-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-lab-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the lab measured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#traps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unmeasured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unmeasured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lab-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lab evidence
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#reference-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-lab-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the lab measured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#traps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unmeasured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unmeasured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lab-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lab evidence
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cisco-ios-xe">Cisco IOS XE<a class="headerlink" href="#cisco-ios-xe" title="Permanent link">&para;</a></h1>
+<p>IOS XE does not fall to its local method when port49 answers ERROR: the login is refused, and break-glass fails too, so keep a path that does not depend on port49 answering (the console, or a second reachable server) for the time port49's store is down (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md">L4-error-cisco_iosxe.md</a>; over TLS it was final too, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a>, cell i). Measured on Catalyst 8000V 17.13.01a (TCP) and 17.18.02 (TCP and RFC 9887); the page also names IOL-XE 17.18.02, which has no TLS client.</p>
+<h2 id="reference-configuration">Reference configuration<a class="headerlink" href="#reference-configuration" title="Permanent link">&para;</a></h2>
+<p>Load <a href="https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/cisco_iosxe.cfg"><code>cisco_iosxe.cfg</code></a> (TACACS+ on port 49) or <a href="https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/cisco_iosxe-tls.cfg"><code>cisco_iosxe-tls.cfg</code></a> (RFC 9887, IOS XE 17.18.1 or later). The <a href="../#placeholders">placeholders table</a> says what each placeholder is. Create the break-glass account by hand, with a password only you know. The lines that matter, quoted from the files:</p>
+<div class="highlight"><pre><span></span><code>aaa group server tacacs+ port49
+ server name port49-1
+ server name port49-2
+ ip vrf forwarding &lt;MGMT_VRF&gt;
+ ip tacacs source-interface &lt;SOURCE_INTERFACE&gt;
+aaa authentication login default group port49 local
+aaa authorization exec default group port49 local
+aaa authorization commands 15 default group port49 local
+aaa authorization config-commands
+</code></pre></div>
+<p>Over TLS each server object carries these instead of a key:</p>
+<div class="highlight"><pre><span></span><code>tacacs server port49-1
+ address ipv4 &lt;PORT49_1&gt;
+ tls port &lt;TLS_PORT&gt;
+ tls trustpoint client &lt;CERT_ID&gt;
+ tls trustpoint server port49-root
+ single-connection
+</code></pre></div>
+<h2 id="what-the-lab-measured">What the lab measured<a class="headerlink" href="#what-the-lab-measured" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A deny port49 answers is never tried locally: break-glass is not a way around it (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-cisco_iosxe.md">L4-cisco_iosxe.md</a>).</li>
+<li>With port49d stopped, break-glass logs in in 20 to 30 ms, and with port49d dark in 780 ms. Commands in sessions that were already open are refused with <code>% Authorization failed.</code> (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md">L88-cisco_iosxe.md</a>, cells b and d; <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-cisco_iosxe.md">L41-cisco_iosxe.md</a>; <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-cisco_iosxe.md">L35-cisco_iosxe.md</a>).</li>
+<li>While port49 answers ERROR, break-glass is refused; with port49d's listener closed it logs in in 60 ms (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md">L4-error-cisco_iosxe.md</a>, cells a and c). <a href="../../../operate/troubleshooting/#break-glass-does-not-work">Troubleshooting</a> says what to do while you wait.</li>
+<li>Over TCP the device answers locally for 30 to 39 s after port49d returns from a stop, or after the first server fails: a token login in that window is refused with nothing sent to port49, and break-glass works (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md">L88-cisco_iosxe.md</a>, cells f2 and f3). The device has no configurable dead time: the lab's image offered no setting (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md">L4-error-cisco_iosxe.md</a>).</li>
+<li>Over TLS on 17.18.02, after port49d declined or reset the handshakes, the client sent port49d nothing and answered locally for 57 to 67 s. This was measured once (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a>, cell i).</li>
+<li>With the first server resetting at accept, a token login reached the second in under 3 s on a fresh device, and in 790 ms over TLS (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md">L88-cisco_iosxe.md</a>, cell f; <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md">L88-cisco_iosxe-iosxe1718-tls.md</a>).</li>
+<li>Over TLS with no port set the device dials 6049, it sends no server name, and it sends its leaf and its intermediate (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a>, cells a, c, e).</li>
+<li>IOS XE accepts a server certificate that names only a DNS name, and one that names another IP address, though it was configured by address. It refuses an expired certificate and one from an unknown CA with a <code>bad_certificate</code> alert (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a>, cell d).</li>
+<li>With <code>single-connection</code> on, break-glass after port49d reset a de-admitted device's connection was analysed from earlier runs and closed with the fix: on every declined path it logged in within 0.5 s of the key miss (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-breakglass-cisco-singleconnection.md">L31-breakglass-cisco-singleconnection.md</a>).</li>
+<li>IOL-XE 17.18.02 offers no RFC 9887 client in its configuration help: <code>tacacs-server host &lt;address&gt;</code> lists <code>&lt;cr&gt;</code> only (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_iol-xe.md">L71-cisco_iol-xe.md</a>).</li>
+</ul>
+<h2 id="traps">Traps<a class="headerlink" href="#traps" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Keep a console path. An ERROR gives no break-glass over TCP until port49d closes its listener (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md">L4-error-cisco_iosxe.md</a>), and gave none over TLS in the one measured run (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a>, cell i).</li>
+<li>A refused token login right after port49d returns is the device's own dead window, not port49: wait it out, or use break-glass (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md">L88-cisco_iosxe.md</a>, cell f2).</li>
+<li>Set the TLS <code>port</code>: with none the device dials 6049, not port49d's listener (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a>, cell a).</li>
+<li>The device accepts a server certificate naming another address, so it does not check what port49d's certificate names: keep the trust to your own CA (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a>, cell d).</li>
+<li>The revocation settings are left to you: the lab used <code>revocation-check none</code> because its CAs publish no CRL (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md">L88-cisco_iosxe-iosxe1718-tls.md</a>).</li>
+</ul>
+<h2 id="unmeasured">Unmeasured<a class="headerlink" href="#unmeasured" title="Permanent link">&para;</a></h2>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: why the second-server login once failed</p>
+<p>One earlier full reference run failed the second-server cell without an explanation and did not repeat in the three runs after it. The cause is unknown (<a href="../../../reference/lab-register/#l52">L52</a>, open; <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-f-evidence-run.md">the evidence run</a> is its history).</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: the IOS XE SSH condition after refusals</p>
+<p>A run of refusals to an unrecognised reply attribute stopped the device answering SSH for about a minute without sending port49 a packet. Whether that is the vty pool is unknown (<a href="../../../reference/lab-register/#l18">L18</a>, open; <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-cisco_iosxe.md">the reply-attribute note</a>).</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: two server objects at one address, and the hang timing</p>
+<p>The reference file says that 17.18.02 drops a second TLS server object that shares an address, so give the two servers distinct addresses; this comes from the file's own comment, and no results note shows the device doing it. How long after a store hang starts the local account first works on IOS XE is also not confirmed here: a report of about 6 s rests on the reference README, not on a note line this page can cite.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: other IOS XE releases and hardware</p>
+<p>The lab ran Catalyst 8000V 17.13.01a and 17.18.02 and IOL-XE 17.18.02. What other releases and hardware do is unknown.</p>
+</div>
+<h2 id="lab-evidence">Lab evidence<a class="headerlink" href="#lab-evidence" title="Permanent link">&para;</a></h2>
+<!-- generated by make docs from code; do not edit -->
+
+<table>
+<thead>
+<tr>
+<th>Entry</th>
+<th>Platform</th>
+<th>Image</th>
+<th>Date</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../../../reference/lab-register/#l1">L1 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-cisco_iosxe.md">L1-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l1">L1 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-23</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-restconf-cisco_iosxe.md">L1-restconf-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l2">L2 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-10-01</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-cisco_iosxe.md">L2-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l3">L3 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-cisco_iosxe.md">L3-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l4">L4 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-cisco_iosxe.md">L4-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l4">L4 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-24</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md">L4-error-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l5">L5 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-cisco_iosxe.md">L5-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l6">L6 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-cisco_iosxe.md">L6-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l8">L8 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-cisco_iosxe.md">L8-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l10">L10 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-cisco_iosxe.md">L10-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l13">L13 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-cisco_iosxe.md">L13-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l18">L18 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-22</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-cisco_iosxe.md">L18-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l20">L20 (open)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-24</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L20-cisco_iosxe.md">L20-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l21">L21 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-24</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-cisco_iosxe.md">L21-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l22">L22 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-carried-cisco_iosxe.md">L22-carried-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l22">L22 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-cisco_iosxe.md">L22-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l28">L28 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-cisco_iosxe.md">L28-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l28">L28 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-30</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-fin-cisco_iosxe.md">L28-fin-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l28">L28 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-30</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-cisco_iosxe.md">L28-held-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l29">L29 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-30</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-cisco_iosxe.md">L29-reload-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l31">L31 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-30</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-breakglass-cisco-singleconnection.md">L31-breakglass-cisco-singleconnection.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l31">L31 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-09-30</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-cisco_iosxe.md">L31-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l34">L34 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-cisco_iosxe.md">L34-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l35">L35 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-cisco_iosxe.md">L35-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l35">L35 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-cisco_iosxe.md">L35-restore-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l37">L37 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-cisco_iosxe.md">L37-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l38">L38 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L38-cisco_iosxe.md">L38-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l41">L41 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-cisco_iosxe.md">L41-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l49">L49 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-cisco_iosxe.md">L49-oxidized-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l51">L51 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V autonomous, <code>show version</code>: <code>Cisco IOS XE Software, Version 17.13.01a</code></td>
+<td>2026-10-09</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-cisco_iosxe.md">L51-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l53">L53 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-cisco_iosxe.md">L53-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l54">L54 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-10-09</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-cisco_iosxe.md">L54-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l64">L64 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-cisco_iosxe.md">L64-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l65">L65 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-cisco_iosxe.md">L65-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l66">L66 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-cisco_iosxe.md">L66-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l71">L71 (closed)</a></td>
+<td>cisco_iol-xe</td>
+<td>IOL-XE 17.18.02</td>
+<td>2026-10-18</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_iol-xe.md">L71-cisco_iol-xe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l71">L71 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_iosxe.md">L71-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l73">L73 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.18.02</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l88">L88 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-03</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-f-evidence-run.md">L88-cisco_iosxe-f-evidence-run.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l88">L88 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.18.02</td>
+<td>2026-11-04</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md">L88-cisco_iosxe-iosxe1718-tls.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l88">L88 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.18.02</td>
+<td>2026-11-04</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718.md">L88-cisco_iosxe-iosxe1718.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l88">L88 (closed)</a></td>
+<td>cisco_iosxe</td>
+<td>Catalyst 8000V 17.13.01a</td>
+<td>2026-11-04</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md">L88-cisco_iosxe.md</a></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

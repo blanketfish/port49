@@ -1,0 +1,3018 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The directory and session stores port49 keeps state in, the single-site and multi-region recipes, and what each looks like when a store is down.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/operate/stores/">
+      
+      
+        <link rel="prev" href="../hardware-keys/">
+      
+      
+        <link rel="next" href="../tls/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Stores - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#stores" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Stores
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-two-roles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The two roles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#single-site" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single site
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#several-regions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Several regions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#one-set-of-encryption-keys-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One set of encryption keys everywhere
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-cut-region-at-3am" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A cut region at 3am
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A cut region at 3am">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-restart-during-a-cut-the-snapshot-and-its-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A restart during a cut: the snapshot and its ceiling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-the-session-store-is-the-one-that-is-down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the session store is the one that is down
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#port49-store-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 store status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#forgetting-a-directory-membership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forgetting a directory membership
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#back-channel-logouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Back-channel logouts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Back-channel logouts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-person-who-signs-in-again-during-a-cut" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A person who signs in again during a cut
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-lab-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the lab measured
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-two-roles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The two roles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#single-site" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single site
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#several-regions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Several regions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#one-set-of-encryption-keys-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One set of encryption keys everywhere
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-cut-region-at-3am" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A cut region at 3am
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A cut region at 3am">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-restart-during-a-cut-the-snapshot-and-its-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A restart during a cut: the snapshot and its ceiling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-the-session-store-is-the-one-that-is-down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the session store is the one that is down
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#port49-store-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 store status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#forgetting-a-directory-membership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forgetting a directory membership
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#back-channel-logouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Back-channel logouts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Back-channel logouts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-person-who-signs-in-again-during-a-cut" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A person who signs in again during a cut
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-lab-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the lab measured
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="stores">Stores<a class="headerlink" href="#stores" title="Permanent link">&para;</a></h1>
+<p>port49 keeps its state in two stores, each with a job. This page says what each holds, how to lay them
+out for one site or several regions, and what you see and do when one is cut off. The part to read before
+you need it is <a href="#a-cut-region-at-3am">a cut region at 3am</a>.</p>
+<h2 id="the-two-roles">The two roles<a class="headerlink" href="#the-two-roles" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Config key</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Directory</td>
+<td><code>stores.directory</code></td>
+<td>The records every region must agree on: revocation marks, second factors (including the TOTP step a code was last used at), the enrollment mark, unlocks, directory membership pins and back-channel logouts. Also the key window the directory was last written under.</td>
+</tr>
+<tr>
+<td>Session</td>
+<td><code>stores.session</code></td>
+<td>Everything else: tokens, receipts, contexts, OIDC owner records, attempt counts, and the sealed snapshots each process keeps of its directory cache.</td>
+</tr>
+</tbody>
+</table>
+<p>Each has a <code>backend</code>: <code>memory</code> (the default, in one process, lost when it stops) or <code>etcd</code>. The
+keys of both blocks are in the <a href="../../reference/config/port49d/#stores"><code>port49d</code> reference</a>; this page
+does not repeat them.</p>
+<p>Every process loads the revocation marks from the directory before it serves and follows them as they
+change. A login, a mint and a command are all answered from that copy, so none of them waits on a
+region far away. That is why a cut region keeps serving.</p>
+<h2 id="single-site">Single site<a class="headerlink" href="#single-site" title="Permanent link">&para;</a></h2>
+<p>Leave <code>stores.session</code> out. The session store is then the directory store, one etcd and one keyspace:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">stores</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">directory</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">etcd</span>
+<span class="w">    </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">endpoints</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://etcd-1.example.net:2379</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://etcd-2.example.net:2379</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://etcd-3.example.net:2379</span>
+<span class="w">      </span><span class="nt">ca_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/etcd-ca.pem</span>
+<span class="w">      </span><span class="nt">daemon</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">cert_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/etcd-daemon.pem</span>
+<span class="w">        </span><span class="nt">key_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/etcd-daemon-key.pem</span>
+</code></pre></div>
+<p><code>etcd</code> in <code>port49d.yaml</code> needs a <code>policy:</code> block and no <code>broker:</code> block; <code>port49-broker.yaml</code> uses
+<code>etcd</code> too. If you do name <code>stores.session</code>, it must reach a different cluster, or the same one with
+the same keys in both blocks. Two blocks that reach one etcd cluster and one prefix under different names
+(an IP address and a DNS name) are refused at start, and so are two blocks that name one store and set
+<code>etcd.call_timeout</code> differently.</p>
+<h2 id="several-regions">Several regions<a class="headerlink" href="#several-regions" title="Permanent link">&para;</a></h2>
+<p>Stretch one directory etcd across the regions, one member in each, and give each region a session etcd
+of its own. Each region runs its own port49d and port49-broker.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">stores</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">directory</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">etcd</span>
+<span class="w">    </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">endpoints</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">https</span><span class="p p-Indicator">:</span><span class="nv">//etcd-dir-a.example.net</span><span class="p p-Indicator">:</span><span class="nv">2379</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">https</span><span class="p p-Indicator">:</span><span class="nv">//etcd-dir-b.example.net</span><span class="p p-Indicator">:</span><span class="nv">2379</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">https</span><span class="p p-Indicator">:</span><span class="nv">//etcd-dir-c.example.net</span><span class="p p-Indicator">:</span><span class="nv">2379</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="nt">ca_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/etcd-ca.pem</span>
+<span class="w">      </span><span class="nt">daemon</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">cert_file</span><span class="p">:</span><span class="w"> </span><span class="nv">/etc/port49/etcd-daemon.pem</span><span class="p p-Indicator">,</span><span class="nt"> key_file</span><span class="p">:</span><span class="w"> </span><span class="nv">/etc/port49/etcd-daemon-key.pem</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">session</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">etcd</span>
+<span class="w">    </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">endpoints</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">https</span><span class="p p-Indicator">:</span><span class="nv">//etcd-sess-a.example.net</span><span class="p p-Indicator">:</span><span class="nv">2379</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="nt">ca_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/etcd-ca.pem</span>
+<span class="w">      </span><span class="nt">prefix</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/port49/</span>
+<span class="w">      </span><span class="nt">daemon</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">cert_file</span><span class="p">:</span><span class="w"> </span><span class="nv">/etc/port49/etcd-daemon.pem</span><span class="p p-Indicator">,</span><span class="nt"> key_file</span><span class="p">:</span><span class="w"> </span><span class="nv">/etc/port49/etcd-daemon-key.pem</span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<p>Never mix backends: <code>memory</code> for one store and <code>etcd</code> for the other is refused, and so is a nest of
+keyspaces on one cluster. The directory's <code>etcd</code> block takes <code>endpoints</code>, <code>ca_file</code>, <code>prefix</code>, <code>daemon</code>,
+<code>broker</code>, <code>roles</code>, <code>call_timeout</code>, <code>bulk_timeout</code> and <code>start_timeout</code> only.</p>
+<p><strong>A split starts on fresh stores.</strong> There is no migration from one store to two. Stand the new stores up
+empty, and let people sign in again and the brokers re-mint.</p>
+<h2 id="one-set-of-encryption-keys-everywhere">One set of encryption keys everywhere<a class="headerlink" href="#one-set-of-encryption-keys-everywhere" title="Permanent link">&para;</a></h2>
+<p>Every region holds the same <code>encryption:</code> keys. The directory records, in <code>meta/seal_keys</code>, the key ids
+it was last written under, and every broker start writes it. A process whose keys do not include the
+current id there refuses to start and exits 1, naming the directory store and the key id. That is the
+rule for a directory store of its own (a split); on a single shared store the start goes on, says it, and
+<code>port49_crypt_store_key_unknown</code> is 1 (alert
+<a href="../../reference/alerts/#port49_crypt_store_key_unknown">port49_crypt_store_key_unknown</a>). A running
+runner on a split rechecks the directory every hour and says the same on stderr once; that recheck sets no
+gauge.</p>
+<p>Rotate in three steps. Finish a step in every region before you begin the next, and restart the
+processes at each (<code>encryption</code> needs a restart):</p>
+<ol>
+<li>Add the new key as <code>encryption.previous</code> everywhere. Nothing is sealed under it yet, but every region can now open what is.</li>
+<li>Make the new key <code>encryption.current</code> and the old one <code>encryption.previous</code>, everywhere.</li>
+<li>Remove the old key from <code>encryption.previous</code>, everywhere, once <a href="../../admin/key-rotation/#the-encryption-key">Key rotation</a>'s waits are over; on a split that includes <code>port49_directory_pins_sealed_previous</code> at 0 on the keyspace holder, from a pass that ended after the last step-2 restart.</li>
+</ol>
+<p>The ids must differ, because the id labels every record the key seals.</p>
+<h2 id="a-cut-region-at-3am">A cut region at 3am<a class="headerlink" href="#a-cut-region-at-3am" title="Permanent link">&para;</a></h2>
+<p>"Cut" means a region cannot reach the directory etcd. Its session store still answers. The table is
+what you see, and what to do.</p>
+<table>
+<thead>
+<tr>
+<th>What happened</th>
+<th>What you see</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A region's link to the directory is cut</td>
+<td>Devices notice nothing: logins and commands are answered from the session store and the cached marks. The line <code>directory store: not answering (...): serving from the cache confirmed &lt;age&gt; ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers</code>. <code>port49_store_directory_reachable</code> is 0 and <code>time() - port49_store_directory_confirmed_timestamp_seconds</code> climbs. <code>port49 store status</code> prints the directory <code>unreachable</code> and exits 3. Alerts <a href="../../reference/alerts/#port49_store_directory_unreachable">port49_store_directory_unreachable</a>, then <a href="../../reference/alerts/#port49_store_directory_stale">port49_store_directory_stale</a>.</td>
+<td>Restore the link. On the heal the line <code>directory store: answering again; the cache was &lt;age&gt; old</code> appears and the marks catch up.</td>
+</tr>
+<tr>
+<td>Someone is revoked in region A while region C is cut</td>
+<td>A and B deny the person's next command. C does not: open sessions keep working, and tokens minted before the cut still log in.</td>
+<td>To cut C off now without the directory, remove the person's grants from the policy file C's hosts load (live within two watch intervals), or stop C's port49d. On the heal, C's runner says <code>a revocation of &lt;principal&gt; made elsewhere reached N token key(s) and M context(s) here</code>.</td>
+</tr>
+<tr>
+<td>A lift made in A during a long cut comes back when C heals</td>
+<td>C's runner says <code>N revocation(s) in broker.state_dir/marks.json were missing from the store (...) and are put back</code>.</td>
+<td>Lift it again in any region once the cut has healed (<code>port49 revoke --lift</code>).</td>
+</tr>
+<tr>
+<td>A person signs in with a password and a TOTP code in the cut region</td>
+<td>503 <code>store_unavailable</code>, "the broker could not reach its store, so it signed no one in; try again shortly" (the first directory read of a sign-in, the person's unlock record, is what fails). The broker says <code>sign-in: the unlock store did not answer: ...</code>, at most once every 10 seconds. The log records an <code>issue</code> denial with reason <code>store_unavailable</code>.</td>
+<td>Use a certificate, OIDC or a hardware key, or break-glass. Password sign-in returns when the cut heals. It fails closed so that one code never signs in twice across regions.</td>
+</tr>
+<tr>
+<td><code>port49 revoke</code>, <code>port49 directory unlock</code>, <code>reset-second-factor</code>, <code>init-enrollments</code> or <code>import</code> in the cut region</td>
+<td>The command fails in about <code>stores.directory.etcd.call_timeout</code> with "the directory store did not answer, so nothing changed". A revocation says the record may not have been made and names the fallback.</td>
+<td>Run it from a region that reaches the directory.</td>
+</tr>
+<tr>
+<td>port49d or port49-broker restarts during the cut (a deploy, an OOM kill)</td>
+<td>It serves from a snapshot, up to the ceiling (below). <code>port49 store status</code> shows <code>cache &lt;age&gt; (snapshot)</code>.</td>
+<td>Nothing while the cut is shorter than the ceiling.</td>
+</tr>
+<tr>
+<td>The cut outlasts the ceiling on a process that started from a snapshot</td>
+<td>port49d: the line <code>directory store: the snapshot this run serves from is &lt;age&gt; old, past session.staleness_ceiling (4h0m0s): the listeners close until the directory answers</code>. port49-broker: every mint and sign-in is 503 <code>store_unavailable</code>. Processes that never restarted keep serving.</td>
+<td>Restore the link. Or raise <code>session.staleness_ceiling</code> and restart, if you know the copy is current.</td>
+</tr>
+<tr>
+<td>A process restarts in the cut and finds no snapshot younger than the ceiling (a new region, or every writer gone longer)</td>
+<td>Its listeners stay closed; port49d says <code>no snapshot in the session store is younger than session.staleness_ceiling</code>. A cold start exits 1 after <code>start_timeout</code>. The region's other processes keep serving.</td>
+<td>Wait for the heal, then start it again.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="a-restart-during-a-cut-the-snapshot-and-its-ceiling">A restart during a cut: the snapshot and its ceiling<a class="headerlink" href="#a-restart-during-a-cut-the-snapshot-and-its-ceiling" title="Permanent link">&para;</a></h3>
+<p>Every 60 seconds, while its copy is confirmed, each process writes a sealed snapshot of its directory
+cache to its session store. A process that restarts while the directory does not answer serves the
+union of the marks in every snapshot younger than <code>session.staleness_ceiling</code> (4 hours by default),
+never the newest alone, so a deleted or replayed snapshot cannot lift a mark.</p>
+<p>Only a load of the directory that succeeds clears the ceiling and the <code>(snapshot)</code> tag. At the ceiling
+the process fails closed: port49d closes its listeners and port49-broker refuses every mint and sign-in.
+A key or cluster fault found at the heal ends the process, exit 1, and its listeners do not reopen. The
+fix is in the process's <code>encryption:</code> or <code>stores:</code> block, not in the directory.</p>
+<h3 id="when-the-session-store-is-the-one-that-is-down">When the session store is the one that is down<a class="headerlink" href="#when-the-session-store-is-the-one-that-is-down" title="Permanent link">&para;</a></h3>
+<p>A session store port49d cannot use is a different failure. port49d checks it every
+<code>etcd.health.interval</code> (1 second by default) through its token and context pools, and after
+<code>etcd.health.close_after</code> failed checks in a row (5 by default) it closes every listener, so that
+devices use their local method. It opens them again after <code>open_after</code> passes in a row (3). The page
+alert is <a href="../../reference/alerts/#port49_store_health_failures_close">port49_store_health_failures_close</a>;
+<code>port49_store_health_failures</code> counts the failed checks, and
+<a href="../../reference/alerts/#port49_store_circuit_open">port49_store_circuit_open</a> says which pool's circuit
+opened.</p>
+<p>A token or context pool whose circuit stays open for <code>etcd.hold_ttl</code> (15 seconds by default) closes the
+listeners too, without waiting for the checks.</p>
+<p>port49-broker never closes anything: it keeps answering 503 <code>store_unavailable</code> while its store is
+down, and <code>/readyz</code> says it is serving.</p>
+<p>Two things stay true while this happens:</p>
+<ul>
+<li><strong>Only the token and context pools close the listeners.</strong> A slow or refused bulk scan opens a circuit
+  and raises an alarm, but it is not a store gone, and it does not close anything.</li>
+<li><strong><code>/readyz</code> does not report store health.</strong> It answers whether the process is serving, so a store
+  outage does not take every replica out of a load balancer at once. Alert on the metrics above, not on
+  <code>/readyz</code>.</li>
+</ul>
+<p>A call whose caller's deadline had already passed when it reached the store is counted as
+<code>outcome="deadline_on_entry"</code> on <code>port49_store_calls_total</code>, and it does not count toward opening a
+circuit: the time was spent before the store was asked, so it says nothing about the store. A call that
+the store was too slow to answer within its deadline still counts as a failure. A rising count of this
+outcome is therefore not a sign that the store is unhealthy; the store alerts above are.</p>
+<p>Some devices do not fall back to their local method when the server answers an error. See
+<a href="../tls/#ios-xe-and-a-down-store">IOS XE and a down store</a> before you rely on break-glass.</p>
+<h2 id="port49-store-status"><code>port49 store status</code><a class="headerlink" href="#port49-store-status" title="Permanent link">&para;</a></h2>
+<p>Run it on a host that reaches the process's <code>metrics_listen</code>:</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>store<span class="w"> </span>status<span class="w"> </span>--metrics<span class="w"> </span><span class="m">127</span>.0.0.1:9049
+</code></pre></div>
+<p>It asks port49d or port49-broker what each store is. One line per role: the backend, how many of the
+etcd members answer out of those listed, whether the store is reachable, and for the directory the age of
+the cache. Examples:</p>
+<div class="highlight"><pre><span></span><code>directory  etcd    3/3 members  reachable  cache 0.4s
+session    etcd    1/1 members  reachable
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>directory  etcd    ?/? members  unreachable  cache 41.2s  1 logouts pending
+           &lt;why the store did not answer, on a line of its own&gt;
+</code></pre></div>
+<p>The indented second line is the reason, printed only when a store does not answer; it is not an error of
+its own.</p>
+<p><code>cache &lt;age&gt; (snapshot)</code> means the process started from a snapshot, not a live load. <code>feeds down:</code> lists
+a feed whose watch has stopped. A session store that is the directory store prints <code>shares the directory
+store</code>, and the memory backend prints <code>in process</code>. The exit code is 0 when every store answers, 3 when
+one does not (the lines are still printed), and 1 when the listener does not answer or another status is
+already running. <code>--metrics</code> defaults to <code>127.0.0.1:9049</code>.</p>
+<h2 id="forgetting-a-directory-membership">Forgetting a directory membership<a class="headerlink" href="#forgetting-a-directory-membership" title="Permanent link">&para;</a></h2>
+<p>A person's directory entry (an LDAP entry, for example) is pinned to the principal the first time it is
+verified. If an entry is deleted and re-created, the principal is refused, <code>directory: user:... is
+pinned to entry ... and is now claimed by ...</code>, until an operator forgets the pin:</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>directory<span class="w"> </span>forget<span class="w"> </span>&lt;principal&gt;
+</code></pre></div>
+<p>Confirm that the re-created entry is the same person first. One forget reaches every region: each reads
+the pin forgotten at its next verification. In a cut region the forget is refused (<code>store_unavailable</code>);
+run it from a region that reaches the directory. A region cut off when you forget keeps refusing the
+re-created entry until the heal. While the directory is cut, a member who is already pinned is served
+from the cached pin, and a first bind or a refusal's record fails closed.</p>
+<p>An etcd restore from a backup older than a forget brings the old pin back. Run <code>port49 directory forget</code>
+again once the restore is done. port49d judges a restore from its own witness record whether or not the
+restore used etcd's <code>--bump-revision</code>, and says so in the alert
+<a href="../../reference/alerts/#port49_store_restore_detected">port49_store_restore_detected</a>; the restore steps
+are on <a href="../backup-and-restore/">backup and restore</a>.</p>
+<p>A cut region says, at most once per principal per 10 minutes, <code>directory store: not answering: serving
+&lt;principal&gt;'s cached directory membership (its pin as this region last read it); a forget made
+elsewhere reaches this region when the directory answers</code>. The table that remembers who was told holds
+65,536 principals. When it is full it drops entries older than the window, then the oldest, so a fleet
+larger than that can see the line repeat for a principal.</p>
+<h2 id="back-channel-logouts">Back-channel logouts<a class="headerlink" href="#back-channel-logouts" title="Permanent link">&para;</a></h2>
+<p>An identity provider's back-channel logout that reaches any region refuses that session's mints and
+refreshes in every region, once each region's logout feed delivers the record. Each region's runner says
+<code>a logout made elsewhere (...) reached N token key(s) and M context(s) here</code>.</p>
+<p>If the region that received the logout is cut from the directory:</p>
+<ul>
+<li>The provider still gets 200, and the region applies the logout at once.</li>
+<li>The logout is kept pending. <code>port49_store_logouts_pending</code> and <code>port49 store status</code>
+  (<code>N logouts pending</code>) count it; the alert is
+  <a href="../../reference/alerts/#port49_store_logouts_pending">port49_store_logouts_pending</a>.</li>
+<li>On the heal the runner forwards it, and the other regions refuse that session from then on.</li>
+<li>To cut the session off in the other regions before the heal, run <code>port49 revoke --principal &lt;principal&gt;</code>
+  from a region that reaches the directory.</li>
+</ul>
+<p>The cut region's runner does not repeat itself while this lasts. It says
+<code>N back-channel logout(s) pending until the directory store answers</code> once for a run of forwarding passes
+that fail, and then says nothing more until a pass forwards them.</p>
+<p>The retry lines come from the other regions, the ones following a logout made elsewhere. If such a region
+cannot finish reaching the logout in its own session store, its <code>a logout made elsewhere (...) reached</code>
+line carries <code>not every step finished (...)</code>. The logout is then tried again after a wait that doubles from 1
+second to at most 64 seconds, and the logged-out person's mints and refreshes are refused meanwhile.</p>
+<p><strong>Look for the first line of the run, not the latest.</strong> The first failure's line carries the <code>port49 revoke</code>
+remedy for ending the person's live sessions at once. The lines after it read
+<code>still not reached after N tries (...); tried again in &lt;wait&gt; (the remedy was said with the first failure)</code>.</p>
+<p>A logout the broker can never reach is not tried again. Its line ends <code>not every step finished (...)</code> with no
+wait and no remedy, and the next takeover of that keyspace reaches it once more.</p>
+<h3 id="a-person-who-signs-in-again-during-a-cut">A person who signs in again during a cut<a class="headerlink" href="#a-person-who-signs-in-again-during-a-cut" title="Permanent link">&para;</a></h3>
+<p>A logout that reaches a region late still ends the logins made after the logout was sent. A person who
+signs in again in a region that has not yet followed the logout may therefore be logged out again when
+it arrives. This is deliberate: cutting logins off by time would fail open under clock skew between
+regions.</p>
+<h2 id="what-the-lab-measured">What the lab measured<a class="headerlink" href="#what-the-lab-measured" title="Permanent link">&para;</a></h2>
+<p>The three-region runs are in the notes
+<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L74-regions.md">L74</a> and
+<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L75-regions.md">L75</a>. With one region
+cut: its open session's command was permitted, and <code>port49 store status</code> exited 3; a revocation in another
+region reached the cut region's session 11 seconds after the heal; a logout posted to the cut region was
+refused there at once, shown pending, and refused by another region 5 seconds after the heal. Password
+sign-in in the cut region answered 503 <code>store_unavailable</code>.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

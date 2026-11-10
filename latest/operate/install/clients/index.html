@@ -1,0 +1,3502 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Installing the port49 command-line client, the Python library and the Ansible lookup.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/operate/install/clients/">
+      
+      
+        <link rel="prev" href="../helm/">
+      
+      
+        <link rel="next" href="../../broker-and-agent/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Install the clients - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#install-the-clients" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Install the clients
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-two-port49-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The two port49 builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#download-a-release" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Download a release
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pkcs11-on-linux-macos-and-homebrew" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PKCS#11 on Linux, macOS and Homebrew
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-python-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Python library
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Use">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-machines-tokens-workload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A machine's tokens: Workload
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#netmiko-and-host-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Netmiko and host keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-retried-and-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is retried, and why
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secrets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secrets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-ansible-collection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Ansible collection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#install_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-mint-once-per-host-per-play" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use: mint once per host per play
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Use: mint once per host per play">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-machine-workload-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A machine: workload mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secrets_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secrets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#host-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-two-port49-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The two port49 builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#download-a-release" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Download a release
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pkcs11-on-linux-macos-and-homebrew" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PKCS#11 on Linux, macOS and Homebrew
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-python-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Python library
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Use">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-machines-tokens-workload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A machine's tokens: Workload
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#netmiko-and-host-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Netmiko and host keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-retried-and-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is retried, and why
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secrets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secrets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-ansible-collection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Ansible collection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#install_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-mint-once-per-host-per-play" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use: mint once per host per play
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Use: mint once per host per play">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-machine-workload-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A machine: workload mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secrets_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secrets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#host-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="install-the-clients">Install the clients<a class="headerlink" href="#install-the-clients" title="Permanent link">&para;</a></h1>
+<p>The clients run on the machines where people and automation sign in, not on the server. There are
+three: the <code>port49</code> command, the Python library, and the Ansible lookup. The Python library and the
+Ansible lookup both drive the <code>port49</code> command, so install that first.</p>
+<h2 id="the-two-port49-builds">The two <code>port49</code> builds<a class="headerlink" href="#the-two-port49-builds" title="Permanent link">&para;</a></h2>
+<p>The release has two builds of <code>port49</code>. Both are <code>/usr/bin/port49</code>, so no archive and no package holds
+both.</p>
+<table>
+<thead>
+<tr>
+<th>Build</th>
+<th>Where you get it</th>
+<th>Hardware keys</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Client</td>
+<td>the <code>port49</code> package and archive, for Linux and macOS (amd64 and arm64)</td>
+<td>PKCS#11 keys (a YubiKey or a smartcard), the TPM (Linux) and file keys</td>
+</tr>
+<tr>
+<td>Static</td>
+<td>the <code>port49-server</code> package and archive, and the container image</td>
+<td>the TPM (Linux) and file keys only</td>
+</tr>
+</tbody>
+</table>
+<p><strong>If your key lives on a YubiKey or a smartcard, run <code>port49 login</code> from the client build.</strong> The client
+build loads the system's PKCS#11 library at run time, so it needs the system's dynamic loader, which every
+desktop Linux and macOS has.</p>
+<p>The static build has no such loader dependency, which suits a server or a container. It will not use a
+<code>pkcs11:</code> key: a key store set to <code>pkcs11</code> is refused, and <code>auto</code> passes over the key and says so. Nothing
+else about it changes.</p>
+<p>See <a href="../../hardware-keys/">Hardware keys</a> for setting a key up.</p>
+<p>Check which one you have, and its version:</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>--version
+</code></pre></div>
+<h2 id="download-a-release">Download a release<a class="headerlink" href="#download-a-release" title="Permanent link">&para;</a></h2>
+<p>Each release on <a href="https://github.com/blanketfish/port49/releases">GitHub Releases</a> carries the client
+archive for each system, <code>port49_&lt;version&gt;_&lt;os&gt;_&lt;arch&gt;.tar.gz</code>, and a <code>SHA256SUMS</code> file covering every
+asset. Download the archive and the sums, check the archive against them, then unpack <code>port49</code> onto your
+<code>PATH</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">PORT49_VERSION</span><span class="o">=</span><span class="m">0</span>.1.0
+<span class="nv">base</span><span class="o">=</span><span class="s2">"https://github.com/blanketfish/port49/releases/download/v</span><span class="si">${</span><span class="nv">PORT49_VERSION</span><span class="si">}</span><span class="s2">"</span>
+curl<span class="w"> </span>-fsSLO<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">base</span><span class="si">}</span><span class="s2">/port49_</span><span class="si">${</span><span class="nv">PORT49_VERSION</span><span class="si">}</span><span class="s2">_linux_amd64.tar.gz"</span>
+curl<span class="w"> </span>-fsSLO<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">base</span><span class="si">}</span><span class="s2">/SHA256SUMS"</span>
+sha256sum<span class="w"> </span>--ignore-missing<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS
+tar<span class="w"> </span>-xzf<span class="w"> </span><span class="s2">"port49_</span><span class="si">${</span><span class="nv">PORT49_VERSION</span><span class="si">}</span><span class="s2">_linux_amd64.tar.gz"</span><span class="w"> </span>port49
+sudo<span class="w"> </span>install<span class="w"> </span>-m<span class="w"> </span><span class="m">0755</span><span class="w"> </span>port49<span class="w"> </span>/usr/local/bin/port49
+</code></pre></div>
+<p>On macOS, use <code>darwin</code> in the archive name, and <code>shasum -a 256 --ignore-missing -c SHA256SUMS</code> to check it.
+Each asset also has a build provenance attestation. With the GitHub CLI, <code>gh attestation verify
+port49_${PORT49_VERSION}_linux_amd64.tar.gz --repo blanketfish/port49</code> checks that the release workflow built
+it.</p>
+<h2 id="pkcs11-on-linux-macos-and-homebrew">PKCS#11 on Linux, macOS and Homebrew<a class="headerlink" href="#pkcs11-on-linux-macos-and-homebrew" title="Permanent link">&para;</a></h2>
+<p>A hardware key needs the YubiKey PKCS#11 module, <code>libykcs11</code>. <code>port49 hwkey setup</code> and
+<code>port49 hwkey status</code> find it in this order: the <code>--module</code> flag, then the <code>module-path</code> of a key already
+in your config, then a probe of the system paths where a package installs it.</p>
+<ul>
+<li><strong>Debian and Ubuntu.</strong> The <code>ykcs11</code> package installs <code>libykcs11.so</code> under
+  <code>/usr/lib/&lt;multiarch&gt;/</code>, which is probed.</li>
+<li><strong>Fedora and RHEL.</strong> <code>yubico-piv-tool</code> installs <code>/usr/lib64/libykcs11.so.2</code>, which is probed.</li>
+<li><strong>macOS and Homebrew.</strong> No path is probed. Install <code>yubico-piv-tool</code>, find its <code>libykcs11.dylib</code>, and pass it:</li>
+</ul>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>hwkey<span class="w"> </span>status<span class="w"> </span>--module<span class="w"> </span>&lt;path-to&gt;/libykcs11.dylib
+</code></pre></div>
+<p>port49 refuses to load a PKCS#11 module that another user could replace. On macOS it accepts write
+  access held by the <code>admin</code> group, because Homebrew's prefix is group-writable by that group by design,
+  but no other group. Once the key is in your config, its <code>module-path</code> names the module and you do
+  not pass <code>--module</code> again.</p>
+<p>If no module is found, the command says so and exits with status 2: <code>no libykcs11 found; install
+yubico-piv-tool or pass --module</code> on Linux, and on macOS <code>no libykcs11 is probed on macOS: pass
+--module PATH, the libykcs11.dylib of your yubico-piv-tool install</code>.</p>
+<h2 id="the-python-library">The Python library<a class="headerlink" href="#the-python-library" title="Permanent link">&para;</a></h2>
+<p>Device tokens from the port49 agent, for scripts, Nornir and Netmiko. The library drives the
+<code>port49</code> CLI (not the API or the agent socket), so a hardware key, its PIN, a touch and
+<code>per_login_mfa</code> take the one path they take at a terminal. Python 3.10 or later; standard
+library only.</p>
+<h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>pip install ./clients/python            # the library
+pip install './clients/python[netmiko]' # and Netmiko, for port49.netmiko
+</code></pre></div>
+<p><code>port49</code> must be on <code>PATH</code> (or pass <code>Agent(port49="/opt/port49/bin/port49")</code>), and <code>port49 login</code>
+must have started an agent.</p>
+<h2 id="use">Use<a class="headerlink" href="#use" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">port49</span><span class="w"> </span><span class="kn">import</span> <span class="n">Agent</span><span class="p">,</span> <span class="n">Denied</span><span class="p">,</span> <span class="n">MFARequired</span>
+
+<span class="n">agent</span> <span class="o">=</span> <span class="n">Agent</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">agent</span><span class="o">.</span><span class="n">identity</span><span class="p">()[</span><span class="s2">"principal"</span><span class="p">])</span>
+
+<span class="n">tok</span> <span class="o">=</span> <span class="n">agent</span><span class="o">.</span><span class="n">token</span><span class="p">(</span><span class="s2">"leaf1"</span><span class="p">,</span> <span class="n">enable</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">ttl</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span>
+<span class="c1"># tok.address, tok.username, tok.login, tok.enable (login and enable are not in repr)</span>
+
+<span class="n">res</span> <span class="o">=</span> <span class="n">agent</span><span class="o">.</span><span class="n">tokens</span><span class="p">([</span><span class="s2">"leaf1"</span><span class="p">,</span> <span class="s2">"leaf2"</span><span class="p">,</span> <span class="s2">"core1"</span><span class="p">])</span>   <span class="c1"># one mint per device, in turn</span>
+<span class="n">res</span><span class="o">.</span><span class="n">tokens</span>      <span class="c1"># {device: Token}</span>
+<span class="n">res</span><span class="o">.</span><span class="n">refused</span>     <span class="c1"># {device: Refusal}: denies, and devices that want a second factor</span>
+<span class="n">res</span><span class="o">.</span><span class="n">raise_for_refused</span><span class="p">()</span>
+</code></pre></div>
+<h3 id="a-machines-tokens-workload">A machine's tokens: <code>Workload</code><a class="headerlink" href="#a-machines-tokens-workload" title="Permanent link">&para;</a></h3>
+<p>For a service with a workload certificate (Oxidized, a backup job), <code>Workload</code> drives
+<code>port49 workload token</code>, which reads the certificate and key at every run:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">port49</span><span class="w"> </span><span class="kn">import</span> <span class="n">Workload</span>
+
+<span class="n">w</span> <span class="o">=</span> <span class="n">Workload</span><span class="p">(</span><span class="n">broker</span><span class="o">=</span><span class="s2">"https://broker.example.com:8443"</span><span class="p">,</span> <span class="n">broker_ca</span><span class="o">=</span><span class="s2">"/etc/port49/ca.pem"</span><span class="p">,</span>
+             <span class="n">cert</span><span class="o">=</span><span class="s2">"/etc/port49/w.pem"</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"/etc/port49/w.key"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">w</span><span class="o">.</span><span class="n">identity</span><span class="p">()[</span><span class="s2">"principal"</span><span class="p">])</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">w</span><span class="o">.</span><span class="n">tokens</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">"backup"</span><span class="p">)</span>                       <span class="c1"># every device the scope selects that you hold a grant on</span>
+<span class="n">res</span> <span class="o">=</span> <span class="n">w</span><span class="o">.</span><span class="n">tokens</span><span class="p">([</span><span class="s2">"leaf1"</span><span class="p">,</span> <span class="s2">"leaf2"</span><span class="p">],</span> <span class="n">purpose</span><span class="o">=</span><span class="s2">"nightly backup"</span><span class="p">)</span>
+<span class="n">res</span><span class="o">.</span><span class="n">tokens</span>      <span class="c1"># {device: Token}</span>
+<span class="n">res</span><span class="o">.</span><span class="n">refused</span>     <span class="c1"># {device: Refusal}: denies, and devices that want a second factor</span>
+</code></pre></div>
+<p>Pass <code>touch_key=</code> (a <code>pkcs11:</code> reference with a <code>pin-source</code>), <code>broker_crl=</code> and <code>deadline=</code>
+(seconds) to reach the CLI's flags of those names.</p>
+<ul>
+<li>A scope that selects nothing returns empty <code>tokens</code> and <code>refused</code>. So does a run where every
+  device was denied (the CLI exits 77 for that): the denies are in <code>refused</code>, and nothing raises.</li>
+<li>A run that <strong>stopped</strong> before it finished never returns: the CLI says so (<code>stopped</code>), and the
+  library raises the class of that code (<code>broker_unavailable</code> and <code>connection_changed</code> are
+  <code>Temporary</code>, <code>broker_refused</code> is <code>BrokerRefused</code>, <code>agent_error</code> is <code>Port49Error</code>). The tokens
+  minted so far are on <code>.results</code>, and every device the run left is in <code>.results.refused</code> under
+  the stopping code. No answer at all is <code>Temporary</code> for exit 75 and <code>Final</code> for exit 77 (the
+  certificate expired: nothing can mint until someone acts).</li>
+<li><strong>The library never reruns a workload run</strong>, not even on <code>Temporary</code>. The CLI already retries
+  each page within its <code>--deadline</code> under one Idempotency-Key; when that runs out, the page in
+  flight may already be minted at the broker with its answer lost, and a new run has a new key,
+  so it would mint that page's devices again. Deciding to run again is yours: <code>.results.refused</code>
+  names the devices a stopped run left. A rerun of a scope sweep, which cannot name what it left,
+  mints every page again, the ones already minted included.</li>
+<li>The answer holds a token for every device and is read whole, up to 64 MiB (some 200,000
+  devices). Larger raises <code>Port49Error</code> with code <code>answer_too_large</code> (the run may have minted):
+  split the sweep, or have the CLI write the tokens with <code>--out</code>.</li>
+<li>A device name may not be empty, padded with whitespace, start with <code>#</code> or hold a line break
+  (<code>ValueError</code>): the CLI would trim or skip it.</li>
+</ul>
+<h2 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h2>
+<p>Every exception is a <code>Port49Error</code> with <code>.code</code>, <code>.detail</code> and <code>.device</code>.</p>
+<table>
+<thead>
+<tr>
+<th>CLI code</th>
+<th>Class</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>not_installed</code></td>
+<td><code>NotInstalled</code></td>
+<td>Install port49 or pass <code>port49=</code>.</td>
+</tr>
+<tr>
+<td><code>no_agent</code>, <code>agent_too_old</code></td>
+<td><code>NoAgent</code></td>
+<td>Run <code>port49 login</code>.</td>
+</tr>
+<tr>
+<td><code>session_over</code>, <code>credential_revoked</code></td>
+<td><code>SessionOver</code></td>
+<td>Run <code>port49 login</code> again.</td>
+</tr>
+<tr>
+<td>a deny (<code>verdict: deny</code>)</td>
+<td><code>Denied</code> (<code>.reason</code> is the broker's reason, <code>.verdict</code>)</td>
+<td>Ask for the grant; not retried.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa_required</code></td>
+<td><code>MFARequired</code> (<code>.requirement</code>)</td>
+<td>A person runs <code>port49 ssh DEVICE</code> at a terminal; one proof covers their agent's further logins for the requirement's <code>reuse_for_seconds</code>. An agent stops and asks a person.</td>
+</tr>
+<tr>
+<td><code>touch_timeout</code>, <code>key_locked</code>, <code>key_absent</code></td>
+<td><code>KeyUnavailable</code></td>
+<td>Touch the key, unlock it, or plug it in; not retried.</td>
+</tr>
+<tr>
+<td><code>broker_refused</code></td>
+<td><code>BrokerRefused</code></td>
+<td>The broker refused a proof, or its certificate was refused; not retried.</td>
+</tr>
+<tr>
+<td><code>revocation_running</code>, <code>connection_changed</code></td>
+<td><code>Temporary</code></td>
+<td>Retried by <code>Agent</code>; see below. <code>Workload</code> never reruns a run: run it again later.</td>
+</tr>
+<tr>
+<td><code>broker_unavailable</code></td>
+<td><code>Temporary</code></td>
+<td>Not retried: the request may have reached the broker and minted. Run it again when the broker is back.</td>
+</tr>
+<tr>
+<td><code>device_unconfigured</code>, <code>attribute_too_long</code>, <code>attribute_unsafe</code>, <code>broker_error</code>, <code>no_token</code></td>
+<td><code>DeviceFault</code></td>
+<td>The broker could not decide this one device (or minted it no token). Fix its inventory entry (<code>device_unconfigured</code>, <code>attribute_*</code>), or read the broker's log (<code>broker_error</code>, <code>no_token</code>). Other devices are unaffected.</td>
+</tr>
+<tr>
+<td><code>agent_error</code>, <code>exit_N</code>, <code>timeout</code></td>
+<td><code>Port49Error</code></td>
+<td>Read <code>.detail</code>.</td>
+</tr>
+<tr>
+<td><code>answer_too_large</code></td>
+<td><code>Port49Error</code></td>
+<td>The CLI's answer passed the library's 64 MiB cap: the tokens may be minted but are not read. Split the sweep, or use <code>port49 workload token --out</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>An error the runner raised before reading an answer (<code>not_installed</code>, <code>timeout</code>,
+<code>answer_too_large</code>) has no <code>.results</code>: what was minted is unknown, not empty.</p>
+<p><code>tokens()</code> collects what belongs to one device (a deny, a second factor, a <code>DeviceFault</code>) into
+<code>refused</code>, so one device never stops a sweep. Test a refusal with <code>r.per_login_mfa is not None</code> or
+<code>isinstance(r.exception(), MFARequired)</code>, not <code>r.error</code>: the same second-factor condition comes
+from the CLI's code (<code>error</code>) or from a broker deny (<code>reason</code>). Anything else stops the sweep, and
+the exception's <code>.results</code> holds the tokens minted so far, so a rerun need not mint them again.</p>
+<p><code>.results</code> holds live tokens: use it in the process that caught the error, and do not log or
+serialize it. <code>str</code>, <code>repr</code>, pickle and <code>copy</code> of the exception leave the tokens out (a rebuilt
+exception has the device names and <code>None</code> for each token), but <code>vars(e)</code> and <code>e.results</code> itself
+are the real thing.</p>
+<h2 id="netmiko-and-host-keys">Netmiko and host keys<a class="headerlink" href="#netmiko-and-host-keys" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">port49</span><span class="w"> </span><span class="kn">import</span> <span class="n">Workload</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">port49.netmiko</span><span class="w"> </span><span class="kn">import</span> <span class="n">connect</span>
+
+<span class="n">conn</span> <span class="o">=</span> <span class="n">connect</span><span class="p">(</span><span class="s2">"leaf1"</span><span class="p">,</span> <span class="n">enable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>    <span class="c1"># a person's token, through the agent `port49 login` started</span>
+<span class="n">conn</span><span class="o">.</span><span class="n">disconnect</span><span class="p">()</span>
+<span class="n">w</span> <span class="o">=</span> <span class="n">Workload</span><span class="p">(</span><span class="n">broker</span><span class="o">=</span><span class="s2">"https://broker.example.com:8443"</span><span class="p">,</span> <span class="n">broker_ca</span><span class="o">=</span><span class="s2">"/etc/port49/ca.pem"</span><span class="p">,</span>
+             <span class="n">cert</span><span class="o">=</span><span class="s2">"/etc/port49/w.pem"</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="s2">"/etc/port49/w.key"</span><span class="p">)</span>
+<span class="n">conn</span> <span class="o">=</span> <span class="n">connect</span><span class="p">(</span><span class="s2">"leaf1"</span><span class="p">,</span> <span class="n">workload</span><span class="o">=</span><span class="n">w</span><span class="p">)</span>     <span class="c1"># a machine's token, through `port49 workload token`</span>
+<span class="n">conn</span><span class="o">.</span><span class="n">disconnect</span><span class="p">()</span>
+<span class="c1"># a Netmiko connection either way; extra keyword arguments pass to Netmiko</span>
+</code></pre></div>
+<ul>
+<li><code>workload=</code> runs <code>port49 workload token</code> once for the one device, and never again (a workload run is never
+  rerun). A refusal raises what the agent path raises: <code>Denied</code>, <code>MFARequired</code> (a device that asks for a second
+  factor the run did not prove), <code>DeviceFault</code>. A stopped run raises its code's class, and its <code>.results</code> names
+  the device and holds no token.</li>
+<li><code>agent=</code> and <code>workload=</code> together are a <code>ValueError</code>. A <code>Workload</code> as <code>agent=</code>, or anything but a <code>Workload</code>
+  as <code>workload=</code>, is a <code>TypeError</code>. All three are raised before anything is minted. With neither, <code>connect</code>
+  uses <code>Agent()</code>, and with no agent running raises <code>NoAgent</code>, naming <code>workload=</code>.</li>
+<li>Host keys are the same on both paths, below.</li>
+</ul>
+<p>port49 stores no host key. <code>connect</code> keeps the device's key in your OpenSSH <code>known_hosts</code>, under
+the device's inventory name (your <code>HostKeyAlias</code> if you set one), the entry <code>port49 ssh</code> uses. It
+reads your ssh_config through <code>ssh -G</code> and the key files through <code>ssh-keygen -F</code>, and parses
+neither itself.</p>
+<ul>
+<li>No key filed: the key the device presents is filed before the token is sent (accept-new). Many
+  workers reaching a new device at once each write one whole line.</li>
+<li>A key filed: the only key accepted. A changed key, a key of another type, or another host at the
+  address is <code>HostKeyError</code> (<code>host_key_changed</code>) before the token is sent; the message gives
+  <code>ssh-keygen -R NAME</code>.</li>
+<li>Your <code>StrictHostKeyChecking yes</code> stands: nothing is filed, and a device with no key filed is
+  refused (<code>host_key_unknown</code>).</li>
+</ul>
+<p>Refused, with the setting named, and never filed past:</p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>device_name</code></td>
+<td>A name known_hosts would read as a pattern or a marker (<code>leaf*</code>, <code>a,b</code>, <code>@x</code>, ...). Checked before the mint.</td>
+</tr>
+<tr>
+<td><code>ssh_config_unread</code></td>
+<td><code>ssh -G</code> failed on your ssh_config.</td>
+</tr>
+<tr>
+<td><code>known_hosts_unread</code></td>
+<td><code>ssh-keygen -F</code> failed on a known_hosts file.</td>
+</tr>
+<tr>
+<td><code>host_key_uncheckable</code></td>
+<td>A <code>KnownHostsCommand</code> (use <code>port49 ssh</code>); a <code>RevokedHostKeys</code> that <code>ssh-keygen -Q</code> cannot read (a plain key list, which ssh honours and this client does not: make a KRL with <code>ssh-keygen -k</code>); a path in <code>GlobalKnownHostsFile</code> or <code>UserKnownHostsFile</code> that cannot be resolved; a host covered only by <code>@cert-authority</code>, which Paramiko cannot check; a <code>ProxyJump</code> or <code>ProxyCommand</code> (Paramiko dials the address itself, so a key filed or checked could be another host's: use <code>port49 ssh</code>); a <code>Port</code> that is not the one <code>connect</code> dials (<code>port=</code>); a <code>BindAddress</code> or <code>BindInterface</code> (Paramiko takes the default route); keys filed only in types Paramiko cannot load (<code>ssh-dss</code>, <code>sk-*</code>); a device with nothing filed that offers only types Paramiko cannot check; in the Ansible lookup, a port49 name that is not an inventory host, minted on a host that connects with <code>network_cli</code> (mint for <code>inventory_hostname</code>).</td>
+</tr>
+<tr>
+<td><code>host_keys_not_kept</code></td>
+<td>Under accept-new, the first <code>UserKnownHostsFile</code> is <code>/dev/null</code>, <code>none</code>, a link to either, or not a file you can write (or create). Every connection would be a first contact.</td>
+</tr>
+<tr>
+<td><code>host_key_revoked</code></td>
+<td>An <code>@revoked</code> line or <code>RevokedHostKeys</code> names the key, filed beside your entry or presented at first contact.</td>
+</tr>
+<tr>
+<td><code>host_key_unknown</code>, <code>host_key_changed</code></td>
+<td>As above.</td>
+</tr>
+</tbody>
+</table>
+<p>Only the host-key types filed under the name are negotiated, on the first connect and on every
+rebuild (so OpenSSH 8.8 and later, which do not offer <code>ssh-rsa</code>, still present the filed RSA key).</p>
+<p>The returned connection keeps the key its connect accepted, in memory. A reconnect
+(<code>establish_connection()</code>) or an SCP transfer on it loads that key into the new Paramiko client,
+looks the files up again (a key revoked or removed since is not loaded, and with none left nothing
+connects), and refuses any other key before authenticating. Every such refusal is
+<code>HostKeyError</code> with code <code>host_key_changed</code> (or <code>host_key_revoked</code>), never Netmiko's
+<code>NetmikoTimeoutException</code> and never Paramiko's <code>BadHostKeyException</code>. Initially Paramiko compares
+against the first key of the presented type, so after a rotation that appended a second key of one
+type, <code>connect</code> can refuse with <code>host_key_changed</code> until the old line is removed.</p>
+<p>A refusal after the mint leaves that token unused; it expires. That Paramiko refuses a wrong key
+before it authenticates was measured on 2026-10-14 (<code>tests/lab/results/L65-&lt;platform&gt;.md</code>).</p>
+<h2 id="what-is-retried-and-why">What is retried, and why<a class="headerlink" href="#what-is-retried-and-why" title="Permanent link">&para;</a></h2>
+<p><code>token</code> runs again, at most <code>attempts</code> times (default 3) with a 1 s, 2 s, 4 s ... wait between,
+only for a code that means nothing was sent to mint with: <code>revocation_running</code> (a revocation
+sweep is on) and <code>connection_changed</code>. A <code>connection_changed</code> retry asks for a second touch,
+since the touch is bound to the connection that changed.</p>
+<p>Never retried: <code>broker_unavailable</code> (the request may have reached the broker before it died, and
+a rerun would mint again and hold another candidate slot until the first token expires; it is
+<code>Temporary</code>, so the caller decides), a key or PIN failure (a locked key would burn its tries),
+<code>touch_timeout</code> (the person did not touch; running again would only prompt them again unasked),
+a deny, <code>broker_refused</code>, a lost session.</p>
+<h2 id="secrets">Secrets<a class="headerlink" href="#secrets" title="Permanent link">&para;</a></h2>
+<p>The token is never in argv, the environment, a log or a <code>repr</code>. It is read from the CLI's stdout
+and handed to Netmiko (or Ansible) only. <code>connect</code>'s connection holds it as Netmiko's <code>password</code> and
+<code>secret</code>, which Netmiko logs in again with, and Netmiko's own log filter holds it to mask it, until
+<code>disconnect()</code>: call <code>disconnect()</code>, or use the connection as a context manager, when done. An exception
+<code>connect</code> raises has its frames' locals cleared, in its traceback and in the tracebacks it chains, except a
+generator's or coroutine's frame or one still running, which hold no token on this path, so a traceback printed
+with its locals shows no token. Netmiko masks the token in its DEBUG log and session log; everything else the
+session sends is logged in full, so keep DEBUG off in production. No exception, <code>repr</code> or failed-parse error carries the
+CLI's stdout. Once a call returns or raises, the library keeps no copy of the CLI's stdout, even if a program the CLI
+started (a wrapper's background job) holds that stdout open: the library reads and drops whatever that program prints
+until it closes it, and never closes the pipe under it. The CLI's stderr (a touch prompt, a sign-in URL) is passed to your stderr as it
+comes; pass <code>Agent(stderr=file)</code> to send it elsewhere.</p>
+<h2 id="the-ansible-collection">The Ansible collection<a class="headerlink" href="#the-ansible-collection" title="Permanent link">&para;</a></h2>
+<p>Device tokens from port49 for Ansible: the lookup <code>port49.client.token</code>. It drives the <code>port49</code>
+CLI through the port49 Python library (<code>clients/python</code>), so a hardware key, its PIN, a touch and
+<code>per_login_mfa</code> take the one path they take at a terminal.</p>
+<h2 id="install_1">Install<a class="headerlink" href="#install_1" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>pip install ./clients/python                                   # on the controller: the library
+ansible-galaxy collection install ./clients/ansible/ansible_collections/port49/client
+</code></pre></div>
+<p>Install the library and collection from the tree, as above, to match a checkout. From the first
+release (<code>v0.1.0</code>) on, this project also publishes them as <code>port49</code> on PyPI and <code>port49.client</code> on
+Galaxy: install the version <code>port49 --version</code> prints (<code>pip install port49==&lt;version&gt;</code>,
+<code>ansible-galaxy collection install port49.client:==&lt;version&gt;</code>). No other package name is port49's.
+Where ansible-core lives in a pipx venv, <code>pipx inject ansible-core ./clients/python</code>.</p>
+<p><code>port49</code> must be on the controller's <code>PATH</code> (or pass <code>port49=/opt/port49/bin/port49</code>), and
+<code>port49 login</code> must have started an agent. Needs ansible-core 2.16 or later.</p>
+<h2 id="use-mint-once-per-host-per-play">Use: mint once per host per play<a class="headerlink" href="#use-mint-once-per-host-per-play" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">hosts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">leaves</span>
+<span class="w">  </span><span class="nt">gather_facts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">  </span><span class="nt">pre_tasks</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mint this host's token</span>
+<span class="w">      </span><span class="nt">ansible.builtin.set_fact</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">port49</span><span class="p">:</span><span class="w"> </span><span class="s">"{{</span><span class="nv"> </span><span class="s">lookup('port49.client.token',</span><span class="nv"> </span><span class="s">inventory_hostname,</span><span class="nv"> </span><span class="s">field='all',</span><span class="nv"> </span><span class="s">enable=true)</span><span class="nv"> </span><span class="s">}}"</span>
+<span class="w">      </span><span class="nt">no_log</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">vars</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">ansible_connection</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ansible.netcommon.network_cli</span>
+<span class="w">    </span><span class="nt">ansible_network_os</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">arista.eos.eos</span>
+<span class="w">    </span><span class="nt">ansible_user</span><span class="p">:</span><span class="w"> </span><span class="s">"{{</span><span class="nv"> </span><span class="s">port49.username</span><span class="nv"> </span><span class="s">|</span><span class="nv"> </span><span class="s">default(omit)</span><span class="nv"> </span><span class="s">}}"</span>
+<span class="w">    </span><span class="nt">ansible_password</span><span class="p">:</span><span class="w"> </span><span class="s">"{{</span><span class="nv"> </span><span class="s">port49.login</span><span class="nv"> </span><span class="s">|</span><span class="nv"> </span><span class="s">default(omit)</span><span class="nv"> </span><span class="s">}}"</span>
+<span class="w">    </span><span class="nt">ansible_become_password</span><span class="p">:</span><span class="w"> </span><span class="s">"{{</span><span class="nv"> </span><span class="s">port49.enable</span><span class="nv"> </span><span class="s">|</span><span class="nv"> </span><span class="s">default(omit)</span><span class="nv"> </span><span class="s">}}"</span>
+<span class="w">    </span><span class="nt">ansible_look_for_keys</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">  </span><span class="nt">tasks</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">arista.eos.eos_facts</span><span class="p">:</span>
+</code></pre></div>
+<p><code>inventory_hostname</code> must be the name port49's inventory knows. A token is single-use and short
+lived; each call of the lookup is a mint.</p>
+<ul>
+<li><strong>Keep <code>| default(omit)</code> on the connection variables</strong>, in the play's <code>vars</code> or in inventory.
+  Under <code>network_cli</code>, ansible-core templates all three for every task, the mint's <code>set_fact</code>
+  included, before the fact exists. Without the default, the mint itself fails with
+  <code>Error processing keyword 'remote_user': 'port49' is undefined</code> (or <code>'password'</code>,
+  <code>'become_pass'</code>). Measured on 2.21.4, and the collection's real-ansible test runs this play.
+  The <code>omit</code> lasts only until the <code>set_fact</code>: a host whose mint fails stops there, so no task
+  connects without the token.</li>
+<li><strong>Keep <code>gather_facts: false</code>, and make the mint the first <code>pre_tasks</code> entry.</strong> Anything that
+  connects before the mint connects without the token: fact gathering would log in as you, with
+  your own credentials. <strong><code>ansible_look_for_keys: false</code></strong> stops <code>network_cli</code> offering your own
+  ssh keys ahead of the token.</li>
+<li><strong>Never put the lookup itself in <code>ansible_password</code>.</strong> Ansible templates connection variables
+  many times per task. Measured on EOS, NX-OS, IOS-XE, vJunos-router and vSRX (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (a),
+  <code>tests/lab/results/L66-&lt;platform&gt;.md</code>): with the lookup in <code>ansible_password</code> and <code>ansible_user</code>,
+  a ten-task play minted 10 tokens for its first 2 tasks. The ninth unspent token was refused
+  <code>candidate_cap_reached</code> (port49's <code>token.candidate_cap</code>, 8 by default), and the play failed at
+  task 2. Mint once in a <code>set_fact</code> and point <code>ansible_password</code> at the fact: the same play then
+  minted once and logged in once for all ten tasks.</li>
+<li><strong>Never <code>cacheable: true</code> on the mint.</strong> It writes the token to the fact-cache backend (a
+  jsonfile, or Redis in a real deployment).</li>
+<li><strong>A reconnect reuses the spent token, and that works only inside the receipt's window.</strong>
+  <code>network_cli</code> closes an idle persistent connection (<code>persistent_connect_timeout</code>, 30 s by
+  default), and <code>meta: reset_connection</code> closes it too. The next task logs in again with the same
+  token. Measured on all five lab platforms (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (b2)): both an idle gap and a <code>reset_connection</code> led to a
+  second login, which port49 answered PASS <code>receipt_replayed</code> from the stored decision. That holds
+  within <code>receipt_idle_ttl</code> (15 m by default) of the last use and <code>receipt_max_age</code> (2 h) of the
+  first. Past either, the login fails <code>token_spent</code>, and the device reports an authentication
+  error that points nowhere near port49. Mint again (a second <code>set_fact</code>) before a gap that long.</li>
+<li><strong>Never enable <code>persistent_log_messages</code></strong> (<code>ANSIBLE_PERSISTENT_LOG_MESSAGES</code>). The persistent
+  socket carries the connection's options, password included, to the connection process, and
+  with this setting the log file records them. Measured on all five lab platforms (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (d)): the token is
+  in that log in the clear. Ansible prints a warning saying so; believe it. <code>-vvv</code> and <code>-vvvv</code>
+  output held no token.</li>
+<li><strong><code>no_log: true</code> on the mint.</strong> The fact holds the token. With <code>no_log</code>, <code>-v</code>, <code>-vvv</code> and
+  <code>-vvvvv</code> print <code>censored</code> for the task and nothing else (the collection's real-ansible test
+  runs all four and searches the output for the token).</li>
+<li><strong>A play longer than <code>receipt_max_age</code></strong> needs a new mint: the token is single-use and expires,
+  so a long play re-mints (a second <code>set_fact</code>) rather than reusing one. Keep each mint close to
+  the work that uses it.</li>
+<li><strong>A device that asks for <code>hardware_key_touch</code></strong> wants a touch per mint, and forks mint at once.
+  So a person runs <code>port49 ssh &lt;one such device&gt;</code> once before the play, and the agent's
+  <code>reuse_for</code> covers the forks. That command logs in to the device; exit at once.</li>
+<li><strong><code>field</code></strong> is <code>login</code> (the default), <code>enable</code> (needs <code>enable=true</code>), <code>username</code>, <code>address</code>,
+  <code>platform</code> or <code>all</code>, a dict of those plus <code>expires_at</code>.</li>
+</ul>
+<h3 id="a-machine-workload-mode">A machine: workload mode<a class="headerlink" href="#a-machine-workload-mode" title="Permanent link">&para;</a></h3>
+<p>Give all of <code>broker</code>, <code>broker_ca</code>, <code>cert</code> and <code>key</code> and the lookup drives <code>port49 workload token</code>
+instead of your agent. It reads the certificate and key at every run.</p>
+<div class="highlight"><pre><span></span><code><span class="l l-Scalar l-Scalar-Plain">lookup('port49.client.token', inventory_hostname, field='all',</span>
+<span class="w">       </span><span class="l l-Scalar l-Scalar-Plain">broker='https://broker.example.com:8443', broker_ca='/etc/port49/ca.pem',</span>
+<span class="w">       </span><span class="l l-Scalar l-Scalar-Plain">cert='/etc/port49/w.pem', key='/etc/port49/w.key')</span>
+</code></pre></div>
+<p><code>touch_key</code> (a <code>pkcs11:</code> reference with a <code>pin-source</code>) and <code>deadline</code> (seconds) reach the CLI's
+flags of those names. A workload run is never rerun by the library or the lookup, even when the
+broker was unreachable: the page in flight may already be minted. Running the play again is yours
+to decide.</p>
+<h2 id="errors_1">Errors<a class="headerlink" href="#errors_1" title="Permanent link">&para;</a></h2>
+<p>A failed lookup raises an Ansible error that names the device and port49's code, for example
+<code>port49: leaf2: deny no_grants_matched: no grant</code>. It never carries a token or the CLI's output.
+The library's README lists the codes and what to do for each.</p>
+<ul>
+<li><strong>A refusal fails that host only.</strong> A deny, a second factor the lookup cannot give (a person runs
+  <code>port49 ssh DEVICE</code> at a terminal first) or a device the broker cannot decide fails <strong>that host
+  only</strong>. The play goes on for the others.</li>
+<li><strong>The message always ends in port49's code.</strong> The code is in brackets when the detail does not
+  already hold it: <code>port49: leaf2: the device has no platform [device_unconfigured]</code>.</li>
+<li><strong>On ansible-core 2.16 to 2.18, read the code in the warning.</strong> Those versions censor the message
+  of a failed <code>no_log</code> task and show only <code>censored</code>. So the lookup also raises the message as an
+  Ansible warning, and the code appears in the <code>[WARNING]</code> line beside it. Measured on 2.16, 2.17
+  and 2.18; 2.19 and later print the error itself, measured to 2.21.</li>
+<li><strong>A workload option given without the other three, or given empty</strong> (an unset variable), is an
+  error. The lookup never falls back to your agent.</li>
+<li><strong>The lookup retries nothing beyond what the library does for an agent:</strong> a revocation sweep or a
+  changed connection, three tries. A broker outage, a deny, a locked key and a lost session are
+  never retried.</li>
+</ul>
+<h2 id="secrets_1">Secrets<a class="headerlink" href="#secrets_1" title="Permanent link">&para;</a></h2>
+<p>The token travels from the CLI's stdout to the lookup's return value and nowhere else: not argv,
+not the environment, not a log, not an exception. The lookup prints nothing. What Ansible does with
+the value is its own: it is in the task result of the <code>set_fact</code> (censored by <code>no_log</code>) and in any
+later task that templates it. A <code>debug</code> of the fact, or a task without <code>no_log</code> that receives
+<code>ansible_password</code>, prints or logs it at its own verbosity; keep <code>no_log</code> on those. Ansible has no
+way to mark one value secret, so <code>no_log</code> on every task that templates the token is the control.</p>
+<h2 id="host-keys">Host keys<a class="headerlink" href="#host-keys" title="Permanent link">&para;</a></h2>
+<p>port49 stores no host key. Ansible keeps them its own way.</p>
+<p>What follows was measured with ansible-core 2.21.4, ansible.netcommon 8.7.1, ansible-pylibssh 1.4.0
+(libssh 0.12.0) and paramiko 5.0.0. Each platform gave the same reading: EOS, NX-OS, IOS-XE,
+vJunos-router and vSRX (lab entry <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a>,
+<code>tests/lab/results/L66-&lt;platform&gt;.md</code>). It is the client's behaviour, not the device's.</p>
+<ul>
+<li><strong><code>network_cli</code> keys a host by <code>ansible_host</code>, the address in Ansible's inventory, not by the
+  port49 name.</strong> Both ssh types filed the first contact under the address.
+  <code>ansible_libssh_config_file</code> naming an ssh_config with <code>HostKeyAlias</code> is not honoured: the key
+  still went under the address. So an address changed for a device in the source of truth (a
+  dynamic inventory built from it, the usual case) is a first contact for Ansible. Measured
+  (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (e)): with <code>host_key_auto_add</code>, both <code>libssh</code> and <code>paramiko</code> connected to another host at
+  the new address and presented it the token.</li>
+<li>
+<p><strong>The lookup closes that gap before it mints.</strong> For a device on <code>network_cli</code>, it compares the
+  keys filed under the port49 name with the keys filed under the address in <code>~/.ssh/known_hosts</code>.</p>
+<p>A device is on <code>network_cli</code> when <code>ansible_connection</code> is <code>network_cli</code> or
+<code>ansible.netcommon.network_cli</code>, or when none is visible and <code>ansible_network_os</code> is set. The
+address is <code>ansible_host</code>, else the inventory name, and <code>[address]:port</code> when <code>ansible_port</code> is
+not 22.</p>
+<p><em>Measured on <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (e3),
+2026-10-16 (<code>tests/lab/results/L66-arista_eos.md</code>):</em></p>
+<ul>
+<li><em>With a different key already filed under the new address, it refused for both <code>libssh</code> and
+  <code>paramiko</code> before any mint.</em></li>
+<li><em>At a new address with no entry, it copies the device's key there. <code>libssh</code> with
+  <code>host_key_auto_add</code> still accepted the other host's key and presented the token (<code>paramiko</code>
+  refused), so do not enable <code>host_key_auto_add</code> with <code>ssh_type: libssh</code>.</em></li>
+<li><em>Measured also without <code>host_key_auto_add</code>
+  (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (e3d)): the lookup
+  copies the name's key to a new address, and the play logs in at the device's own address.
+  Both <code>libssh</code> and <code>paramiko</code> refuse another host's key at a moved address without presenting
+  the token.</em></li>
+</ul>
+<p><strong>With the lookup, run <code>network_cli</code> without <code>host_key_auto_add</code>, for either ssh type.</strong> Only a
+device's very first contact (case 4 below) needs its key filed some other way: connect once with
+<code>port49 ssh</code>, or file a key from <code>ssh-keyscan</code> after checking it on the console.</p>
+<p>What the lookup does for each case:</p>
+<ol>
+<li>Name has keys, address has none: it files them under the address, then mints.</li>
+<li>Both have keys, and a key type in both differs: it mints nothing and fails with
+   <code>host_key_changed</code>. The message gives both fingerprints and the command that clears the stale
+   address, for example <code>ssh-keygen -R '[10.0.0.9]:2222' -f /home/&lt;user&gt;/.ssh/known_hosts</code>. Check
+   the device's key on its console first. Run the command only if the address now belongs to
+   this device.</li>
+<li>Name has none, address has keys: it copies them under the name, then mints. If no user
+   known_hosts file is writable, it warns and mints anyway.</li>
+<li>Neither has a key: a first contact, as before.</li>
+<li>A key of the address that <code>@revoked</code> or <code>RevokedHostKeys</code> revokes fails with
+   <code>host_key_revoked</code>.</li>
+</ol>
+<p>The details of the check:</p>
+<ul>
+<li><code>known_hosts_file</code> is the file to check, if <code>ansible_ssh_common_args</code> or the ssh type points
+  Ansible elsewhere. It defaults to <code>~/.ssh/known_hosts</code>.</li>
+<li>In workload mode, every device is checked before the one mint.</li>
+<li>The port is <code>ansible_port</code>, else <code>ansible_ssh_port</code>.</li>
+<li>If your ssh_config gives the device a <code>HostKeyAlias</code>, the keys filed under the alias count as
+  the name's. A key type where the name and the alias disagree fails with <code>host_key_changed</code>. A
+  <code>KnownHostsCommand</code> fails with <code>host_key_uncheckable</code>: the lookup cannot run it as ssh does.</li>
+<li>The check runs before the connection. It cannot see a key that changes later, and libssh
+  accepts one (next bullet).</li>
+<li>A device not on <code>network_cli</code> is not checked. Use the <code>HostKeyAlias</code> setting below there.
+  Which settings decide that:<ul>
+<li>For a device other than the current host, only its own <code>hostvars</code> count. A <code>localhost</code>
+  play's <code>ansible_connection: local</code> does not turn off the check for it.</li>
+<li>For the current host, its inventory <code>ansible_connection</code> and its play's <code>vars:</code> both
+  count, and either one naming <code>network_cli</code> runs the check. So an inventory <code>ssh</code> under a
+  play's <code>network_cli</code> is checked, as Ansible connects with <code>network_cli</code>.</li>
+<li>An <code>ansible_connection</code> that reaches the lookup still templated (<code>"{{ conn }}"</code>) counts
+  as <code>network_cli</code>.</li>
+</ul>
+</li>
+<li>A port49 name that is not a host in Ansible's inventory has no address the lookup can check.
+  An example is an inventory name <code>l66a</code> minting <code>lookup('port49.client.token', p49_name)</code> for
+  <code>srx1</code>. Minted on a host that connects with <code>network_cli</code>, it fails with
+  <code>host_key_uncheckable</code> and mints nothing: name the inventory host by its port49 name and mint
+  for <code>inventory_hostname</code>, as the play above does. On any other connection it mints,
+  unchecked, as for any device not on <code>network_cli</code>.</li>
+</ul>
+</li>
+<li>
+<p><strong>Never set <code>host_key_auto_add</code> with <code>ansible_network_cli_ssh_type: libssh</code>.</strong> libssh appended
+  the first contact and kept the file's comments and <code>@revoked</code> and <code>@cert-authority</code> lines. But
+  given a changed key for a host it knew, <strong>it accepted the new key, logged in and presented the
+  token</strong> (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (c), (e3b)).
+  Without <code>host_key_auto_add</code>, and with the lookup's copy of the name's key at the address, libssh
+  refused another host's key and presented nothing
+  (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (e3d)).</p>
+</li>
+<li>
+<p><strong><code>paramiko</code> with <code>host_key_auto_add</code> refused a changed key before authentication.</strong> No TACACS+
+  exchange happened and the token was never presented. It has two costs:</p>
+<ul>
+<li><strong>It refuses a known_hosts file that holds an <code>@revoked</code> or <code>@cert-authority</code> line</strong>
+  (<code>InvalidHostKey</code>), so the play fails before connecting. That fails loudly and closed, but it
+  means <code>port49 ssh</code>'s revocation lines and Paramiko cannot share a file.</li>
+<li><strong>On a first contact it rewrites the file</strong> and drops every comment.</li>
+</ul>
+<p>Of the two <code>network_cli</code> paths, this is the one that refuses a changed key. A first contact is
+still accepted.</p>
+<p>With the lookup (above), an address changed in the inventory is not a first contact when the
+device's name holds a key. The lookup copies the name's key to the new address first, so
+<code>paramiko</code> meets a changed key and refuses it
+(<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (e3b), (e3d)). It
+stays a first contact for a device whose name holds no key.</p>
+</li>
+<li>
+<p><strong>Where the connection runs OpenSSH</strong> (<code>ansible.builtin.ssh</code>), set:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">ansible_ssh_extra_args</span><span class="p">:</span><span class="w"> </span><span class="s">"-o</span><span class="nv"> </span><span class="s">HostKeyAlias={{</span><span class="nv"> </span><span class="s">inventory_hostname</span><span class="nv"> </span><span class="s">}}</span><span class="nv"> </span><span class="s">-o</span><span class="nv"> </span><span class="s">StrictHostKeyChecking=accept-new"</span>
+</code></pre></div>
+<p>This files keys under the port49 name, as <code>port49 ssh</code> and the Python client do (the name is
+lowercased, as they lowercase it). This is the measured path that closes the gap
+(<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (e)): with the alias,
+an address moved to another host was refused, and the token was never presented to it.</p>
+<p>Without <code>accept-new</code>, a first contact is <code>Host key verification failed.</code></p>
+<p><strong>Do not set <code>host_key_checking = False</code>.</strong> Ansible then passes <code>StrictHostKeyChecking=no</code>
+ahead of your extra args, which overrides <code>accept-new</code>. OpenSSH still withholds a password from
+a host whose key changed, but a first contact is accepted unchecked.</p>
+<ul>
+<li><strong>One inventory name per address.</strong> <code>ansible.builtin.ssh</code> keys its ControlPath on address,
+  port and user. Measured (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l66">L66</a> (e2)): a second inventory name at the same address reused the
+  first name's open master, and its own <code>HostKeyAlias</code> was never looked up.</li>
+<li><strong>For <code>raw</code> against Junos, also set <code>ansible_ssh_use_tty: false</code>.</strong> The plugin runs <code>raw</code>
+  with <code>ssh -tt</code>. The Junos CLI ran the command at once, then held the session open until the
+  play was killed.</li>
+</ul>
+</li>
+<li>
+<p><strong>A re-keyed device has two entries</strong>: the name (<code>port49 ssh</code>, Python, <code>ansible.builtin.ssh</code> with
+  the alias) and the address (<code>network_cli</code>). Remove both with <code>ssh-keygen -R</code>:</p>
+<div class="highlight"><pre><span></span><code>ssh-keygen -R leaf1
+ssh-keygen -R 10.0.0.11
+</code></pre></div>
+</li>
+</ul>
+<h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>make test-python                               # stdlib unittest; Ansible is stubbed, none needed
+PORT49_TEST_ANSIBLE_PLAYBOOK=/path/to/venv/bin/ansible-playbook make test-python   # and real ansible-core
+</code></pre></div>
+<p>The real-ansible run includes the play above under <code>network_cli</code>, against a closed local port; it
+needs <code>ansible.netcommon</code> and <code>arista.eos</code> (in that venv, or on a collections path named by
+<code>PORT49_TEST_ANSIBLE_COLLECTIONS</code>) and is skipped without them.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

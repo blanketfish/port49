@@ -1,0 +1,2990 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Telling port49 which devices exist, from a file or from an inventory connector, and the bounds that stop a bad source from taking the fleet off the air.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/admin/inventory/">
+      
+      
+        <link rel="prev" href="../workloads/">
+      
+      
+        <link rel="next" href="../devices/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Inventory - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#inventory" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Inventory
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#two-ways-to-supply-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two ways to supply it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-inventory-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inventory file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-inventory-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inventory service
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The inventory service">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-netbox-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A NetBox source
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behind-an-egress-proxy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behind an egress proxy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pointing-port49d-at-the-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pointing port49d at the service
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-removal-bound-max_removed_percent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The removal bound: max_removed_percent
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The removal bound: max_removed_percent">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-deliberate-large-removal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A deliberate large removal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quarantine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quarantine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-a-change-before-it-lands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying a change before it lands
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#two-ways-to-supply-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two ways to supply it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-inventory-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inventory file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-inventory-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inventory service
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The inventory service">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-netbox-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A NetBox source
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behind-an-egress-proxy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behind an egress proxy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pointing-port49d-at-the-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pointing port49d at the service
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-removal-bound-max_removed_percent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The removal bound: max_removed_percent
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The removal bound: max_removed_percent">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-deliberate-large-removal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A deliberate large removal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quarantine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quarantine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-a-change-before-it-lands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying a change before it lands
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="inventory">Inventory<a class="headerlink" href="#inventory" title="Permanent link">&para;</a></h1>
+<p>port49 admits a TACACS+ connection by its <strong>source address</strong>. The inventory says which devices exist, what
+platform each is, which addresses it connects from and what attributes policy scopes can match. A device that is
+not in it gets no answer at all (<code>device_unknown</code>), so the inventory is as much an access control as the policy
+is.</p>
+<p>This page covers:</p>
+<ul>
+<li>the two ways to supply the inventory;</li>
+<li>what the inventory service's connectors do;</li>
+<li>the three mechanisms that protect you from a bad source: the removal bound, quarantine, and the refusal to
+  serve an empty list.</li>
+</ul>
+<p>The policy is a separate file (<a href="../policy/">Policy</a>); the keys a device is admitted under are in the policy's
+<code>key_groups:</code> (<a href="../key-rotation/#device-keys">Key rotation</a>).</p>
+<h2 id="two-ways-to-supply-it">Two ways to supply it<a class="headerlink" href="#two-ways-to-supply-it" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>inventory_file</code></th>
+<th><code>inventory.service</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What it is</td>
+<td>one YAML file read by port49d</td>
+<td><code>port49-inventory</code>, a service that syncs sources and publishes a signed bundle</td>
+</tr>
+<tr>
+<td>Sources</td>
+<td>the file</td>
+<td>files, NetBox, Nautobot, each at its own <code>interval</code></td>
+</tr>
+<tr>
+<td>Use it for</td>
+<td>a lab, a small fleet, CI, <code>port49 explain</code> against a device that does not exist</td>
+<td>a fleet whose source of truth is a NetBox or a Nautobot</td>
+</tr>
+<tr>
+<td>A bad source</td>
+<td>the previous inventory keeps serving</td>
+<td>the service keeps publishing the last good bundle, and port49d keeps the one it holds</td>
+</tr>
+</tbody>
+</table>
+<p>port49d takes exactly one: <code>inventory_file</code>, or <code>inventory.service</code> with no <code>inventory_file</code>. Naming both is refused
+at start. Both need a policy: the bundle port49d serves is built from the inventory and the policy together.</p>
+<h2 id="the-inventory-file">The inventory file<a class="headerlink" href="#the-inventory-file" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="nt">devices</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="nv">leaf1</span><span class="p p-Indicator">,</span><span class="nt"> platform</span><span class="p">:</span><span class="w"> </span><span class="nv">arista_eos</span><span class="p p-Indicator">,</span><span class="nt"> addresses</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">192.0.2.1</span><span class="p p-Indicator">],</span><span class="nt"> attributes</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">site</span><span class="p">:</span><span class="w"> </span><span class="nv">east</span><span class="p p-Indicator">}}</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="nv">edge1</span><span class="p p-Indicator">,</span><span class="nt"> platform</span><span class="p">:</span><span class="w"> </span><span class="nv">cisco_iosxe</span><span class="p p-Indicator">,</span><span class="nt"> addresses</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">192.0.2.21</span><span class="p p-Indicator">],</span><span class="nt"> attributes</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">site</span><span class="p">:</span><span class="w"> </span><span class="nv">west</span><span class="p p-Indicator">}}</span>
+</code></pre></div>
+<p>Every key is in the <a href="../../reference/config/inventory/">inventory file reference</a>. An unknown key, a second YAML
+document, a device named twice, a device with no name, or one address given to two devices refuses the whole file.</p>
+<p><strong>List every address a device may connect from.</strong> TACACS+ is often sourced from a loopback or a management
+interface, not the primary address. A device that connects from an address the file does not list is
+<code>device_unknown</code>, and nothing in the message points back at the inventory. Pin the source interface in the device's
+AAA configuration (<code>ip tacacs source-interface</code> or the platform's equivalent) so the address cannot change under
+you.</p>
+<p><code>attributes:</code> are the free keys that policy scopes match on, such as <code>site</code> and <code>role</code>. A scope that matches on an
+attribute the device does not have is decided by the scope's <code>on_missing:</code> (<a href="../policy/">Policy</a>), which is why a
+connector's <code>map</code> is worth checking before the first sync.</p>
+<p>port49d watches the file on the policy watch ticker and re-reads it at SIGHUP. The ticker is
+<code>broker.policy_watch_interval</code>, or <code>policy.watch_interval</code> on a port49d with no <code>broker:</code> block; 5s by default.</p>
+<p>A change loads once two reads in a row agree, so an edit takes effect within two intervals. Write the file
+atomically (to a new name, then rename), so a half-written file is never read. A file that does not load, or is
+refused by the removal bound below, leaves the previous inventory serving and sets <code>port49_inventory_file_refused</code>.</p>
+<p>The inventory service is different: it re-reads its own configuration only at a restart, and a SIGHUP to it starts a
+sync.</p>
+<h2 id="the-inventory-service">The inventory service<a class="headerlink" href="#the-inventory-service" title="Permanent link">&para;</a></h2>
+<p><code>port49-inventory</code> reads one or more sources, checks the result against the policy, and publishes a bundle signed
+with an Ed25519 key. port49d polls it (<code>inventory.service.poll_interval</code>, 30 seconds by default). It verifies every
+bundle against <code>inventory.service.verify_key_files</code>, and applies one only when it is newer than the one in force.</p>
+<p>The service speaks mutual TLS. <code>readers</code> may fetch the bundle; <code>syncers</code> may also start a sync
+(<code>port49 inventory sync</code>). Their names are exact: <code>user:&lt;email&gt;</code> in lower case, or a certificate's URI SAN such as
+<code>spiffe://...</code>. <code>*</code> is not a wildcard.</p>
+<p>A source is synced:</p>
+<ul>
+<li>at its <code>interval</code> (default <code>10m</code>, <code>1m</code> to <code>24h</code>, set on the service or on one source);</li>
+<li>at the service's start, which refuses to serve with no snapshot at all;</li>
+<li>when NetBox or Nautobot sends a webhook, if the source names a <code>webhook_secret_ref</code>;</li>
+<li>on demand, with <code>port49 inventory sync --service URL --ca FILE --cert FILE --key FILE</code> (it waits as long as a
+  sync may take, up to <code>sync_timeout</code>), or by SIGHUP to the service.</li>
+</ul>
+<p><strong>Size <code>interval</code> to how long a change may wait.</strong> The webhook is the fast path, but no measured NetBox or Nautobot
+release sends a refused delivery again at its defaults
+(<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-netbox.md">NetBox</a>,
+<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-nautobot.md">Nautobot</a>). The scheduled sync is the
+backstop. When a webhook is lost, a newly racked device cannot be admitted for up to one <code>interval</code>. A webhook that
+arrives while the service is shutting down triggers nothing (the startup sync covers it).</p>
+<h3 id="a-netbox-source">A NetBox source<a class="headerlink" href="#a-netbox-source" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="nt">listen</span><span class="p">:</span><span class="w"> </span><span class="s">":8443"</span>
+<span class="nt">tls_cert_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49-inventory/server.pem</span>
+<span class="nt">tls_key_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49-inventory/server-key.pem</span>
+<span class="nt">client_ca_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49-inventory/clients-ca.pem</span>
+<span class="nt">readers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"spiffe://example.com/port49d"</span><span class="p p-Indicator">]</span>
+<span class="nt">syncers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"user:alice@example.com"</span><span class="p p-Indicator">]</span>
+<span class="nt">signing_key_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49-inventory/signing.key</span>
+<span class="nt">policy_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49-inventory/policy.yaml</span>
+<span class="nt">state_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/lib/port49-inventory</span>
+<span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<span class="nt">safety</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">max_removed_percent</span><span class="p">:</span><span class="w"> </span><span class="nv">10</span><span class="p p-Indicator">}</span>
+<span class="nt">sync</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">netbox_prod</span>
+<span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">netbox</span>
+<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://netbox.example.com</span>
+<span class="w">    </span><span class="nt">ca_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/ssl/certs/ca-certificates.crt</span>
+<span class="w">    </span><span class="nt">token_secret_ref</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">env:PORT49_NETBOX_TOKEN</span>
+<span class="w">    </span><span class="nt">filter</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">status</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">active</span><span class="p p-Indicator">]}</span>
+<span class="w">    </span><span class="nt">map</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">site</span><span class="p">:</span><span class="w"> </span><span class="nv">site.slug</span><span class="p p-Indicator">,</span><span class="nt"> role</span><span class="p">:</span><span class="w"> </span><span class="nv">role.slug</span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<p>Started with <code>PORT49_NETBOX_TOKEN</code> set to a placeholder, the service says what is wrong with that file before a
+listener opens:</p>
+<div class="highlight"><pre><span></span><code>port49-inventory: sync[0] (netbox_prod): map must name platform: the path the device's platform is read from
+</code></pre></div>
+<p>Add <code>platform: platform.slug</code> to the <code>map</code>. With the token variable unset the service says
+<code>port49-inventory: sync[0].token_secret_ref the environment variable it names is not set</code>, and every fault of this
+kind is a refusal at start, never a half-started service. The key list is in the
+<a href="../../reference/config/port49-inventory/">service reference</a>; the token and the webhook secret are
+<a href="../../operate/secrets/">secret references</a>, read at start and never printed.</p>
+<p>What the connector does that a hand-written file would not:</p>
+<ul>
+<li><strong>It reads the release first</strong> (<code>/api/status/</code>) and picks a mapping profile for it.<ul>
+<li>The accepted releases are <strong>NetBox 3.7, NetBox 4.x, Nautobot 1.6, and Nautobot 2.x and 3.x</strong>.</li>
+<li>The lab measured NetBox 3.7 and 4.7 and Nautobot 1.6, 2.4 and 3.2. Another minor of an accepted major is
+  read with that profile and noted as unmeasured.</li>
+<li><strong>A release outside that list refuses every sync</strong> until the source sets <code>profile:</code>, with
+  <code>&lt;product&gt; &lt;version&gt; is a release no lab run measured (spec §15 L27, L30: &lt;measured list&gt;); set profile to read it with a measured release's fields, at your own risk</code>.
+  The last good bundle keeps serving meanwhile, but new devices are not admitted until you act.</li>
+<li>After a NetBox or Nautobot major upgrade, check that the next sync succeeds. The notes
+  (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-netbox.md">NetBox</a>,
+  <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md">Nautobot</a>)
+  record what each release was measured to do.</li>
+</ul>
+</li>
+<li><strong>Removals are confirmed.</strong> A device the last read kept and this read lacks is asked for by name before it counts
+  as removed (up to 256 of them; past that the whole list is read a second time and both reads must agree). One that
+  is still there makes the sync fail, so a list that shifts under paging, a rename or a delete at a page boundary,
+  never reads as a removal.</li>
+<li><strong>GraphQL first, REST as the fallback</strong> (<code>api: auto</code>). A GraphQL list is taken only when its length equals REST's
+  <code>count</code> before and after it and no device appears twice, so a server cap or a page lost to a concurrent delete
+  fails the sync instead of looking like devices removed.</li>
+<li><strong><code>filter:</code></strong> keeps <code>status: [active]</code> unless you say otherwise, and <code>tags:</code> or <code>has_primary_ip:</code> narrow it. It is
+  applied by the service, to what was read.</li>
+<li><strong><code>map:</code></strong> names, per attribute, the path in the product's record it comes from. It must name <code>platform</code>. An
+  attribute a device does not give (a null custom field, or one that is an object or a list) is left unset, never
+  invented; <code>on_missing:</code> in the policy then decides what that means.</li>
+<li><strong>Addresses</strong> are the primary IPs (<code>addresses.primary</code>, default true), plus the interfaces you name
+  (<code>addresses.interfaces</code>) or every interface (<code>all_interfaces</code>). Interface addresses are opt-in because every
+  address listed admits its source, and an address on two devices refuses the sync. A loopback, link-local,
+  multicast or unspecified interface address is left out.</li>
+<li><strong>Platforms</strong> are translated through a built-in alias table (<code>eos</code>, <code>arista-eos</code>, <code>veos</code>, <code>cisco_xe</code> and the
+  netutils drivers Nautobot reports), plus your <code>platform_aliases:</code>. A slug neither knows is kept as the device's
+  platform, and the device is <strong>admitted and served by the generic adapter</strong>, which has no platform-specific
+  handling. Each publication that changes that set says so, and <code>port49_inventory_generic_platform_devices</code> holds
+  the count. Treat a nonzero count as a mapping to fix, not as a state to live in.</li>
+</ul>
+<h3 id="behind-an-egress-proxy">Behind an egress proxy<a class="headerlink" href="#behind-an-egress-proxy" title="Permanent link">&para;</a></h3>
+<p>The service honours <code>HTTPS_PROXY</code> and <code>NO_PROXY</code> for each NetBox and Nautobot source. At start it says, per source,
+how it will fetch:</p>
+<div class="highlight"><pre><span></span><code>port49-inventory: source netbox_prod is fetched directly (no HTTPS_PROXY)
+port49-inventory: source netbox_prod is fetched through the proxy &lt;scheme&gt;://&lt;host&gt; (with credentials) (HTTPS_PROXY)
+</code></pre></div>
+<p>The second form is the shape the line takes with a proxy set. It names the proxy's scheme and host and whether it
+carries credentials, never the credentials.</p>
+<p>Two faults are worth knowing:</p>
+<ul>
+<li>An <code>HTTPS_PROXY</code> that does not parse as a proxy URL fails every sync of that source until it is fixed.
+  Percent-encode <code>#</code>, <code>/</code>, <code>?</code> and <code>%</code> in its password.</li>
+<li>A proxy that answers 407 fails the sync with <code>the egress proxy refused HTTPS_PROXY's credentials; the token was
+  not sent</code>. The source's API token is never sent to a proxy that refused.</li>
+</ul>
+<p>Set the variable on the service's unit or container. A Compose broker's note says the same for identity providers
+(<a href="https://github.com/blanketfish/port49/blob/main/deploy/compose/README.md">the compose README</a>).</p>
+<h3 id="pointing-port49d-at-the-service">Pointing port49d at the service<a class="headerlink" href="#pointing-port49d-at-the-service" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="nt">inventory</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">service</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://port49-inventory.example.com:8443</span>
+<span class="w">    </span><span class="nt">ca_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/inventory-ca.pem</span>
+<span class="w">    </span><span class="nt">tls_cert_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/port49d.pem</span>
+<span class="w">    </span><span class="nt">tls_key_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/port49d-key.pem</span>
+<span class="w">    </span><span class="nt">verify_key_files</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">/etc/port49/inventory-signing.pub</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">state_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/lib/port49/inventory</span>
+</code></pre></div>
+<p><code>state_dir</code> holds the last bundle port49d applied, so a restart starts from it with no service reachable;
+<code>mirror_dir</code> is an optional second copy the service writes, read at a cold start when <code>state_dir</code> has none. List two
+<code>verify_key_files</code> while the service's signing key rotates (<a href="../key-rotation/#the-inventory-services-signing-key">Key rotation</a>).
+Every path under <code>inventory.service</code> is absolute, and <code>state_dir</code> and <code>mirror_dir</code> may not overlap.</p>
+<p>If the service is down, <strong>nothing fails closed</strong>: the fleet keeps authenticating on the bundle in force. The alerts
+(<a href="../../operate/troubleshooting/#inventory">Troubleshooting</a>) tell you the service is failing, its bundle is
+refused or its snapshot is stale.</p>
+<h2 id="the-removal-bound-max_removed_percent">The removal bound: <code>max_removed_percent</code><a class="headerlink" href="#the-removal-bound-max_removed_percent" title="Permanent link">&para;</a></h2>
+<p>A partly available source of truth, a mistyped filter or a NetBox that returns a short page would otherwise
+silently deauthorize the fleet. So every sync, and every inventory reload in port49d, is <strong>refused</strong> when it takes
+more than <code>max_removed_percent</code> of the devices in force out of service.</p>
+<p>A device is out of service when it:</p>
+<ul>
+<li>was removed;</li>
+<li>stays, but is newly refused admission;</li>
+<li>stays, but lost every address it had.</li>
+</ul>
+<p>The default is <strong>10</strong>, on the service (<code>safety.max_removed_percent</code>, or a source's own <code>safety:</code>) and in port49d
+(<code>inventory.max_removed_percent</code>). <code>0</code> refuses every removal and <code>100</code> turns the bound off.</p>
+<p>A refused change keeps the last good snapshot serving and raises an alarm
+(<code>port49_inventory_sync_refused</code> on the service, <code>port49_inventory_file_refused</code> or
+<code>port49_inventory_bundle_refused</code> in port49d). An empty inventory, and one the policy admits no device of, are
+refused whatever the bound says.</p>
+<p><code>port49 inventory diff</code> runs the same check offline, so you can see a refusal before you make one. For a ten-device
+inventory (<code>old.yaml</code>) and the same file with the last two devices removed (<code>new.yaml</code>), against the policy in
+force:</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>inventory<span class="w"> </span>diff<span class="w"> </span>--policy<span class="w"> </span>policy.yaml<span class="w"> </span>old.yaml<span class="w"> </span>new.yaml
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>bundle sha256:&lt;digest&gt; → sha256:&lt;digest&gt;: +0 device(s), -2, 0 changed
+  device removed edge1 (cisco_iosxe)
+  device removed edge2 (cisco_iosxe)
+  scope all_devices: edge1 left
+  scope all_devices: edge2 left
+refused: the new inventory removes 2 of 10 devices and refuses 0 more (20%), more than inventory.max_removed_percent (10%); fix the file, or, if the change is meant, raise inventory.max_removed_percent in port49d.yaml and send SIGHUP, which re-reads it with the reload
+</code></pre></div>
+<p>The command exits 1 on a refusal. The <code>&lt;digest&gt;</code> placeholders stand for the two bundle hashes, which differ with
+every input; everything else is the command's output as it was run. With <code>--max-removed-percent 20</code> the same two
+files end with <code>ok: port49d would take the new inventory (inventory.max_removed_percent 20%)</code> and exit 0.</p>
+<h3 id="a-deliberate-large-removal">A deliberate large removal<a class="headerlink" href="#a-deliberate-large-removal" title="Permanent link">&para;</a></h3>
+<p>Decommissioning more than a tenth of the fleet is a planned change, and you raise <strong>both</strong> bounds, in this order:</p>
+<ol>
+<li>If the devices come from the service, raise <code>safety.max_removed_percent</code> (or the source's own) in
+   <code>port49-inventory.yaml</code> and restart the service (a SIGHUP to it starts a sync; it does not re-read the file).</li>
+<li>In <code>port49d.yaml</code>, raise <code>inventory.max_removed_percent</code> and send SIGHUP to port49d, which re-reads this key
+   with the reload. The same bound is the only check on the effect of port49d's own policy file on admission, so
+   it applies to a policy edit that newly refuses or quarantines devices as well.</li>
+<li>Make the change, watch it apply, and <strong>lower both back</strong>.</li>
+</ol>
+<p><strong>Why the default stays at 10, and why 100 is not the answer.</strong> A service's first sync after its state is lost is
+bounded by nothing, because there is no earlier bundle to compare to. port49d's bound is then the only thing between
+a partial NetBox page and most of the fleet leaving admission, and those devices then get no answer from port49.
+Ten percent is large enough that a normal week of racking and decommissioning passes, and small enough that a
+source failure does not. Do a deliberate removal in daytime, with the source's owner reachable.</p>
+<h2 id="quarantine">Quarantine<a class="headerlink" href="#quarantine" title="Permanent link">&para;</a></h2>
+<p>Some checks need both the policy and the inventory:</p>
+<ul>
+<li>a privilege level a platform cannot number;</li>
+<li>a session reply above the grant's ceiling;</li>
+<li>a role landing above the ceiling;</li>
+<li><code>enable: auto</code> on a platform whose enable exchange carries no principal.</li>
+</ul>
+<p>A device racked tomorrow with a new platform can fail them against a policy that was valid today. Refusing the
+whole bundle would block every inventory change fleet-wide. Instead port49 <strong>quarantines the device</strong>: it is
+published with <code>admission: quarantined</code> and the reason, and the rest of the fleet moves on.</p>
+<p>What the operator sees:</p>
+<ul>
+<li>port49d's reload line counts them: <code>inventory reloaded (...): ...; N device(s) quarantined now, M before; ...</code>,
+  and each quarantined device is logged with its cause at start and at every reload that loads.</li>
+<li><code>port49_devices_quarantined</code> is the count in force now. <code>port49 policy test</code> ends with
+  <code>... 0 quarantined, 0 projection refusals</code>.</li>
+<li>A mint for the device is refused <code>device_quarantined</code>, and its connection is <strong>closed without a reply</strong>, as for
+  <code>device_unknown</code>.</li>
+</ul>
+<p><strong>Silence, not FAIL, on purpose.</strong> The device sees a dead server and falls to its local method, which is the
+posture every platform documents for an outage and the one the reference AAA configuration covers. An answer of
+FAIL would tell the device that AAA is healthy and refuses everyone. Break-glass therefore works on a quarantined
+device. The close was measured on Arista, Cisco IOS XE, Cisco NX-OS and Juniper images
+(spec §10; spec §14 for a quarantine through a sync), and how long break-glass takes with <code>single-connection</code> on is
+per platform, in the <a href="../devices/">device pages</a>.</p>
+<p><strong>Quarantine means port49 cannot compute a correct policy for the device, not that the device is suspect.</strong>
+The way out is the change the cause names: a policy edit that the next reload applies, an adapter or platform-set
+change, or a corrected attribute in the source. The service's next sync reports the device no longer quarantined.
+Do not clear one by weakening a ceiling to make the check pass; read the cause first.</p>
+<h2 id="verifying-a-change-before-it-lands">Verifying a change before it lands<a class="headerlink" href="#verifying-a-change-before-it-lands" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>port49 policy test --policy FILE --inventory FILE</code> reports quarantines, admission refusals and projection
+  refusals for the inventory you give it.</li>
+<li><code>port49 inventory diff --policy FILE OLD NEW</code> shows the devices a change removes or re-admits, and the bound.</li>
+<li><code>port49 inventory export --service URL ... --verify-key FILE</code> writes a verified copy of the bundle the service
+  publishes. Without <code>--from</code> it accepts an older genuine bundle, and its header names the sequence, so read the
+  header before you compare.</li>
+<li><code>port49 explain --policy FILE --inventory FILE --subject NAME --device NAME</code> answers what a subject can do on a
+  device, including a device that is only in your candidate inventory.</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

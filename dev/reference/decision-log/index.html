@@ -1,0 +1,3743 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The fields of the decision log, one line per decision, and how to query it.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/reference/decision-log/">
+      
+      
+        <link rel="prev" href="../reason-codes/">
+      
+      
+        <link rel="next" href="../metrics/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Decision log - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#decision-log" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Decision log
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Events
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Events">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#report-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Report events
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tls_outcome" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The tls_outcome values
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#packet_fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        packet_fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-log-never-holds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the log never holds
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Events
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Events">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#report-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Report events
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tls_outcome" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The tls_outcome values
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#packet_fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        packet_fields
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-log-never-holds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the log never holds
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<!-- generated by make docs from code; do not edit -->
+
+<h1 id="decision-log">Decision log<a class="headerlink" href="#decision-log" title="Permanent link">&para;</a></h1>
+<p>port49 writes one JSON record for every decision it makes, and each record is one line of the log. The log is
+port49's own record of what it decided, for whom and against which rule. It is separate from the accounting
+records a device sends, which report what a device did. Every key is snake_case.</p>
+<p>Every record has the same envelope: <code>ts</code>, <code>event</code> and, for a decision, <code>verdict</code> and <code>reason</code>. The blocks
+that follow (<code>auth</code>, <code>device</code>, <code>session</code> and the rest) appear on the records they apply to. Most fields are
+left out of a record when they have no value, so a query must treat a missing key as "not set".</p>
+<p>A record that names its policy blob can be replayed offline and must give the same verdict. The
+<a href="../reason-codes/">reason codes</a> page lists every value of <code>reason</code>.</p>
+<p>The meanings are the policy-engine spec's own text, so a section or decision number in one points into <a href="https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md">the spec</a>. A lab ID in a meaning is an entry of the spec's lab register, marked open or closed. It stays open until a lab test has measured the behavior it names, and a claim that cites an open entry is not yet measured.</p>
+<h2 id="events">Events<a class="headerlink" href="#events" title="Permanent link">&para;</a></h2>
+<p>A decision event records one decision, with a verdict and a reason.</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Emitted by</th>
+<th>What it decides</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mint</code></td>
+<td>broker</td>
+<td>which grants matched, which roles composed, which blob resulted. A record a sweep page writes through the mint (<code>POST /v1/tokens</code> by <code>scope</code>) carries <code>sweep: {scope, after}</code>; the revocation re-check's records after the mint do not (§13 decision 42 ruling 4). A record of a device under a per-login requirement carries <code>per_login_mfa: {accept, reuse_for_seconds, levels, method, proved_at, reused}</code> (§5.1.5)</td>
+</tr>
+<tr>
+<td><code>redeem</code></td>
+<td>daemon</td>
+<td>whether a presented credential is valid, and creates the context</td>
+</tr>
+<tr>
+<td><code>authorize_session</code></td>
+<td>daemon</td>
+<td>the session and its returned attributes (§6)</td>
+</tr>
+<tr>
+<td><code>authorize_command</code></td>
+<td>daemon</td>
+<td>one command vector</td>
+</tr>
+<tr>
+<td><code>escalate</code></td>
+<td>daemon</td>
+<td>an <code>enable</code> exchange, attributed to the principal (§7)</td>
+</tr>
+<tr>
+<td><code>refresh</code></td>
+<td>broker</td>
+<td>whether a live context takes the policy now in force, or is revoked (§5.1.3); or, on a session refresh (<code>/v1/refresh</code>), whether it is extended, with <code>session.auth_time</code> and <code>session.session_expires</code> (§5.6); or, on a policy refresh, <code>session.session_expires</code> where the ceiling moved earlier. A context on a platform that never asks about a command carries <code>session.unreached: true</code> (decision 21). On a session refresh, a context under a requirement no proof covers is <code>deny per_login_mfa_required</code>, not extended (§5.1.5). A refresh record under a requirement carries <code>per_login_mfa: {…}</code> as the mint's does</td>
+</tr>
+<tr>
+<td><code>revoke</code></td>
+<td>broker</td>
+<td>a revocation by principal or by certificate (§5.1.4): what it reached, and the live contexts it could not; a revocation lifted; or, over HTTP, a principal ending its own sessions (<code>by: self</code>) or a <code>(device, username)</code> key ended (<code>by: key</code>), neither leaving a mark</td>
+</tr>
+<tr>
+<td><code>identity</code></td>
+<td>broker</td>
+<td>what <code>GET /v1/identity</code> resolved the caller to: <code>permit grants_matched</code> when its subject holds a grant unexpired now, else <code>deny no_grants_matched</code> (design document §17)</td>
+</tr>
+<tr>
+<td><code>explain</code></td>
+<td>broker</td>
+<td>a hypothetical decision <code>POST /v1/explain</code> answered, about the caller or, under <code>explain_others</code>, another principal: its verdict and reason are the answer given, or <code>deny api_right_missing</code>. It authorizes nothing, and replay passes over it</td>
+</tr>
+<tr>
+<td><code>issue</code></td>
+<td>broker</td>
+<td>whether a person's sign-in is exchanged for a port49-issued certificate: an OIDC sign-in at <code>POST /v1/certificate</code> (§13 decision 43 ruling 8), or a directory-password sign-in at <code>POST /v1/sign-in</code> or <code>/v1/sign-in/confirm</code> (§13 decision 47): <code>permit certificate_issued</code>, carrying <code>certificate: {serial, issuer, fingerprint, not_after}</code> and <code>auth.oidc</code> or <code>auth.directory_password: {amr, auth_time, entry_sha256}</code>, or a deny with the refusal's reason. A directory sign-in's record carries <code>sign_in: {source}</code>, and on a deny <code>failed</code> (<code>name</code>, <code>second_factor</code>, <code>second_factor_skew</code>, <code>password</code>, <code>directory_state</code>, <code>enrollment</code>, <code>principal_limit</code>, <code>source_limit</code>) with <code>skew_seconds</code>, <code>directory_result</code> and <code>directory_data</code> where they apply. It never carries the name typed, the password, the code or the secret. A broker that cannot issue (<code>issuance_unavailable</code>) records nothing</td>
+</tr>
+<tr>
+<td><code>per_login_mfa</code></td>
+<td>broker</td>
+<td>whether a per-login proof posted to <code>POST /v1/mfa</code> is accepted (§5.1.5; §13 decision 45): <code>permit per_login_mfa_proved</code> or <code>deny per_login_mfa_refused</code>, carrying <code>per_login_mfa: {method, challenge_sha256}</code>. A proof the broker cannot judge (<code>store_unavailable</code>) records that</td>
+</tr>
+<tr>
+<td><code>admin_touch</code></td>
+<td>broker</td>
+<td>an admin-level call's proof outcome (§5.1.6; §13 decision 54 ruling 15): <code>deny admin_touch_required</code> (a challenge was issued, nothing done), <code>permit admin_touch_proved</code> (the operation's own record follows), <code>deny admin_touch_refused</code> or <code>deny admin_touch_unavailable</code>, carrying <code>admin: {operation, target, challenge_sha256, why}</code>, where <code>why</code> is on a refusal or an unavailable answer one of a closed set of fixed words and never text from the request: <code>no_roots</code>, <code>bearer</code>, <code>no_client_certificate</code>, <code>no_exporter</code>, <code>malformed_proof</code>, <code>unknown_challenge</code>, <code>touch_slot_chain</code>, <code>session_slot_chain</code>, <code>device_mismatch</code>, <code>touch_policy</code>, <code>session_key</code>, <code>bad_signature</code>. A record never carries the challenge, the signature, the attestations or the exporter value; the cause text is in the API answer alone</td>
+</tr>
+<tr>
+<td><code>enroll</code></td>
+<td>broker</td>
+<td>whether a person's TOTP second factor is enrolled (<code>POST /v1/sign-in/confirm</code>; §13 decision 47 ruling 4): <code>permit second_factor_enrolled</code>, carrying <code>auth.directory_password</code> and <code>sign_in: {source}</code>, or a deny with the sign-in's reasons. Every enrollment is alertable: inside an enrollment window a stolen password enrolls the thief's authenticator</td>
+</tr>
+<tr>
+<td><code>blob</code></td>
+<td>broker</td>
+<td>not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="report-events">Report events<a class="headerlink" href="#report-events" title="Permanent link">&para;</a></h3>
+<p>A report event shares the envelope but is not a decision: it carries no verdict.</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Emitted by</th>
+<th>What it reports</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>account</code></td>
+<td>daemon</td>
+<td>A device's accounting record: what the device did, after the fact. It carries the <code>record</code> block and no <code>policy</code> block.</td>
+</tr>
+<tr>
+<td><code>account_gap</code></td>
+<td>daemon</td>
+<td>Accounting records port49 received and did not write to the log, with the <code>gap</code> block: the stage, how many and since when. A window with a gap cannot say a device did not ask.</td>
+</tr>
+<tr>
+<td><code>unvalidated</code></td>
+<td>daemon</td>
+<td>A packet no key validated, or a connection the listener refused or ended: the <code>unvalidated</code> block, with a diagnosis, the cleartext header fields and a hash of the body. Never the body.</td>
+</tr>
+<tr>
+<td><code>inventory_change</code></td>
+<td>daemon and broker</td>
+<td>One security-relevant change a policy or inventory swap made, in the <code>change</code> block, with the device in the <code>device</code> block. <code>port49_inventory_changes_total{kind}</code> counts them.</td>
+</tr>
+<tr>
+<td><code>directory_forget</code></td>
+<td>broker</td>
+<td>An operator ran <code>port49 directory forget</code> for a principal, which deleted the principal's directory membership and the entry it was pinned to. The <code>forget</code> block holds the entry.</td>
+</tr>
+<tr>
+<td><code>second_factor_reset</code></td>
+<td>broker</td>
+<td>An operator reset a person's second factor (<code>port49 directory reset-second-factor</code>), or <code>port49-broker init-enrollments</code> created the enrollment store. The <code>second_factor_reset</code> block holds the cleared enrollment.</td>
+</tr>
+<tr>
+<td><code>sign_in_unlock</code></td>
+<td>broker</td>
+<td>An operator cleared a principal's failed-attempt count (<code>port49 directory unlock</code>). The <code>sign_in_unlock</code> block holds the count the broker held.</td>
+</tr>
+<tr>
+<td><code>enrollments_import</code></td>
+<td>broker</td>
+<td>An operator ran <code>port49 directory import</code>, which filled or replaced the enrollment store. The <code>enrollments_import</code> block holds the record count and the export time.</td>
+</tr>
+<tr>
+<td><code>generic_platform</code></td>
+<td>daemon</td>
+<td>port49d serves an admitted device whose platform has no adapter, with the set's generic adapter. One record per such device at start and at each bundle swap. It carries no verdict, and the broker does not write it.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="fields">Fields<a class="headerlink" href="#fields" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td>timestamp</td>
+<td>When the record was written, as an RFC 3339 timestamp.</td>
+</tr>
+<tr>
+<td><code>event</code></td>
+<td>string</td>
+<td>What the record is about. The two events tables list each value: the decision events and what they decide, then the report events.</td>
+</tr>
+<tr>
+<td><code>verdict</code></td>
+<td>string</td>
+<td><code>permit</code> or <code>deny</code>. Absent on the report events, which decide nothing, and on an <code>explain</code> that answered with a mint error.</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>string</td>
+<td>Why the verdict is what it is: one value of the closed reason vocabulary.</td>
+</tr>
+<tr>
+<td><code>principal</code></td>
+<td>string</td>
+<td>Who the decision was about.</td>
+</tr>
+<tr>
+<td><code>auth.method</code></td>
+<td>string</td>
+<td>How the caller authenticated.</td>
+</tr>
+<tr>
+<td><code>auth.credential_sha256</code></td>
+<td>string</td>
+<td>The SHA-256 of the credential presented on the wire. The credential itself is never logged. A mint record has no value here and carries <code>mint.token_sha256</code> for each token it issued.</td>
+</tr>
+<tr>
+<td><code>auth.fingerprint</code></td>
+<td>string</td>
+<td>The SHA-256 of a client certificate that the trust anchor verified and the broker then refused. It says whose certificate it was. Identity, not a secret.</td>
+</tr>
+<tr>
+<td><code>auth.directory.source</code></td>
+<td>string</td>
+<td>Where the directory membership this decision used came from: <code>fresh</code> (read from a server for this request) or <code>grace</code> (the stored membership, still inside the grace period).</td>
+</tr>
+<tr>
+<td><code>auth.directory.verified_at</code></td>
+<td>string</td>
+<td>When the membership was last verified against the directory.</td>
+</tr>
+<tr>
+<td><code>auth.directory.server</code></td>
+<td>string</td>
+<td>The directory server the membership was read from.</td>
+</tr>
+<tr>
+<td><code>auth.directory.site</code></td>
+<td>string</td>
+<td>The directory site the membership was read from.</td>
+</tr>
+<tr>
+<td><code>auth.oidc.issuer</code></td>
+<td>string</td>
+<td>The issuer of the verified OIDC token.</td>
+</tr>
+<tr>
+<td><code>auth.oidc.sub</code></td>
+<td>string</td>
+<td>The subject of the verified OIDC token.</td>
+</tr>
+<tr>
+<td><code>auth.oidc.sid</code></td>
+<td>string</td>
+<td>The identity provider's own session id, when the token carries one.</td>
+</tr>
+<tr>
+<td><code>auth.oidc.amr</code></td>
+<td>list of string</td>
+<td>The token's authentication methods references. Recorded because how someone authenticated cannot be established afterwards. No decision reads it.</td>
+</tr>
+<tr>
+<td><code>auth.oidc.acr</code></td>
+<td>string</td>
+<td>The token's authentication context class reference. Recorded and read by nothing.</td>
+</tr>
+<tr>
+<td><code>auth.oidc.auth_time</code></td>
+<td>string</td>
+<td>When the identity provider says the person authenticated.</td>
+</tr>
+<tr>
+<td><code>auth.k8s.cluster</code></td>
+<td>string</td>
+<td>The configured name of the cluster whose verifier accepted the service account token.</td>
+</tr>
+<tr>
+<td><code>auth.k8s.issuer</code></td>
+<td>string</td>
+<td>The issuer of the verified service account token.</td>
+</tr>
+<tr>
+<td><code>auth.k8s.sub</code></td>
+<td>string</td>
+<td>The subject of the verified service account token.</td>
+</tr>
+<tr>
+<td><code>auth.k8s.serviceaccount_uid</code></td>
+<td>string</td>
+<td>The UID of the service account.</td>
+</tr>
+<tr>
+<td><code>auth.k8s.pod</code></td>
+<td>string</td>
+<td>The name of the pod the token was issued to.</td>
+</tr>
+<tr>
+<td><code>auth.k8s.pod_uid</code></td>
+<td>string</td>
+<td>The UID of the pod the token was issued to.</td>
+</tr>
+<tr>
+<td><code>auth.k8s.node</code></td>
+<td>string</td>
+<td>The node the pod ran on, when the token names one.</td>
+</tr>
+<tr>
+<td><code>auth.k8s.jti</code></td>
+<td>string</td>
+<td>The token's id, when it carries one.</td>
+</tr>
+<tr>
+<td><code>auth.directory_password.amr</code></td>
+<td>list of string</td>
+<td>The methods a directory-password sign-in used.</td>
+</tr>
+<tr>
+<td><code>auth.directory_password.auth_time</code></td>
+<td>string</td>
+<td>When the sign-in authenticated.</td>
+</tr>
+<tr>
+<td><code>auth.directory_password.entry_sha256</code></td>
+<td>string</td>
+<td>A SHA-256 of the directory entry that signed in. Never the password or the code.</td>
+</tr>
+<tr>
+<td><code>device.nas</code></td>
+<td>string</td>
+<td>The device's address as port49 saw it.</td>
+</tr>
+<tr>
+<td><code>device.name</code></td>
+<td>string</td>
+<td>The device's name in the inventory.</td>
+</tr>
+<tr>
+<td><code>device.platform</code></td>
+<td>string</td>
+<td>The device's platform in the inventory.</td>
+</tr>
+<tr>
+<td><code>device.key_ref</code></td>
+<td>string</td>
+<td>The key that validated the exchange. Set on every record of a validated exchange and on no other. A record from the TLS listener has none.</td>
+</tr>
+<tr>
+<td><code>device.key_version</code></td>
+<td>integer</td>
+<td>The version of that key. <code>port49 keys status</code> reads a rotation's phase-out from it.</td>
+</tr>
+<tr>
+<td><code>device.transport</code></td>
+<td>string</td>
+<td><code>tls</code> on a record from the TACACS+ over TLS (RFC 9887) listener. Absent on the RFC 8907 listener's records.</td>
+</tr>
+<tr>
+<td><code>device.cert_sha256</code></td>
+<td>string</td>
+<td>On a TLS record, the SHA-256 of the device's verified leaf certificate.</td>
+</tr>
+<tr>
+<td><code>session.ctx_id</code></td>
+<td>string</td>
+<td>The id of the context (the session state port49 holds for a login). It joins the records of one login.</td>
+</tr>
+<tr>
+<td><code>session.username</code></td>
+<td>string</td>
+<td>The username the device sent. Left empty when the device sent a token-shaped username, which the log never carries.</td>
+</tr>
+<tr>
+<td><code>session.username_redacted</code></td>
+<td>boolean</td>
+<td><code>true</code> when the device sent a token-shaped username and it was left out of <code>session.username</code>.</td>
+</tr>
+<tr>
+<td><code>session.replaced_ctx_id</code></td>
+<td>string</td>
+<td>On a <code>redeem</code> that replaced an existing context for the same device and username, the id of the displaced context. A second login by the same principal joins the context and sets nothing here.</td>
+</tr>
+<tr>
+<td><code>session.replaced_unreadable</code></td>
+<td>boolean</td>
+<td><code>true</code> when the replaced context could not be opened (sealed under a key that has left the two-key window, or failing authentication), so its id cannot be named.</td>
+</tr>
+<tr>
+<td><code>session.revoked_at</code></td>
+<td>string</td>
+<td>On a <code>redeem</code> refused <code>credential_revoked</code>, when the revocation that refused it was made.</td>
+</tr>
+<tr>
+<td><code>session.privilege_clamped.from</code></td>
+<td>integer</td>
+<td>The privilege level the context held before a login joined it.</td>
+</tr>
+<tr>
+<td><code>session.privilege_clamped.to</code></td>
+<td>integer</td>
+<td>The level it was lowered to, which is the newest login's ceiling. Another window's next command above this level is denied <code>privilege_exceeded</code>.</td>
+</tr>
+<tr>
+<td><code>session.auth_time</code></td>
+<td>string</td>
+<td>On a <code>refresh</code> record that moved it, the session's new authentication time.</td>
+</tr>
+<tr>
+<td><code>session.session_expires</code></td>
+<td>string</td>
+<td>On a <code>refresh</code> record that moved it, the session's new ceiling; on a <code>redeem</code> refused <code>session_expired</code>, the ceiling that refused it.</td>
+</tr>
+<tr>
+<td><code>session.unreached</code></td>
+<td>boolean</td>
+<td><code>true</code> on a <code>refresh</code> record for a context on a platform that never asks about a command, or on a device whose inventory entry gives no platform. The live session keeps what it had.</td>
+</tr>
+<tr>
+<td><code>session.port</code></td>
+<td>string</td>
+<td>The port (tty) the device reported on this exchange.</td>
+</tr>
+<tr>
+<td><code>session.rem_addr</code></td>
+<td>string</td>
+<td>The remote address the device reported on this exchange.</td>
+</tr>
+<tr>
+<td><code>session.privilege</code></td>
+<td>integer</td>
+<td>On <code>authorize_session</code> and <code>authorize_command</code>, the privilege level in the request's header, which is the level the device asked at. On other events, what that event says: a refresh's is the context's level and a redeem's is the login's start level.</td>
+</tr>
+<tr>
+<td><code>session.held_privilege</code></td>
+<td>integer</td>
+<td>The privilege level port49 held for the context when the request arrived, before any raise this request makes. Present on authorize records whose context was read and is this user's, denials included. Compare it with <code>session.privilege</code> to see what the device asked for against what port49 held.</td>
+</tr>
+<tr>
+<td><code>request.service</code></td>
+<td>string</td>
+<td>The <code>service</code> attribute of the request. Recorded on every <code>authorize_session</code> and <code>authorize_command</code> record, denials included, so it can be grouped by. It is checked against the platform's session services and nothing else.</td>
+</tr>
+<tr>
+<td><code>request.raw</code></td>
+<td>list of string</td>
+<td>The request's arguments as the device sent them, after redaction: a word that matches a secret rule is replaced with <code>«redacted»</code> first, and <code>request.redacted</code> says so.</td>
+</tr>
+<tr>
+<td><code>request.vector</code></td>
+<td>list of string</td>
+<td>The request's command as a list of words.</td>
+</tr>
+<tr>
+<td><code>request.redacted</code></td>
+<td>boolean</td>
+<td><code>true</code> when words were replaced with <code>«redacted»</code> before the record was written. A secret is never logged.</td>
+</tr>
+<tr>
+<td><code>packet_fields.action</code></td>
+<td>string</td>
+<td>The authentication action, as a name. Authentication requests only.</td>
+</tr>
+<tr>
+<td><code>packet_fields.authen_type</code></td>
+<td>string</td>
+<td>The authentication type, as a name.</td>
+</tr>
+<tr>
+<td><code>packet_fields.service</code></td>
+<td>string</td>
+<td>The authentication service, as a name.</td>
+</tr>
+<tr>
+<td><code>packet_fields.authen_method</code></td>
+<td>string</td>
+<td>The authentication method, as a name. Authorization and accounting requests only.</td>
+</tr>
+<tr>
+<td><code>packet_fields.priv_lvl</code></td>
+<td>integer</td>
+<td>The privilege level in the request header.</td>
+</tr>
+<tr>
+<td><code>reply.attributes</code></td>
+<td>list of string</td>
+<td>The attributes a permitted authorization returned to the device, as sent, with every placeholder filled.</td>
+</tr>
+<tr>
+<td><code>flags</code></td>
+<td>string</td>
+<td>On an <code>account</code> record, the accounting flags the device sent, such as <code>stop</code>.</td>
+</tr>
+<tr>
+<td><code>attribution</code></td>
+<td>string</td>
+<td>On an <code>account</code> record, whether the record was tied to a login port49 knows. <code>resolved</code>: it was. <code>foreign</code>: a record for a session whose start port49 never saw, on a device where it did watch this user's other sessions begin (a local fallback, a console login, or a device-local account with the same name); this is the value to alert on, and <code>port49_accounting_attributions_total{attribution="foreign"}</code> counts it. <code>system</code>: the device acting on its own behalf. <code>unattributed</code>: none of these.</td>
+</tr>
+<tr>
+<td><code>task_id</code></td>
+<td>string</td>
+<td>The <code>task_id</code> of an accounting record.</td>
+</tr>
+<tr>
+<td><code>record.raw</code></td>
+<td>list of string</td>
+<td>On an <code>account</code> record, the accounting arguments as the device sent them, after redaction: a word that matches a secret rule is replaced with <code>«redacted»</code> before the record is written, and <code>record.redacted</code> says so.</td>
+</tr>
+<tr>
+<td><code>record.vector</code></td>
+<td>list of string</td>
+<td>On an <code>account</code> record, the command as a list of words.</td>
+</tr>
+<tr>
+<td><code>record.redacted</code></td>
+<td>boolean</td>
+<td><code>true</code> when words were replaced before the accounting record was written, so no secret reaches the disk.</td>
+</tr>
+<tr>
+<td><code>record.priv_lvl</code></td>
+<td>integer</td>
+<td>The privilege level in the accounting record.</td>
+</tr>
+<tr>
+<td><code>record.start_time</code></td>
+<td>integer</td>
+<td>The device's start time for the task, when it sent one.</td>
+</tr>
+<tr>
+<td><code>record.stop_time</code></td>
+<td>integer</td>
+<td>The device's stop time for the task, when it sent one.</td>
+</tr>
+<tr>
+<td><code>record.elapsed_time</code></td>
+<td>integer</td>
+<td>The device's elapsed time for the task, when it sent one.</td>
+</tr>
+<tr>
+<td><code>mint.token_sha256</code></td>
+<td>list of string</td>
+<td>The SHA-256 of each token the mint issued. The token itself never appears in the log.</td>
+</tr>
+<tr>
+<td><code>mint.ttl_seconds</code></td>
+<td>integer</td>
+<td>How long the minted tokens live, in seconds.</td>
+</tr>
+<tr>
+<td><code>mint.blob</code></td>
+<td>string</td>
+<td>The hash of the policy blob the mint resulted in.</td>
+</tr>
+<tr>
+<td><code>policy.bundle</code></td>
+<td>string</td>
+<td>The policy version the blob was compiled from.</td>
+</tr>
+<tr>
+<td><code>policy.blob</code></td>
+<td>string</td>
+<td>The hash of the compiled blob the decision was made against. With <code>policy.bundle</code>, it is what makes the record replayable.</td>
+</tr>
+<tr>
+<td><code>policy.subject</code></td>
+<td>string</td>
+<td>The subject that matched the principal.</td>
+</tr>
+<tr>
+<td><code>policy.subjects</code></td>
+<td>list of string</td>
+<td>Every subject that matched, sorted, when the principal matches more than one. <code>policy.subject</code> is then absent.</td>
+</tr>
+<tr>
+<td><code>policy.grants.[].scope</code></td>
+<td>string</td>
+<td>On a mint record, the scope of a grant that selected the device.</td>
+</tr>
+<tr>
+<td><code>policy.grants.[].roles</code></td>
+<td>list of string</td>
+<td>The roles that grant gives.</td>
+</tr>
+<tr>
+<td><code>policy.grants.[].expires</code></td>
+<td>string</td>
+<td>When the grant stops matching. Empty means never.</td>
+</tr>
+<tr>
+<td><code>policy.matched_deny.rule</code></td>
+<td>list of string</td>
+<td>The rule's terms as written.</td>
+</tr>
+<tr>
+<td><code>policy.matched_deny.specificity</code></td>
+<td>list of integer</td>
+<td>The specificity tuple the rule scored against this command.</td>
+</tr>
+<tr>
+<td><code>policy.matched_deny.role</code></td>
+<td>string</td>
+<td>The role that carries the rule. The rule is the deny that decided a <code>no_permit_dominates_deny</code>, or the most specific deny a permit overrode.</td>
+</tr>
+<tr>
+<td><code>policy.matched_permits.[].rule</code></td>
+<td>list of string</td>
+<td>The rule's terms as written.</td>
+</tr>
+<tr>
+<td><code>policy.matched_permits.[].specificity</code></td>
+<td>list of integer</td>
+<td>The specificity tuple the rule scored against this command.</td>
+</tr>
+<tr>
+<td><code>policy.matched_permits.[].role</code></td>
+<td>string</td>
+<td>The role that carries the rule. The permits that matched the command are listed most specific first, and the first decided a permit.</td>
+</tr>
+<tr>
+<td><code>policy.stage</code></td>
+<td>integer</td>
+<td>The 1-based pipeline stage that a <code>pipe_stage_denied</code> refused. The stage's words are in <code>request.raw</code>.</td>
+</tr>
+<tr>
+<td><code>blob.hash</code></td>
+<td>string</td>
+<td>The hash that names the blob.</td>
+</tr>
+<tr>
+<td><code>blob.body</code></td>
+<td>object</td>
+<td>On a <code>blob</code> record, the compiled blob whole, emitted once per hash, so replay depends on the log alone.</td>
+</tr>
+<tr>
+<td><code>blob.redacted</code></td>
+<td>boolean</td>
+<td><code>true</code> when rule text in the body was redacted before it was logged. The body is then not the blob the hash names, and replay reports every record that names it unverifiable.</td>
+</tr>
+<tr>
+<td><code>unvalidated.source</code></td>
+<td>string</td>
+<td>The source address of a packet no key validated.</td>
+</tr>
+<tr>
+<td><code>unvalidated.diagnosis</code></td>
+<td>string</td>
+<td>Why the packet or connection is on this record. <code>no_known_key_matches</code>: no key of the device's <code>key_ref</code> validates it. <code>matches_retired</code>: a retired key validates it, and <code>unvalidated.version</code> says which. <code>unencrypted_refused</code>: the packet was not obfuscated. <code>not_tacacs</code>: the header is not TACACS+. <code>unadmitted_source</code>: the source address is not in the inventory. <code>malformed_after_validation</code>: the key validated and the body did not decode. <code>device_quarantined</code>: the device is admitted but quarantined by policy. <code>admission_refused</code>: the device is in the inventory and admission refused it. <code>admission_withdrawn</code>: a reload renamed, re-keyed or re-platformed the device of an open connection. <code>transport_mismatch</code>: the device reached the listener it does not speak. <code>tls_refused</code>: the TLS listener refused or ended the connection, and <code>unvalidated.tls_outcome</code> says why. <code>obfuscated_over_tls</code>: a packet over TLS with the unencrypted flag clear.</td>
+</tr>
+<tr>
+<td><code>unvalidated.key_ref</code></td>
+<td>string</td>
+<td>The key tried, when there was one.</td>
+</tr>
+<tr>
+<td><code>unvalidated.version</code></td>
+<td>integer</td>
+<td>The version of the key (the numbered version within the device's <code>key_ref</code>) that the packet matched, or that the connection speaks. During a key rotation, a <code>matches_retired</code> record carries the retired version a device is still using, which is how you find the devices that have not moved to the new key. Absent where no key matched.</td>
+</tr>
+<tr>
+<td><code>unvalidated.type</code></td>
+<td>integer</td>
+<td>The packet type in the header.</td>
+</tr>
+<tr>
+<td><code>unvalidated.seq_no</code></td>
+<td>integer</td>
+<td>The sequence number in the header.</td>
+</tr>
+<tr>
+<td><code>unvalidated.session_id</code></td>
+<td>integer</td>
+<td>The session id in the header.</td>
+</tr>
+<tr>
+<td><code>unvalidated.length</code></td>
+<td>integer</td>
+<td>The body length in the header.</td>
+</tr>
+<tr>
+<td><code>unvalidated.body_sha256</code></td>
+<td>string</td>
+<td>The SHA-256 of the body. The body itself is never logged.</td>
+</tr>
+<tr>
+<td><code>unvalidated.transport</code></td>
+<td>string</td>
+<td><code>tls</code> on a record from the TLS listener.</td>
+</tr>
+<tr>
+<td><code>unvalidated.tls_outcome</code></td>
+<td>string</td>
+<td>On a record with <code>diagnosis: tls_refused</code>, why the handshake was refused. See the values below.</td>
+</tr>
+<tr>
+<td><code>unvalidated.detail</code></td>
+<td>string</td>
+<td>A bounded, printable note on a record from the TLS listener, or on a <code>transport_mismatch</code> record from either listener (which names the transport the device record says and the listener it reached). It is never a body.</td>
+</tr>
+<tr>
+<td><code>unvalidated.cert_sha256</code></td>
+<td>string</td>
+<td>On a record with <code>diagnosis: tls_refused</code>, the SHA-256 of the certificate the device sent, where it sent one.</td>
+</tr>
+<tr>
+<td><code>server_msg</code></td>
+<td>string</td>
+<td>The message the reply carried to the person at the device. A denial's names the rule that decided and does not echo the command.</td>
+</tr>
+<tr>
+<td><code>gap.stage</code></td>
+<td>string</td>
+<td>Where accounting records were dropped: <code>offer_refused</code> (answered <code>ERROR</code>, so the device may send the record again), <code>drain_unparseable</code> or <code>drain_set_aside</code> (answered <code>SUCCESS</code> and not in the log).</td>
+</tr>
+<tr>
+<td><code>gap.records</code></td>
+<td>integer</td>
+<td>How many accounting records were dropped at this stage.</td>
+</tr>
+<tr>
+<td><code>gap.since</code></td>
+<td>string</td>
+<td>The earliest arrival among the dropped records, as far as the spool knows it.</td>
+</tr>
+<tr>
+<td><code>change.kind</code></td>
+<td>string</td>
+<td>What changed. Only security-relevant changes are written: <code>device_added</code> (a device added and admitted), <code>admission_changed</code> (a device already in the inventory becoming admitted), <code>address_added</code> (an address added to a device already in the inventory), <code>key_ref_changed</code>, <code>transport_changed</code> and <code>platform_changed</code> (a device's key assignment, <code>transport</code> or <code>platform</code> changed), and <code>scope_joined</code> or <code>scope_left</code> (a device entering or leaving a scope with <code>security_log: true</code>).</td>
+</tr>
+<tr>
+<td><code>change.scope</code></td>
+<td>string</td>
+<td>The scope involved, when the change names one.</td>
+</tr>
+<tr>
+<td><code>change.address</code></td>
+<td>string</td>
+<td>The address involved, when the change names one.</td>
+</tr>
+<tr>
+<td><code>change.from</code></td>
+<td>string</td>
+<td>The earlier value, on <code>key_ref_changed</code>, <code>transport_changed</code>, <code>platform_changed</code> and <code>admission_changed</code>.</td>
+</tr>
+<tr>
+<td><code>change.to</code></td>
+<td>string</td>
+<td>The later value, on those kinds and on <code>device_added</code>, where it is <code>admitted</code>.</td>
+</tr>
+<tr>
+<td><code>change.from_bundle</code></td>
+<td>string</td>
+<td>The policy version before the swap that made the change.</td>
+</tr>
+<tr>
+<td><code>change.to_bundle</code></td>
+<td>string</td>
+<td>The policy version after it.</td>
+</tr>
+<tr>
+<td><code>forget.entry_id</code></td>
+<td>string</td>
+<td>The id of the directory entry the principal was pinned to.</td>
+</tr>
+<tr>
+<td><code>forget.dn</code></td>
+<td>string</td>
+<td>The distinguished name of that entry.</td>
+</tr>
+<tr>
+<td><code>forget.verified_at</code></td>
+<td>string</td>
+<td>When the entry was last verified or refused.</td>
+</tr>
+<tr>
+<td><code>forget.refused</code></td>
+<td>boolean</td>
+<td><code>true</code> when the last answer for the entry was a refusal.</td>
+</tr>
+<tr>
+<td><code>forget.origin</code></td>
+<td>string</td>
+<td>Who asked for the principal to be forgotten.</td>
+</tr>
+<tr>
+<td><code>sweep.scope</code></td>
+<td>string</td>
+<td>On a mint record made through a sweep page, the scope the sweep walked.</td>
+</tr>
+<tr>
+<td><code>sweep.after</code></td>
+<td>string</td>
+<td>The page's cursor.</td>
+</tr>
+<tr>
+<td><code>revocation.by</code></td>
+<td>string</td>
+<td>What the revocation was made by, such as a principal or a certificate.</td>
+</tr>
+<tr>
+<td><code>revocation.issuer</code></td>
+<td>string</td>
+<td>The issuer of a certificate revoked by serial.</td>
+</tr>
+<tr>
+<td><code>revocation.serial</code></td>
+<td>string</td>
+<td>The serial of a certificate revoked by serial.</td>
+</tr>
+<tr>
+<td><code>revocation.oidc_issuer</code></td>
+<td>string</td>
+<td>The OIDC issuer of a session or subject ended by a back-channel logout or a revocation by <code>sid</code> or <code>sub</code>.</td>
+</tr>
+<tr>
+<td><code>revocation.sid</code></td>
+<td>string</td>
+<td>The OIDC session id that was ended.</td>
+</tr>
+<tr>
+<td><code>revocation.sub</code></td>
+<td>string</td>
+<td>The OIDC subject that was ended.</td>
+</tr>
+<tr>
+<td><code>revocation.principals</code></td>
+<td>list of string</td>
+<td>Every principal a logout reached, when its owner record named more than one. The record's <code>principal</code> is then the first.</td>
+</tr>
+<tr>
+<td><code>revocation.device</code></td>
+<td>string</td>
+<td>The device a revocation was limited to.</td>
+</tr>
+<tr>
+<td><code>revocation.username</code></td>
+<td>string</td>
+<td>The username a revocation was limited to.</td>
+</tr>
+<tr>
+<td><code>revocation.at</code></td>
+<td>string</td>
+<td>When the revocation was made.</td>
+</tr>
+<tr>
+<td><code>revocation.origin</code></td>
+<td>string</td>
+<td>Who made the revocation.</td>
+</tr>
+<tr>
+<td><code>revocation.contexts</code></td>
+<td>integer</td>
+<td>How many live contexts it reached. Zero is left out.</td>
+</tr>
+<tr>
+<td><code>revocation.token_keys</code></td>
+<td>integer</td>
+<td>How many token keys it reached. Zero is left out.</td>
+</tr>
+<tr>
+<td><code>revocation.connections</code></td>
+<td>integer</td>
+<td>How many connections it ended. Zero is left out.</td>
+</tr>
+<tr>
+<td><code>revocation.unreached.[].device</code></td>
+<td>string</td>
+<td>A live context the revocation could not reach: its device.</td>
+</tr>
+<tr>
+<td><code>revocation.unreached.[].username</code></td>
+<td>string</td>
+<td>A live context the revocation could not reach: its username.</td>
+</tr>
+<tr>
+<td><code>revocation.saved</code></td>
+<td>boolean</td>
+<td>Whether <code>broker.revocations_file</code> was written. Present for a standing mark only: absent for a self or key revocation, which writes none, and on a broker that keeps no <code>revocations_file</code>.</td>
+</tr>
+<tr>
+<td><code>revocation.error</code></td>
+<td>string</td>
+<td>What went wrong, when something did.</td>
+</tr>
+<tr>
+<td><code>explain.asked_by</code></td>
+<td>string</td>
+<td>The principal that asked the hypothetical question.</td>
+</tr>
+<tr>
+<td><code>explain.asked_by_fingerprint</code></td>
+<td>string</td>
+<td>The fingerprint of the certificate the asker presented.</td>
+</tr>
+<tr>
+<td><code>explain.command</code></td>
+<td>boolean</td>
+<td><code>true</code> when the question was about a command. The command itself is never recorded.</td>
+</tr>
+<tr>
+<td><code>explain.mint_error</code></td>
+<td>string</td>
+<td>The mint error the broker would have answered instead of a token. The record then has no verdict.</td>
+</tr>
+<tr>
+<td><code>certificate.serial</code></td>
+<td>string</td>
+<td>The serial of the certificate issued, as <code>port49 revoke --cert-serial</code> takes it.</td>
+</tr>
+<tr>
+<td><code>certificate.issuer</code></td>
+<td>string</td>
+<td>The distinguished name of the CA that issued it.</td>
+</tr>
+<tr>
+<td><code>certificate.fingerprint</code></td>
+<td>string</td>
+<td>Its SHA-256 fingerprint.</td>
+</tr>
+<tr>
+<td><code>certificate.not_after</code></td>
+<td>string</td>
+<td>When it expires.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa.accept</code></td>
+<td>list of string</td>
+<td>On a mint or refresh record under a per-login requirement, the proof methods the requirement accepts.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa.reuse_for_seconds</code></td>
+<td>integer</td>
+<td>How long a proof is reused for, in seconds.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa.levels</code></td>
+<td>list of string</td>
+<td>The privilege levels the requirement covers.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa.method</code></td>
+<td>string</td>
+<td>The method of the proof that covered the record, or of the proof a <code>per_login_mfa</code> record judged.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa.proved_at</code></td>
+<td>string</td>
+<td>When the covering proof was made.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa.reused</code></td>
+<td>boolean</td>
+<td><code>true</code> when an earlier proof was reused.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa.challenge_sha256</code></td>
+<td>string</td>
+<td>On a <code>per_login_mfa</code> record, the SHA-256 of the challenge. The challenge itself is never logged.</td>
+</tr>
+<tr>
+<td><code>admin.operation</code></td>
+<td>string</td>
+<td>On an <code>admin_touch</code> record, the operation the proof was for.</td>
+</tr>
+<tr>
+<td><code>admin.target</code></td>
+<td>string</td>
+<td>The operation's target, as the challenge shows it.</td>
+</tr>
+<tr>
+<td><code>admin.challenge_sha256</code></td>
+<td>string</td>
+<td>The SHA-256 of the challenge. The challenge, the signature and the attestation are never logged.</td>
+</tr>
+<tr>
+<td><code>admin.why</code></td>
+<td>string</td>
+<td>For a refusal or an unavailable answer, a fixed cause.</td>
+</tr>
+<tr>
+<td><code>sign_in.source</code></td>
+<td>string</td>
+<td>The source network a directory-password sign-in came from.</td>
+</tr>
+<tr>
+<td><code>sign_in.failed</code></td>
+<td>string</td>
+<td>On a refusal, which check failed.</td>
+</tr>
+<tr>
+<td><code>sign_in.skew_seconds</code></td>
+<td>integer</td>
+<td>For a clock too far off, by how many seconds.</td>
+</tr>
+<tr>
+<td><code>sign_in.directory_result</code></td>
+<td>integer</td>
+<td>The directory's result code, on a refusal that has one.</td>
+</tr>
+<tr>
+<td><code>sign_in.directory_data</code></td>
+<td>string</td>
+<td>The directory's diagnostic data, on a refusal that has one. Never the name typed, the password or the code.</td>
+</tr>
+<tr>
+<td><code>second_factor_reset.enrolled_at</code></td>
+<td>string</td>
+<td>When the enrollment that was cleared was made.</td>
+</tr>
+<tr>
+<td><code>second_factor_reset.enrolled_from</code></td>
+<td>string</td>
+<td>Where it was made from.</td>
+</tr>
+<tr>
+<td><code>second_factor_reset.reopen_until</code></td>
+<td>string</td>
+<td>Until when enrollment is open again. Absent on a store creation.</td>
+</tr>
+<tr>
+<td><code>second_factor_reset.all</code></td>
+<td>boolean</td>
+<td><code>true</code> for a reset of every enrollment.</td>
+</tr>
+<tr>
+<td><code>second_factor_reset.created</code></td>
+<td>boolean</td>
+<td><code>true</code> when the record is the creation of the enrollment store.</td>
+</tr>
+<tr>
+<td><code>second_factor_reset.origin</code></td>
+<td>string</td>
+<td>Who made the reset.</td>
+</tr>
+<tr>
+<td><code>sign_in_unlock.failures</code></td>
+<td>integer</td>
+<td>The failed-attempt count the answering broker held. Absent when its session store did not answer the clear: the unlock is then in force but the count is unknown, which is not zero.</td>
+</tr>
+<tr>
+<td><code>sign_in_unlock.origin</code></td>
+<td>string</td>
+<td>Who cleared the count.</td>
+</tr>
+<tr>
+<td><code>enrollments_import.records</code></td>
+<td>integer</td>
+<td>How many enrollment records the import wrote.</td>
+</tr>
+<tr>
+<td><code>enrollments_import.exported_at</code></td>
+<td>string</td>
+<td>When the imported export was made.</td>
+</tr>
+<tr>
+<td><code>enrollments_import.replaced</code></td>
+<td>boolean</td>
+<td><code>true</code> when the import replaced an existing store.</td>
+</tr>
+<tr>
+<td><code>enrollments_import.origin</code></td>
+<td>string</td>
+<td>Who ran the import.</td>
+</tr>
+<tr>
+<td><code>index_error</code></td>
+<td>string</td>
+<td>What a failed session-index write cost, on the record for the session that lost it. That session is missing from the index, so a later revocation cannot find it. This is different from <code>revocation.unreached</code>, which lists live contexts a revocation found and could not reach.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="tls_outcome">The tls_outcome values<a class="headerlink" href="#tls_outcome" title="Permanent link">&para;</a></h2>
+<p>A record from the RFC 9887 (TACACS+ over TLS) listener carries <code>transport: "tls"</code>. An <code>unvalidated</code> record with <code>diagnosis: tls_refused</code> carries the <code>tls_outcome</code> that says why the handshake was refused. The handshake counter <code>port49_tls_handshakes_total</code> uses the same values as its <code>outcome</code> label. Strike says whether the refusal counts against the source address, as a wrong key does.</p>
+<table>
+<thead>
+<tr>
+<th><code>tls_outcome</code></th>
+<th>Means</th>
+<th>Strike</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>version_refused</code></td>
+<td>The ClientHello offered no TLS 1.3.</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>no_client_certificate</code></td>
+<td>The device sent no certificate.</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>unknown_ca</code></td>
+<td>Its chain reaches no <code>client_ca_file</code> anchor.</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>certificate_expired</code></td>
+<td>A certificate in its chain is expired or not yet valid.</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>certificate_invalid</code></td>
+<td>Any other path error, a serverAuth-only leaf included.</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>certificate_revoked</code></td>
+<td>A certificate in its chain is revoked.</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>status_unavailable</code></td>
+<td>Its status could not be established under <code>on_unavailable: refuse</code>. A decline: the window stands until it lapses.</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>identity_mismatch</code></td>
+<td>The leaf does not name the device its source address is.</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>sni_mismatch</code></td>
+<td>The ClientHello asked for a server name not in <code>server_names</code>. A decline: the window stands until it lapses.</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>early_data_refused</code></td>
+<td>The ClientHello carried <code>early_data</code> (RFC 9887 section 5.1.2).</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>handshake_timeout</code></td>
+<td>No handshake within <code>handshake_timeout</code>.</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>handshake_failed</code></td>
+<td>Anything else: a bad signature, a client abort.</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p>Two more values are never in a record. They are label values of <code>port49_tls_handshakes_total</code> only, and both mean the device was admitted:</p>
+<ul>
+<li><code>ok</code>: The handshake completed and the device's certificate was admitted. Counted after the status check passes.</li>
+<li><code>resumed</code>: The handshake resumed an earlier TLS session and the device was admitted.</li>
+</ul>
+<h2 id="packet_fields">packet_fields<a class="headerlink" href="#packet_fields" title="Permanent link">&para;</a></h2>
+<p>A record for a validated request carries <code>packet_fields</code>: the request's header fields as names, not numbers. These are <code>action</code> (authentication only), <code>authen_type</code>, <code>service</code>, <code>authen_method</code> (authorization and accounting only) and <code>priv_lvl</code>. A value outside the protocol's list is written <code>unknown_&lt;n&gt;</code>, where <code>&lt;n&gt;</code> is the header byte. A record for an unvalidated packet has no <code>packet_fields</code>; it has the <code>unvalidated</code> block, which holds only cleartext header fields.</p>
+<h2 id="what-the-log-never-holds">What the log never holds<a class="headerlink" href="#what-the-log-never-holds" title="Permanent link">&para;</a></h2>
+<p>The log never contains a token, a password, a challenge or a response. A credential appears only as <code>credential_sha256</code>. The body of an unvalidated packet is never logged, only its hash. A token typed as a username leaves <code>session.username</code> empty and sets <code>session.username_redacted</code> to <code>true</code>.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

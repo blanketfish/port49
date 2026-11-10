@@ -1,0 +1,4874 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Every shipped alert rule: its severity, its expression and why its threshold is what it is.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/reference/alerts/">
+      
+      
+        <link rel="prev" href="../metrics/">
+      
+      
+        <link rel="next" href="../lab-register/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Alerts - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#alerts" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Alerts
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#thresholds-and-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thresholds and defaults
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The rules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#port49_target_down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_target_down
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_target_absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_target_absent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_broker_target_absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_broker_target_absent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_global_cap_shedding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_global_cap_shedding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_connections_near_cap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_connections_near_cap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_key_secret_files_changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_key_secret_files_changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_issuing_ca_missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_issuing_ca_missing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_issuing_ca_expiring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_issuing_ca_expiring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_key_retirement_within_7d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_key_retirement_within_7d
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_key_retirement_within_1d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_key_retirement_within_1d
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_admin_touch_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_admin_touch_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_policy_fail_closed_compositions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_policy_fail_closed_compositions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_policy_file_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_policy_file_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_policy_refresh_pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_policy_refresh_pending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_policy_bundle_mismatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_policy_bundle_mismatch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_broker_mint_gate_closed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_broker_mint_gate_closed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_devices_generic_platform" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_devices_generic_platform
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_context_refreshes_failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_context_refreshes_failed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_per_login_mfa_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_per_login_mfa_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_directory_unreachable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_directory_unreachable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_directory_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_directory_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_logouts_pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_logouts_pending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_marks_feed_down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_marks_feed_down
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_feed_down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_feed_down
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_feed_legs_colocated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_feed_legs_colocated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_circuit_open" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_circuit_open
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_contexts_reindexed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_contexts_reindexed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_contexts_reindex_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_contexts_reindex_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_calls_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_calls_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_keyspace_unheld" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_keyspace_unheld
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_client_cert_expiring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_client_cert_expiring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_crypt_store_key_unknown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_crypt_store_key_unknown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_crypt_token_open_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_crypt_token_open_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_pins_unopenable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_pins_unopenable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_feed_rescans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_feed_rescans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_ledger_pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_ledger_pending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_ledger_behind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_ledger_behind
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_health_failures_close" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_health_failures_close
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_health_check_failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_health_check_failing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_context_cache_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_context_cache_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_handshake_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_handshake_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_device_certificate_renewal_late" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_device_certificate_renewal_late
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_server_certificate_renewal_late" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_server_certificate_renewal_late
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_server_certificate_expired" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_server_certificate_expired
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_cert_status_unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_cert_status_unavailable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_crl_next_update_passed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_crl_next_update_passed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_transport_changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_transport_changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_oidc_keys_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_oidc_keys_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_oidc_logouts_failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_oidc_logouts_failing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_oidc_tokens_unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_oidc_tokens_unavailable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_workload_certificates_renewal_late" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_workload_certificates_renewal_late
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_redemption_restore_unjudged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_redemption_restore_unjudged
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_restore_detected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_restore_detected
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_refresh_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_refresh_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_refresh_half_ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_refresh_half_ceiling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_lookups_ambiguous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_lookups_ambiguous
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_server_down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_server_down
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_group_names_ambiguous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_group_names_ambiguous
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_enrollment_store_lost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_enrollment_store_lost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_sign_ins_throttled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_sign_ins_throttled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_sign_ins_enrollment_store_lost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_sign_ins_enrollment_store_lost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_accounting_spool_drops" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_accounting_spool_drops
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_accounting_spool_disk_slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_accounting_spool_disk_slow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_decision_log_write_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_decision_log_write_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_accounting_foreign" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_accounting_foreign
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_sync_failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_sync_failing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_sync_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_sync_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_bundle_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_bundle_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_mirror_behind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_mirror_behind
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_persist_failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_persist_failed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_snapshot_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_snapshot_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_policy_mismatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_policy_mismatch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_privilege_changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_privilege_changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#etcd_no_leader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd_no_leader
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#etcd_db_nearly_full" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd_db_nearly_full
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#etcd_disk_slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd_disk_slow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#etcd_leader_changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd_leader_changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#thresholds-and-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thresholds and defaults
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The rules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#port49_target_down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_target_down
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_target_absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_target_absent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_broker_target_absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_broker_target_absent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_global_cap_shedding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_global_cap_shedding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_connections_near_cap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_connections_near_cap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_key_secret_files_changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_key_secret_files_changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_issuing_ca_missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_issuing_ca_missing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_issuing_ca_expiring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_issuing_ca_expiring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_key_retirement_within_7d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_key_retirement_within_7d
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_key_retirement_within_1d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_key_retirement_within_1d
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_admin_touch_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_admin_touch_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_policy_fail_closed_compositions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_policy_fail_closed_compositions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_policy_file_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_policy_file_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_policy_refresh_pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_policy_refresh_pending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_policy_bundle_mismatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_policy_bundle_mismatch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_broker_mint_gate_closed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_broker_mint_gate_closed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_devices_generic_platform" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_devices_generic_platform
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_context_refreshes_failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_context_refreshes_failed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_per_login_mfa_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_per_login_mfa_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_directory_unreachable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_directory_unreachable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_directory_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_directory_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_logouts_pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_logouts_pending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_marks_feed_down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_marks_feed_down
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_feed_down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_feed_down
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_feed_legs_colocated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_feed_legs_colocated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_circuit_open" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_circuit_open
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_contexts_reindexed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_contexts_reindexed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_contexts_reindex_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_contexts_reindex_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_calls_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_calls_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_keyspace_unheld" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_keyspace_unheld
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_client_cert_expiring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_client_cert_expiring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_crypt_store_key_unknown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_crypt_store_key_unknown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_crypt_token_open_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_crypt_token_open_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_pins_unopenable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_pins_unopenable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_feed_rescans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_feed_rescans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_ledger_pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_ledger_pending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_ledger_behind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_ledger_behind
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_health_failures_close" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_health_failures_close
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_health_check_failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_health_check_failing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_context_cache_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_context_cache_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_handshake_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_handshake_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_device_certificate_renewal_late" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_device_certificate_renewal_late
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_server_certificate_renewal_late" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_server_certificate_renewal_late
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_server_certificate_expired" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_server_certificate_expired
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_tls_cert_status_unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_tls_cert_status_unavailable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_crl_next_update_passed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_crl_next_update_passed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_transport_changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_transport_changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_oidc_keys_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_oidc_keys_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_oidc_logouts_failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_oidc_logouts_failing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_oidc_tokens_unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_oidc_tokens_unavailable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_workload_certificates_renewal_late" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_workload_certificates_renewal_late
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_redemption_restore_unjudged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_redemption_restore_unjudged
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_store_restore_detected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_store_restore_detected
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_refresh_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_refresh_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_refresh_half_ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_refresh_half_ceiling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_lookups_ambiguous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_lookups_ambiguous
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_server_down" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_server_down
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_group_names_ambiguous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_group_names_ambiguous
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_directory_enrollment_store_lost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_directory_enrollment_store_lost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_sign_ins_throttled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_sign_ins_throttled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_sign_ins_enrollment_store_lost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_sign_ins_enrollment_store_lost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_accounting_spool_drops" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_accounting_spool_drops
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_accounting_spool_disk_slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_accounting_spool_disk_slow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_decision_log_write_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_decision_log_write_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_accounting_foreign" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_accounting_foreign
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_sync_failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_sync_failing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_sync_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_sync_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_bundle_refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_bundle_refused
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_mirror_behind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_mirror_behind
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_persist_failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_persist_failed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_snapshot_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_snapshot_stale
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_policy_mismatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_policy_mismatch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_privilege_changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_privilege_changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#etcd_no_leader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd_no_leader
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#etcd_db_nearly_full" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd_db_nearly_full
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#etcd_disk_slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd_disk_slow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#etcd_leader_changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd_leader_changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<!-- generated by make docs from code; do not edit -->
+
+<h1 id="alerts">Alerts<a class="headerlink" href="#alerts" title="Permanent link">&para;</a></h1>
+<p><code>port49.rules.yaml</code> holds one Prometheus alerting rule for each alarm port49 defines. Load it in
+one of two ways:</p>
+<ul>
+<li>into Prometheus, with <code>rule_files:</code></li>
+<li>through the Helm chart, with <code>prometheusRule.enabled: true</code>. The chart renders the same file as a
+  Prometheus Operator <code>PrometheusRule</code>. <code>deploy/helm/port49/files/port49.rules.yaml</code> is a byte copy,
+  because Helm cannot read outside the chart, and <code>tests/alerts</code> fails if the two differ.</li>
+</ul>
+<p><code>make alerts-check</code> runs <code>promtool check rules</code> and <code>promtool test rules</code> on it. <code>go test
+./tests/alerts/</code> checks that every metric an expression names is one port49 registers.</p>
+<p>There are two severities; route on the <code>severity</code> label.</p>
+<ul>
+<li><code>page</code>: a fault that is refusing devices or losing records now.</li>
+<li><code>ticket</code>: one that costs nothing yet, or that a person fixes in working hours.</li>
+</ul>
+<p><strong>The job names are the rules' parameter.</strong> Three rules read Prometheus's own <code>up</code> series for
+<code>job="port49d"</code> and <code>job="port49-broker"</code>: <code>port49_target_down</code>, <code>port49_target_absent</code> and
+<code>port49_broker_target_absent</code>. The chart's PodMonitors (rendered with <code>prometheusRule.enabled</code>) set
+those names. If you scrape another way, give the jobs those names or edit the rules. Without them,
+<code>port49_target_absent</code> and <code>port49_broker_target_absent</code> fire, which is the point of them.</p>
+<p>The absent rules are fleet-wide: <code>absent()</code> stays quiet while any scrape of that job exists. So use
+one Prometheus per port49 fleet, or add a namespace matcher to the two expressions.</p>
+<p>No expression names a device, and none groups by one. The series carry no device identity, and the
+decision log answers "which devices". The labels used are bounded: <code>instance</code>,
+<code>key_ref</code>, <code>version</code>, <code>server</code>, <code>issuer</code>, <code>outcome</code>, <code>feed</code>, <code>pool</code>, <code>component</code>.</p>
+<p>Each alert below carries a <code>runbook_url</code> annotation that points at its section here. The metrics each rule reads are in the <a href="../metrics/">metrics reference</a>. An alert that has just fired: start at the <a href="../../operate/troubleshooting/#an-alert-fired">3am index</a>, which gives a short do and don't for each family of alerts.</p>
+<h2 id="thresholds-and-defaults">Thresholds and defaults<a class="headerlink" href="#thresholds-and-defaults" title="Permanent link">&para;</a></h2>
+<p>Each row pairs what an alert covers with the rule that answers it.</p>
+<p><strong>A threshold that follows a setting assumes that setting's default.</strong> The defaults are <code>close_after</code>
+5, <code>broker.refresh_interval</code> 5m, <code>jwks_max_age</code> 24h, <code>expiry_warning_fraction</code> 0.33 and
+<code>staleness_ceiling</code> 4h. Edit the rule if you set another. The <code>hold_ttl</code> rules are the exception: they
+use multiples of the 15s <code>hold_ttl</code> default that hold at any allowed setting (10s to 1m), so they need
+no edit.</p>
+<p><strong>Edit in the safe direction.</strong> A setting lowered below the default can silence its alarm:</p>
+<ul>
+<li>With <code>close_after: 3</code>, the page on <code>port49_store_health_failures &gt;= 5</code> never fires.</li>
+<li>With <code>jwks_max_age: 6h</code>, the 12h keys rule fires after tokens are already refused.</li>
+</ul>
+<p>Recompute each such threshold when you change the setting it follows.</p>
+<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<p><strong>The <code>component</code> label.</strong> <code>port49_cert_status_checks_total</code>, <code>port49_crl_loads_total</code>,
+<code>port49_crl_next_update_timestamp_seconds</code> and <code>port49_cert_status_unavailable_total</code> carry
+<code>component</code> (<code>broker</code>, <code>tls_listener</code>), and the store metrics carry <code>component</code> and <code>pool</code>. A rule
+that divides or compares two such series one-to-one fails to match across components: aggregate with
+<code>sum by (...)</code> or match with <code>ignoring(component)</code>. Every rule here names its component or needs
+no match.</p>
+<p><strong>A dark etcd member costs up to 12 s.</strong> gRPC raises a keepalive below 10 s to 10 s, plus a 2 s
+timeout, so a dropped link to one member stalls the marks watch (events resume on another member)
+and an unhedged call for that long. Reads and the opted-in mark writes are hedged, other writes are
+not, so no alert can fire faster than that; the <code>for:</code> of the store rules is longer than 12 s
+for this reason.</p>
+<p><strong>Nothing warns before the listener closes.</strong> <code>close_after</code> x <code>interval</code> (5 s at the defaults) is
+shorter than any scrape interval, so no alert can fire between the first failed health check and
+the close. <code>port49_store_health_failures_close</code> pages once the listeners are closed: the gauge is
+held by the process, not the run, so the page stays raised through the whole outage and resolves
+when the listeners reopen.</p>
+<p><strong>Series that exist only where the thing does.</strong> <code>port49_store_directory_reachable</code>,
+<code>port49_store_directory_confirmed_timestamp_seconds</code>, <code>port49_store_keyspace_held</code> and
+<code>port49_directory_refresh_last_complete_timestamp_seconds</code> are created by the code that starts what
+they watch (the etcd store, the keyspace runner, the scheduled refresh), at 0. On the memory backend,
+the default, they do not exist, so no alert on <code>== 0</code> or on age has a series to fire on. Where a gauge
+cannot work that way, a <code>*_configured</code> gauge says whether to expect it: <code>port49_issuing_ca_configured</code>,
+<code>port49_directory_password_configured</code>.</p>
+<p><strong>Where the rules differ from the statement they answer.</strong>
+- <code>port49_oidc_keys_stale</code> drops the statement's <code>or absent()</code>: every configured issuer's series is
+  created at 0, so an issuer that never fetched already shows <code>time() - 0</code>, and the series is absent
+  only where OIDC is not configured, where <code>absent()</code> would fire forever.
+- <code>port49_directory_enrollment_store_lost</code> keeps it, as <code>port49_directory_password_configured == 1
+  unless on(instance) port49_directory_enrollment_store_ok</code>: the gauge is absent until the store
+  first answers, and a broker that never reached it is the case to catch.
+- <code>port49_issuing_ca_expiring</code> also requires the CA gauge above 0, so the page for a missing CA is
+  not doubled by a ticket for a CA "expiring" in 1970.
+- <code>port49_store_directory_stale</code> requires its timestamp above 0 (a process that has not yet confirmed
+  is <code>port49_store_directory_unreachable</code> and <code>port49_store_feed_down</code>).
+- <code>port49_directory_refresh_stale</code> and <code>port49_directory_refresh_half_ceiling</code> take the freshest
+  refresh across all runner-capable replicas, so a replica that lost the hold, whose gauge stops
+  moving, does not alarm; and they require the newest such process to have been up as long as the
+  threshold, so a restart is quiet but a restart in the middle of a directory outage (the gauge reads 0
+  until a pass completes) still fires. Both wait 15 minutes (<code>for:</code>), which covers a runner failover:
+  the new runner's series sits at 0 until its first pass completes. They read <code>last_over_time(...[1d])</code>,
+  so they keep firing for a day after every broker is gone, when no series is left to read.
+- <code>port49_inventory_snapshot_stale</code> is the spec's expression with its NaN arm and no gate: a process
+  that never watches the inventory reads 0, and one waiting for its first snapshot reads NaN before
+  its listener opens, which is the case the NaN arm exists for.
+- <code>port49_store_keyspace_unheld</code> sums over the processes that run a keyspace runner, and fires for a
+  day after the last one disappears (a crashed fleet exports no 0): <code>count(last_over_time(...[1d]))
+  unless count(...)</code>. A memory-backend install never had the series, so it never fires.
+- The key-retirement rules leave out the spec's uptime gate (spec, key rotation: line 5578). That only makes them
+  fire more. A restart blanks <code>port49_key_version_devices</code> (it counts devices whose latest validated
+  connection since start used the version), so a rule that resolves after a restart is not evidence
+  the devices have moved: read the decision log.
+- <code>enrolled</code> sign-ins outside a rollout are not alerted: "outside a rollout" is yours to define.</p>
+<h2 id="the-rules">The rules<a class="headerlink" href="#the-rules" title="Permanent link">&para;</a></h2>
+<h3 id="port49_target_down">port49_target_down<a class="headerlink" href="#port49_target_down" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 2m.</p>
+<p>A port49d or broker target is not answering its scrape: up is 0 for it.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">up</span><span class="p">{</span><span class="nl">job</span><span class="o">=~</span><span class="p">"</span><span class="s">port49d|port49-broker</span><span class="p">"}</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A port49d or broker that is down raises no alarm of its own, because every other rule reads series it no longer exports</p>
+<p><strong>Why this threshold:</strong> <code>up == 0</code> for a scrape target of either job; two minutes outlasts a restart's missed scrapes.</p>
+<h3 id="port49_target_absent">port49_target_absent<a class="headerlink" href="#port49_target_absent" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 5m.</p>
+<p>Prometheus has no up series for port49d: no port49d target exists at all, so every device has lost port49 and falls to local authentication, and no other port49d rule can fire.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">absent</span><span class="o">(</span><span class="nv">up</span><span class="p">{</span><span class="nl">job</span><span class="o">=</span><span class="p">"</span><span class="s">port49d</span><span class="p">"}</span><span class="o">)</span>
+</code></pre></div>
+<p><strong>Source:</strong> A port49d target Prometheus is not scraping at all has no <code>up</code> series, so <code>== 0</code> never matches</p>
+<p><strong>Why this threshold:</strong> <code>absent()</code> of port49d's <code>up</code>. Prometheus's pod discovery keeps a target only while its pod exists, so a StatefulSet with every pod Pending or deleted leaves no series for <code>== 0</code> to match, and every device has lost port49: a page. Five minutes outlasts a rollout. A mislabelled scrape config shows here too.</p>
+<h3 id="port49_broker_target_absent">port49_broker_target_absent<a class="headerlink" href="#port49_broker_target_absent" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>Prometheus has no up series for the broker: no broker target exists at all, so no token can be minted and no other broker rule can fire.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">absent</span><span class="o">(</span><span class="nv">up</span><span class="p">{</span><span class="nl">job</span><span class="o">=</span><span class="p">"</span><span class="s">port49-broker</span><span class="p">"}</span><span class="o">)</span>
+</code></pre></div>
+<p><strong>Source:</strong> The same for the broker: no <code>up</code> series for <code>port49-broker</code> at all</p>
+<p><strong>Why this threshold:</strong> <code>absent()</code> of the broker's <code>up</code>: no token can be minted, but held tokens still log in. On the memory-store trial, which runs no separate broker, the broker rule fires; drop it there or silence it.</p>
+<h3 id="port49_global_cap_shedding">port49_global_cap_shedding<a class="headerlink" href="#port49_global_cap_shedding" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>port49d reset TACACS+ connections at accept because the global connection cap was full; devices fall to local authentication.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_connections_shed_total</span><span class="p">{</span><span class="nl">reason</span><span class="o">=</span><span class="p">"</span><span class="s">global_cap</span><span class="p">"}[</span><span class="s">5m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Connections reset at accept because the global connection cap is full: <code>port49_connections_shed_total{reason="global_cap"}</code> increasing</p>
+<p><strong>Why this threshold:</strong> Any shed connection is a device refused, so any increase pages; five minutes smooths one scrape.</p>
+<h3 id="port49_connections_near_cap">port49_connections_near_cap<a class="headerlink" href="#port49_connections_near_cap" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>A port49d is holding more than 80% of limits.max_connections open; raise the cap or add replicas before it sheds.</p>
+<div class="highlight"><pre><span></span><code><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="nv">port49_connections</span><span class="p">{</span><span class="nl">state</span><span class="o">=</span><span class="p">"</span><span class="s">open</span><span class="p">"}</span><span class="o">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="nv">port49_connections_max</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.8</span>
+</code></pre></div>
+<p><strong>Source:</strong> A warning before shedding starts: <code>port49_connections</code> near the cap</p>
+<p><strong>Why this threshold:</strong> Ten minutes at 80% is a trend, not a burst; the page above covers the cap itself.</p>
+<h3 id="port49_key_secret_files_changed">port49_key_secret_files_changed<a class="headerlink" href="#port49_key_secret_files_changed" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>A key version's secret file changed or cannot be read; the held secret stays in force until the next start.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_key_secret_files_changed</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A key version's secret file that changed or cannot be read: <code>port49_key_secret_files_changed &gt; 0</code> for 10m</p>
+<p><strong>Why this threshold:</strong> A rotated file is expected for minutes while the rollout restarts; ten minutes is a forgotten restart.</p>
+<h3 id="port49_issuing_ca_missing">port49_issuing_ca_missing<a class="headerlink" href="#port49_issuing_ca_missing" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 5m.</p>
+<p>A broker is configured to issue certificates and has no usable issuing CA, so every OIDC sign-in is refused issuance_unavailable; run port49d init-issuer or restore the CA.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_issuing_ca_not_after_timestamp_seconds</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="nv">port49_issuing_ca_configured</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> A broker set to issue certificates that has no usable issuing CA: <code>port49_issuing_ca_not_after_timestamp_seconds == 0</code> while <code>broker.identity.issuance</code> is configured</p>
+<p><strong>Why this threshold:</strong> A broker started without its CA says so and keeps serving; five minutes outlasts a rollout and nothing else clears it.</p>
+<h3 id="port49_issuing_ca_expiring">port49_issuing_ca_expiring<a class="headerlink" href="#port49_issuing_ca_expiring" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>The issuing CA expires within 90 days; make its successor and distribute the new bundle before sign-ins stop.</p>
+<div class="highlight"><pre><span></span><code><span class="o">(</span><span class="nv">port49_issuing_ca_not_after_timestamp_seconds</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">90</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">86400</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="nv">port49_issuing_ca_not_after_timestamp_seconds</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="nv">port49_issuing_ca_configured</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> The issuing CA expires within 90 days</p>
+<p><strong>Why this threshold:</strong> Ninety days is a CA rollover's lead time; a CA already at 0 is the page above, not this ticket.</p>
+<h3 id="port49_key_retirement_within_7d">port49_key_retirement_within_7d<a class="headerlink" href="#port49_key_retirement_within_7d" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A key version with devices still on it passes its retire_after within 7 days; move the devices (the decision log names them) before it does.</p>
+<div class="highlight"><pre><span></span><code><span class="o">(</span><span class="nv">port49_key_version_devices</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">key_ref</span><span class="p">,</span><span class="w"> </span><span class="nv">version</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="nv">port49_key_retirement_seconds</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">7</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">86400</span><span class="o">)</span>
+</code></pre></div>
+<p><strong>Source:</strong> A key version that devices still present nears its <code>retire_after</code>: the first step of an alarm whose severity rises as the date approaches</p>
+<p><strong>Why this threshold:</strong> A week is a change window; the series carry no device identity, the log names the devices.</p>
+<h3 id="port49_key_retirement_within_1d">port49_key_retirement_within_1d<a class="headerlink" href="#port49_key_retirement_within_1d" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>A key version with devices still on it passes its retire_after within a day, or already has; those devices fail authentication once it does.</p>
+<div class="highlight"><pre><span></span><code><span class="o">(</span><span class="nv">port49_key_version_devices</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">key_ref</span><span class="p">,</span><span class="w"> </span><span class="nv">version</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="nv">port49_key_retirement_seconds</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">86400</span><span class="o">)</span>
+</code></pre></div>
+<p><strong>Source:</strong> The same key version within a day of its <code>retire_after</code>, or past it: the alarm's last step</p>
+<p><strong>Why this threshold:</strong> A day is the last working shift; a version past retire_after with devices on it is refusing them now.</p>
+<h3 id="port49_admin_touch_refused">port49_admin_touch_refused<a class="headerlink" href="#port49_admin_touch_refused" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>An admin call was refused its hardware-key touch proof: a stolen token or a broken key.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_admin_touch_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">refused</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> An admin call refused its hardware-key touch proof: <code>port49_admin_touch_total{outcome="refused"}</code></p>
+<p><strong>Why this threshold:</strong> Someone holds an admin credential without the touch; no benign cause repeats.</p>
+<h3 id="port49_policy_fail_closed_compositions">port49_policy_fail_closed_compositions<a class="headerlink" href="#port49_policy_fail_closed_compositions" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>The policy in force has compositions answered fail-closed: those users are denied all but the allows; port49 policy test names them.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_policy_fail_closed_compositions</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A policy in force that answers some compositions fail-closed: <code>port49_policy_fail_closed_compositions</code> &gt; 0</p>
+<p><strong>Why this threshold:</strong> A standing condition of the policy, not an incident; a ticket the author sees.</p>
+<h3 id="port49_policy_file_refused">port49_policy_file_refused<a class="headerlink" href="#port49_policy_file_refused" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>The policy file on disk was refused or will not settle; an older policy is serving.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_policy_file_refused</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> A policy file on disk that is refused or will not settle: <code>port49_policy_file_refused == 1</code></p>
+<p><strong>Why this threshold:</strong> An edit in progress is refused for seconds; five minutes is a file that stayed wrong.</p>
+<h3 id="port49_policy_refresh_pending">port49_policy_refresh_pending<a class="headerlink" href="#port49_policy_refresh_pending" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 2m.</p>
+<p>A policy change has not yet reached every live login context.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_policy_refresh_pending</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> A policy swap or grant expiry that has not yet reached every live login context: 1 from the change until its settle pass</p>
+<p><strong>Why this threshold:</strong> A pass takes seconds; two minutes is a stuck settle pass.</p>
+<h3 id="port49_policy_bundle_mismatch">port49_policy_bundle_mismatch<a class="headerlink" href="#port49_policy_bundle_mismatch" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>A broker or port49d serves a policy bundle other than the runner's; its tokens or admissions carry another policy until it reloads.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_policy_bundle_matches_runner</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A broker serving a policy bundle other than the runner's: <code>port49_policy_bundle_matches_runner</code> 0 for longer than twice <code>broker.policy_watch_interval</code></p>
+<p><strong>Why this threshold:</strong> Five minutes outlasts twice the watch interval and the settle delay at their defaults; raise it if the intervals are raised.</p>
+<h3 id="port49_broker_mint_gate_closed">port49_broker_mint_gate_closed<a class="headerlink" href="#port49_broker_mint_gate_closed" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 1m.</p>
+<p>A broker mints nothing: its mint gate has been closed for over a minute; the store does not answer, or no runner judges its bundle.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_broker_mint_gate_closed</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> A broker that mints nothing: <code>port49_broker_mint_gate_closed</code> at 1 for a minute</p>
+<p><strong>Why this threshold:</strong> The gate is closed from a start until a takeover is seen, so a minute is where a restart ends and a fault begins; a ticket, since other replicas keep minting.</p>
+<h3 id="port49_devices_generic_platform">port49_devices_generic_platform<a class="headerlink" href="#port49_devices_generic_platform" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>Admitted devices are served by the generic adapter: their platform has no adapter, and their commands are judged without its knowledge.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_devices_generic_platform</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Admitted devices served by the generic adapter: <code>port49_devices_generic_platform</code>, naming no device</p>
+<p><strong>Why this threshold:</strong> A standing condition of the inventory, not an incident; the start line names the platforms and counts.</p>
+<h3 id="port49_context_refreshes_failed">port49_context_refreshes_failed<a class="headerlink" href="#port49_context_refreshes_failed" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A policy refresh could not carry a login context onto the policy in force: a context revoked for a compile fault, or one that would not open.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_context_refreshes_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">failed</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A login context a policy refresh could not carry onto the policy in force: counted <code>failed</code> in <code>port49_context_refreshes_total</code></p>
+<p><strong>Why this threshold:</strong> Each failure is one context left on an older policy or revoked.</p>
+<h3 id="port49_per_login_mfa_refused">port49_per_login_mfa_refused<a class="headerlink" href="#port49_per_login_mfa_refused" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>A run of per-login MFA proofs did not verify: someone is trying another token or another person's sign-in.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_per_login_mfa_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">refused</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span>
+</code></pre></div>
+<p><strong>Source:</strong> A run of per-login MFA proofs that did not verify: <code>per_login_mfa_refused</code>, alerted on its own, because a run of them is someone trying another token or another person's sign-in</p>
+<p><strong>Why this threshold:</strong> More than two in ten minutes is a run; a mistyped touch is one.</p>
+<h3 id="port49_store_directory_unreachable">port49_store_directory_unreachable<a class="headerlink" href="#port49_store_directory_unreachable" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 1m.</p>
+<p>This process cannot read the directory store: revocations and password sign-ins from other regions do not arrive.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_store_directory_reachable</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A process that cannot read the directory store: <code>port49_store_directory_reachable == 0</code> for 1m</p>
+<p><strong>Why this threshold:</strong> A cut region keeps logging devices in on stale marks, so one minute is a real partition.</p>
+<h3 id="port49_store_directory_stale">port49_store_directory_stale<a class="headerlink" href="#port49_store_directory_stale" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 1m.</p>
+<p>This process last confirmed its copy of the directory store over a minute ago, whatever the reason; its revocation marks may be stale.</p>
+<div class="highlight"><pre><span></span><code><span class="o">(</span><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">port49_store_directory_confirmed_timestamp_seconds</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">60</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="nv">port49_store_directory_confirmed_timestamp_seconds</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A process whose copy of the directory store is unconfirmed for over a minute: <code>time() - port49_store_directory_confirmed_timestamp_seconds &gt; 60</code></p>
+<p><strong>Why this threshold:</strong> The series exists only under etcd, at 0 until the first confirmation, so a 0 is skipped here: port49_store_directory_unreachable and port49_store_feed_down cover a process that never confirmed.</p>
+<h3 id="port49_store_logouts_pending">port49_store_logouts_pending<a class="headerlink" href="#port49_store_logouts_pending" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>Back-channel logouts were accepted while the directory store did not answer and have not reached it.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_store_logouts_pending</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Back-channel logouts accepted but not yet in the directory store: <code>port49_store_logouts_pending &gt; 0</code> for 5m</p>
+<p><strong>Why this threshold:</strong> A cut region holds logouts the others have not seen; five minutes is longer than a blip.</p>
+<h3 id="port49_store_marks_feed_down">port49_store_marks_feed_down<a class="headerlink" href="#port49_store_marks_feed_down" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 1m.</p>
+<p>The marks feed is down: revocation marks written elsewhere do not reach this process.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_store_feed_up</span><span class="p">{</span><span class="nl">feed</span><span class="o">=</span><span class="p">"</span><span class="s">marks</span><span class="p">"}</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> The marks feed down, so revocation marks written elsewhere do not arrive: <code>port49_store_feed_up{feed="marks"} == 0</code></p>
+<p><strong>Why this threshold:</strong> Revocation rides this feed; a minute is four times the 15s <code>hold_ttl</code> default and the longest <code>hold_ttl</code> allows (10s to 1m), so at any setting the feed has been down for a full hold.</p>
+<h3 id="port49_store_feed_down">port49_store_feed_down<a class="headerlink" href="#port49_store_feed_down" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 1m.</p>
+<p>A store feed other than marks is down (contexts, or a split broker's pins or logouts): this process misses other replicas' writes, and its directory copy is not confirmed.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_store_feed_up</span><span class="p">{</span><span class="nl">feed</span><span class="o">!=</span><span class="p">"</span><span class="s">marks</span><span class="p">"}</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A store feed other than marks down: <code>port49_store_feed_up{feed}</code> 0 for longer than <code>hold_ttl</code></p>
+<p><strong>Why this threshold:</strong> A minute is four times the 15s <code>hold_ttl</code> default and the longest <code>hold_ttl</code> allows (10s to 1m). Every feed but marks, which pages, so a feed added later is covered.</p>
+<h3 id="port49_store_feed_legs_colocated">port49_store_feed_legs_colocated<a class="headerlink" href="#port49_store_feed_legs_colocated" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>Both legs of the {{ $labels.feed }} feed's watch are on one etcd member: port49 reaches only one etcd member for this feed, so check the other members; that member going dark stalls the feed.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_store_feed_legs_colocated</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> Both legs of a feed's watch on one etcd member: <code>port49_store_feed_legs_colocated</code> at 1 for 10m</p>
+<p><strong>Why this threshold:</strong> Both legs of a feed's watch on one member is no redundancy against that member going dark; the move apart is tried from 2 s doubling to 30 s, so ten minutes is a cluster where no other member is reachable for this feed. A client with one etcd endpoint never moves a leg and holds the gauge at 0 (colocation is not a fault there); port49d logs once at start that the feeds share one member.</p>
+<h3 id="port49_store_circuit_open">port49_store_circuit_open<a class="headerlink" href="#port49_store_circuit_open" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 1m.</p>
+<p>A store pool's circuit is open: its calls fail at once until a probe succeeds.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_store_circuit_open</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> A store pool's circuit open, so its calls fail at once</p>
+<p><strong>Why this threshold:</strong> The rule fires for every <code>{component, pool}</code> series, and what an open circuit costs depends on which. On port49d (<code>component="daemon"</code>), a <code>token</code> or <code>context</code> pool open for <code>hold_ttl</code> (the 15s <code>hold_ttl</code> default) closes the listeners, so a minute is four times that and this ticket follows the close; it does not warn before it. A <code>bulk</code> pool never closes them: logins and commands are unaffected and the scans (the refresh, a revocation by principal, a start's purge) fail until a probe succeeds. On port49-broker (<code>component="broker"</code>) no circuit closes anything, because its guards never stop; mints, refreshes and revocations through the open pool fail. The component <code>broker_enrollments</code> refuses password sign-in and second-factor enrollment through its open pool, and closes nothing.</p>
+<h3 id="port49_contexts_reindexed">port49_contexts_reindexed<a class="headerlink" href="#port49_contexts_reindexed" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>Live login contexts were found missing from the index: an index record was deleted in the store.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_contexts_reindexed_total</span><span class="p">[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Live login contexts found missing from the index: any increase of <code>port49_contexts_reindexed_total</code></p>
+<p><strong>Why this threshold:</strong> No benign path deletes an index record.</p>
+<h3 id="port49_contexts_reindex_failures">port49_contexts_reindex_failures<a class="headerlink" href="#port49_contexts_reindex_failures" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A login context could not be re-indexed or judged; one sealed under a key port49d does not hold is denied, never revoked (check PORT49_ENC_V1).</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_contexts_reindex_failures_total</span><span class="p">[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A login context that could not be re-indexed or judged: any increase of <code>port49_contexts_reindex_failures_total</code></p>
+<p><strong>Why this threshold:</strong> Each failure leaves a context for the next pass; a mis-set key repeats it.</p>
+<h3 id="port49_store_calls_refused">port49_store_calls_refused<a class="headerlink" href="#port49_store_calls_refused" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>etcd's roles are refusing port49's store calls; port49d answers store_unavailable.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_store_calls_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">refused</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> etcd's roles refusing port49's store calls: any increase of <code>port49_store_calls_total{outcome="refused"}</code></p>
+<p><strong>Why this threshold:</strong> A refused call is a role or credential fault that retries cannot fix.</p>
+<h3 id="port49_store_keyspace_unheld">port49_store_keyspace_unheld<a class="headerlink" href="#port49_store_keyspace_unheld" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 2m.</p>
+<p>No port49-broker replica holds the store keyspace: no runner is judging bundles, purging or refreshing contexts.</p>
+<div class="highlight"><pre><span></span><code><span class="o">(</span><span class="k">sum</span><span class="o">(</span><span class="nv">port49_store_keyspace_held</span><span class="o">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="o">)</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="o">(</span><span class="k">count</span><span class="o">(</span><span class="nv">last_over_time</span><span class="o">(</span><span class="nv">port49_store_keyspace_held</span><span class="p">[</span><span class="s">1d</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="ow">unless</span><span class="w"> </span><span class="k">count</span><span class="o">(</span><span class="nv">port49_store_keyspace_held</span><span class="o">))</span>
+</code></pre></div>
+<p><strong>Source:</strong> No broker replica holding the store keyspace: the sum of <code>port49_store_keyspace_held</code> over port49-broker's replicas 0 for twice <code>hold_ttl</code></p>
+<p><strong>Why this threshold:</strong> Two minutes is eight times the 15s <code>hold_ttl</code> default, and exactly twice the longest <code>hold_ttl</code> allows (1m), so it holds at any setting. The series exists only on a process that runs a keyspace runner, so the memory backend, with none, raises nothing. The second arm covers every broker gone (a crashed fleet exports no 0): series seen in the last day and none now, so it fires for a day after the brokers vanish, then stops.</p>
+<h3 id="port49_store_client_cert_expiring">port49_store_client_cert_expiring<a class="headerlink" href="#port49_store_client_cert_expiring" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A component's etcd client certificate expires within 30 days.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_store_client_cert_expiry_timestamp_seconds</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">86400</span>
+</code></pre></div>
+<p><strong>Source:</strong> A store client certificate within 30 days of expiry</p>
+<p><strong>Why this threshold:</strong> Thirty days is the stated lead time.</p>
+<h3 id="port49_crypt_store_key_unknown">port49_crypt_store_key_unknown<a class="headerlink" href="#port49_crypt_store_key_unknown" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>port49d started on a store last written under a current key its encryption window does not hold (a mis-set PORT49_ENC_V1).</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_crypt_store_key_unknown</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> port49d started on a store written under a key its encryption window does not hold: <code>port49_crypt_store_key_unknown</code> at 1</p>
+<p><strong>Why this threshold:</strong> Records written under the missing key cannot open; fix the key and start again.</p>
+<h3 id="port49_crypt_token_open_failures">port49_crypt_token_open_failures<a class="headerlink" href="#port49_crypt_token_open_failures" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A stored token would not decrypt: a rotation may have retired a key while tokens it sealed were live.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_crypt_open_failures_total</span><span class="p">{</span><span class="nl">record</span><span class="o">=</span><span class="p">"</span><span class="s">token</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A stored token that would not decrypt: any increase of <code>port49_crypt_open_failures_total{record="token"}</code></p>
+<p><strong>Why this threshold:</strong> The counter is the only witness; the token is dropped from its candidates with no error.</p>
+<h3 id="port49_directory_pins_unopenable">port49_directory_pins_unopenable<a class="headerlink" href="#port49_directory_pins_unopenable" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A directory pin opens under neither encryption key: its principal cannot bind, mint or refresh.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_directory_pins_unopenable</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="nv">port49_store_keyspace_held</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> A directory pin that opens under neither encryption key: <code>port49_directory_pins_unopenable</code> above 0 on the replica holding the keyspace</p>
+<p><strong>Why this threshold:</strong> One principal is locked out until the key that sealed the pin is back as <code>encryption.previous</code> or the pin is forgotten; the pass never deletes it. Gated on <code>port49_store_keyspace_held == 1</code>, since a replica that handed over keeps its last value.</p>
+<h3 id="port49_store_feed_rescans">port49_store_feed_rescans<a class="headerlink" href="#port49_store_feed_rescans" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A feed's watch was compacted and rescanned the store; the feed lagged.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_store_feed_rescans_total</span><span class="p">[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A feed whose watch was compacted and rescanned the store: any increase of <code>port49_store_feed_rescans_total</code></p>
+<p><strong>Why this threshold:</strong> A rescan means a watch fell behind compaction; repeated, the feed is too slow.</p>
+<h3 id="port49_ledger_pending">port49_ledger_pending<a class="headerlink" href="#port49_ledger_pending" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 1m.</p>
+<p>The runner's ledger record is behind: a context put back at one would be taken after a restart.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_ledger_pending</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> The runner's ledger record behind: <code>port49_ledger_pending</code> above 0 for a minute</p>
+<p><strong>Why this threshold:</strong> A write takes a round trip; a minute is a record that cannot be written.</p>
+<h3 id="port49_ledger_behind">port49_ledger_behind<a class="headerlink" href="#port49_ledger_behind" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 1m.</p>
+<p>The runner's ledger keeper runs with its context feed down; the record does not follow other processes' logins.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_ledger_behind</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> The runner's ledger keeper running with its context feed down: <code>port49_ledger_behind</code> at 1</p>
+<p><strong>Why this threshold:</strong> One minute rides out a feed reconnect.</p>
+<h3 id="port49_store_health_failures_close">port49_store_health_failures_close<a class="headerlink" href="#port49_store_health_failures_close" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>port49d closed its TACACS+ listeners: its store health checks failed close_after times in a row. Break-glass logins use local passwords until it reopens.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_store_health_failures</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">5</span>
+</code></pre></div>
+<p><strong>Source:</strong> port49d closing its TACACS+ listeners after its store health checks fail: <code>port49_store_health_failures &gt;= &lt;close_after&gt;</code></p>
+<p><strong>Why this threshold:</strong> 5 is close_after at its default; set it to yours. The gauge is held through the outage, so the page stays up and resolves when the listeners reopen. Not above 0: a defragmenting member fails an occasional check. close_after x interval is shorter than any scrape, so nothing warns first.</p>
+<h3 id="port49_store_health_check_failing">port49_store_health_check_failing<a class="headerlink" href="#port49_store_health_check_failing" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>port49d's store health checks are failing often, short of closing the listeners.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_store_health_checks_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">fail</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">60</span>
+</code></pre></div>
+<p><strong>Source:</strong> Store health checks failing often, short of closing the listeners: <code>increase(port49_store_health_checks_total{outcome="fail"}[10m])</code> above a threshold the operator picks</p>
+<p><strong>Why this threshold:</strong> At the default 1s interval 60 is a tenth of the checks in ten minutes; a defragmenting member measured 4 to 7 of 18. Set your own.</p>
+<h3 id="port49_context_cache_stale">port49_context_cache_stale<a class="headerlink" href="#port49_context_cache_stale" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A replica is answering commands from login contexts the store did not confirm; revocation does not reach them until the store answers or the listeners close.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_context_cache_lookups_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">stale</span><span class="p">"}[</span><span class="s">5m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Commands answered from login contexts the store did not confirm: any increase of <code>port49_context_cache_lookups_total{outcome="stale"}</code></p>
+<p><strong>Why this threshold:</strong> Every stale read is a command authorized on unconfirmed state.</p>
+<h3 id="port49_tls_handshake_failures">port49_tls_handshake_failures<a class="headerlink" href="#port49_tls_handshake_failures" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>RFC 9887 listener handshakes are failing; the outcome label says why.</p>
+<div class="highlight"><pre><span></span><code><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">outcome</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="kr">rate</span><span class="o">(</span><span class="nv">port49_tls_handshakes_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">!~</span><span class="p">"</span><span class="s">ok|resumed</span><span class="p">"}[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> TLS listener handshakes failing, by outcome: <code>rate(port49_tls_handshakes_total{outcome!~"ok\|resumed"}[5m])</code></p>
+<p><strong>Why this threshold:</strong> Scanners cause the odd failure; five minutes of them is a device or a certificate.</p>
+<h3 id="port49_tls_device_certificate_renewal_late">port49_tls_device_certificate_renewal_late<a class="headerlink" href="#port49_tls_device_certificate_renewal_late" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A device certificate is past two thirds of its own lifetime: its renewal is late. The ratio is the least over certificates verified in the last 24h, so it clears up to a day after the device renews.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_tls_device_certificate_lifetime_left_ratio</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">0.33</span>
+</code></pre></div>
+<p><strong>Source:</strong> A device certificate whose renewal is late: <code>port49_tls_device_certificate_lifetime_left_ratio &lt; 0.33</code></p>
+<p><strong>Why this threshold:</strong> 0.33 is the default expiry_warning_fraction; a ratio holds for any lifetime, a fixed number of days would fire forever on short-lived certificates.</p>
+<h3 id="port49_tls_server_certificate_renewal_late">port49_tls_server_certificate_renewal_late<a class="headerlink" href="#port49_tls_server_certificate_renewal_late" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>The RFC 9887 listener's certificate is past two thirds of its own lifetime: its renewal is late.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_tls_server_certificate_lifetime_left_ratio</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mf">0.33</span>
+</code></pre></div>
+<p><strong>Source:</strong> The TLS listener's certificate, its renewal late: <code>port49_tls_server_certificate_lifetime_left_ratio &lt; 0.33</code></p>
+<p><strong>Why this threshold:</strong> As for the device certificates.</p>
+<h3 id="port49_tls_server_certificate_expired">port49_tls_server_certificate_expired<a class="headerlink" href="#port49_tls_server_certificate_expired" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>The RFC 9887 listener's certificate has expired; TLS devices cannot connect.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_tls_server_certificate_lifetime_left_ratio</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> The TLS listener's certificate expired: <code>port49_tls_server_certificate_lifetime_left_ratio &lt; 0</code> pages</p>
+<p><strong>Why this threshold:</strong> Below 0 is expired.</p>
+<h3 id="port49_tls_cert_status_unavailable">port49_tls_cert_status_unavailable<a class="headerlink" href="#port49_tls_cert_status_unavailable" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>The TLS listener could not establish a certificate's revocation status; with on_unavailable: refuse its devices are refused.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_cert_status_unavailable_total</span><span class="p">{</span><span class="nl">component</span><span class="o">=</span><span class="p">"</span><span class="s">tls_listener</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> The TLS listener unable to establish a certificate's revocation status: <code>increase(port49_cert_status_unavailable_total{component="tls_listener"}[10m]) &gt; 0</code> while TLS devices are admitted</p>
+<p><strong>Why this threshold:</strong> The series carries only the component; with no TLS devices admitted it does not move.</p>
+<h3 id="port49_crl_next_update_passed">port49_crl_next_update_passed<a class="headerlink" href="#port49_crl_next_update_passed" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A CRL the TLS listener relies on passes its next update within an hour, or has.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">port49_crl_next_update_timestamp_seconds</span><span class="p">{</span><span class="nl">component</span><span class="o">=</span><span class="p">"</span><span class="s">tls_listener</span><span class="p">"}</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">-3600</span>
+</code></pre></div>
+<p><strong>Source:</strong> A CRL the TLS listener relies on within an hour of its next update, or past it: <code>time() - port49_crl_next_update_timestamp_seconds{component="tls_listener"} &gt; -3600</code></p>
+<p><strong>Why this threshold:</strong> An hour is time to fix a failed fetch before the list stops serving.</p>
+<h3 id="port49_inventory_transport_changed">port49_inventory_transport_changed<a class="headerlink" href="#port49_inventory_transport_changed" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A sync changed a device's transport, which may be a downgrade from tls to tcp; port49 records it and does not block it.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_inventory_changes_total</span><span class="p">{</span><span class="nl">kind</span><span class="o">=</span><span class="p">"</span><span class="s">transport_changed</span><span class="p">"}[</span><span class="s">1h</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A sync that changed a device's transport: <code>increase(port49_inventory_changes_total{kind="transport_changed"}[1h]) &gt; 0</code></p>
+<p><strong>Why this threshold:</strong> A downgrade is silent otherwise.</p>
+<h3 id="port49_oidc_keys_stale">port49_oidc_keys_stale<a class="headerlink" href="#port49_oidc_keys_stale" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>An OIDC issuer's keys were never fetched since this process started, or last fetched over 12h ago, half of jwks_max_age at its default; tokens are refused once they are 24.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">port49_oidc_keys_last_success_timestamp_seconds</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">12</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">3600</span>
+</code></pre></div>
+<p><strong>Source:</strong> An OIDC provider outage that keeps its keys from being fetched: <code>time() - port49_oidc_keys_last_success_timestamp_seconds &gt; jwks_max_age / 2 or absent(...)</code>, with a <code>for:</code> of a few minutes</p>
+<p><strong>Why this threshold:</strong> Half of jwks_max_age (24h by default): one more failed cycle and every token for that issuer is refused. Set it to yours. Not <code>or absent()</code>: the series exists only for configured issuers, so on a deployment with no OIDC it would fire forever.</p>
+<h3 id="port49_oidc_logouts_failing">port49_oidc_logouts_failing<a class="headerlink" href="#port49_oidc_logouts_failing" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>OIDC back-channel logouts were not fully applied (store_error or partial); sessions may outlive their sign-out.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_oidc_logouts_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=~</span><span class="p">"</span><span class="s">store_error|partial</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> OIDC back-channel logouts not fully applied: logouts <code>store_error\|partial</code></p>
+<p><strong>Why this threshold:</strong> Each is a logout the store did not take whole.</p>
+<h3 id="port49_oidc_tokens_unavailable">port49_oidc_tokens_unavailable<a class="headerlink" href="#port49_oidc_tokens_unavailable" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>Bearer tokens are refused because their issuer's keys are unavailable.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_oidc_tokens_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">unavailable</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Bearer tokens refused because their issuer's keys are unavailable: tokens <code>unavailable</code></p>
+<p><strong>Why this threshold:</strong> The identity provider is unreachable and the held keys have expired.</p>
+<h3 id="port49_workload_certificates_renewal_late">port49_workload_certificates_renewal_late<a class="headerlink" href="#port49_workload_certificates_renewal_late" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>Workload certificates are being presented with under a quarter of their validity left: their renewal is late.</p>
+<div class="highlight"><pre><span></span><code><span class="k">sum</span><span class="o">(</span><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_workload_certificates_renewal_late_total</span><span class="p">[</span><span class="s">1h</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Workload certificates presented with their renewal late: <code>increase(port49_workload_certificates_renewal_late_total[1h]) &gt; 0</code>, summed over replicas</p>
+<p><strong>Why this threshold:</strong> Each replica counts a certificate once per 24h, so any increase of the sum is a late renewer.</p>
+<h3 id="port49_redemption_restore_unjudged">port49_redemption_restore_unjudged<a class="headerlink" href="#port49_redemption_restore_unjudged" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 2m.</p>
+<p>port49d cannot read meta/witness, so it cannot tell whether its store was restored, and refuses every token login (store_unavailable) until it can; check the store and the daemon role's read of meta/witness; stopping port49d lets devices fall to break-glass</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_redemption_restore_unjudged</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> A port49d that cannot tell whether its store was restored: <code>port49_redemption_restore_unjudged</code> at 1</p>
+<p><strong>Why this threshold:</strong> The one refusal state the restore floor keeps: port49d cannot read <code>meta/witness</code>, so it refuses every token login with an <code>ERROR</code>, which IOS XE and Junos under <code>tacplus</code> alone treat as final. A failed read clears in seconds; two minutes is a store or a role that stayed wrong.</p>
+<h3 id="port49_store_restore_detected">port49_store_restore_detected<a class="headerlink" href="#port49_store_restore_detected" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow the restore runbook, Restoring etcd from a snapshot</p>
+<div class="highlight"><pre><span></span><code><span class="o">(</span><span class="nv">port49_store_restore_detected_timestamp_seconds</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="o">(</span><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">port49_store_restore_detected_timestamp_seconds</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">86400</span><span class="o">)</span>
+</code></pre></div>
+<p><strong>Source:</strong> A session store restored from a snapshot: <code>port49_store_restore_detected_timestamp_seconds</code> above 0</p>
+<p><strong>Why this threshold:</strong> Fires for a day after port49d finds its store restored (the gauge holds the time); the restore runbook on the backup and restore page is the work, and revocations made after the snapshot are lost until it is followed. The 0 of a port49d that never found one is skipped.</p>
+<h3 id="port49_directory_refresh_stale">port49_directory_refresh_stale<a class="headerlink" href="#port49_directory_refresh_stale" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 15m.</p>
+<p>No scheduled directory refresh has verified every principal for over three refresh intervals; contexts keep their last verification and will deny context_stale at the ceiling.</p>
+<div class="highlight"><pre><span></span><code><span class="o">(</span><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="k">max</span><span class="o">(</span><span class="nv">last_over_time</span><span class="o">(</span><span class="nv">port49_directory_refresh_last_complete_timestamp_seconds</span><span class="p">[</span><span class="s">1d</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">300</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">()</span><span class="w"> </span><span class="o">(</span><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="k">max</span><span class="o">(</span><span class="nv">last_over_time</span><span class="o">(</span><span class="nv">process_start_time_seconds</span><span class="p">[</span><span class="s">1d</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="nv">last_over_time</span><span class="o">(</span><span class="nv">port49_directory_refresh_last_complete_timestamp_seconds</span><span class="p">[</span><span class="s">1d</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">300</span><span class="o">)</span>
+</code></pre></div>
+<p><strong>Source:</strong> No scheduled directory refresh completed for three intervals: <code>time() - port49_directory_refresh_last_complete_timestamp_seconds &gt; 3 × refresh_interval</code></p>
+<p><strong>Why this threshold:</strong> 300 is broker.refresh_interval at its default (5m); set 3x yours. The freshest refresh anywhere, so a runner that lost the hold does not alarm on its old value; and only once the newest process with the series is also that old, so a restart does not, but a restart in the middle of an outage does (the gauge reads 0 until a pass completes). 15 minutes covers a failover: the new runner's series sits at 0 until its first pass completes. last_over_time keeps the rule firing for a day after every broker is gone.</p>
+<h3 id="port49_directory_refresh_half_ceiling">port49_directory_refresh_half_ceiling<a class="headerlink" href="#port49_directory_refresh_half_ceiling" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 15m.</p>
+<p>No directory refresh has verified every principal for half of session.staleness_ceiling (4h at its default); at the ceiling every live session denies context_stale. Escapes: session.staleness_ceiling: 0s with a port49d restart, or stop port49d so break-glass applies.</p>
+<div class="highlight"><pre><span></span><code><span class="o">(</span><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="k">max</span><span class="o">(</span><span class="nv">last_over_time</span><span class="o">(</span><span class="nv">port49_directory_refresh_last_complete_timestamp_seconds</span><span class="p">[</span><span class="s">1d</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">3600</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">()</span><span class="w"> </span><span class="o">(</span><span class="kr">time</span><span class="o">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="k">max</span><span class="o">(</span><span class="nv">last_over_time</span><span class="o">(</span><span class="nv">process_start_time_seconds</span><span class="p">[</span><span class="s">1d</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="nv">last_over_time</span><span class="o">(</span><span class="nv">port49_directory_refresh_last_complete_timestamp_seconds</span><span class="p">[</span><span class="s">1d</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">3600</span><span class="o">)</span>
+</code></pre></div>
+<p><strong>Source:</strong> No directory refresh completed for half the staleness ceiling: <code>time() - port49_directory_refresh_last_complete_timestamp_seconds &gt; session.staleness_ceiling / 2</code></p>
+<p><strong>Why this threshold:</strong> 7200 is half the default ceiling; set half yours. Same shape and 15m <code>for:</code> as port49_directory_refresh_stale. A page: at the ceiling sessions are denied.</p>
+<h3 id="port49_directory_lookups_ambiguous">port49_directory_lookups_ambiguous<a class="headerlink" href="#port49_directory_lookups_ambiguous" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A directory lookup matched more than one principal and was refused identity_ambiguous.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_directory_lookups_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">ambiguous</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Directory lookups that match more than one principal: <code>port49_directory_lookups_total{outcome="ambiguous"}</code> increasing</p>
+<p><strong>Why this threshold:</strong> Each is a user refused; the directory holds two entries for one name.</p>
+<h3 id="port49_directory_server_down">port49_directory_server_down<a class="headerlink" href="#port49_directory_server_down" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>A directory server's breaker is open; queries go to another server, or fail if there is none.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_directory_server_up</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> A directory server down: <code>port49_directory_server_up == 0</code> for a while</p>
+<p><strong>Why this threshold:</strong> Ten minutes: one server down is a degraded pool, not an outage.</p>
+<h3 id="port49_directory_group_names_ambiguous">port49_directory_group_names_ambiguous<a class="headerlink" href="#port49_directory_group_names_ambiguous" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>Group names match no one because two groups under groups_base_dn share them.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_directory_group_names_ambiguous</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Group names that two directory groups share: <code>port49_directory_group_names_ambiguous &gt; 0</code></p>
+<p><strong>Why this threshold:</strong> A gauge over the last hour; the grants naming those groups are not given.</p>
+<h3 id="port49_directory_enrollment_store_lost">port49_directory_enrollment_store_lost<a class="headerlink" href="#port49_directory_enrollment_store_lost" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 2m.</p>
+<p>The broker's password enrollment store is lost, not initialised, or was never reached; password sign-in is refused.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_directory_enrollment_store_ok</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="o">(</span><span class="nv">port49_directory_password_configured</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="ow">unless</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="nv">port49_directory_enrollment_store_ok</span><span class="o">)</span>
+</code></pre></div>
+<p><strong>Source:</strong> The broker's password enrollment store lost or never reached: <code>port49_directory_enrollment_store_ok == 0 or absent()</code></p>
+<p><strong>Why this threshold:</strong> The gauge is absent until the store first answers, and a broker that has never reached it is the case to catch. <code>port49_directory_password_configured</code> is 1 only on a broker with the verifier, so a broker without one never matches the absent arm.</p>
+<h3 id="port49_sign_ins_throttled">port49_sign_ins_throttled<a class="headerlink" href="#port49_sign_ins_throttled" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>Directory-password sign-ins are being throttled: failed attempts passed failures_per_principal or failures_per_source.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_sign_ins_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">throttled</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Password sign-ins being throttled: a rise of <code>throttled</code></p>
+<p><strong>Why this threshold:</strong> A throttle needs failures_per_* failed attempts: a guessing run, or one user's stale password on a script.</p>
+<h3 id="port49_sign_ins_enrollment_store_lost">port49_sign_ins_enrollment_store_lost<a class="headerlink" href="#port49_sign_ins_enrollment_store_lost" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>A password sign-in was refused because the enrollment store is lost.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_sign_ins_total</span><span class="p">{</span><span class="nl">outcome</span><span class="o">=</span><span class="p">"</span><span class="s">enrollment_store_lost</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Password sign-ins refused because the enrollment store is lost: any <code>enrollment_store_lost</code></p>
+<p><strong>Why this threshold:</strong> Any one is an operator or user refused; the gauge alert above covers a store that is lost with no sign-in in flight.</p>
+<h3 id="port49_accounting_spool_drops">port49_accounting_spool_drops<a class="headerlink" href="#port49_accounting_spool_drops" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>The accounting spool discarded records; the stage label says where.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_accounting_spool_drops_total</span><span class="p">[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> An accounting spool dropping records</p>
+<p><strong>Why this threshold:</strong> Accounting records are an audit trail; no drop is acceptable.</p>
+<h3 id="port49_accounting_spool_disk_slow">port49_accounting_spool_disk_slow<a class="headerlink" href="#port49_accounting_spool_disk_slow" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>port49d's accounting spool disk cannot keep up; every accounting record waits on its fsync, so devices see slow or failed accounting. Move the spool directory to a disk with sustained fsync p99 under 10 ms.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">histogram_quantile</span><span class="o">(</span><span class="mf">0.99</span><span class="p">,</span><span class="w"> </span><span class="kr">rate</span><span class="o">(</span><span class="nv">port49_accounting_spool_sync_seconds_bucket</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.010</span>
+</code></pre></div>
+<p><strong>Source:</strong> An accounting spool disk too slow, by port49's own threshold: p99 of <code>port49_accounting_spool_sync_seconds</code> over 10 ms for 10m</p>
+<p><strong>Why this threshold:</strong> Every accounting ack waits on the spool's fsync; with the session etcd and the spool on a CT1000P3PSSD8 drive, account p99 was 152 ms at 170/s (tests/lab/results/load-beehive.md, cell c, <code>step_1_account_p99_ms</code>); with both in RAM the spool's capacity was 1291/s (tests/lab/results/load-beehive-ram.md, cell c), and on a GCE pd-ssd (operator-declared) 2905/s with account p99 3.67 ms at 170/s (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md, cell c).</p>
+<h3 id="port49_decision_log_write_failures">port49_decision_log_write_failures<a class="headerlink" href="#port49_decision_log_write_failures" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>The decision log sink refused writes; decisions are not being recorded.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_decision_log_write_failures_total</span><span class="p">[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Decision log writes refused: the log must be complete, never sampled</p>
+<p><strong>Why this threshold:</strong> The log is the audit trail; a refused write counts per attempt.</p>
+<h3 id="port49_accounting_foreign">port49_accounting_foreign<a class="headerlink" href="#port49_accounting_foreign" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>Accounting records arrived for a session port49 never saw begin: a local fallback or console login on a device, or a device bypassing port49.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_accounting_attributions_total</span><span class="p">{</span><span class="nl">attribution</span><span class="o">=</span><span class="p">"</span><span class="s">foreign</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Accounting for sessions port49 never saw begin: the <code>foreign</code> series, not rate-limited, because a burst of <code>foreign</code> is itself the signal</p>
+<p><strong>Why this threshold:</strong> Any foreign record is the detection the spec names for a local login the policy did not see; it pages.</p>
+<h3 id="port49_inventory_sync_failing">port49_inventory_sync_failing<a class="headerlink" href="#port49_inventory_sync_failing" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>The last inventory sync failed: a source, the policy file or the state directory did not answer.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_inventory_sync_failing</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> An inventory sync that failed: the service retains the previous bundle and alarms</p>
+<p><strong>Why this threshold:</strong> Syncs repeat; ten minutes is several failed ones.</p>
+<h3 id="port49_inventory_sync_refused">port49_inventory_sync_refused<a class="headerlink" href="#port49_inventory_sync_refused" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>The last inventory sync was refused and an older bundle is published.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_inventory_sync_refused</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> An inventory sync that was refused: the service keeps the last good snapshot and alarms</p>
+<p><strong>Why this threshold:</strong> A refused sync is a bad source document; five minutes is not a race with its fix.</p>
+<h3 id="port49_inventory_bundle_refused">port49_inventory_bundle_refused<a class="headerlink" href="#port49_inventory_bundle_refused" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>port49d was given an inventory document it refused; the bundle in force keeps serving.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_inventory_bundle_refused</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> An inventory document port49d refused: the fleet keeps the last good snapshot and alarms</p>
+<p><strong>Why this threshold:</strong> The old bundle serves, so a ticket; five minutes outlasts a rollout.</p>
+<h3 id="port49_inventory_mirror_behind">port49_inventory_mirror_behind<a class="headerlink" href="#port49_inventory_mirror_behind" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>The inventory mirror's copy differs from the bundle published.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_inventory_mirror_behind</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> The inventory mirror behind the published bundle</p>
+<p><strong>Why this threshold:</strong> A write is quick; ten minutes behind is a mirror that fails.</p>
+<h3 id="port49_inventory_persist_failed">port49_inventory_persist_failed<a class="headerlink" href="#port49_inventory_persist_failed" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>The inventory document in force could not be written to inventory.service.state_dir; a restart would start without it.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_inventory_persist_failed</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> The inventory document in force not written to the state directory</p>
+<p><strong>Why this threshold:</strong> The state directory is full or unwritable.</p>
+<h3 id="port49_inventory_snapshot_stale">port49_inventory_snapshot_stale<a class="headerlink" href="#port49_inventory_snapshot_stale" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>The inventory snapshot in force was last confirmed over a day ago, or there is none; the fleet still authenticates on it, and nothing fails closed.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_inventory_snapshot_age_seconds</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">86400</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="nv">port49_inventory_snapshot_age_seconds</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nv">port49_inventory_snapshot_age_seconds</span>
+</code></pre></div>
+<p><strong>Source:</strong> A stale inventory snapshot: <code>port49_inventory_snapshot_age_seconds</code> raises an alarm, never a fail-closed</p>
+<p><strong>Why this threshold:</strong> 86400 is a day; set your sync cadence times a few. The NaN arm (no snapshot yet) is the spec's own expression. Not gated: a process that never watches the inventory reads 0, and one that waits for its first snapshot reads NaN from before its listener opens, which is the case the NaN arm is for.</p>
+<h3 id="port49_inventory_policy_mismatch">port49_inventory_policy_mismatch<a class="headerlink" href="#port49_inventory_policy_mismatch" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 5m.</p>
+<p>The inventory service built the bundle in force against a policy other than port49d's own; port49d applies the inventory against its own policy.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">port49_inventory_policy_mismatch</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p><strong>Source:</strong> An inventory bundle built against a policy other than port49d's: the hash mismatch is logged and alarmed</p>
+<p><strong>Why this threshold:</strong> Five minutes outlasts a policy rollout reaching both.</p>
+<h3 id="port49_inventory_privilege_changes">port49_inventory_privilege_changes<a class="headerlink" href="#port49_inventory_privilege_changes" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A source-of-truth edit moved privilege: a device changed key or platform, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_inventory_changes_total</span><span class="p">{</span><span class="nl">kind</span><span class="o">=~</span><span class="p">"</span><span class="s">key_ref_changed|platform_changed|admission_changed|address_added|scope_joined|scope_left|device_added</span><span class="p">"}[</span><span class="s">1h</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Source-of-truth edits that move privilege: <code>port49_inventory_changes_total{kind}</code></p>
+<p><strong>Why this threshold:</strong> Every kind but transport_changed, which has its own alert. A device_added during onboarding raises it too: expected, and it is the only place a new capture target shows.</p>
+<h3 id="etcd_no_leader">etcd_no_leader<a class="headerlink" href="#etcd_no_leader" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> 1m.</p>
+<p>An etcd member has no leader; a dark member costs up to 12 s, a lost quorum stops the store.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">etcd_server_has_leader</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> An etcd member with no leader: <code>etcd_server_has_leader == 0</code></p>
+<p><strong>Why this threshold:</strong> A minute rides out an election.</p>
+<h3 id="etcd_db_nearly_full">etcd_db_nearly_full<a class="headerlink" href="#etcd_db_nearly_full" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>An etcd member's database is over 80% of its quota; at the quota etcd refuses writes.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">etcd_mvcc_db_total_size_in_bytes</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nv">etcd_server_quota_backend_bytes</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.8</span>
+</code></pre></div>
+<p><strong>Source:</strong> An etcd database nearly at its quota: <code>etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes &gt; 0.8</code></p>
+<p><strong>Why this threshold:</strong> Defragment or compact before the quota: ten minutes is not a spike.</p>
+<h3 id="etcd_disk_slow">etcd_disk_slow<a class="headerlink" href="#etcd_disk_slow" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> 10m.</p>
+<p>etcd's disk cannot keep up; port49 store calls will time out in bursts. Move etcd to a disk with sustained fsync p99 under 10 ms (datacenter NVMe or a cloud SSD volume).</p>
+<div class="highlight"><pre><span></span><code><span class="kr">histogram_quantile</span><span class="o">(</span><span class="mf">0.99</span><span class="p">,</span><span class="w"> </span><span class="kr">rate</span><span class="o">(</span><span class="nv">etcd_disk_wal_fsync_duration_seconds_bucket</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.010</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="kr">histogram_quantile</span><span class="o">(</span><span class="mf">0.99</span><span class="p">,</span><span class="w"> </span><span class="kr">rate</span><span class="o">(</span><span class="nv">etcd_disk_backend_commit_duration_seconds_bucket</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mf">0.025</span>
+</code></pre></div>
+<p><strong>Source:</strong> An etcd disk too slow, by port49's own threshold: p99 of <code>etcd_disk_wal_fsync_duration_seconds</code> over 10 ms, or of <code>etcd_disk_backend_commit_duration_seconds</code> over 25 ms</p>
+<p><strong>Why this threshold:</strong> etcd's own guidance is a WAL fsync p99 under 10 ms; a drive that stalls can push store calls past the 500 ms call timeout in bursts: on a CT1000P3PSSD8 drive the session etcd logged 7974 to 9244 slow applies in cells d and e (tests/lab/results/load-beehive.md), against 1 and 0 in RAM (tests/lab/results/load-beehive-ram.md) and at most 74 on a GCE pd-ssd (operator-declared; a 44, c 74, d 1, e 0) with a WAL fsync mean of 0.72 to 0.86 ms (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md). Ten minutes over a 5m rate is a drive, not a compaction.</p>
+<h3 id="etcd_leader_changes">etcd_leader_changes<a class="headerlink" href="#etcd_leader_changes" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>etcd changed leader more than 3 times in an hour: a flapping network or a slow disk.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">etcd_server_leader_changes_seen_total</span><span class="p">[</span><span class="s">1h</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">3</span>
+</code></pre></div>
+<p><strong>Source:</strong> etcd changing leader too often: <code>increase(etcd_server_leader_changes_seen_total[1h]) &gt; 3</code></p>
+<p><strong>Why this threshold:</strong> Occasional changes are rollouts; four in an hour is a fault.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3248 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deploying port49 to Kubernetes with the Helm chart.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/operate/install/helm/">
+      
+      
+        <link rel="prev" href="../container/">
+      
+      
+        <link rel="next" href="../clients/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Install with Helm - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#install-with-helm" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Install with Helm
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-four-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The four requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secrets-and-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secrets and rotation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Secrets and rotation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rotating-the-encryption-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotating the encryption: key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-issuing-ca" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The issuing CA
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admin-calls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin calls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#at-3am" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        At 3am
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-and-scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage and scaling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alerts-and-scraping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alerts and scraping
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Network">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#anycast-with-metallb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Anycast with MetalLB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backups
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backups">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#velero-file-system-backup-of-the-volumes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Velero (file-system backup of the volumes)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-region" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-region
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-smoke-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The smoke tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-four-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The four requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#secrets-and-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Secrets and rotation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Secrets and rotation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rotating-the-encryption-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotating the encryption: key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-issuing-ca" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The issuing CA
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admin-calls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin calls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#at-3am" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        At 3am
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-and-scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage and scaling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alerts-and-scraping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alerts and scraping
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Network">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#anycast-with-metallb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Anycast with MetalLB
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backups
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backups">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#velero-file-system-backup-of-the-volumes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Velero (file-system backup of the volumes)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-region" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-region
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-smoke-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The smoke tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="install-with-helm">Install with Helm<a class="headerlink" href="#install-with-helm" title="Permanent link">&para;</a></h1>
+<p>This is one of three peer shapes (see <a href="../">Install</a>). The chart runs <code>port49d</code> and <code>port49-broker</code> as
+two StatefulSets, a volume claim per replica, against an etcd you supply. Nothing in port49 requires
+Kubernetes.</p>
+<p>Read the <a href="../#what-every-shape-needs">four requirements</a> on the Install page first, then follow the
+guide below, which is the chart's own README.</p>
+<p>Runs port49d (TACACS+) and port49-broker as two StatefulSets, a PVC per replica. Kubernetes is one
+supported shape among peers (systemd, containers); nothing in port49 requires it.</p>
+<p>Status: the chart's render checks run on a Go stand-in renderer (<code>make test</code>) and on real helm 3.22.0
+(<code>make helm-test</code>, a CI job), and the kind smoke installs it on a cluster with port49's own etcd (green in CI,
+run 41155086403).</p>
+<h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
+<p>You supply, as Secrets created with <code>--from-file</code> (never <code>--from-literal</code>): the device keys, the
+encryption key, etcd's CA and one etcd client identity per component, and the broker's TLS pair.</p>
+<div class="highlight"><pre><span></span><code>helm<span class="w"> </span>install<span class="w"> </span>port49<span class="w"> </span>deploy/helm/port49<span class="w"> </span>-n<span class="w"> </span>port49<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--set<span class="w"> </span>keys.existingSecret<span class="o">=</span>port49-device-keys<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--set<span class="w"> </span>encryption.existingSecret<span class="o">=</span>port49-encryption<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--set<span class="w"> </span>etcd.caSecret<span class="o">=</span>port49-etcd-ca<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--set<span class="w"> </span>etcd.port49d.existingSecret<span class="o">=</span>port49-etcd-port49d<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--set<span class="w"> </span>etcd.broker.existingSecret<span class="o">=</span>port49-etcd-broker<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--set<span class="w"> </span>broker.tls.existingSecret<span class="o">=</span>port49-broker-tls<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--set<span class="w"> </span><span class="s1">'etcd.endpoints={https://etcd-0:2379,https://etcd-1:2379,https://etcd-2:2379}'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--set-file<span class="w"> </span><span class="nv">policy</span><span class="o">=</span>policy.yaml<span class="w"> </span>--set-file<span class="w"> </span><span class="nv">inventory</span><span class="o">=</span>inventory.yaml
+</code></pre></div>
+<p>The schema refuses an install with fewer than three etcd members, a repeated or non-https member, or
+an empty Secret name. List every member: a client given one URL has no failover. port49 does not
+create or run etcd for you; <code>examples/etcd/</code> is a three-member example, and the kind smoke runs it with
+its init Job.</p>
+<p><strong>etcd's disk.</strong> etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
+datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
+500 ms call timeout in bursts. The <code>etcd_disk_slow</code> alert (<code>deploy/alerts</code>) fires when the WAL fsync
+or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms; a consumer QLC drive failed it (the notes are the <code>load-*</code> files in <code>tests/lab/results/</code>).
+port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The <code>port49_accounting_spool_disk_slow</code> alert watches it.</p>
+<p>Two server groups (for example a lab and production) are two releases in two namespaces with their
+own Secrets and their own etcd; they share nothing.</p>
+<h2 id="the-four-requirements">The four requirements<a class="headerlink" href="#the-four-requirements" title="Permanent link">&para;</a></h2>
+<ol>
+<li><code>etcd.endpoints</code>: every member, at least three.</li>
+<li><code>keys.existingSecret</code>: mounted whole at <code>/run/port49/keys</code>, in port49d's pod only, mode 0440 under
+   <code>fsGroup</code> (measured on kind: <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l82">L82</a>).</li>
+<li><code>encryption.existingSecret</code> and <code>encryption.id</code>: mounted in both pods.</li>
+<li><code>policy</code> and <code>inventory</code>, via <code>--set-file</code>. Without a policy port49d refuses to start.</li>
+</ol>
+<h2 id="secrets-and-rotation">Secrets and rotation<a class="headerlink" href="#secrets-and-rotation" title="Permanent link">&para;</a></h2>
+<p>Every secret is a mounted file, never an environment variable. Mounts are whole-volume and never
+<code>subPath</code>, because the kubelet updates a whole mount in place and a <code>subPath</code> mount never sees the
+update. Files are mode 0440; the pod sets <code>fsGroup: 65532</code> with <code>fsGroupChangePolicy: OnRootMismatch</code>
+so the unprivileged user can read them and the state directories are not made group-writable at every
+start.</p>
+<p>A key is read under the secret-file rule, so two things are refused at the pod's start, each with a line
+naming the file. A key directory that is group- or world-writable (outside a read-only Secret mount, which
+is excused): <code>chmod 0755</code> or <code>0750</code> it. A group-readable key whose group is not the pod's (fsGroup 65532
+is): a Secret volume's files are, and a file an injector or a CSI driver writes as <code>root:root</code> 0440 is not.
+Never a looser rule. Two mechanisms were measured on kind (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l83">L83</a>, run 41155086403):</p>
+<ul>
+<li><strong>The Secrets Store CSI driver is not supported for device keys.</strong> Its files are <code>0:0 0644</code> (the world
+  bit: refused) and, with the provider's <code>filePermission: 0440</code>, <code>0:0 0440</code> (port49d, uid 65532, cannot read
+  them). The driver chart (secrets-store-csi-driver 1.6.1) sets no <code>fsGroupPolicy</code> and the provider has no
+  owner or group option, so <code>fsGroup</code> is not applied to the volume and no setting makes the file readable by
+  65532 without a world bit. <code>filePermission: 0400</code> does not help: a <code>root:root</code> 0400 file is unreadable too.</li>
+<li><strong>The Vault Agent injector is offered for the encryption key only, never for device keys.</strong> By default the
+  agent is uid 100 and owns the rendered file (<code>100:65532 0440</code>); port49d refuses a key whose owner is neither
+  itself nor root, because whoever owns a file can rewrite it. With
+  <code>vault.hashicorp.com/agent-run-as-same-user: "true"</code> the file is port49d's own and port49d starts. But adding
+  a version is a pod rollout, not a reload: the injector reads its annotations only when a pod is admitted, and
+  each file is its own annotation. A device key must reach a running process with no restart (spec decision 54
+  ruling 2), and the injector failed that cell (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l83">L83</a> c), so device keys come from External Secrets or a Secret
+  volume (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l82">L82</a>). The encryption key changes rarely and a rollout is acceptable for it.</li>
+</ul>
+<p>fsGroup also acts on a PVC's root, and two rules meet there. With <code>OnRootMismatch</code> the kubelet walks the
+whole volume at a pod's start unless the root is group 65532, includes 0770 and has setgid (kubelet
+<code>volume_linux.go</code>, <code>requiresPermissionChange</code>); its walk adds group write to everything it reaches.
+port49's file fence refuses a group-writable directory above a file it reads, unless the directory is
+sticky and root-owned. So the <code>data-dir</code> init container, as root before the process starts, sets the
+volume root to <code>root:65532</code> mode 3770 (the kubelet then never walks it again, and the fence excuses
+it), makes the data directory with an explicit <code>chmod 0700</code>, and repairs everything below it to
+owner-only, so a walk that happens anyway (a restore, a driver that walks regardless) changes nothing
+the process sees. No fenced file (policy, inventory, device keys, the sealing key) lives on a PVC. A
+cluster that forbids root init containers needs a volume root provisioned 3770 root:65532 instead.
+If <code>data-dir</code> fails the pod sits in <code>Init:</code> and <code>kubectl describe pod</code> says why; nothing starts
+half-fenced.</p>
+<p>The kind smoke checks this against a real kubelet (green in CI): its two-generation cell uses a
+volume type the kubelet applies fsGroup to (a <code>local</code> volume or csi-hostpath, never kind's default
+hostPath class, which never applies it): install, delete the pod, and check the broker starts again,
+the root is <code>3770 root:65532</code> and <code>state/issuing-ca.key</code> is still 0600. Run first with the old 2755
+root, with issuance on, it must leave <code>issuing-ca.key</code> unusable after the walk (the broker says so and
+issues nothing; it does not crash-loop), which proves the cell detects it.</p>
+<p><code>examples/external-secret.yaml</code> syncs the device keys from Vault with External Secrets: one Secret key
+per key version (<code>core_v1</code>, <code>core_v2</code>), each from its own remote key. Adding a version is adding a
+remote key and an entry; nothing is overwritten, so a rollback is still a file on disk. The Vault Agent
+injector (encryption key only) and the Secrets Store CSI driver (not supported) are covered above.</p>
+<p><strong>Order matters.</strong> Put the key file in place first, then add the policy line that names it. To remove a
+key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
+file that is not there makes port49d refuse its start (<code>lstat ...: no such file</code>), so on a restart it
+crash-loops until you restore the key in the Secret or take the policy line out; the pod shows <code>CrashLoopBackOff</code> and <code>kubectl logs --previous</code> repeats the line.
+The example's store is a namespaced <code>SecretStore</code>, usable only from the release's namespace. A
+cluster-wide <code>ClusterSecretStore</code> without <code>conditions</code> can be used from every namespace: anyone who
+can create an ExternalSecret anywhere could read the device keys through your Vault role.
+<code>examples/external-secret-clusterstore.yaml</code> shows the option, with the namespace named.</p>
+<h3 id="rotating-the-encryption-key">Rotating the <code>encryption:</code> key<a class="headerlink" href="#rotating-the-encryption-key" title="Permanent link">&para;</a></h3>
+<p>One key everywhere, from one Secret, in three steps. The Secret holds each key as its own file, and the
+chart's <code>encryption.key</code> and <code>encryption.previous.key</code> name them (<code>encryption.key</code> by default).</p>
+<ol>
+<li>Add the new key to the Secret as a new file, <code>encryption-e2</code> (32 bytes, made as at install:
+   <code>--from-file</code>, never a literal), keeping the old <code>encryption.key</code>. Then upgrade with the new key as
+   <code>previous</code> while the old one stays current:
+   <code>--set encryption.previous.id=e2 --set encryption.previous.key=encryption-e2</code>.
+   Every pod now opens what either key sealed.</li>
+<li>Swap: <code>--set encryption.id=e2 --set encryption.key=encryption-e2 --set encryption.previous.id=c1
+   --set encryption.previous.key=encryption.key</code>. New records are sealed under <code>e2</code>.</li>
+<li>Remove <code>encryption.previous</code> and the old file only after the scheduled directory pass (every
+   <code>refresh_interval</code>) has re-sealed the second-factor records under <code>e2</code>. A record that opens under neither
+   key is never "not enrolled": that sign-in is <code>503 store_unavailable</code>, and the broker's line names
+   <code>port49 directory reset-second-factor</code>.</li>
+</ol>
+<p>A pod whose keys lack the id the directory store currently holds refuses to start, naming the store and the
+id. Never reuse an id; the chart refuses a <code>previous</code> with no file, the same id, or the same file as the
+current key.</p>
+<h2 id="the-issuing-ca">The issuing CA<a class="headerlink" href="#the-issuing-ca" title="Permanent link">&para;</a></h2>
+<p>This section applies when issuance is on: a person signs in at your identity provider and the broker
+issues a short-lived certificate. It is off by default, because it needs your provider: install with
+<code>-f examples/values-issuance.yaml</code> (the provider, client and domain replaced) so that
+<code>broker.identity.issuance</code> is set; <code>init-issuer</code> refuses a broker without it. A broker that takes
+certificates and tokens only has no issuing CA and skips this section. The values replace the chart's
+<code>humans</code> list: keep the <code>x509</code> entry in it if people still sign in with client certificates, or the
+broker stops accepting them (its start line names the verifiers it loaded).</p>
+<p>Every broker must hold the same issuing CA, or it refuses to start against the store's record of it.
+After the first install run, once:</p>
+<div class="highlight"><pre><span></span><code>deploy/helm/port49/scripts/copy-issuer.sh<span class="w"> </span>port49<span class="w"> </span>port49<span class="w"> </span>--from<span class="w"> </span><span class="m">0</span>
+</code></pre></div>
+<p><code>--from</code> is required: it names the broker whose CA is the one to keep (<code>--to</code> names targets; the
+default is every other broker). The script looks at every broker's volume first. If none holds a CA it
+runs <code>init-issuer</code> in a one-shot pod on the source's volume; if the source holds none but another
+broker does it refuses and names that broker (a second <code>init-issuer</code> would make a different CA). It
+copies <code>issuing-ca.pem</code> and <code>issuing-ca.key</code> (and <code>issuing-ca-previous.pem</code> during a rotation) to each
+target through a staging directory, with ownership and mode set, skips a target that already holds
+the same CA, and <strong>refuses, naming both certificate sha256s and both ordinals, a target that holds a
+different one: it never overwrites a CA.</strong> Then it restarts the brokers and prints each pod's "issuing
+ca" log line so you can compare them. It never <code>exec</code>s into a broker, and its helper pods have
+deadlines of minutes.</p>
+<p><strong>broker-0's volume was lost</strong> (or any broker's): copy from one that holds the CA, never run
+<code>init-issuer</code>:</p>
+<div class="highlight"><pre><span></span><code>deploy/helm/port49/scripts/copy-issuer.sh<span class="w"> </span>port49<span class="w"> </span>port49<span class="w"> </span>--from<span class="w"> </span><span class="m">1</span><span class="w"> </span>--to<span class="w"> </span><span class="m">0</span>
+</code></pre></div>
+<p>Do not reach for <code>forget-issuer</code>. It removes the store's record of the CA so that a new one can be
+made, and every certificate issued under the old CA stops working. It is for the case where every
+broker lost the CA and no copy exists.</p>
+<h2 id="admin-calls">Admin calls<a class="headerlink" href="#admin-calls" title="Permanent link">&para;</a></h2>
+<p>Admin commands (<code>port49 revoke</code>, <code>port49 directory ...</code>) are calls to the broker API and need a
+security-key press from an admin whose key chains to <code>broker.attestationRootsConfigMap</code> (a ConfigMap
+holding <code>attestation-roots.pem</code>). Without it every admin call is refused 503. Run them from a
+workstation that can reach the <code>&lt;release&gt;-broker</code> Service.</p>
+<p>Break-glass, when no broker is reachable: <code>scripts/revoke-offline.sh &lt;ns&gt; &lt;release&gt; -- --principal
+&lt;name&gt; [--lift|--list]</code> scales the brokers to 0, runs <code>port49-broker revoke --offline</code> against
+broker-0's volume, and scales back on every exit. The chart is on etcd, which keeps the revocation
+marks (with a copy in <code>broker.state_dir</code>), so it has no <code>init-revocations</code> step (that command is for a single-process trial on the memory
+store). The etcd roles are applied once per cluster by <code>examples/etcd/etcd-init-job.yaml</code>, which applies
+<code>port49d store-roles</code>' output as etcd's root and enables auth. Before it, run
+<code>port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml &gt; roles.sh</code> (the broker's
+config names the broker's own etcd certificate) and
+<code>kubectl -n port49-etcd create configmap port49-etcd-roles --from-file=roles.sh</code>; the Job's header
+comment has the details. <code>init-enrollments</code> is a one-off Job, run once per new deployment that uses directory password
+sign-in: <code>examples/init-enrollments-job.yaml</code> is it (adapt its names to
+your values, then <code>kubectl -n &lt;ns&gt; apply -f</code> it and <code>kubectl -n &lt;ns&gt; wait --for=condition=complete job/port49-init-enrollments
+--timeout=300s</code>; the kind job <code>make kind-enrollments</code> applies that file with only the image and the release's ConfigMap name changed, in the namespace <code>-n</code> names). A broker already running when <code>init-enrollments</code> finishes
+finds the new store within 30 seconds; until then its sign-ins answer <code>enrollment_store_lost</code>.</p>
+<h2 id="at-3am">At 3am<a class="headerlink" href="#at-3am" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>You see</th>
+<th>Look at</th>
+<th>Cause and action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pod <code>CrashLoopBackOff</code></td>
+<td><code>kubectl logs --previous &lt;pod&gt;</code></td>
+<td>The config or a Secret is wrong; the log names the field or reference, never its value.</td>
+</tr>
+<tr>
+<td>Pod <code>ContainerCreating</code> for minutes</td>
+<td><code>kubectl describe pod &lt;pod&gt;</code> (the Events)</td>
+<td>A named Secret or ConfigMap is missing: a kubelet event, never a port49 line.</td>
+</tr>
+<tr>
+<td>Pod <code>Pending</code></td>
+<td><code>kubectl describe pod &lt;pod&gt;</code></td>
+<td>A named PVC is missing or unbound, or nothing can be scheduled.</td>
+</tr>
+<tr>
+<td>port49d refuses to start naming etcd and a version</td>
+<td><code>kubectl logs --previous &lt;pod&gt;</code></td>
+<td>A member is below the floor; upgrade etcd. Every member is listed and checked.</td>
+</tr>
+<tr>
+<td>Not Ready, running</td>
+<td><code>curl :9049/readyz</code> through a port-forward</td>
+<td>A store is unreachable; the body says which.</td>
+</tr>
+<tr>
+<td>Admin call 503</td>
+<td>broker log</td>
+<td>No attestation roots configured.</td>
+</tr>
+<tr>
+<td>Brokers disagree on the CA, or one refuses to start on it</td>
+<td>the broker's "issuing ca" log line; <code>copy-issuer.sh</code> output</td>
+<td>Copy from a broker that holds the CA the store records, onto one that holds none (a lost volume): <code>copy-issuer.sh &lt;ns&gt; &lt;release&gt; --from &lt;ordinal&gt; --to &lt;ordinal&gt;</code>. It never overwrites a CA: onto a broker that holds a different one, including one "behind a promotion" after a rotation, it refuses and names both, and the files are copied by hand with a debug pod on that broker's PVC (the docs' "When it will not start"). Never <code>init-issuer</code> again, and not <code>forget-issuer</code>.</td>
+</tr>
+<tr>
+<td>Pod <code>Init:Error</code> or <code>Init:CrashLoopBackOff</code></td>
+<td><code>kubectl logs &lt;pod&gt; -c data-dir</code> and <code>-c data-dir-owner</code> (<code>describe</code> shows only the exit code)</td>
+<td><code>data-dir-owner</code> naming a path: a file in the data directory belongs to another uid; run the <code>chown -R 65532:65532 ...</code> it prints. <code>data-dir-owner</code> saying a directory may be mode 0000: <code>chmod u+rwx</code> it (as root on the volume), then restart. <code>data-dir</code> saying the data directory is a symlink: someone replaced it; inspect and remove the link. Otherwise the root init that sets up the volume failed; its log names the command. Usually a PVC that cannot be chowned (a read-only or network volume that refuses chown), or a namespace policy that drops its capabilities.</td>
+</tr>
+<tr>
+<td>No pod is ever created; the StatefulSet's events say <code>violates PodSecurity</code></td>
+<td><code>kubectl -n &lt;ns&gt; describe statefulset &lt;name&gt;</code></td>
+<td>The namespace enforces <code>restricted</code>. The data-dir init runs as root (it makes the volume's root 3770 and the data directory 0700), so the namespace must be <code>baseline</code>: <code>kubectl label --overwrite ns &lt;ns&gt; pod-security.kubernetes.io/enforce=baseline</code>.</td>
+</tr>
+<tr>
+<td>A backup Job failed</td>
+<td><code>kubectl logs job/&lt;name&gt; -c stale-check</code></td>
+<td>A <code>.new</code> file is left from a run that did not finish; the log names it. Neither backup image has a shell: remove it from a throwaway alpine pod that mounts the backups PVC (<code>kubectl run</code>, <code>rm /backup/&lt;name&gt;.new</code>), and the next run proceeds.</td>
+</tr>
+<tr>
+<td><code>kubectl get externalsecret</code> shows <code>SecretSyncedError</code></td>
+<td><code>kubectl describe externalsecret &lt;name&gt;</code></td>
+<td>ESO cannot reach the store or a remote key. The Secret keeps its last data, so a new key version never appears and port49d names the missing <code>secret_ref</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="storage-and-scaling">Storage and scaling<a class="headerlink" href="#storage-and-scaling" title="Permanent link">&para;</a></h2>
+<p>Each replica has its own PVC (the accounting spool for port49d, the state directory for the broker).
+Scaling down or deleting the release retains the PVCs; delete them yourself when you are sure.
+<code>autoscaling.enabled</code> renders an HPA on the <code>port49_connections</code> Pods metric; it needs a metrics
+adapter (for example prometheus-adapter) that you provide, and the StatefulSet then omits <code>replicas</code>.
+A scale-down leaves the spool of the removed pod on its PVC, so drain or collect it before deleting.</p>
+<h2 id="alerts-and-scraping">Alerts and scraping<a class="headerlink" href="#alerts-and-scraping" title="Permanent link">&para;</a></h2>
+<p><code>prometheusRule.enabled: true</code> renders the alert rules as a <code>PrometheusRule</code> and a <code>PodMonitor</code> for each
+workload's <code>metrics</code> port. The monitors set <code>job</code> to <code>port49d</code> and <code>port49-broker</code>, the two names the
+<code>port49_target_down</code>, <code>port49_target_absent</code> and <code>port49_broker_target_absent</code> rules key on
+(<code>deploy/alerts/README.md</code>). Both need the Prometheus Operator's CRDs, and <code>prometheusRule.labels</code> must be
+the ones your Prometheus selects on. The same labels go on the monitors; if your Prometheus selects
+PodMonitors on different labels from rules, set them on the monitors yourself.</p>
+<p>The metrics ports (9049 for port49d, 9050 for the broker) listen on every pod address. Restrict them with
+a NetworkPolicy that admits only your Prometheus (and the kubelet, for the probes on the same port); the
+chart does not render one.</p>
+<h2 id="network">Network<a class="headerlink" href="#network" title="Permanent link">&para;</a></h2>
+<p><code>service.type</code> defaults to LoadBalancer with <code>externalTrafficPolicy: Local</code>, and the device's source
+address must reach port49d unrewritten, because port49d admits a device by that address. Measured on kind
+(spec §15 <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l39">L39</a>, 2026-11-04, kube-proxy in iptables mode, a device outside every node, a NodePort Service):</p>
+<table>
+<thead>
+<tr>
+<th>Setting, and where the device dials</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Cluster</code>, a node running the pod</td>
+<td>fails: the source port49d sees is a pod-network address, not the device's</td>
+</tr>
+<tr>
+<td><code>Cluster</code>, a node not running the pod</td>
+<td>fails: the source is that node's own address</td>
+</tr>
+<tr>
+<td><code>Local</code>, a node running the pod</td>
+<td>works: port49d sees the device's own address</td>
+</tr>
+<tr>
+<td><code>Local</code>, a node not running the pod</td>
+<td>the connection times out, and port49d logs nothing, since the connection never reaches it</td>
+</tr>
+<tr>
+<td>host networking, the pod's node</td>
+<td>works, but the chart does not offer it</td>
+</tr>
+</tbody>
+</table>
+<p>Keep <code>Local</code>; <code>Cluster</code> breaks device binding. Under <code>Local</code>, give devices the LoadBalancer address, not a
+node's address: a pod that moves leaves its old node answering nothing, and the symptom is a device whose
+logins time out while port49d's log shows no attempt from it. MetalLB in BGP mode advertises the address
+only from nodes with a ready pod (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l85">L85</a> measured that); a cloud load balancer is unmeasured.</p>
+<p>Host networking passed in the lab, on a namespace relabelled <code>privileged</code>. The chart offers none: its namespace
+runs at Pod Security <code>baseline</code>. Kubernetes also refuses a pod's <code>net.ipv4.ip_unprivileged_port_start</code>
+sysctl on the host network, so a host-network pod needs that sysctl removed. Binding port 49 as the non-root
+user then depends on the node's own value, which is 1024 on an ordinary host: set it to 0 there or give
+the container a capability to bind. A kind node's value is inferred to be 0, not read.</p>
+<p>The TLS listener's Service has the same policy; its port was not dialled. <code>tlsListener.enabled</code> adds port 300
+and requires <code>tlsListener.existingSecret</code>.
+The pod sets <code>net.ipv4.ip_unprivileged_port_start</code> to 0 so the non-root process can bind 49; clusters
+that forbid that sysctl need a different arrangement (not offered here).</p>
+<p>A terminating port49d pod keeps serving for <code>port49d.preStopSeconds</code> (default 15) before it closes its
+listeners, so the route to it is withdrawn first. Without the wait, a login that a router or load
+balancer still sent to the pod was refused: with MetalLB over BGP the route took 6.6 s to leave the
+router after the listener closed (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l85">L85</a> c, measured on kind), and the rolling-restart run without the
+wait lost one login of 42 past its retry (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l85">L85</a> d). It applies to every <code>service.type</code>, because the endpoint leaves the Service at the
+pod's deletion in all of them. The image has no shell, so the wait is the kubelet's own <code>sleep</code>
+action, which needs Kubernetes 1.30 or later; on an older cluster set <code>port49d.preStopSeconds: 0</code>.
+<code>port49d.terminationGracePeriodSeconds</code> (default 60) must be at least the sleep plus 30, port49d's
+longest drain; the chart refuses a smaller value. With the 15 s wait the rolling restart lost no login
+(55 of 55 first time, <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l85">L85</a> d, run 41155086403).</p>
+<h3 id="anycast-with-metallb">Anycast with MetalLB<a class="headerlink" href="#anycast-with-metallb" title="Permanent link">&para;</a></h3>
+<p><code>service.anycast.enabled: true</code> with <code>service.anycast.address</code> adds MetalLB's
+<code>metallb.universe.tf/loadBalancerIPs</code> annotation to the TACACS+ Service. Nothing else changes, and
+MetalLB, its address pool and its BGP peers stay yours. Lab <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l85">L85</a> measured this on kind with MetalLB 0.16.1
+and an FRR 10.5.3 peer, and the chart refuses what it did not measure: <code>service.type</code> must be
+<code>LoadBalancer</code>, <code>externalTrafficPolicy</code> must be <code>Local</code>, and <code>port49d.preStopSeconds</code> must be at least 15.
+Measured: the device's own source address reaches port49d; exactly the nodes running a ready pod advertise
+the address; after a pod's listener closes its route left FRR 6.6 s later, with 33 of 33 per-transaction
+logins passing; a rolling restart lost no login. Single-connection sessions are not drained by this: two
+of four were still open when the window ended, so under anycast prefer per-transaction sessions
+(design section 13). tests/lab/results/L85-kind.md has the runs, including the two that led to the
+<code>preStop</code> wait.</p>
+<p>The image is distroless and non-root. The pods meet the Pod Security <code>baseline</code> level, and the
+namespace needs no weaker one. The volume setup is two init containers. The first runs as root with
+<code>CHOWN</code>, <code>FOWNER</code> and <code>FSETID</code> only, all in <code>baseline</code>'s list: it sets the volume's root and the data
+directory's owner and mode (inodes, never a descent). The second runs as 65532 with every capability
+dropped and does the recursive <code>chmod</code> inside the data directory, which it owns. A namespace
+enforcing <code>restricted</code> refuses the root init; use <code>baseline</code>. If a file inside the data directory is
+owned by another uid (a restore done as root), the second init stops with the path and the one
+command to run, <code>chown -R 65532:65532 &lt;data directory&gt;</code>, instead of leaving the fence to refuse it
+later.</p>
+<p><code>issuerDiscovery.enabled</code> (default off) binds <code>system:unauthenticated</code> to the issuer-discovery role
+for the cluster, which is a cluster-wide change: enable it in one release per cluster, and see
+<code>examples/kubernetes/issuer-discovery.yaml</code>.</p>
+<h2 id="backups">Backups<a class="headerlink" href="#backups" title="Permanent link">&para;</a></h2>
+<p>Two CronJobs, one pattern (the etcd snapshot job runs in the kind smoke, the enrollments job in its own kind job against a directory, <code>make kind-enrollments</code>): <code>examples/backup-cronjob.yaml</code> (the etcd
+snapshot, which needs etcd's root certificate and is yours to adapt) and the chart's own, off by default:
+<code>--set backup.enrollments.enabled=true --set backup.enrollments.claimName=&lt;your PVC&gt;</code> (the sealed
+enrollment store, <code>port49-broker export-enrollments --out FILE</code>; it mounts what the broker does, from
+the same template). It exports the enrollment store of a <code>directory_password</code> verifier, so the chart refuses
+to render it unless <code>config.broker.broker.identity.humans</code> has one (otherwise the job would fail every night).
+The kind smoke runs the etcd snapshot job only: it has no directory, and a directory refuses the smoke's
+policy. The enrollments job reads the sealed enrollment store in etcd (not the directory; the directory is only what the verifier's config needs to load). <code>make kind-enrollments</code> runs it against an OpenLDAP pod: <code>init-enrollments</code> as the example Job, then the export twice (a dated, non-empty, 0600 file owned by 65532 each, and a log holding only the broker's certificate-validity warning), then once over a stale <code>enrollments.new</code> (the job fails and <code>stale-check</code>'s log names it). That run exported a freshly initialised store, the mark with no enrolled person: an export holding enrollments is unmeasured. Neither the etcd nor the port49 image has a shell, so:</p>
+<ol>
+<li>a <code>stale-check</code> init container fails the job when <code>&lt;name&gt;.new</code> is left from a run that did not
+   finish (the failed pod stays, and <code>kubectl logs</code> names the file); remove it and the next run goes;</li>
+<li>the writer init container (<code>etcdctl snapshot save</code>, or <code>export-enrollments --out</code>) creates
+   <code>&lt;name&gt;.new</code> 0600 and never replaces a file;</li>
+<li>an alpine <code>finish</code> container does <code>umask 077</code>, renames to a dated name and prunes after 14 days.</li>
+</ol>
+<p>Nothing sealed is written to a log. The snapshot holds sealed data but is still sensitive; give its
+PVC a restrictive access mode. Restore enrollments with <code>port49 directory import</code>.</p>
+<h3 id="velero-file-system-backup-of-the-volumes">Velero (file-system backup of the volumes)<a class="headerlink" href="#velero-file-system-backup-of-the-volumes" title="Permanent link">&para;</a></h3>
+<p><code>examples/velero/</code> is a Velero <code>Schedule</code> with the steps around it. <strong>A Velero restore that includes
+<code>port49-etcd</code> is a store restore</strong>: it loses the revocations and lifts made since the backup
+and brings back redeemed tokens, so follow the restore runbook,
+<a href="https://blanketfish.github.io/port49/latest/operate/backup-and-restore/#restoring-etcd-from-a-snapshot">Restoring etcd from a snapshot</a> (delete <code>v1/t/</code> and <code>meta/judged</code>/<code>meta/judged_bundle</code>
+before the members serve clients, re-issue revocations with <code>scripts/revoke-offline.sh</code> (it runs <code>port49-broker revoke --offline</code>), lift again). Prefer
+restoring etcd from the <code>etcdctl snapshot</code> CronJob with <code>--bump-revision</code>; a file-system copy of a live member
+is crash-consistent at best and unmeasured under load (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> measured one restore on an idle cluster). Measured on kind (Velero 1.18.4 with
+its node agent, an S3-compatible store in the cluster; <code>tests/lab/results/L89-kind.md</code>, 2026-11-04): after a
+backup, deleting the namespace and a restore, both StatefulSets became ready with no fence refusal, the
+issuing CA's fingerprint was unchanged, the owner, group and mode of <code>state/</code>, <code>issuing-ca.key</code> and the
+spool directory were unchanged (65532:65532, 0700 and 0600), and a mint and a login succeeded. The
+measurement used file-system backup because kind has no snapshot-capable CSI driver; CSI snapshots are
+not measured here.</p>
+<ul>
+<li><strong>Restore with the pods running, never with the StatefulSets at 0 replicas.</strong> Velero's file-system
+  restore copies a volume through the pod that mounts it; restored at 0 replicas, the restore stayed
+  <code>InProgress</code> past 8 minutes with every pod volume restore <code>New</code> and its pod absent (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> cell (c), run
+  42053716808). <code>examples/velero/README.md</code> has the order (etcd held down while the pods run, then both
+  StatefulSets scaled to 0) and the recovery from a restore at 0 replicas.</li>
+<li><strong>The backup holds the issuing CA's private key</strong> (<code>state/issuing-ca.key</code>), each broker's state and the
+  accounting spool. <strong>The bucket alone also holds the namespaces' Secrets</strong>, unencrypted by Velero: the
+  TACACS+ keys, the store's encryption key, the etcd CA and client identities and the TLS key. The
+  repository key protects only the volumes. Protect the bucket like the CA key: server-side encryption, and
+  access limited to the backup's own credentials.</li>
+<li><strong>Set the repository key from your own Secret before installing Velero.</strong> Velero's default repository
+  password is a well-known static value, and Velero writes it into <code>velero-repo-credentials</code> itself when
+  it finds no Secret (<code>examples/velero/README.md</code> has the order).</li>
+<li><strong>Velero skips a hostPath volume with only a warning, and the backup still reads Completed.</strong> The first
+  measured run backed up 4 of the namespace's 7 claims: etcd's volumes were hostPath (kind's default
+  class), and the backup said "Volume data in pod port49/etcd-0 is a hostPath volume which is not
+  supported for pod volume backup, skipping" (lab-kind run 41855911600). The restore then brought etcd back
+  empty and port49d never became ready. Put etcd on volumes the node agent can read: list the volumes
+  backed by hostPath (a claim and its path per line; no output means none), and move any that appear:</li>
+</ul>
+<!-- l89:hostpath:begin -->
+<p><div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>get<span class="w"> </span>pv<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{range .items[*]}{.spec.claimRef.namespace}/{.spec.claimRef.name} {.spec.hostPath.path}{"\n"}{end}'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">'^(port49|port49-etcd)/'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'NF == 2'</span>
+</code></pre></div>
+  <!-- l89:hostpath:end -->
+</p>
+<p>A claim that no pod mounts (a spool kept after a scale-down, say) is never copied: file-system backup
+  reads a volume through the pod that mounts it. So after every backup check each claim in both namespaces
+  by name, not by count. This prints every claim without a completed pod volume backup (it assumes
+  StatefulSet claim names, <code>&lt;volume&gt;-&lt;pod&gt;</code>, as the chart and the etcd example use), and nothing is the pass:</p>
+<!-- l89:claims:begin -->
+<p><div class="highlight"><pre><span></span><code><span class="nv">backup</span><span class="o">=</span>&lt;the<span class="w"> </span>backup<span class="s1">'s name&gt;</span>
+<span class="s1">comm -23 \</span>
+<span class="s1">  &lt;(kubectl get pvc -A -o jsonpath='</span><span class="o">{</span>range<span class="w"> </span>.items<span class="o">[</span>*<span class="o">]}{</span>.metadata.namespace<span class="o">}</span>/<span class="o">{</span>.metadata.name<span class="o">}{</span><span class="s2">"\n"</span><span class="o">}{</span>end<span class="o">}</span><span class="s1">' | grep -E '</span>^<span class="o">(</span>port49<span class="p">|</span>port49-etcd<span class="o">)</span>/<span class="s1">' | sort) \</span>
+<span class="s1">  &lt;(kubectl -n velero get podvolumebackups -l velero.io/backup-name=$backup \</span>
+<span class="s1">      -o jsonpath='</span><span class="o">{</span>range<span class="w"> </span>.items<span class="o">[</span>?<span class="o">(</span>@.status.phase<span class="o">==</span><span class="s2">"Completed"</span><span class="o">)]}{</span>.spec.pod.namespace<span class="o">}</span>/<span class="o">{</span>.spec.volume<span class="o">}</span>-<span class="o">{</span>.spec.pod.name<span class="o">}{</span><span class="s2">"\n"</span><span class="o">}{</span>end<span class="o">}</span><span class="err">'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sort<span class="o">)</span>
+</code></pre></div>
+  <!-- l89:claims:end -->
+</p>
+<p><a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> runs these two commands verbatim, from this file, in CI after its backup (lab-kind run 41870212174): each printed nothing on a good backup, and with a claim no pod mounts the second printed exactly that claim.</p>
+<p>The backup's own warnings, which name a volume Velero skipped:</p>
+<div class="highlight"><pre><span></span><code>velero<span class="w"> </span>backup<span class="w"> </span>describe<span class="w"> </span>&lt;the<span class="w"> </span>backup<span class="err">'</span>s<span class="w"> </span>name&gt;<span class="w"> </span>--details<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>-A6<span class="w"> </span>warnings
+</code></pre></div>
+<h2 id="multi-region">Multi-region<a class="headerlink" href="#multi-region" title="Permanent link">&para;</a></h2>
+<p><code>examples/values-multi-region.yaml</code> gives the session store its own etcd per region with a 500 ms call
+timeout; port49d starts without waiting for it.</p>
+<h2 id="the-smoke-tests">The smoke tests<a class="headerlink" href="#the-smoke-tests" title="Permanent link">&para;</a></h2>
+<p><code>make kind-smoke</code> and <code>make kind-smoke-red</code> run the chart on a kind cluster, whose nodes are privileged
+containers. The smokes run in CI (<code>.github/workflows/kind.yml</code>). Locally they refuse to start on a host with a TPM or a security key (<code>/dev/tpm0</code>, <code>/dev/tpmrm0</code>, a Yubico device on the USB bus); the
+refusal is one line that names the device it found.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3390 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="What to back up, how to restore it, and what a restore does to live sessions.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/operate/backup-and-restore/">
+      
+      
+        <link rel="prev" href="../secrets/">
+      
+      
+        <link rel="next" href="../monitoring/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Backup and restore - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#backup-and-restore" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Backup and restore
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-restore-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a restore does
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-shape-must-keep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each shape must keep
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What each shape must keep">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-enrollments-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The enrollments export
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-restore-floor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The restore floor
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The restore floor">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-port49-cannot-tell" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When port49 cannot tell
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-you-see" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you see
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-revision-bump-and-the-5-minute-band" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The revision bump and the 5-minute band
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restoring-etcd-from-a-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restoring etcd from a snapshot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restoring-with-velero" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restoring with Velero
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-backup-holds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the backup holds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pinning-the-plugin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pinning the plugin
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Restore">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovering-from-a-restore-at-0-replicas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovering from a restore at 0 replicas
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-restore-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a restore does
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-shape-must-keep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each shape must keep
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What each shape must keep">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-enrollments-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The enrollments export
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-restore-floor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The restore floor
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The restore floor">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-port49-cannot-tell" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When port49 cannot tell
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-you-see" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you see
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-revision-bump-and-the-5-minute-band" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The revision bump and the 5-minute band
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restoring-etcd-from-a-snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restoring etcd from a snapshot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restoring-with-velero" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restoring with Velero
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-backup-holds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the backup holds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pinning-the-plugin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pinning the plugin
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Restore">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovering-from-a-restore-at-0-replicas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovering from a restore at 0 replicas
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="backup-and-restore">Backup and restore<a class="headerlink" href="#backup-and-restore" title="Permanent link">&para;</a></h1>
+<p>Read the first section before you need it. A restore is the one routine operation that can admit a
+person you revoked, so its steps run in a fixed order and each safety step has a check.</p>
+<h2 id="what-a-restore-does">What a restore does<a class="headerlink" href="#what-a-restore-does" title="Permanent link">&para;</a></h2>
+<p>A restore puts the store back to the moment of its snapshot. Two things follow, and the rest of this page
+exists to undo them:</p>
+<ul>
+<li><strong>Revocations made since the snapshot are gone, and lifts made since are undone.</strong> A revoked
+  principal or certificate is admitted again until the revocation is put back.</li>
+<li><strong>Every single-use token redeemed since the snapshot is back, unspent.</strong> Redeemable again until it
+  expires (a token lives at most 15 minutes).</li>
+</ul>
+<p>port49 defends against both on its own, and still asks you for steps, because some restores it cannot
+see (below). Keep the order of the runbook: the token delete comes before anything reaches the store,
+and the revocations are re-issued before any broker starts.</p>
+<h2 id="what-each-shape-must-keep">What each shape must keep<a class="headerlink" href="#what-each-shape-must-keep" title="Permanent link">&para;</a></h2>
+<p>All three shapes (<a href="../install/systemd/">systemd</a>, <a href="../install/container/">container</a>,
+<a href="../install/helm/">Helm</a>) keep the same things. Only the paths differ.</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Why it is in the backup</th>
+<th>systemd</th>
+<th>container (compose)</th>
+<th>Helm</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The etcd data of every cluster: the directory store, and each region's session store</td>
+<td>The revocation marks, second factors, pins and sessions. A snapshot holds the plaintext index (principal, device, username, certificate, <code>sid</code>): guard it as the store itself.</td>
+<td>the hourly <code>port49-etcd-snapshot</code> timer, from an etcd host</td>
+<td>each <code>etcd-N-data</code> volume</td>
+<td>the <code>port49-etcd-snapshot</code> CronJob (<code>examples/backup-cronjob.yaml</code>)</td>
+</tr>
+<tr>
+<td><code>broker.state_dir</code> of <strong>every</strong> broker: <code>marks.json</code>, <code>witness.json</code>, and <code>issuing-ca.pem</code> and <code>issuing-ca.key</code> when the broker issues certificates</td>
+<td><code>marks.json</code> is the copy that puts back revocations a restore lost. <code>witness.json</code> is how a broker tells a restore. The CA is the private key your devices trust: whoever reads the backup can issue certificates.</td>
+<td><code>/var/lib/port49-broker</code></td>
+<td>the <code>broker-state</code> volume</td>
+<td>one PVC per broker replica, <code>state/</code> inside it</td>
+</tr>
+<tr>
+<td>port49d's accounting spool and the file beside it, <code>&lt;accounting.spool_path&gt;.restore.json</code></td>
+<td><code>restore.json</code> is port49d's record of the restore witness, so a restart still knows the store was restored. Two port49d with spools in one directory each keep their own.</td>
+<td><code>/var/spool/port49d</code></td>
+<td>the <code>port49d-spool</code> volume</td>
+<td>the port49d PVC (<code>/var/spool/port49d/data</code>)</td>
+</tr>
+<tr>
+<td>On the memory store only: the directory holding <code>broker.revocations_file</code></td>
+<td>The memory store runs the broker inside port49d, which refuses <code>broker.state_dir</code>; the broker keeps its state beside the revocations file. That directory holds the revocations file (the marks), <code>enrollments.json</code> (the sealed enrollment store), the CRLs the broker verified, and, when the broker issues certificates, <code>issuing-ca.pem</code> and <code>issuing-ca.key</code> (with <code>-next</code> or <code>-previous</code> copies during a CA rotation): whoever reads the backup can issue certificates. On etcd the store keeps the marks and none of this applies.</td>
+<td>the directory of <code>broker.revocations_file</code></td>
+<td>same</td>
+<td>same</td>
+</tr>
+<tr>
+<td>The enrollment store of a <code>directory_password</code> verifier</td>
+<td>Second factors. On etcd it is sealed records in the directory store; on the memory store it is the sealed file <code>enrollments.json</code>, in the directory above.</td>
+<td>the daily <code>port49-enrollments-export</code> timer, on a broker host</td>
+<td>no job is shipped: run <code>port49-broker export-enrollments --out FILE</code> from your scheduler</td>
+<td>the chart's <code>backup.enrollments</code> CronJob (off by default)</td>
+</tr>
+</tbody>
+</table>
+<p>The configuration, the policy and the secrets are not on this list: they are in your configuration
+management and your secrets manager. Two cautions:</p>
+<ul>
+<li>
+<p><strong>A backup is only restorable while every key that sealed its records is kept.</strong> Every record inside
+  an etcd snapshot, a Velero backup or an enrollments export stays sealed under the <code>encryption:</code> key
+  that was current when the record was written. An enrollments export keeps each record's own seal and
+  seals only its envelope under the key current at export time.</p>
+<p>Keep every old key file, offline, as long as any backup holding its records is kept. Velero also stores
+the encryption Secret in its bucket, so the bucket is as sensitive as the key.
+<a href="../../admin/key-rotation/#backups-and-exports-need-every-key-that-sealed-their-records">Key rotation</a> has the
+rule and what a missing key costs.</p>
+</li>
+<li>
+<p><strong>Back up <code>broker.state_dir</code> with the broker's host, not from a different moment.</strong> A broker whose
+  <code>state_dir</code> survived the restore is the one that puts back the revocations the store lost, so the runbook
+  starts it first.</p>
+</li>
+</ul>
+<h3 id="the-enrollments-export">The enrollments export<a class="headerlink" href="#the-enrollments-export" title="Permanent link">&para;</a></h3>
+<p><code>port49-broker export-enrollments --out FILE</code> writes the sealed enrollment store to a new file (mode
+0600, never replacing one). The unit and the CronJob run it on a schedule, keep 14 days, and write a
+temporary file that is renamed, so a failed run changes nothing. On Helm a <code>stale-check</code> init container
+fails the Job when a <code>.new</code> file is left from a run that did not finish; remove it, and the next run goes.</p>
+<p>A new deployment that uses directory password sign-in runs <code>port49-broker init-enrollments</code> once,
+before the first start (on Helm, <code>examples/init-enrollments-job.yaml</code>). It creates the store the export
+reads, and a second run is refused (<code>the enrollment store is already there</code>). Until it has run,
+sign-ins answer <code>enrollment_store_lost</code>.</p>
+<p>To restore from an export, as an admin with a key press:</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>directory<span class="w"> </span>import<span class="w"> </span>&lt;<span class="w"> </span>enrollments-&lt;date&gt;.json
+</code></pre></div>
+<p>The import refuses when the store holds a second factor enrolled or reset after the export was taken,
+because it would undo it. <code>--replace</code> replaces the store anyway. An export sealed under a key the broker
+does not hold is refused, and the message tells you to set that key as <code>encryption.previous</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured</p>
+<p>The Helm export has been run only against a freshly initialised store, which holds the creation
+mark and no enrolled person. An export that holds enrolled people has not been measured. The systemd
+timer has not been run on a real host: run it once by hand before you rely on it.</p>
+</div>
+<h2 id="the-restore-floor">The restore floor<a class="headerlink" href="#the-restore-floor" title="Permanent link">&para;</a></h2>
+<p>An etcd restore can bring back a token that was redeemed after the snapshot. port49 refuses such a token
+in three places, and the runbook adds a fourth, the delete, for the cases where the first two cannot
+tell.</p>
+<ol>
+<li><strong>port49d's restore floor.</strong> Every token records the store revision it was created at. port49d
+   reads <code>meta/witness</code> once a second. When the witness or the store's revision is lower than its own
+   record (<code>&lt;accounting.spool_path&gt;.restore.json</code>), the store was restored. The revision of that read
+   becomes the floor: a token at or below it is refused <code>FAIL</code> with reason <code>token_spent</code>, once, and
+   the user mints again. A token minted after the read is served. Each refusal adds one to
+   <code>port49_redemption_restored_refused_total</code>.</li>
+<li><strong>The runner's purge.</strong> The broker that holds the keyspace compares <code>meta/witness</code> with its own
+   <code>broker.state_dir/witness.json</code>. A store below the record, or no record at all, makes it purge every
+   unspent token and every once-only record (sign-in challenges, proofs, nonces).</li>
+<li><strong>The mint gate.</strong> While a purge is owed, that broker mints nothing, so a token is not minted into a
+   purge that would delete it.</li>
+<li><strong>The delete,</strong> step 3 of the runbook, before any port49d or broker reaches the restored store.</li>
+</ol>
+<h3 id="when-port49-cannot-tell">When port49 cannot tell<a class="headerlink" href="#when-port49-cannot-tell" title="Permanent link">&para;</a></h3>
+<p>port49d tells a restore only from a record that is <em>newer</em> than the restored store. So it does not see
+one when:</p>
+<ul>
+<li>the restore also restored the spool directory or <code>broker.state_dir</code> (Velero, a volume snapshot), so
+  <code>restore.json</code> and <code>witness.json</code> came back with the store. They are newer than the store only when the
+  store had writes in the backup window, which is usual on a busy store and not on an idle one;</li>
+<li>port49d's spool directory is new or was lost. It has no <code>restore.json</code> and takes the restored witness as
+  its first record. It logs
+  <code>port49d: store: no restore record at &lt;path&gt;: a restore made before this port49d's first read of the store cannot be told; after a restore, delete the unspent tokens before this port49d reaches the store (step 3 of Restoring etcd from a snapshot)</code>.</li>
+</ul>
+<p>Either way a restored token is redeemed a second time with no line saying so. <strong>The delete is required
+in both cases.</strong> A broker with no <code>witness.json</code> (an empty or new <code>broker.state_dir</code>) purges once at its
+first takeover, which costs every user one new token and is expected on a cold start of a whole fleet
+on new volumes.</p>
+<p>A record that cannot be read or decoded is moved aside (<code>&lt;path&gt;.bad-&lt;time&gt;</code>), and the first read is taken
+as a restore: every token in the store is refused <code>token_spent</code> once.</p>
+<h3 id="what-you-see">What you see<a class="headerlink" href="#what-you-see" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>You see</th>
+<th>It means</th>
+<th>You do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>port49d's stderr: <code>port49d: store: the session store was restored from a snapshot: meta/witness is …</code> and the tail <code>Revocations and marks made after the snapshot are lost: follow the restore runbook, Restoring etcd from a snapshot</code></td>
+<td>port49d found the restore and set its floor. The line names the floor revision. After a restore without <code>--bump-revision</code> it also names the band (below).</td>
+<td>Follow the runbook from the revocations step if you have not. The line is a report, not a recovery.</td>
+</tr>
+<tr>
+<td><code>port49_store_restore_detected_timestamp_seconds</code> above 0, and the alert <a href="../../reference/alerts/#port49_store_restore_detected">port49_store_restore_detected</a> (ticket, for a day after)</td>
+<td>Same event, as a metric.</td>
+<td>The same.</td>
+</tr>
+<tr>
+<td>A user's login fails and <code>port49_redemption_restored_refused_total</code> rises</td>
+<td>Their token is from before the restore.</td>
+<td>They mint a new token (<code>port49 token</code>). Nothing else.</td>
+</tr>
+<tr>
+<td>A broker's stderr: <code>port49-broker: runner: &lt;why&gt;; every unspent token is purged and must be minted again (port49 token): N purged; M once-only records (sign-in challenges, proofs, nonces) deleted</code></td>
+<td>The runner purged. <code>&lt;why&gt;</code> is <code>the store's meta/witness is … below the … this replica saw: the store was restored from a snapshot</code>, or <code>no witness record in broker.state_dir; …</code>.</td>
+<td>Nothing. Every user mints again.</td>
+</tr>
+<tr>
+<td>A broker's stderr: <code>port49-broker: runner: N revocation(s) in broker.state_dir/marks.json were missing from the store (an etcd restore, …) and are put back: &lt;marks&gt;; lift any that were lifted on purpose with port49 revoke --lift</code></td>
+<td>The runner put back the revocations its copy held.</td>
+<td>Lift again, with <code>port49 revoke --lift</code>, any of them that were lifted on purpose before the snapshot.</td>
+</tr>
+<tr>
+<td>A broker's stderr: <code>broker.state_dir had no marks.json at this start; a revocation a store restore lost is put back only if this copy saw it</code></td>
+<td>This broker had no copy, so it put back nothing.</td>
+<td>If no broker's <code>state_dir</code> survived, re-issue every revocation made since the snapshot (step 4 of the runbook).</td>
+</tr>
+<tr>
+<td><code>port49_broker_mint_gate_closed</code> at 1 and <code>POST /v1/token</code> answering <code>503 store_unavailable</code> with <code>Retry-After: 5</code></td>
+<td>A broker owes the purge and mints nothing until it is done.</td>
+<td>Wait. If it stays at 1 for more than a minute (ticket <a href="../../reference/alerts/#port49_broker_mint_gate_closed">port49_broker_mint_gate_closed</a>), no runner is purging: check that one broker holds the keyspace, and read its stderr for a purge that failed. A purge cut short is made again by the next takeover.</td>
+</tr>
+<tr>
+<td><code>port49_redemption_restore_unjudged</code> at 1, and <code>port49d: store: reading meta/witness, to tell whether the store was restored: …; token redemptions are refused (store_unavailable) until a read answers; tried again every 1s</code></td>
+<td>port49d cannot read <code>meta/witness</code>, so it cannot tell whether the store was restored and refuses every token login. Page after 2 minutes: <a href="../../reference/alerts/#port49_redemption_restore_unjudged">port49_redemption_restore_unjudged</a>.</td>
+<td>Fix the store, or the daemon role's read of <code>meta/witness</code>. A device whose authentication <code>ERROR</code> is final (IOS XE, and Junos under <code>tacplus</code> alone) refuses break-glass until the read answers or port49d is stopped; stopping port49d lets those devices fall to break-glass. Do not delete <code>restore.json</code> to clear it: without the record port49d cannot tell a restore.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-revision-bump-and-the-5-minute-band">The revision bump and the 5-minute band<a class="headerlink" href="#the-revision-bump-and-the-5-minute-band" title="Permanent link">&para;</a></h3>
+<p>Restore an etcd snapshot with <code>--bump-revision</code>. It raises the restored store's revision by a billion
+(eleven days of writes at a thousand a second), so etcd never reuses a revision for another write. port49d
+tells a restore from its witness whether or not <code>--bump-revision</code> was used, and with it the floor
+needs no band: nothing is refused but the old tokens.</p>
+<p>Measured on vEOS with etcd 3.6.15
+(<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-arista_eos.md">L35-restore-arista_eos.md</a>):
+a snapshot at revision 338 of a store at 347 restored to 1000000338, its next write was 1000000339, and
+a read at 347 was refused as compacted.</p>
+<p><strong>Without <code>--bump-revision</code></strong> (a Velero restore cannot use it) the restored store climbs through the
+revisions the old timeline already used. port49d then also refuses, for <strong>5 minutes after its read</strong>,
+every token minted at a revision up to the old high mark, <code>token_spent</code>. The log line names the time:
+<code>a token minted until &lt;time&gt; (5 minutes after this read) at a revision up to &lt;N&gt; is refused until &lt;time&gt;; restore with --bump-revision (step 2 of Restoring etcd from a snapshot) to end that</code>.
+Users see a failed login, and so does every retry until the window ends. A token minted inside the window
+keeps its mint time, so it stays refused until the band ends, 20 minutes after the read, and pasting the
+same token again keeps failing. Tell users to mint a new token after the window. Break-glass is unaffected.</p>
+<h2 id="restoring-etcd-from-a-snapshot">Restoring etcd from a snapshot<a class="headerlink" href="#restoring-etcd-from-a-snapshot" title="Permanent link">&para;</a></h2>
+<p>This is the runbook for a restore of etcd on any shape. Do the steps in order. A step marked <strong>Check</strong> is
+a stop: do not go on until the check passes.</p>
+<ol>
+<li>
+<p><strong>Stop what could reach the restored store.</strong></p>
+<p><strong>On Helm, first suspend every GitOps controller</strong> (Argo CD auto-sync or self-heal, Flux) that manages
+<code>port49</code> or <code>port49-etcd</code>, with the commands in the <a href="#restoring-with-velero">Velero runbook</a> below
+(the paragraph before its step 1). Resume it after step 6. A StatefulSet cannot serve loopback
+only (step 2), so on Helm the brokers held at 0 are the only guard. A controller that puts the
+replicas back lets a broker reach the restored store before the delete and before the revocations are
+re-issued, and <strong>can admit a revoked principal</strong>.</p>
+<p><strong>Stop every <code>port49-broker</code></strong> (systemd: <code>systemctl stop port49-broker</code> on every broker host;
+container: stop the <code>port49-broker</code> service; Helm: scale the broker StatefulSet to 0).</p>
+<p>port49d may run on: it goes dark while the store is down. <strong>Also stop every port49d</strong> in any of these
+cases, because port49d may then not see the restore, and the delete below must land before it reaches
+the store:</p>
+<ul>
+<li>the restore also restored the spool directory or <code>broker.state_dir</code>;</li>
+<li>a port49d's spool is new;</li>
+<li>you cannot serve the restored store on loopback only (a StatefulSet cannot).</li>
+</ul>
+</li>
+<li>
+<p><strong>Restore with <code>--bump-revision</code> and <code>--mark-compacted</code></strong> on each member, from the same snapshot:
+    <code>etcdutl snapshot restore &lt;snapshot&gt; --data-dir &lt;new dir&gt; --bump-revision 1000000000 --mark-compacted</code>,
+    with the member flags your cluster uses (<code>--name</code>, <code>--initial-cluster</code>,
+    <code>--initial-advertise-peer-urls</code>).</p>
+<p>Start the members serving clients on <strong>loopback only</strong> (for example
+<code>--listen-client-urls https://127.0.0.1:2379 --advertise-client-urls https://127.0.0.1:2379</code>, the TLS
+flags unchanged, the peer URLs as they were so quorum forms). On systemd and compose, no port49d or
+broker can reach the restored store yet; on Helm only the stopped StatefulSets keep them off it.</p>
+<p>If the store was restored without <code>--bump-revision</code> anyway, also restart every port49d only after step 5's
+first runner has said its put-back line. Two things go wrong otherwise:</p>
+<ul>
+<li>a port49d restarted before then loads the restored marks, so it enforces none of the revocations the
+  restore lost;</li>
+<li>a port49d started after the restore seals below what a port49d that ran across it knows, so its
+  logins are denied <code>store_unavailable</code> until that process writes at the key.</li>
+</ul>
+</li>
+<li>
+<p><strong>Delete the unspent tokens and the judged records,</strong> on the loopback address, as etcd's root. Use your
+    store prefix (<code>stores.session.etcd.prefix</code>, <code>/port49/</code> by default):</p>
+<div class="highlight"><pre><span></span><code>etcdctl<span class="w"> </span>--endpoints<span class="w"> </span>https://127.0.0.1:2379<span class="w"> </span>del<span class="w"> </span>--prefix<span class="w"> </span>/port49/v1/t/
+etcdctl<span class="w"> </span>--endpoints<span class="w"> </span>https://127.0.0.1:2379<span class="w"> </span>del<span class="w"> </span>/port49/v1/meta/judged
+etcdctl<span class="w"> </span>--endpoints<span class="w"> </span>https://127.0.0.1:2379<span class="w"> </span>del<span class="w"> </span>/port49/v1/meta/judged_bundle
+</code></pre></div>
+<p>Add the <code>--cacert</code>, <code>--cert</code> and <code>--key</code> of etcd's root identity; in a container, run <code>etcdctl</code> in
+the member's own network namespace. <strong>Check:</strong> all three returned. Only then restart the members on
+their usual client URLs.</p>
+<p>On Helm the one-shot Job <code>restore-unspent</code> runs these three deletes from etcd's own image, as etcd's
+root; the Velero runbook below uses it.</p>
+</li>
+<li>
+<p><strong>Re-issue the revocations no broker's <code>marks.json</code> holds,</strong> while every broker is still stopped. These
+    are:</p>
+<ul>
+<li>those made while every broker was down, since no broker saw them;</li>
+<li>if no broker's <code>state_dir</code> survived the restore, every revocation made since the snapshot.</li>
+</ul>
+<p>Run <code>port49-broker revoke --offline --principal &lt;principal&gt;</code> on a broker host as the broker's user
+(<code>sudo -u port49-broker</code>; as root it refuses and names the line). On Helm,
+<code>deploy/helm/port49/scripts/revoke-offline.sh</code> does the same from the repository root. It leaves the
+brokers at the 0 it finds.</p>
+</li>
+<li>
+<p><strong>Check <code>broker.policy_file</code> on every broker host</strong> before any broker starts. Step 3 deleted
+    <code>meta/judged</code>, so the reload guard at a broker's start has no judged bundle to check against. The first
+    start says <code>no bundle has been judged on this keyspace; this start is not judged against one</code> and goes
+    on, and a policy file the guard would have refused is not caught. Confirm each host holds the policy
+    you mean to serve.</p>
+<p><strong>Start the brokers, first a broker whose <code>broker.state_dir</code> survived the restore.</strong> The first runner
+puts back only the revocations its own <code>marks.json</code> holds that the store lacks, and names them. A
+broker on an empty or new <code>state_dir</code> that runs first puts back none of the revocations made since
+the snapshot: its line says <code>had no marks.json at this start</code>. If no broker's <code>state_dir</code> survived, step
+4 had to re-issue them all.</p>
+<p>The first runner also applies every mark to the restored contexts and purges the unspent tokens.
+<strong>Check:</strong> a runner printed <code>every unspent token is purged</code>. If none did, delete the restored tokens
+again as root (step 3). Then start any port49d you stopped.</p>
+</li>
+<li>
+<p><strong>Lift again,</strong> with <code>port49 revoke --lift</code>, any revocation that was lifted since the snapshot and that
+    the put-back line named.</p>
+</li>
+<li>
+<p><strong>Run <code>port49 directory forget</code> again</strong> for every pin forgotten since the snapshot: a restore brings
+    the old pin back (<a href="../stores/">Stores</a>).</p>
+</li>
+<li>
+<p>If a replay fails <code>token_not_found</code> with the log line <code>etcd: superseded record "&lt;prefix&gt;v1/meta/superseded_all" does not decode</code>,
+    delete that one key as etcd's root (<code>etcdctl del &lt;prefix&gt;v1/meta/superseded_all</code>); the next purge
+    writes it again. That is availability, never an admission.</p>
+</li>
+</ol>
+<p>A restored snapshot also brings back every context it held. One that a revocation by principal or
+certificate ended is denied again at once by the marks. One that a self or key revocation ended has no
+mark and is live again until its idle TTL: revoke it again.</p>
+<h2 id="restoring-with-velero">Restoring with Velero<a class="headerlink" href="#restoring-with-velero" title="Permanent link">&para;</a></h2>
+<p>Prefer restoring etcd from an etcd snapshot (the CronJob's), as above, with <code>--bump-revision</code>, and use
+Velero for the other volumes. <strong>A Velero restore that includes <code>port49-etcd</code> is a store restore:</strong> it cannot use
+<code>--bump-revision</code>, so the 5-minute band applies, and the spool and <code>broker.state_dir</code> come back with the
+store, so the delete of step 3 is <strong>required</strong>, not belt and braces. The runbook below is the repository's
+own file, <code>deploy/helm/port49/examples/velero/README.md</code>, so it matches the chart you run. It restores
+etcd alone first, runs the <code>restore-unspent</code> Job (the delete of step 3), holds etcd down, restores
+<code>port49</code> with its pods running so Velero can copy their volumes, then holds both StatefulSets at 0 and
+brings etcd back, so the revocations are re-issued before any broker or port49d reaches the store.</p>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured</p>
+<p>The Argo CD and Flux suspend and resume commands in the runbook follow those tools' documented
+commands, and no GitOps controller has run the restore. Restoring <code>port49</code> while etcd is held down in
+its own namespace has not been measured either: the measurement ran against an etcd that shared the
+release's namespace and was never held at 0. A file-system copy of a live etcd member under load, and
+a CSI volume snapshot in place of file-system backup, are also unmeasured. Skipping the suspend step
+can admit a revoked principal until the revocations are re-issued.</p>
+</div>
+<p>What is measured is on kind, with Velero 1.18.4 and its node agent
+(<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L89-kind.md">L89-kind.md</a>): a backup of both
+StatefulSets, a deleted namespace and a restore left both ready with no fence refusal, the issuing CA
+unchanged, and a mint and a login working; a restore with the StatefulSets at 0 replicas hung; and the
+restore order below, with the pods running and then scaled to 0, completed with <code>marks.json</code>, the CA and
+the spool intact.</p>
+<p>Everything from here to the end of the page is that README verbatim: what the backup holds, its
+requirements, how to pin the plugin, then the restore.</p>
+<h2 id="what-the-backup-holds">What the backup holds<a class="headerlink" href="#what-the-backup-holds" title="Permanent link">&para;</a></h2>
+<p>The backup holds <code>issuing-ca.key</code>, the issuing CA's private key, in each broker's <code>state/</code> directory,
+the broker state, and the accounting spool of each port49d. Whoever reads the bucket and the repository
+key can issue certificates your devices trust.</p>
+<p>The bucket alone holds more. Velero encrypts only the volume data, under the repository key. It stores
+the namespaces' Secrets as it reads them, unencrypted: the TACACS+ keys, the store's encryption key, the
+etcd CA and client identities, and the TLS key. Read access to the bucket is enough to take them. The
+repository key protects the volumes and nothing else. Protect the bucket like the CA key.</p>
+<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
+<ol>
+<li>
+<p>The repository key is yours, from a Secret, created BEFORE Velero is installed and before the first
+   backup. Velero's default repository password is a well-known static value, and Velero writes that
+   Secret itself when it starts and finds none. A repository made under the default key keeps it, so a
+   backup made first is encrypted with a key everyone knows. Generate the key and create the Secret from
+   a file, never from a value on the command line:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">umask</span><span class="w"> </span><span class="m">077</span>
+head<span class="w"> </span>-c<span class="w"> </span><span class="m">32</span><span class="w"> </span>/dev/urandom<span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>&gt;<span class="w"> </span>repository-password
+kubectl<span class="w"> </span>create<span class="w"> </span>namespace<span class="w"> </span>velero
+kubectl<span class="w"> </span>-n<span class="w"> </span>velero<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>generic<span class="w"> </span>velero-repo-credentials<span class="w"> </span>--from-file<span class="o">=</span>repository-password<span class="o">=</span>./repository-password
+velero<span class="w"> </span>install<span class="w"> </span>...
+</code></pre></div>
+<p>Keep a copy outside the cluster: a restore into a new cluster needs it. If Velero already runs and
+has made no backup, delete the Secret Velero made, create yours, and restart the Velero deployment.</p>
+</li>
+<li>
+<p>Apply <code>schedule.yaml</code> only after step 1.</p>
+</li>
+<li>The bucket must be encrypted at rest (server-side encryption in the object store).</li>
+<li>Access to the bucket is limited to the backup's own credentials: no other principal, no public access,
+   no credentials shared with another workload.</li>
+</ol>
+<h2 id="pinning-the-plugin">Pinning the plugin<a class="headerlink" href="#pinning-the-plugin" title="Permanent link">&para;</a></h2>
+<p><code>velero install --plugins</code> cannot take an image by digest: Velero names the plugin's init container after
+the reference, and a digest makes that name invalid. Give it the tag, then check the running pod's
+<code>imageID</code> (<code>kubectl -n velero get pods -o jsonpath='{..initContainerStatuses[*].imageID}'</code>) against the
+digest you reviewed, or mirror the plugin by tag into a registry you control.</p>
+<h2 id="restore">Restore<a class="headerlink" href="#restore" title="Permanent link">&para;</a></h2>
+<p><strong>A Velero restore that includes <code>port49-etcd</code> is a store restore</strong>, and a store restore
+rolls the revocation marks back too. It loses every revocation and lift made since the
+backup, so a revoked principal or certificate is admitted again until it is re-issued, and it brings back
+every token redeemed since, redeemable again while it has not expired. The backup also restores port49d's
+<code>&lt;accounting.spool_path&gt;.restore.json</code> and the brokers' <code>witness.json</code> with the store (two port49d with spools in one directory each keep their own record). port49d can then tell the restore only if
+<code>&lt;accounting.spool_path&gt;.restore.json</code> is newer than the etcd copy, which is usual on a store with writes in the backup window and
+not so on an idle one, and a broker tells it on the same terms (its <code>witness.json</code> is then newer than the
+restored witness), and purges once more and says so at its first takeover: the token delete (step 3 of
+<a href="https://blanketfish.github.io/port49/latest/operate/backup-and-restore/#restoring-etcd-from-a-snapshot">Restoring etcd from a snapshot</a>) is
+required, and it must land before port49d or a broker reaches the restored store. A Velero restore cannot
+use <code>--bump-revision</code>, so when port49d does tell the restore it also arms the 5-minute band: see "What
+you see after step 9" below. So the restore is made in this order, with nothing reaching the store until
+the end.</p>
+<p>Run step 2 in this directory (<code>deploy/helm/port49/examples/velero/</code>), which holds <code>restore-unspent.yaml</code>;
+step 8 from the repository root. <code>&lt;release&gt;</code> is your Helm release name, <code>&lt;backup&gt;</code> the Velero backup,
+<code>&lt;brokers&gt;</code> and <code>&lt;port49d&gt;</code> the <code>broker.replicas</code> and <code>port49d.replicas</code> you run, <code>&lt;prefix&gt;</code> the store
+prefix (<code>/port49/</code> by default), and <code>&lt;restore&gt;</code> a name for the restore of <code>port49</code>, new each time you make
+one (<code>port49-restore-1</code>, then <code>port49-restore-2</code>).</p>
+<p><strong>Do not restore <code>port49</code> with its StatefulSets at 0 replicas</strong> (a resource modifier setting
+<code>/spec/replicas</code> to 0, as the <code>restore-scale-zero.yaml</code> of earlier versions of this page did). Velero's
+file-system restore copies a volume through the pod that mounts it, and at 0 replicas there is none:
+measured on kind in <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> cell (c), run 42053716808, the restore stayed <code>InProgress</code> past 8 minutes with
+every pod volume restore at <code>New</code> and its pod absent. It does not finish. If you started one, see
+"Recovering from a restore at 0 replicas" below.</p>
+<p>So the pods run for the restore, and etcd is held down while they do, so none of them reaches the store.</p>
+<p><strong>First, silence the alerts for the restore's window.</strong> This order keeps port49d away from the store for
+longer than 5 minutes, so <code>port49_target_absent</code> (page, 5m) fires, and <code>port49_target_down</code> (page, 2m) fires
+if step 4's pods crash-loop while etcd is held down. Silence both, and the etcd rules, in Alertmanager for
+the length you expect the restore to take, and remove the silence after step 11. Expect
+<code>port49_store_restore_detected</code> (ticket) afterwards; step 9 says why.</p>
+<p><strong>Then, if a GitOps controller manages the release, suspend it for both namespaces.</strong> These follow Argo
+CD's and Flux's documented commands and are not measured in port49's lab (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> runs no GitOps controller).
+Argo CD with
+auto-sync or self-heal, or Flux, puts back what this order takes away: it re-creates the
+HorizontalPodAutoscaler that step 4 leaves out and reverts step 6's scale to 0, so brokers and port49d
+start before etcd is back or before step 8 re-issues the revocations.
+<strong>Skipping this can admit a revoked principal</strong> until step 8 runs.</p>
+<p>For each Argo CD Application that manages <code>port49</code> or <code>port49-etcd</code>, first note its sync policy: copy
+the <code>.spec.syncPolicy.automated</code> object of <code>argocd app get &lt;app&gt; -o json</code> as it is (its <code>prune</code>,
+<code>selfHeal</code>, <code>allowEmpty</code> and <code>enabled</code>), so step 11 restores exactly that. Suspend the parent too when
+the app is managed by another (app-of-apps, or generated by an ApplicationSet): the parent's next sync
+turns the child's sync back on. For a parent Application, suspend it the same way, first. For an
+ApplicationSet, first suspend the Application that syncs the ApplicationSet itself, if one does (or it
+puts the ApplicationSet back as Git has it), then keep the ApplicationSet from overwriting the child's
+sync policy: add <code>.spec.syncPolicy</code> to its <code>spec.ignoreApplicationDifferences</code>
+(<code>- jqPathExpressions: [.spec.syncPolicy]</code>), and remove that again after step 11 (first,
+check your Argo CD version supports <code>ignoreApplicationDifferences</code>). Then:</p>
+<div class="highlight"><pre><span></span><code>argocd<span class="w"> </span>app<span class="w"> </span><span class="nb">set</span><span class="w"> </span>&lt;app&gt;<span class="w"> </span>--sync-policy<span class="w"> </span>none
+</code></pre></div>
+<p>Under Flux, suspend every HelmRelease and every Kustomization that applies <code>port49</code> or <code>port49-etcd</code>
+(the etcd example is plain manifests, reconciled by a Kustomization):</p>
+<div class="highlight"><pre><span></span><code>flux<span class="w"> </span><span class="nb">suspend</span><span class="w"> </span>helmrelease<span class="w"> </span>&lt;name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;
+flux<span class="w"> </span><span class="nb">suspend</span><span class="w"> </span>kustomization<span class="w"> </span>&lt;name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;
+</code></pre></div>
+<p>Then:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>delete<span class="w"> </span>namespace<span class="w"> </span>port49<span class="w"> </span>port49-etcd
+</code></pre></div>
+<ol>
+<li>
+<p>etcd alone. No port49d or broker exists yet, so nothing reaches the store.</p>
+<p><!-- l89:etcdrestore:begin -->
+<div class="highlight"><pre><span></span><code>velero<span class="w"> </span>restore<span class="w"> </span>create<span class="w"> </span>--from-backup<span class="w"> </span>&lt;backup&gt;<span class="w"> </span>--include-namespaces<span class="w"> </span>port49-etcd<span class="w"> </span>--wait
+kubectl<span class="w"> </span>-n<span class="w"> </span>port49-etcd<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>Ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>etcd<span class="w"> </span>--timeout<span class="o">=</span>5m
+</code></pre></div>
+<!-- l89:etcdrestore:end --></p>
+</li>
+<li>
+<p>The token delete (step 3 of Restoring etcd from a snapshot), from a one-shot pod holding etcd's root client certificate (the
+   Secret <code>port49-etcd-root</code>, as <code>etcd-init-job.yaml</code> uses it). Edit <code>PREFIX</code> in the file if your prefix is
+   not <code>/port49/</code>.</p>
+<p><!-- l89:deletejob:begin -->
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>restore-unspent.yaml
+<span class="nv">state</span><span class="o">=</span>
+<span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">120</span><span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">  </span><span class="nv">state</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>-n<span class="w"> </span>port49-etcd<span class="w"> </span>get<span class="w"> </span>job/restore-unspent<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.conditions[?(@.status=="True")].type}'</span><span class="k">)</span>
+<span class="w">  </span><span class="k">case</span><span class="w"> </span><span class="s2">"</span><span class="nv">$state</span><span class="s2">"</span><span class="w"> </span><span class="k">in</span><span class="w"> </span>*Complete*<span class="p">|</span>*Failed*<span class="o">)</span><span class="w"> </span><span class="k">break</span><span class="w"> </span><span class="p">;;</span><span class="w"> </span><span class="k">esac</span>
+<span class="w">  </span>sleep<span class="w"> </span><span class="m">2</span>
+<span class="k">done</span>
+kubectl<span class="w"> </span>-n<span class="w"> </span>port49-etcd<span class="w"> </span>logs<span class="w"> </span>job/restore-unspent<span class="w"> </span>--all-containers<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<span class="k">case</span><span class="w"> </span><span class="s2">"</span><span class="nv">$state</span><span class="s2">"</span><span class="w"> </span><span class="k">in</span>
+<span class="w">  </span>*Complete*<span class="o">)</span><span class="w"> </span>kubectl<span class="w"> </span>-n<span class="w"> </span>port49-etcd<span class="w"> </span>delete<span class="w"> </span>job/restore-unspent<span class="w"> </span><span class="p">;;</span>
+<span class="w">  </span>*<span class="o">)</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"restore-unspent did not complete (</span><span class="nv">$state</span><span class="s2">): read its log above, and do not go on to step 3"</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span><span class="p">;</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">;;</span>
+<span class="k">esac</span>
+</code></pre></div>
+<!-- l89:deletejob:end --></p>
+<p>This ends when the Job completes or fails, and prints its log either way. If it did not complete, do not
+go on: the log says why. Each delete is its own container (<code>unspent</code>, <code>judged</code>, <code>judged-bundle</code>), so
+<code>kubectl -n port49-etcd logs job/restore-unspent -c unspent</code> shows one, and
+<code>kubectl -n port49-etcd describe job/restore-unspent</code> has its pods. Delete the Job before applying it
+again. The deletes need a quorum of etcd, not every member: one member not yet answering after the
+restore is fine as long as the Job completes. <code>context deadline exceeded</code> from every container means
+no quorum: bring etcd's members back before trying again. The Job runs etcdctl from etcd's own image,
+so it needs no egress.</p>
+</li>
+<li>
+<p>Hold etcd down: <code>kubectl -n port49-etcd scale statefulset/etcd --replicas=0</code>.</p>
+</li>
+<li>
+<p>Restore <code>port49</code>, without the HorizontalPodAutoscaler (the chart's <code>autoscaling.enabled</code>): a pod it
+   added while the pods run would have a claim with no backup, and step 5 would find a pod with no line.
+   Step 11 brings it back. Its pods start, so the node agent can restore their volumes, and with etcd down they
+   cannot reach the store. The lab cannot hold its etcd down apart from the release (one namespace), so
+   <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> (d) runs this command with its etcd up.</p>
+<p><!-- l89:restore:begin -->
+<div class="highlight"><pre><span></span><code>velero<span class="w"> </span>restore<span class="w"> </span>create<span class="w"> </span>&lt;restore&gt;<span class="w"> </span>--from-backup<span class="w"> </span>&lt;backup&gt;<span class="w"> </span>--include-namespaces<span class="w"> </span>port49<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--exclude-resources<span class="w"> </span>horizontalpodautoscalers.autoscaling<span class="w"> </span>--wait
+</code></pre></div>
+<!-- l89:restore:end --></p>
+</li>
+<li>
+<p>Check that the volumes came back, by the restore's name. This prints the restore's phase, then one
+   line per pod volume restore:</p>
+<p><!-- l89:volumes:begin -->
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>-n<span class="w"> </span>velero<span class="w"> </span>get<span class="w"> </span>restore<span class="w"> </span>&lt;restore&gt;<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.phase}{"\n"}'</span>
+kubectl<span class="w"> </span>-n<span class="w"> </span>velero<span class="w"> </span>get<span class="w"> </span>podvolumerestores<span class="w"> </span>-l<span class="w"> </span>velero.io/restore-name<span class="o">=</span>&lt;restore&gt;<span class="w"> </span>-o<span class="w"> </span>custom-columns<span class="o">=</span>PHASE:.status.phase,POD:.spec.pod.name,VOLUME:.spec.volume
+</code></pre></div>
+<!-- l89:volumes:end --></p>
+<p>The phase must be <code>Completed</code>, and there must be a <code>Completed</code> line with volume <code>data</code> for every
+broker pod (<code>&lt;release&gt;-broker-0</code>, <code>-1</code>, ...) and every port49d pod (<code>&lt;release&gt;-port49d-0</code>, ...). A
+pod with no line did not have its volume restored. A line still <code>New</code> or <code>InProgress</code> is still copying: run the
+check again. <strong>Never go on to step 7 while the restore or any of these lines is not <code>Completed</code>.</strong> A
+broker that starts on an empty <code>state_dir</code> puts back none of the revocations the store restore lost.
+If one is missing or <code>Failed</code>, stop: no broker or port49d has reached the store, so start over from
+the first command with a new <code>&lt;restore&gt;</code>.</p>
+</li>
+<li>
+<p>Scale both StatefulSets to 0, and wait until no port49 pod is left.</p>
+<p><!-- l89:scalezero:begin -->
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>-n<span class="w"> </span>port49<span class="w"> </span>scale<span class="w"> </span>statefulset/&lt;release&gt;-broker<span class="w"> </span>statefulset/&lt;release&gt;-port49d<span class="w"> </span>--replicas<span class="o">=</span><span class="m">0</span>
+kubectl<span class="w"> </span>-n<span class="w"> </span>port49<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span>delete<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>port49<span class="w"> </span>--timeout<span class="o">=</span>3m
+</code></pre></div>
+<!-- l89:scalezero:end --></p>
+</li>
+<li>
+<p>Bring etcd back: <code>kubectl -n port49-etcd scale statefulset/etcd --replicas=3</code>, and wait for it as
+   step 1 does.</p>
+</li>
+<li>
+<p>Then, with no broker and no port49d running, re-issue the revocations made since the backup (step 4
+   of Restoring etcd from a snapshot). The script leaves the brokers at the 0 it finds. Run it from the repository root.</p>
+<p><!-- l89:revoke:begin -->
+<div class="highlight"><pre><span></span><code>deploy/helm/port49/scripts/revoke-offline.sh<span class="w"> </span>port49<span class="w"> </span>&lt;release&gt;<span class="w"> </span>--<span class="w"> </span>--principal<span class="w"> </span>user:bob@example.com
+</code></pre></div>
+<!-- l89:revoke:end --></p>
+</li>
+<li>
+<p>The brokers first, a broker whose <code>broker.state_dir</code> survived the restore first (the check in step 5
+   showed every broker's volume restored, so any of them does); then port49d.</p>
+<p><!-- l89:scaleup:begin -->
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>-n<span class="w"> </span>port49<span class="w"> </span>scale<span class="w"> </span>statefulset/&lt;release&gt;-broker<span class="w"> </span>--replicas<span class="o">=</span>&lt;brokers&gt;
+kubectl<span class="w"> </span>-n<span class="w"> </span>port49<span class="w"> </span>rollout<span class="w"> </span>status<span class="w"> </span>statefulset/&lt;release&gt;-broker<span class="w"> </span>--timeout<span class="o">=</span>10m
+kubectl<span class="w"> </span>-n<span class="w"> </span>port49<span class="w"> </span>scale<span class="w"> </span>statefulset/&lt;release&gt;-port49d<span class="w"> </span>--replicas<span class="o">=</span>&lt;port49d&gt;
+kubectl<span class="w"> </span>-n<span class="w"> </span>port49<span class="w"> </span>rollout<span class="w"> </span>status<span class="w"> </span>statefulset/&lt;release&gt;-port49d<span class="w"> </span>--timeout<span class="o">=</span>10m
+</code></pre></div>
+<!-- l89:scaleup:end --></p>
+<p><strong>What you see after step 9.</strong> port49d usually logs <code>the session store was restored from a snapshot</code>
+(its <code>&lt;accounting.spool_path&gt;.restore.json</code> is newer than the etcd copy) and <code>port49_store_restore_detected</code> fires. This
+restore did not use <code>--bump-revision</code>, so for the 5 minutes after port49d's read <strong>every token a user
+mints is refused <code>token_spent</code> (FAIL)</strong>: the new timeline's revisions sit below the old <code>high_header</code>.
+Users see a failed login, and so does every retry until the window ends. The log line names the
+time (<code>a token minted until &lt;time&gt; (5 minutes after this read)</code>). Tell users to mint a new token after it: a
+token minted inside the window keeps its mint time, so it stays refused until the band ends (20 minutes
+after the read), and a user who pastes the same token again keeps failing. A fresh mint after the window
+is served. No restored token is accepted at any point. Break-glass is unaffected. The band itself lasts 20 minutes,
+but only tokens minted in its first 5 are refused.</p>
+</li>
+<li>
+<p>Lift again what was lifted since (step 6 of Restoring etcd from a snapshot).</p>
+</li>
+<li>
+<p>Bring back what step 4 left out, and resume what you suspended first. With a GitOps controller,
+    resuming it does both (unmeasured, as above). Under Argo CD, put back the <code>automated</code> object you
+    noted, exactly, children first, then any parent and the Application that syncs an ApplicationSet:</p>
+<div class="highlight"><pre><span></span><code>argocd<span class="w"> </span>app<span class="w"> </span>patch<span class="w"> </span>&lt;app&gt;<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">'{"spec":{"syncPolicy":{"automated":&lt;noted JSON&gt;}}}'</span>
+</code></pre></div>
+<p>Under Flux, resume each one you suspended:</p>
+<div class="highlight"><pre><span></span><code>flux<span class="w"> </span>resume<span class="w"> </span>helmrelease<span class="w"> </span>&lt;name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;
+flux<span class="w"> </span>resume<span class="w"> </span>kustomization<span class="w"> </span>&lt;name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;
+</code></pre></div>
+<p>Without one, upgrade the release to the chart version it runs, which re-creates the
+HorizontalPodAutoscaler and changes nothing else:</p>
+<div class="highlight"><pre><span></span><code>helm<span class="w"> </span>upgrade<span class="w"> </span>&lt;release&gt;<span class="w"> </span>&lt;chart&gt;<span class="w"> </span>--version<span class="w"> </span>&lt;version&gt;<span class="w"> </span>-n<span class="w"> </span>port49<span class="w"> </span>--reuse-values
+</code></pre></div>
+</li>
+</ol>
+<p>With the chart's <code>autoscaling.enabled</code>, the HPA is not restored (step 4) until step 11.</p>
+<h3 id="recovering-from-a-restore-at-0-replicas">Recovering from a restore at 0 replicas<a class="headerlink" href="#recovering-from-a-restore-at-0-replicas" title="Permanent link">&para;</a></h3>
+<p>A restore made with the StatefulSets at 0 replicas waits for pods that never start, and Velero restores
+one at a time, so it holds up every restore after it. No broker or port49d ran, so nothing reached the
+store. Restart Velero, delete that restore (<code>&lt;restore&gt;</code> here is its name), then start over from the first
+command above with a new <code>&lt;restore&gt;</code>. Measured on kind in <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> cell (d), run 42058930263, on (c)'s hung
+restore: after these commands the restore was gone and no restore was <code>New</code> or <code>InProgress</code>.</p>
+<!-- l89:recover:begin -->
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>-n<span class="w"> </span>velero<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment/velero
+kubectl<span class="w"> </span>-n<span class="w"> </span>velero<span class="w"> </span>rollout<span class="w"> </span>status<span class="w"> </span>deployment/velero<span class="w"> </span>--timeout<span class="o">=</span>5m
+velero<span class="w"> </span>restore<span class="w"> </span>delete<span class="w"> </span>&lt;restore&gt;<span class="w"> </span>--confirm
+kubectl<span class="w"> </span>-n<span class="w"> </span>velero<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span>delete<span class="w"> </span>restore/&lt;restore&gt;<span class="w"> </span>--timeout<span class="o">=</span>5m
+</code></pre></div>
+<!-- l89:recover:end -->
+
+<p>Prefer restoring etcd from the <code>etcdctl snapshot</code> CronJob (<code>backup-cronjob.yaml</code>) with <code>--bump-revision</code>,
+as Restoring etcd from a snapshot gives it, and use Velero for the other volumes. A file-system copy of a live etcd member is
+crash-consistent at best, and the three members are copied at different moments; whether a busy member's
+database survives that is unmeasured. <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> measured one restore on an idle cluster.</p>
+<p>The data-directory init containers refuse a volume whose files are not owned by uid 65532 (see the
+chart README), so what a restore does to ownership, group and mode matters. <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l89">L89</a> (a) measured it on kind:
+owner, group and mode of <code>state/</code>, <code>issuing-ca.key</code> and the spool directory were unchanged, and both
+StatefulSets became ready with no fence refusal.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

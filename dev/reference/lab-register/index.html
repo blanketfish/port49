@@ -1,0 +1,4869 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="What each L-number on this site means, whether the lab has measured it, and the results notes that say so.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/reference/lab-register/">
+      
+      
+        <link rel="prev" href="../alerts/">
+      
+      
+        <link rel="next" href="../../contributing/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Lab register - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#lab-register" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Lab register
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-register" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The register
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The register">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#l1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L3
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L4
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L5
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L6
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L7
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L8
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L9
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L10
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L11
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L12
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L13
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L14
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L15
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L16
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L17
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L18
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L19
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L20
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L21
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L22
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L23
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L24
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L25
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L26
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l26b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L26b
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l26c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L26c
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L27
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l28" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L28
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l29" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L29
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L30
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L31
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L32
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l33" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L33
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l34" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L34
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l35" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L35
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l36" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L36
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l37" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L37
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l38" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L38
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l39" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L39
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l40" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L40
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l41" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L41
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l42" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L42
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l43" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L43
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l44" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L44
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l45" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L45
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l46" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L46
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l47" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L47
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l48" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L48
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l49" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L49
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l50" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L50
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l51" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L51
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l52" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L52
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l53" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L53
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l54" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L54
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l55" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L55
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l56" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L56
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l57" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L57
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l58" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L58
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l59" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L59
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l60" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L60
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l61" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L61
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l62" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L62
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l63" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L63
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l64" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L64
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l65" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L65
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l66" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L66
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l67" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L67
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l68" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L68
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l69" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L69
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l70" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L70
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l71" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L71
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l72" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L72
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l73" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L73
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l74" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L74
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l75" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L75
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l76" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L76
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l78" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L78
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l79" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L79
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l80" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L80
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l81" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L81
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l82" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L82
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l83" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L83
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l84" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L84
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l85" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L85
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l86" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L86
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l87" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L87
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l88" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L88
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l89" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L89
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l90" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L90
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l91" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L91
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l92" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L92
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l93" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L93
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-register" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The register
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The register">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#l1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L3
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L4
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L5
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L6
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L7
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L8
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L9
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L10
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L11
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L12
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L13
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L14
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L15
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L16
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l17" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L17
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L18
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L19
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L20
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l21" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L21
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l22" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L22
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L23
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l24" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L24
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L25
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l26" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L26
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l26b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L26b
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l26c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L26c
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L27
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l28" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L28
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l29" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L29
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L30
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L31
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L32
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l33" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L33
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l34" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L34
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l35" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L35
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l36" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L36
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l37" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L37
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l38" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L38
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l39" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L39
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l40" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L40
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l41" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L41
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l42" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L42
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l43" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L43
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l44" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L44
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l45" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L45
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l46" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L46
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l47" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L47
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l48" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L48
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l49" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L49
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l50" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L50
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l51" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L51
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l52" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L52
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l53" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L53
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l54" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L54
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l55" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L55
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l56" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L56
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l57" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L57
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l58" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L58
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l59" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L59
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l60" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L60
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l61" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L61
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l62" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L62
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l63" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L63
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l64" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L64
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l65" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L65
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l66" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L66
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l67" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L67
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l68" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L68
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l69" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L69
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l70" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L70
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l71" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L71
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l72" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L72
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l73" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L73
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l74" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L74
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l75" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L75
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l76" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L76
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l78" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L78
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l79" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L79
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l80" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L80
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l81" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L81
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l82" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L82
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l83" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L83
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l84" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L84
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l85" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L85
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l86" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L86
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l87" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L87
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l88" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L88
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l89" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L89
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l90" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L90
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l91" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L91
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l92" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L92
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l93" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L93
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<!-- generated by make docs from code; do not edit -->
+
+<h1 id="lab-register">Lab register<a class="headerlink" href="#lab-register" title="Permanent link">&para;</a></h1>
+<p>Every page of this site that says how a device behaves rests on a claim that port49's lab can test.
+Each claim has an ID, an <strong>L-number</strong> such as the ones linked throughout the site, and this page lists them
+all. A claim is one question about a device or a protocol, for example whether a switch shows a message
+port49 sends with a denial, and the lab answers it on real device images.</p>
+<ul>
+<li><strong>Open</strong> means the lab has not finished measuring the claim. The documentation never asserts an open
+  claim as fact: where a page mentions one, it says the behavior is unmeasured, or it cites the results
+  note for the platform it measured. A row can be open while one platform is measured and others are not.</li>
+<li><strong>Closed</strong> means a lab test passed and a results note records the platform, the image version, what was
+  observed and where the capture is. The note is the evidence.</li>
+</ul>
+<p>A results note wins over any page: when a note and a page disagree, the page is wrong and is corrected to
+match the note. The register itself is section 15 of <a href="https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md#15-lab-register">the policy-engine spec</a>, and the
+rows below are shortened from it. Follow the spec link for a row's full wording.</p>
+<h2 id="the-register">The register<a class="headerlink" href="#the-register" title="Permanent link">&para;</a></h2>
+<h3 id="l1"><a href="#l1">L1</a><a class="headerlink" href="#l1" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> What the <code>port</code> field contains, per platform and per transport — SSH, console, eAPI, NX-API, NETCONF.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-arista_eos.md">L1-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-cisco_iosxe.md">L1-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-cisco_nxos.md">L1-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-juniper_vjunos-router.md">L1-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-juniper_vsrx.md">L1-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-restconf-cisco_iosxe.md">L1-restconf-cisco_iosxe.md</a></p>
+<h3 id="l2"><a href="#l2">L2</a><a class="headerlink" href="#l2" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Whether <code>server_msg</code> on an authorization REPLY is displayed to the operator, and at what length it truncates.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-arista_eos.md">L2-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-cisco_iosxe.md">L2-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-cisco_nxos.md">L2-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-juniper_vjunos-router.md">L2-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-juniper_vsrx.md">L2-juniper_vsrx.md</a></p>
+<h3 id="l3"><a href="#l3">L3</a><a class="headerlink" href="#l3" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-21. Whether the enable START carries <code>rem_addr</code>, and what it contains — bare address, or address and source port.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-arista_eos.md">L3-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-cisco_iosxe.md">L3-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-cisco_nxos.md">L3-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L3-nxos-cisco_nxos.md">L3-nxos-cisco_nxos.md</a></p>
+<h3 id="l4"><a href="#l4">L4</a><a class="headerlink" href="#l4" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos <code>authentication-order</code> with <code>password</code> listed — and <code>deadtime</code> behavior.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-arista_eos.md">L4-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-cisco_iosxe.md">L4-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-cisco_nxos.md">L4-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-arista_eos.md">L4-error-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md">L4-error-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_nxos.md">L4-error-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md">L4-error-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vsrx.md">L4-error-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-juniper_vjunos-router.md">L4-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-juniper_vsrx.md">L4-juniper_vsrx.md</a></p>
+<h3 id="l5"><a href="#l5">L5</a><a class="headerlink" href="#l5" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-20. Which platforms send accounting WATCHDOG, how often, and with or without arguments.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-arista_eos.md">L5-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-cisco_iosxe.md">L5-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-cisco_nxos.md">L5-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-juniper_vjunos-router.md">L5-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-juniper_vsrx.md">L5-juniper_vsrx.md</a></p>
+<h3 id="l6"><a href="#l6">L6</a><a class="headerlink" href="#l6" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-arista_eos.md">L6-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-cisco_iosxe.md">L6-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-cisco_nxos.md">L6-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-juniper_vjunos-router.md">L6-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-juniper_vsrx.md">L6-juniper_vsrx.md</a></p>
+<h3 id="l7"><a href="#l7">L7</a><a class="headerlink" href="#l7" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-24. Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (<code>/login</code>) change that, and whether API commands produce per-command authorization requests.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-arista_eos.md">L7-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-cisco_nxos.md">L7-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-login-arista_eos.md">L7-login-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-nxapi-cookie-cisco_nxos.md">L7-nxapi-cookie-cisco_nxos.md</a></p>
+<h3 id="l8"><a href="#l8">L8</a><a class="headerlink" href="#l8" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-23. The maximum password length each platform accepts at an interactive prompt.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-arista_eos.md">L8-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-cisco_iosxe.md">L8-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-cisco_nxos.md">L8-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-juniper_vjunos-router.md">L8-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-juniper_vsrx.md">L8-juniper_vsrx.md</a></p>
+<h3 id="l9"><a href="#l9">L9</a><a class="headerlink" href="#l9" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-29. Whether Junos anchors <code>allow-commands</code> / <code>deny-commands</code> regexes, and which RE2 constructs its regex dialect rejects.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vjunos-router.md">L12-projection-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vsrx.md">L12-projection-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-abbreviations-juniper_vjunos-router.md">L9-abbreviations-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-abbreviations-juniper_vsrx.md">L9-abbreviations-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-juniper_vjunos-router.md">L9-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-juniper_vsrx.md">L9-juniper_vsrx.md</a></p>
+<h3 id="l10"><a href="#l10">L10</a><a class="headerlink" href="#l10" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-29. Whether <code>service</code> arrives as <code>shell</code> or <code>junos-exec</code>, and the exact spelling of every attribute in a shipped adapter.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-arista_eos.md">L10-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-cisco_iosxe.md">L10-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-cisco_nxos.md">L10-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-juniper_vjunos-router.md">L10-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-juniper_vsrx.md">L10-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vjunos-router.md">L12-projection-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vsrx.md">L12-projection-juniper_vsrx.md</a></p>
+<h3 id="l11"><a href="#l11">L11</a><a class="headerlink" href="#l11" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-03. Junos precedence, repetition, and length behavior for wire and class rules.</p>
+<p>No results note yet.</p>
+<h3 id="l12"><a href="#l12">L12</a><a class="headerlink" href="#l12" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-29. <code>user-permissions</code> over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session, and two bits in one value.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-bits-juniper_vjunos-router.md">L12-bits-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-bits-juniper_vsrx.md">L12-bits-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-configuration-juniper_vjunos-router.md">L12-configuration-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-configuration-juniper_vsrx.md">L12-configuration-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-juniper_vjunos-router.md">L12-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-juniper_vsrx.md">L12-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-netconf-juniper_vjunos-router.md">L12-netconf-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-netconf-juniper_vsrx.md">L12-netconf-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vjunos-router.md">L12-projection-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vsrx.md">L12-projection-juniper_vsrx.md</a></p>
+<h3 id="l13"><a href="#l13">L13</a><a class="headerlink" href="#l13" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-arista_eos.md">L13-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-cisco_iosxe.md">L13-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-cisco_nxos.md">L13-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-juniper_vjunos-router.md">L13-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-juniper_vsrx.md">L13-juniper_vsrx.md</a></p>
+<h3 id="l14"><a href="#l14">L14</a><a class="headerlink" href="#l14" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an <code>&lt;edit-config&gt;</code>, and with what <code>service</code>, <code>cmd</code> and <code>cmd-arg</code>; what <code>port</code> and <code>rem_addr</code> …</p>
+<p>No results note yet.</p>
+<h3 id="l15"><a href="#l15">L15</a><a class="headerlink" href="#l15" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and what port49 then answers.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-arista_eos.md">L15-clients-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-cisco_nxos.md">L15-clients-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-login-arista_eos.md">L7-login-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L7-nxapi-cookie-cisco_nxos.md">L7-nxapi-cookie-cisco_nxos.md</a></p>
+<h3 id="l16"><a href="#l16">L16</a><a class="headerlink" href="#l16" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Role delivery over TACACS+ and its interaction with command authorization.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L16-arista_eos.md">L16-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L16-cisco_nxos.md">L16-cisco_nxos.md</a></p>
+<h3 id="l17"><a href="#l17">L17</a><a class="headerlink" href="#l17" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Which <code>system tacplus-options</code> statements change what a port49 answer MEANS on Junos.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L17-juniper_vjunos-router.md">L17-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L17-juniper_vsrx.md">L17-juniper_vsrx.md</a></p>
+<h3 id="l18"><a href="#l18">L18</a><a class="headerlink" href="#l18" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-arista_eos.md">L18-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-cisco_iosxe.md">L18-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-cisco_nxos.md">L18-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-juniper_vjunos-router.md">L18-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-juniper_vsrx.md">L18-juniper_vsrx.md</a></p>
+<h3 id="l19"><a href="#l19">L19</a><a class="headerlink" href="#l19" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> The maximum password length each platform accepts via PAP, on every login path where the device uses PAP.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-cisco_nxos.md">L8-cisco_nxos.md</a></p>
+<h3 id="l20"><a href="#l20">L20</a><a class="headerlink" href="#l20" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a wrong password for the same user inside that window is also accepted; and whether a …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-restconf-cisco_iosxe.md">L1-restconf-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L20-cisco_iosxe.md">L20-cisco_iosxe.md</a></p>
+<h3 id="l21"><a href="#l21">L21</a><a class="headerlink" href="#l21" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-24. Whether each platform sends the command words the operator typed (<code>sh run</code>) or the resolved ones (<code>show running-config</code>) on a per-command authorization request, and on the accounting record for it.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-arista_eos.md">L21-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-cisco_iosxe.md">L21-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-cisco_nxos.md">L21-cisco_nxos.md</a></p>
+<h3 id="l22"><a href="#l22">L22</a><a class="headerlink" href="#l22" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-24. What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of <code>clear counters</code>, <code>clear ip bgp *</code> and <code>configure terminal</code> it runs, refuses in its own parser, or sends port49 — and …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-arista_eos.md">L22-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-carried-arista_eos.md">L22-carried-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-carried-cisco_iosxe.md">L22-carried-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-carried-cisco_nxos.md">L22-carried-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-cisco_iosxe.md">L22-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L22-cisco_nxos.md">L22-cisco_nxos.md</a></p>
+<h3 id="l23"><a href="#l23">L23</a><a class="headerlink" href="#l23" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-25. Whether <code>home-directory</code>, <code>idletime</code> and <code>timeout</code>, each beside readonly's reply, leave the session readonly's on EOS and NX-OS: the same identity, the same reach for <code>clear counters</code> and <code>configure terminal</code>, and a permitted <code>show version</code>.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L23-arista_eos.md">L23-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L23-cisco_nxos.md">L23-cisco_nxos.md</a></p>
+<h3 id="l24"><a href="#l24">L24</a><a class="headerlink" href="#l24" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-25. Whether a Junos login class's <code>idle-timeout</code> ends an idle session a TACACS+ reply landed in that class, through <code>local-user-name</code> and through the <code>remote</code> template.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L24-juniper_vjunos-router.md">L24-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L24-juniper_vsrx.md">L24-juniper_vsrx.md</a></p>
+<h3 id="l25"><a href="#l25">L25</a><a class="headerlink" href="#l25" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Whether the N9Kv writes an accounting record under <code>admin</code> with task_id <code>vsh.bin.&lt;port&gt;</code> when a network-operator cancels the sudo prompt of a bare <code>show interface</code>, and what distinguishes it from a person's <code>admin</code> session, over SSH and over NX-API.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L25-cisco_nxos.md">L25-cisco_nxos.md</a></p>
+<h3 id="l26"><a href="#l26">L26</a><a class="headerlink" href="#l26" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-25. The Junos operational CLI keyword tree under <code>show</code>: at each command path, the words proven keywords — offered by completion there, and shown a keyword by <code>| display xml rpc</code> (an element named as the word, none holding it as text, or a path still asking for a …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26-juniper_vjunos-router.md">L26-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26-juniper_vsrx.md">L26-juniper_vsrx.md</a></p>
+<h3 id="l26b"><a href="#l26b">L26b</a><a class="headerlink" href="#l26b" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-25. Whether a word is a keyword to <code>deny-commands</code>, by the deny itself: a deny naming the word at its path refuses the command, the CLI's caret under the word, while a paired control without the deny runs it with positive evidence.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26b-juniper_vjunos-router.md">L26b-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26b-juniper_vsrx.md">L26b-juniper_vsrx.md</a></p>
+<h3 id="l26c"><a href="#l26c">L26c</a><a class="headerlink" href="#l26c" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-12. Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off (moved to <a href="#l59">L59</a>): <code>xml-mode netconf need-trailer</code> and <code>xml-mode netconf</code>, then <code>&lt;get-software-information/&gt;</code>, <code>&lt;get-configuration/&gt;</code> and a <code>&lt;command&gt;</code> RPC; <code>op url</code> …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-entries-juniper_vjunos-router.md">L26c-entries-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-entries-juniper_vsrx.md">L26c-entries-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-juniper_vjunos-router.md">L26c-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-juniper_vsrx.md">L26c-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-junoscript-juniper_vjunos-router.md">L26c-junoscript-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-junoscript-juniper_vsrx.md">L26c-junoscript-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-operator-juniper_srx.md">L26c-operator-juniper_srx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-projected-juniper_vjunos-router.md">L26c-projected-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-projected-juniper_vsrx.md">L26c-projected-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-scripts-juniper_vjunos-router.md">L26c-scripts-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-scripts-juniper_vsrx.md">L26c-scripts-juniper_vsrx.md</a></p>
+<h3 id="l27"><a href="#l27">L27</a><a class="headerlink" href="#l27" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-30. What NetBox and Nautobot's APIs return for a device, per product and major version: where the version is reported (<code>/api/status/</code>, the <code>API-Version</code> header on <code>/api/</code>); the field names for role, platform, site or location, primary address, custom fields and …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L27-nautobot.md">L27-nautobot.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L27-netbox.md">L27-netbox.md</a></p>
+<h3 id="l28"><a href="#l28">L28</a><a class="headerlink" href="#l28" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-30. What a device does when port49d cannot validate its key on a connection's first packet.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-arista_eos.md">L28-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-cisco_iosxe.md">L28-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-cisco_nxos.md">L28-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-fin-cisco_iosxe.md">L28-fin-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-arista_eos.md">L28-held-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-cisco_iosxe.md">L28-held-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-cisco_nxos.md">L28-held-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-juniper_vjunos-router.md">L28-held-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-juniper_vjunos-router.md">L28-juniper_vjunos-router.md</a></p>
+<h3 id="l29"><a href="#l29">L29</a><a class="headerlink" href="#l29" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-30. What a device does when port49d resets a connection it holds open mid-session, at its first packet after a reload refused, removed, renamed, re-keyed or re-platformed its device (§10, "How a daemon refreshes its snapshot"): whether the session survives …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-arista_eos.md">L29-reload-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-cisco_iosxe.md">L29-reload-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-cisco_nxos.md">L29-reload-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-juniper_vjunos-router.md">L29-reload-juniper_vjunos-router.md</a></p>
+<h3 id="l30"><a href="#l30">L30</a><a class="headerlink" href="#l30" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-30. How NetBox and Nautobot page a device list that does not fit one page, and what Nautobot 3.x returns: for NetBox 3.7 and 4.x and Nautobot 1.6 and 2.x, a REST list holding more devices than its <code>limit</code>, whether <code>next</code> is an absolute URL, which host and scheme …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md">L30-nautobot.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-netbox.md">L30-netbox.md</a></p>
+<h3 id="l31"><a href="#l31">L31</a><a class="headerlink" href="#l31" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-09-30. What break-glass costs on IOS-XE and NX-OS with single-connection on, when port49d resets a de-admitted device's connection after the device has written its request: a device removed from inventory (unadmitted), refused admission, or quarantined.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-arista_eos.md">L31-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-breakglass-cisco-singleconnection.md">L31-breakglass-cisco-singleconnection.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-cisco_iosxe.md">L31-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-cisco_nxos.md">L31-cisco_nxos.md</a></p>
+<h3 id="l32"><a href="#l32">L32</a><a class="headerlink" href="#l32" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-01. What the inventory service's NetBox and Nautobot connectors read as built (plan 6c), from each measured release: the GraphQL list query with every field the connector asks for (<code>status</code>, <code>primary_ip4</code>, <code>primary_ip6</code>, the map's paths, every interface address) …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L32-nautobot.md">L32-nautobot.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L32-netbox.md">L32-netbox.md</a></p>
+<h3 id="l33"><a href="#l33">L33</a><a class="headerlink" href="#l33" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-01. What NetBox and Nautobot do delivering a webhook to port49-inventory's <code>webhook_listen</code>, per measured release: whether each delivers to an <code>https</code> payload URL whose certificate a private CA issued (<code>ca_file_path</code>, <code>ssl_verification</code> on); whether …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-e2e-nautobot-arista_eos.md">L33-e2e-nautobot-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-e2e-netbox-arista_eos.md">L33-e2e-netbox-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-nautobot.md">L33-nautobot.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-netbox.md">L33-netbox.md</a></p>
+<h3 id="l34"><a href="#l34">L34</a><a class="headerlink" href="#l34" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-01. Whether a device shows the <code>server_msg</code> port49 puts on a permitted authorization reply — the session reply at login, and a per-command reply — and still treats the reply as a permit: the command's output appears and the session goes on.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-arista_eos.md">L34-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-cisco_iosxe.md">L34-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-cisco_nxos.md">L34-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-juniper_vjunos-router.md">L34-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-juniper_vsrx.md">L34-juniper_vsrx.md</a></p>
+<h3 id="l35"><a href="#l35">L35</a><a class="headerlink" href="#l35" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-20. What a device does when port49d's store hangs rather than refuses (etcd cut off from port49d, or past its quorum): each request's time from the device's send to port49d's reply, against the device's own TACACS+ timeout (§15 <a href="#l4">L4</a>, <a href="#l13">L13</a>); what it shows for <code>FAIL</code> …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-arista_eos.md">L35-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-cisco_iosxe.md">L35-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-cisco_nxos.md">L35-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-juniper_vjunos-router.md">L35-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-juniper_vsrx.md">L35-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-arista_eos.md">L35-restore-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-cisco_iosxe.md">L35-restore-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-cisco_nxos.md">L35-restore-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L38-cisco_iosxe.md">L38-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md">L4-error-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/quarantine-cisco_iosxe.md">quarantine-cisco_iosxe.md</a></p>
+<h3 id="l36"><a href="#l36">L36</a><a class="headerlink" href="#l36" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-04. On etcd, whether a live Junos session's re-authorization (<code>authorization-time-interval</code>, 15 min) after a port49d restart is answered from the context the store kept, and whether a denial then ends the session.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md">L36-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md">L36-juniper_vsrx.md</a></p>
+<h3 id="l37"><a href="#l37">L37</a><a class="headerlink" href="#l37" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-20. On the split deployment (plan 7e; two port49d replicas and port49-broker on one etcd, each device listing both replicas as TACACS+ servers): whether a session opened through one replica has its next command answered by the other once the first stops; whether …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-arista_eos.md">L37-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-cisco_iosxe.md">L37-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-cisco_nxos.md">L37-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-juniper_vjunos-router.md">L37-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-juniper_vsrx.md">L37-juniper_vsrx.md</a></p>
+<h3 id="l38"><a href="#l38">L38</a><a class="headerlink" href="#l38" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-04. On IOS-XE, whether an open session's command runs under local authorization once port49 is unreachable, by the command (<code>show privilege</code>, <code>show version</code>) and by what port49 answered before it went away (nothing; a <code>FAIL store_unavailable</code>) …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L38-cisco_iosxe.md">L38-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/quarantine-cisco_iosxe.md">quarantine-cisco_iosxe.md</a></p>
+<h3 id="l39"><a href="#l39">L39</a><a class="headerlink" href="#l39" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-04. Whether port49d sees a device's true source address in each deployment shape: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with <code>externalTrafficPolicy: Cluster</code> and with <code>Local</code>; (c) Kubernetes with …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-docker-proxy-off-arista_eos.md">L39-docker-proxy-off-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-docker-proxy-on-arista_eos.md">L39-docker-proxy-on-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-kind.md">L39-kind.md</a></p>
+<h3 id="l40"><a href="#l40">L40</a><a class="headerlink" href="#l40" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> On Junos, whether <code>authorization-time-interval</code> re-authorizes a session more than once: after the first re-authorization (<code>L36-*.md</code> saw one, 15 minutes after login), whether a second request comes one interval later, and so whether a revocation made after …</p>
+<p>No results note yet.</p>
+<h3 id="l41"><a href="#l41">L41</a><a class="headerlink" href="#l41" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-05. On the compose deployment (decision 37), what a device does when port49d closes its TACACS+ listener mid-session on its store health checks, beside port49d stopped: how long after the store hangs an idle port49d closes it (against <code>close_after</code> × <code>interval</code> + …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-arista_eos.md">L41-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-cisco_iosxe.md">L41-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-cisco_nxos.md">L41-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vjunos-router.md">L41-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vsrx.md">L41-juniper_vsrx.md</a></p>
+<h3 id="l42"><a href="#l42">L42</a><a class="headerlink" href="#l42" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-05. Nested-group resolution, per directory.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L42-openldap.md">L42-openldap.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L42-samba_ad.md">L42-samba_ad.md</a></p>
+<h3 id="l43"><a href="#l43">L43</a><a class="headerlink" href="#l43" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-05. Which bind mechanisms each directory accepts from port49-broker, and how each refusal reads: SASL EXTERNAL over LDAPS with a client certificate (OpenLDAP mapping it by <code>olcAuthzRegexp</code>); GSSAPI with a keytab and no SASL security layer, over LDAPS (Samba AD's …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L43-openldap.md">L43-openldap.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L43-samba_ad.md">L43-samba_ad.md</a></p>
+<h3 id="l44"><a href="#l44">L44</a><a class="headerlink" href="#l44" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-07. The Active Directory claims on a Windows DC: on <a href="#l42">L42</a>'s fixture and its loop, which groups <code>member:1.2.840.113556.1.4.1941:=&lt;user DN&gt;</code> returns and how the loop is answered; SASL EXTERNAL with a client certificate (over StartTLS, where a DC maps it, and over …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L44-windows_ad.md">L44-windows_ad.md</a></p>
+<h3 id="l45"><a href="#l45">L45</a><a class="headerlink" href="#l45" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-07. The back-channel logout token a provider sends to port49's <code>/v1/logout</code>, per way a session ends: an RP-initiated logout at the provider's end-session endpoint, an administrator signing a user out of every session, and an administrator ending one session.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L45-keycloak.md">L45-keycloak.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/oidc-e2e-arista_eos.md">oidc-e2e-arista_eos.md</a></p>
+<h3 id="l46"><a href="#l46">L46</a><a class="headerlink" href="#l46" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-07. Fresh authentication on a provider: with an SSO session live, whether a plain second authorization request reuses it (no credentials asked, <code>auth_time</code> unchanged: the control); whether one with <code>prompt=login</code> makes the person enter their credentials again …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L46-keycloak.md">L46-keycloak.md</a></p>
+<h3 id="l47"><a href="#l47">L47</a><a class="headerlink" href="#l47" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> <a href="#l45">L45</a>'s and <a href="#l46">L46</a>'s claims on hosted providers, and their access tokens' <code>azp</code>, <code>aud</code> and <code>sub</code> under the client-credentials grant.</p>
+<p>No results note yet.</p>
+<h3 id="l48"><a href="#l48">L48</a><a class="headerlink" href="#l48" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-08. A workload CA's behaviour with port49's workload verifier (plan 8).</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md">L48-step_ca.md</a></p>
+<h3 id="l49"><a href="#l49">L49</a><a class="headerlink" href="#l49" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-08. Oxidized as the day-one consumer of minted tokens (plan 8): the commands each model (<code>eos</code>, <code>nxos</code>, <code>ios</code>, <code>junos</code>) sends at login and during a backup, as port49 receives them; whether Oxidized reads a node's username and password from its CSV source at each …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-arista_eos.md">L49-oxidized-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-cisco_iosxe.md">L49-oxidized-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-cisco_nxos.md">L49-oxidized-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-juniper_vjunos-router.md">L49-oxidized-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-juniper_vsrx.md">L49-oxidized-juniper_vsrx.md</a></p>
+<h3 id="l50"><a href="#l50">L50</a><a class="headerlink" href="#l50" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-09. Who can write the directory attribute a workload certificate's directory mapping reads (plan 8b; §13 decisions 16, 40 ruling 5 and 41 ruling 10): on Windows AD and on Samba AD, for a service account's entry in its own OU, and for each of <code>uid</code>, <code>description</code> …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L50-samba_ad.md">L50-samba_ad.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L50-windows_ad.md">L50-windows_ad.md</a></p>
+<h3 id="l51"><a href="#l51">L51</a><a class="headerlink" href="#l51" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-09. What an SSH client offering several public keys before the password does to a port49 login (raised by the owner from production NX-OS experience): on each platform, whether each refused key counts against the device's SSH authentication-attempt limit (NX-OS …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-arista_eos.md">L51-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-cisco_iosxe.md">L51-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-cisco_nxos.md">L51-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-juniper_vjunos.md">L51-juniper_vjunos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-juniper_vsrx.md">L51-juniper_vsrx.md</a></p>
+<h3 id="l52"><a href="#l52">L52</a><a class="headerlink" href="#l52" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Why a C8000V running IOS-XE 17.13.01a intermittently skips its TACACS+ method for SSH logins (found during <a href="#l51">L51</a>, Addendum B of tests/lab/results/L51-cisco_iosxe.md): about four good logins, then 40–55 s in which …</p>
+<p>No results note yet.</p>
+<h3 id="l53"><a href="#l53">L53</a><a class="headerlink" href="#l53" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-09. The SSH host key each platform presents, whether a console command shows the same key so an operator can check it out of band, whether it survives a reload, and what an SSH key exchange abandoned before authentication does to the device.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-arista_eos.md">L53-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-cisco_iosxe.md">L53-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-cisco_nxos.md">L53-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-juniper_vjunos-router.md">L53-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-juniper_vsrx.md">L53-juniper_vsrx.md</a></p>
+<h3 id="l54"><a href="#l54">L54</a><a class="headerlink" href="#l54" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-09. <code>port49 ssh</code> against each platform (plan 9a): which authentication method the device takes under <code>PreferredAuthentications keyboard-interactive,password</code> with public-key authentication off; that ssh's prompt for it names <code>&lt;username&gt;@&lt;device&gt;</code>, so port49's …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-arista_eos.md">L54-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-cisco_iosxe.md">L54-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-cisco_nxos.md">L54-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-juniper_vjunos-router.md">L54-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-juniper_vsrx.md">L54-juniper_vsrx.md</a></p>
+<h3 id="l55"><a href="#l55">L55</a><a class="headerlink" href="#l55" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-11. Keycloak as port49's public client meets it (plan 9b).</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L55-keycloak.md">L55-keycloak.md</a></p>
+<h3 id="l56"><a href="#l56">L56</a><a class="headerlink" href="#l56" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-11. Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real <code>port49</code> CLI.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L56-arista_eos.md">L56-arista_eos.md</a></p>
+<h3 id="l57"><a href="#l57">L57</a><a class="headerlink" href="#l57" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-12. What a Junos configuration capture carries for configuration groups that reach port49's template classes.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L57-juniper_vjunos-router.md">L57-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L57-juniper_vsrx.md">L57-juniper_vsrx.md</a></p>
+<h3 id="l58"><a href="#l58">L58</a><a class="headerlink" href="#l58" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-11. The two Junos baseline words a readonly's set 1.2.0 reply rests on, under the factored deny set 1.2.0 renders, one alternative naming both words (<code>^ *(save|junoscript)( .*)?</code> and the pipe tail), each against a control with the same class and no deny …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L58-juniper_vjunos-router.md">L58-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L58-juniper_vsrx.md">L58-juniper_vsrx.md</a></p>
+<h3 id="l59"><a href="#l59">L59</a><a class="headerlink" href="#l59" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> What plan 9b1 left unmeasured of <a href="#l26c">L26c</a>, under a reply carrying set 1.2.0's entry denies (<code>junoscript</code>, <code>op</code>) beside a deny of <code>show configuration</code> beneath <code>view-configuration</code>, each against a control with the same bits and no deny that reaches the service …</p>
+<p>No results note yet.</p>
+<h3 id="l60"><a href="#l60">L60</a><a class="headerlink" href="#l60" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> A YubiKey's PIV applet through <code>libykcs11</code> under purego, on the lab's dedicated machine.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L60-ser8.md">L60-ser8.md</a></p>
+<h3 id="l61"><a href="#l61">L61</a><a class="headerlink" href="#l61" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-12. Keycloak's <code>amr</code> and <code>acr</code> in an ID token for <code>idp_mfa</code>.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L61-keycloak.md">L61-keycloak.md</a></p>
+<h3 id="l62"><a href="#l62">L62</a><a class="headerlink" href="#l62" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-15. A real TPM 2.0 through <code>/dev/tpmrm0</code> on the lab's dedicated machine, for a non-root user in <code>tss</code>: whether <code>issued_key_store: tpm</code> creates a key under the ECC SRK, signs a TLS 1.3 handshake and a refresh, survives an agent restart and a reboot, and is refused (cannot load) on another machine given the same key file.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L62-ser8.md">L62-ser8.md</a></p>
+<h3 id="l63"><a href="#l63">L63</a><a class="headerlink" href="#l63" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> The macOS Secure Enclave through Security.framework under purego, from an unsigned <code>port49</code> built with <code>CGO_ENABLED=0</code>: whether <code>SecKeyCreateRandomKey</code> with <code>kSecAttrTokenIDSecureEnclave</code> and <code>kSecAttrIsPermanent</code> creates a key, whether a second process finds …</p>
+<p>No results note yet.</p>
+<h3 id="l64"><a href="#l64">L64</a><a class="headerlink" href="#l64" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-14. <code>port49 ssh</code> under decision 46 against each platform, with OpenSSH's default algorithms: (a) a first contact, the operator's known_hosts holding nothing for the device: whether the login succeeds with one askpass ask, and every line ssh files under the …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-arista_eos.md">L64-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-cisco_iosxe.md">L64-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-cisco_nxos.md">L64-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-juniper_vjunos-router.md">L64-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-juniper_vsrx.md">L64-juniper_vsrx.md</a></p>
+<h3 id="l65"><a href="#l65">L65</a><a class="headerlink" href="#l65" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-14. The Python client (<code>port49.netmiko.connect</code>) against each platform: (a) a first contact: Netmiko logs in, and the key Paramiko accepted is filed under the inventory name (hashed under <code>HashKnownHosts yes</code>), its type recorded; (b) a second connection verifies …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-arista_eos.md">L65-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-cisco_iosxe.md">L65-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-cisco_nxos.md">L65-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-juniper_vjunos-router.md">L65-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-juniper_vsrx.md">L65-juniper_vsrx.md</a></p>
+<h3 id="l66"><a href="#l66">L66</a><a class="headerlink" href="#l66" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-14. The Ansible lookup <code>port49.client.token</code> over <code>ansible.netcommon.network_cli</code> against each platform: (a) a ten-task play with the lookup in <code>ansible_password</code>: how many mints per host; (b) the same play minting once in a <code>pre_tasks</code> <code>set_fact</code>: how many mints …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-arista_eos.md">L66-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-cisco_iosxe.md">L66-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-cisco_nxos.md">L66-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-juniper_vjunos-router.md">L66-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-juniper_vsrx.md">L66-juniper_vsrx.md</a></p>
+<h3 id="l67"><a href="#l67">L67</a><a class="headerlink" href="#l67" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-15. A person's simple bind from port49-broker, per directory, over LDAPS and over StartTLS (<code>start_tls: true</code>): (a) the right password accepted, a wrong one refused with which result code and, on AD, which <code>data</code> code; (b) a DN with an empty password sent by a …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L67-openldap.md">L67-openldap.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L67-samba_ad.md">L67-samba_ad.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L67-windows_ad.md">L67-windows_ad.md</a></p>
+<h3 id="l68"><a href="#l68">L68</a><a class="headerlink" href="#l68" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-16. A Junos reply sending view-configuration with the rest of its reach denied (plan 9g; decision 48).</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-juniper_vjunos-router.md">L68-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-juniper_vsrx.md">L68-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-juniper_vjunos-router.md">L68-netconf-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-juniper_vsrx.md">L68-netconf-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-operator-juniper_vjunos-router.md">L68-netconf-operator-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-operator-juniper_vsrx.md">L68-netconf-operator-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-projected-juniper_vjunos-router.md">L68-projected-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-projected-juniper_vsrx.md">L68-projected-juniper_vsrx.md</a></p>
+<h3 id="l69"><a href="#l69">L69</a><a class="headerlink" href="#l69" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-16. A Kubernetes cluster's service account tokens as port49's <code>k8s</code> verifier meets them (plan 10), on kind: (a) a projected token's claims for <code>audience: port49-lab</code>, <code>expirationSeconds: 600</code> (<code>iss</code>, <code>aud</code>, <code>exp</code> − <code>iat</code>, <code>nbf</code>, <code>sub</code>, <code>kubernetes.io</code> with …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L69-kind.md">L69-kind.md</a></p>
+<h3 id="l70"><a href="#l70">L70</a><a class="headerlink" href="#l70" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> <a href="#l69">L69</a>'s (a), (c) and (d) on managed clusters: whether EKS, GKE and AKS publish issuer discovery and the JWKS anonymously over the internet, the form of their issuer and <code>kid</code>, and how they rotate signing keys.</p>
+<p>No results note yet.</p>
+<h3 id="l71"><a href="#l71">L71</a><a class="headerlink" href="#l71" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-17. Which lab images carry an RFC 9887 (TACACS+ over TLS) client at all, read from each image's own CLI help with nothing left configured: EOS <code>tacacs-server host &lt;ip&gt; ?</code> (an <code>ssl-profile</code> or <code>tls</code> option), IOS-XE <code>tacacs server &lt;name&gt;</code> then <code>tls ?</code> (IOS has no …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-arista_ceos.md">L71-arista_ceos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-arista_eos.md">L71-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_iol-xe.md">L71-cisco_iol-xe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_iosxe.md">L71-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_nxos.md">L71-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-cisco_xrd.md">L71-cisco_xrd.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vjunos-router.md">L71-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vsrx.md">L71-juniper_vsrx.md</a></p>
+<h3 id="l72"><a href="#l72">L72</a><a class="headerlink" href="#l72" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-17. port49's RFC 9887 listener against reference clients (<code>openssl s_client</code> 3.x and <code>tests/lab/cmd/tacacs-tls-client</code>, Go <code>crypto/tls</code>), on the lab host with no device: (a) a TLS 1.3 PAP login with a seed token passes, every reply has the unencrypted flag, and …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L72-reference.md">L72-reference.md</a></p>
+<h3 id="l73"><a href="#l73">L73</a><a class="headerlink" href="#l73" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-18. Each device's RFC 9887 client against port49, per platform, once an image carries one (<a href="#l71">L71</a>): (a) the port it uses with none configured (RFC 9887 says 300; Cisco's documents use 6049); (b) whether every packet has the unencrypted flag set; (c) whether it sends …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md">L73-arista_ceos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md">L73-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_nxos.md">L73-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md">L73-cisco_xrd.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md">L73-juniper_vjunos-router.md</a></p>
+<h3 id="l74"><a href="#l74">L74</a><a class="headerlink" href="#l74" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-05. port49 across three simulated regions on one host: three network namespaces joined by a bridge, <code>tc netem</code> adding 20ms each way on each region's link (40ms round trip region to region); a directory etcd of three members, one per region; a session etcd, a …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L74-regions.md">L74-regions.md</a></p>
+<h3 id="l75"><a href="#l75">L75</a><a class="headerlink" href="#l75" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-05. The TOTP used step and the unlock across three port49-broker processes on the lab host, each with a session etcd of its own and <a href="#l74">L74</a>'s directory etcd shared, and <a href="#l67">L67</a>'s OpenLDAP.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L75-regions.md">L75-regions.md</a></p>
+<h3 id="l76"><a href="#l76">L76</a><a class="headerlink" href="#l76" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-18. Nokia SR Linux against port49 over TACACS+ on port 49 (<code>kind: nokia_srlinux</code>; server group <code>port49</code> first and <code>local</code> second; accounting to <code>port49</code>; <code>tests/lab/configs/srlinux-startup.cli</code>): (a) a user that exists only in port49 logs in over SSH; the session …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L76-nokia_srlinux.md">L76-nokia_srlinux.md</a></p>
+<h3 id="l78"><a href="#l78">L78</a><a class="headerlink" href="#l78" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> Whether Junos locks a user out when a <em>permit</em> session reply totals more than 255 bytes with every attribute at most 255 (port49 never sends one attribute over 255: §6, "Length"): the total at which the login is refused or the user locked out, if any, and …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-23.4R2-S2.1-juniper_vjunos-router.md">L78-vJunos-router-23.4R2-S2.1-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md">L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md</a></p>
+<h3 id="l79"><a href="#l79">L79</a><a class="headerlink" href="#l79" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-05. Whether a directory write sent from a region whose link is cut (iptables DROP, so the kernel keeps retransmitting) is delivered after the link heals within the retransmission window: (j) a lift reported "could not be lifted, and stands" that lands later; (k) …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L79-regions.md">L79-regions.md</a></p>
+<h3 id="l80"><a href="#l80">L80</a><a class="headerlink" href="#l80" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-21. NX-OS 10.6(2)F over per-request TLS (RFC 9887 with no <code>single-connection</code>, the device default) with <code>aaa authorization commands default group port49 local</code>: whether a command port49's policy denies runs (local fallback) or is refused, graded from the …</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L80-cisco_nxos.md">L80-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.md">QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.md</a></p>
+<h3 id="l81"><a href="#l81">L81</a><a class="headerlink" href="#l81" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> An IP address as the TLS server name (decision 50 ruling 10): (a) <code>openssl s_client -servername &lt;IPv6 literal&gt;</code> against a listener whose <code>server_names</code> lists it in another spelling: accepted.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L81-reference.md">L81-reference.md</a></p>
+<h3 id="l82"><a href="#l82">L82</a><a class="headerlink" href="#l82" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-31. Kubernetes Secret volumes as port49d's key directory, on kind.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L82-kind.md">L82-kind.md</a></p>
+<h3 id="l83"><a href="#l83">L83</a><a class="headerlink" href="#l83" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-31. Secret-store agents rendering port49d's keys, on kind.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L83-kind.md">L83-kind.md</a></p>
+<h3 id="l84"><a href="#l84">L84</a><a class="headerlink" href="#l84" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-04. Host credential mechanisms against <code>fence.ReadSecret</code>.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L84-systemd-docker.md">L84-systemd-docker.md</a></p>
+<h3 id="l85"><a href="#l85">L85</a><a class="headerlink" href="#l85" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-10-31. MetalLB in BGP mode as an anycast VIP for port49d, on kind with an FRR peer.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L85-kind.md">L85-kind.md</a></p>
+<h3 id="l86"><a href="#l86">L86</a><a class="headerlink" href="#l86" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-01. An admin call's touch on a real YubiKey, on the lab's dedicated machine.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L86-ser8.md">L86-ser8.md</a></p>
+<h3 id="l87"><a href="#l87">L87</a><a class="headerlink" href="#l87" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-04. SR Linux with <code>exit-on-reject true</code> when port49 is up and answers ERROR (<code>store_unavailable</code>, the lab fault switch), and once port49d has closed its listener on etcd (go-dark).</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L87-nokia_srlinux.md">L87-nokia_srlinux.md</a></p>
+<h3 id="l88"><a href="#l88">L88</a><a class="headerlink" href="#l88" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-04. Each platform under port49's reference AAA configuration (<code>deploy/device-aaa/</code>), loaded as shipped.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_ceos-tls.md">L88-arista_ceos-tls.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_ceos.md">L88-arista_ceos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_eos.md">L88-arista_eos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-f-evidence-run.md">L88-cisco_iosxe-f-evidence-run.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md">L88-cisco_iosxe-iosxe1718-tls.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718.md">L88-cisco_iosxe-iosxe1718.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md">L88-cisco_iosxe.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos-nxos106-tls.md">L88-cisco_nxos-nxos106-tls.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos-nxos106.md">L88-cisco_nxos-nxos106.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos.md">L88-cisco_nxos.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd-named-vrf.md">L88-cisco_xrd-named-vrf.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd-tls.md">L88-cisco_xrd-tls.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd.md">L88-cisco_xrd.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26-tls.md">L88-juniper_vjunos-router-vjunos26-tls.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26.md">L88-juniper_vjunos-router-vjunos26.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router.md">L88-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vsrx.md">L88-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux-tls.md">L88-nokia_srlinux-tls.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux.md">L88-nokia_srlinux.md</a></p>
+<h3 id="l89"><a href="#l89">L89</a><a class="headerlink" href="#l89" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-04. Velero file-system backup (node agent) of a chart release's PVCs, on kind with an S3-compatible store in the cluster.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L89-kind.md">L89-kind.md</a></p>
+<h3 id="l90"><a href="#l90">L90</a><a class="headerlink" href="#l90" title="Permanent link">&para;</a></h3>
+<p><strong>Closed</strong>, measured 2026-11-04. Oxidized's SSH host-key handling against accept-new, on one EOS device.</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L90-oxidized-arista_eos.md">L90-oxidized-arista_eos.md</a></p>
+<h3 id="l91"><a href="#l91">L91</a><a class="headerlink" href="#l91" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> <code>port49 hwkey status</code> and <code>setup</code> on a real YubiKey, on the lab's dedicated machine.</p>
+<p>No results note yet.</p>
+<h3 id="l92"><a href="#l92">L92</a><a class="headerlink" href="#l92" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> SR Linux over RFC 9887 (<a href="#l88">L88</a> h).</p>
+<p>Results notes: <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-nokia_srlinux-tls.md">L88-nokia_srlinux-tls.md</a></p>
+<h3 id="l93"><a href="#l93">L93</a><a class="headerlink" href="#l93" title="Permanent link">&para;</a></h3>
+<p><strong>Open.</strong> IOS XR over plain TCP under the reference configuration: whether an authentication ERROR is final.</p>
+<p>No results note yet.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

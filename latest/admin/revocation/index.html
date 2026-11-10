@@ -1,0 +1,2978 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Revoking a person, a certificate or a session, closing what revocation cannot reach, and setting up the CRL and OCSP checks that mark certificates for you.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/admin/revocation/">
+      
+      
+        <link rel="prev" href="../key-rotation/">
+      
+      
+        <link rel="next" href="../identity-providers/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Revoking access - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#revoking-access" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Revoking access
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-you-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you need
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#revoking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revoking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revoking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#-cert-over-cert-serial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --cert over --cert-serial
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-stolen-laptop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A stolen laptop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit codes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lifting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-marks-are-kept" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where marks are kept
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checking-your-cas-revocation-lists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checking your CA's revocation lists
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checking your CA&#39;s revocation lists">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#issuer_file-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        issuer_file rules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_unavailable-refuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_unavailable: refuse
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-you-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you need
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#revoking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revoking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revoking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#-cert-over-cert-serial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        --cert over --cert-serial
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-stolen-laptop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A stolen laptop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit codes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lifting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-marks-are-kept" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where marks are kept
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checking-your-cas-revocation-lists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checking your CA's revocation lists
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checking your CA&#39;s revocation lists">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#issuer_file-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        issuer_file rules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#on_unavailable-refuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_unavailable: refuse
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="revoking-access">Revoking access<a class="headerlink" href="#revoking-access" title="Permanent link">&para;</a></h1>
+<p><a href="../../concepts/revocation/">Revocation</a> explains what happens, in order, and what it cannot do. This page is
+the runbook: the commands, what each one needs, how to read the answer, and the broker settings that check
+your CA's revocation lists.</p>
+<h2 id="what-you-need">What you need<a class="headerlink" href="#what-you-need" title="Permanent link">&para;</a></h2>
+<p><code>port49 revoke</code> talks to the broker through your own agent, so run <code>port49 login</code> first. It needs your subject
+to declare the right in the policy's <a href="../roles-and-grants/#api-rights"><code>api:</code> list</a>:</p>
+<ul>
+<li><code>revoke_others</code> to revoke another principal, a certificate, a <code>(device, username)</code> key or an OIDC session,
+  and to list what is in force;</li>
+<li><code>lift_revocations</code> to lift a revocation, and to list.</li>
+</ul>
+<p>Every write but <code>--mine</code> also asks for a press of your security key, bound to that one request. Without the
+right the call is refused before any key press, and the refusal is logged. Your own sessions, with
+<code>port49 revoke --mine</code>, need neither a right nor a touch.</p>
+<h2 id="revoking">Revoking<a class="headerlink" href="#revoking" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>You want to stop</th>
+<th>Run</th>
+<th>Leaves a standing mark</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>a person or workload, everywhere</td>
+<td><code>port49 revoke --principal user:alice@example.com</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>one certificate</td>
+<td><code>port49 revoke --cert alice.pem</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>whoever holds one device login</td>
+<td><code>port49 revoke --device leaf1 --username alice</code></td>
+<td>no</td>
+</tr>
+<tr>
+<td>one OIDC session</td>
+<td><code>port49 revoke --sid &lt;sid&gt; --sid-issuer &lt;issuer&gt;</code></td>
+<td>no</td>
+</tr>
+<tr>
+<td>your own sessions</td>
+<td><code>port49 revoke --mine</code></td>
+<td>no</td>
+</tr>
+</tbody>
+</table>
+<p>On a terminal, <code>--principal</code> asks <code>revoke &lt;principal&gt; everywhere? ... [y/N]</code> first. <code>--yes</code> skips the question, and
+a script with no terminal is not asked.</p>
+<p>The answer begins with a <code>target:</code> line naming the policy subject the principal belongs to. If it says
+<code>no subject in the policy in force names it</code>, check the spelling. The mark is written anyway, so a typo of a real
+colleague's address is a revocation of nobody. The broker spells principals this way:</p>
+<ul>
+<li>a certificate's principal: <code>user:&lt;lower-case email&gt;</code>;</li>
+<li>a workload's: its SPIFFE ID, verbatim;</li>
+<li>a service account's: <code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code>.</li>
+</ul>
+<p><code>port49 revoke --list</code> shows what is in force, each with its origin (<code>api &lt;who&gt;</code> for an operator,
+<code>crl &lt;name&gt;</code> or <code>ocsp &lt;responder&gt;</code> for a CA's revocation). A <code>--mine</code>, <code>--device</code> or <code>--sid</code> revocation leaves no
+mark, so it is not listed; the decision log's <code>revoke</code> record names each, with <code>revocation.by</code> of <code>self</code>, <code>key</code>
+or a logout.</p>
+<p>A revocation does <strong>not expire</strong>. The agent reconnects with the same key on its own, so only a lift undoes it.</p>
+<h3 id="-cert-over-cert-serial"><code>--cert</code> over <code>--cert-serial</code><a class="headerlink" href="#-cert-over-cert-serial" title="Permanent link">&para;</a></h3>
+<p>Name a certificate by file:</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>revoke<span class="w"> </span>--cert<span class="w"> </span>alice.pem
+</code></pre></div>
+<p><code>port49 revoke</code> reads the issuer and serial out of the file, and prints them before anything is sent, so you see
+whose certificate it is:</p>
+<div class="highlight"><pre><span></span><code>port49 revoke: alice.pem: subject "CN=alice,O=Example", issuer "CN=Example Issuing CA,O=Example", serial 0x2a
+</code></pre></div>
+<p>The file must hold one certificate, PEM or DER. One that holds a private key, more than one certificate (a chain
+would revoke the CA's serial and say it did) or more than 1 MiB is refused. The command never prints a key or a
+block.</p>
+<p>The by-hand form is <code>--cert-issuer DN --cert-serial HEX</code>, both required, and it is the one to avoid. Use
+<code>--cert-serial</code> only when you have no file, for instance a serial copied from your CA's issuance log. Two things
+go wrong with it:</p>
+<ul>
+<li><strong>The issuer must be spelled as Go prints it</strong> (RFC 2253, <code>CN=Example Issuing CA,O=Example</code>). A differently
+  spelled issuer matches nothing, and the report says so (<code>nothing was found under this certificate; ... use --cert FILE</code>).</li>
+<li><strong>The serial is hexadecimal.</strong> Colons, a <code>0x</code> and leading zeros are dropped and a leading <code>-</code> is kept. A serial
+  of digits alone is read as hex, though <code>openssl</code> prints a small serial in decimal first (<code>4096 (0x1000)</code>). The
+  report warns when that may have happened: revoke again with <code>--cert FILE</code>, then lift the wrong one.</li>
+</ul>
+<p><code>--cert</code> sends the serial as explicit hex and cannot make that mistake.</p>
+<p>A certificate revocation closes that certificate's held connections, deletes unspent tokens and marks its live
+contexts. It leaves the principal's <strong>other</strong> certificates working, with one exception: unspent tokens are
+deleted by <code>(device, username)</code>, so the other certificates lose theirs on those devices and can mint again.</p>
+<p>A workload renews its certificate under a new serial the mark does not name. For a workload, revoke the
+principal too, and revoke the certificate at your CA so it cannot renew.</p>
+<h3 id="a-stolen-laptop">A stolen laptop<a class="headerlink" href="#a-stolen-laptop" title="Permanent link">&para;</a></h3>
+<p>Revoke in this order:</p>
+<ol>
+<li><code>port49 revoke --principal user:alice@example.com</code> now. It stops every mint, closes the person's held
+   connections and refuses the agent's next request.</li>
+<li>
+<p><strong>Close the device sessions.</strong> TACACS+ cannot disconnect a device's session, so a revocation takes effect at the
+   <em>next authorization request</em>. A platform that asks port49 only at login never asks again, so the revocation
+   reaches a context nobody reads. The report names those sessions:</p>
+<div class="highlight"><pre><span></span><code>not reached, on a platform that never asks port49 about a command (close these on the device): leaf1 (alice), srx2 (alice)
+</code></pre></div>
+<p>Close each on the device with the device's own tools, and see
+<a href="../devices/juniper-junos/">Junos</a> for what it does on its own.
+3. When your CA has issued the person a new certificate, revoke the <strong>old</strong> one by <code>--cert</code> (or revoke it at the
+   CA, below) and lift the principal.</p>
+</li>
+</ol>
+<p>Close a stranger's session too. <code>--mine</code> and <code>--device</code>/<code>--username</code> leave no mark, so the owner's next login on
+that device re-admits every session still open there under that username. The report says so.</p>
+<h3 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Exit</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>done; <code>--list</code> printed</td>
+</tr>
+<tr>
+<td>1</td>
+<td>nothing was revoked, or it is unknown. Refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (<code>nothing was revoked</code>), an unreadable or refused <code>--cert</code> file, or a broker refusal that says nothing was done. <strong>Unknown whether it ran:</strong> the broker did not answer (<code>the broker did not answer ...</code>), it answered with no revocation named (<code>the broker's answer named no revocation; it may be in force</code>), it answered <code>503 revocation_unconfirmed</code> (<code>the broker could not confirm it: ...</code>), or a revoke got <code>503 store_unavailable</code> (<code>the broker says: ...</code>). The first two say to run <code>port49 revoke --list</code> and look at the decision log before you retry; for the last two, read the broker's words</td>
+</tr>
+<tr>
+<td>2</td>
+<td>the flags are wrong: no target, two targets, or a flag that does not go with the form</td>
+</tr>
+<tr>
+<td>3</td>
+<td>the revocation <strong>is in force</strong> but incomplete, or not saved to the revocations file, or a lift step did not finish: run the same command again, which repeats every step</td>
+</tr>
+</tbody>
+</table>
+<p>Exit 1 is two different things, so read the line. A refusal that says nothing was done means nothing happened;
+<code>it may be in force</code> means it may have. Two broker answers look like refusals and are not:</p>
+<ul>
+<li><code>the broker could not confirm it</code> (<code>503 revocation_unconfirmed</code>): the revocation may have gone through, and so
+  may a lift made meanwhile. Run <code>port49 revoke --list</code> to see what is in force, then repeat the command if the
+  mark is not what you wanted.</li>
+<li><code>the broker says: ...</code> on a revoke that got <code>503 store_unavailable</code>: the mark went nowhere but that one broker's
+  own process, so the credential is revoked on that broker and not, yet, on the others. Do what the broker's words
+  say to make the mark everywhere, and run the revoke again once the store is back.</li>
+</ul>
+<p>Exit 3 is never a failure to revoke: the mark stands and refuses every new mint, but
+until a run finishes, unspent tokens may still log in (up to their TTL) and unmarked contexts keep authorizing.
+<code>port49 revoke --lift</code> takes the same codes; an answer with no text exits 1 with <code>it may have run</code>.</p>
+<h2 id="lifting">Lifting<a class="headerlink" href="#lifting" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>revoke<span class="w"> </span>--lift<span class="w"> </span>--principal<span class="w"> </span>user:alice@example.com
+port49<span class="w"> </span>revoke<span class="w"> </span>--lift<span class="w"> </span>--cert<span class="w"> </span>alice.pem
+</code></pre></div>
+<p>A lift needs <code>lift_revocations</code> and a touch. It restores nothing: contexts the revocation marked stay revoked until
+a login with a token minted after the lift joins them. <code>--lift --principal</code> on a principal that is not revoked
+answers <code>no such revocation is in force</code>.</p>
+<p><strong>Lifting a mark a CA made.</strong> A mark whose origin is <code>crl &lt;name&gt;</code> or <code>ocsp &lt;responder&gt;</code> was written because the
+CA revoked the certificate. The person is told the certificate was revoked at its CA and to request a new
+one; no lift is offered. You can still run <code>--lift --cert</code>, but it is no fix: the next connection checks the CA
+again and is refused, or, with the list gone stale, answered <code>certificate_status_unavailable</code>, or admitted under
+<code>on_unavailable: allow</code>. Lift such a mark only after the CA has unrevoked the certificate, and expect it to be
+marked again if the CA's list still names it. A <code>certificateHold</code> entry is never marked.</p>
+<h2 id="where-marks-are-kept">Where marks are kept<a class="headerlink" href="#where-marks-are-kept" title="Permanent link">&para;</a></h2>
+<p>A standing mark is in the session store and is read by every broker. How it survives a restart depends on the
+shape:</p>
+<ul>
+<li><strong>A broker on etcd</strong> (the normal split) keeps each mark in the store, and each broker keeps a copy in
+  <code>broker.state_dir</code>, which is what puts a mark back after a store restore. Back that directory up and follow
+  <a href="../../operate/backup-and-restore/">Backup and restore</a>; it also covers <code>port49-broker revoke --offline</code> for
+  revoking with every broker down.</li>
+<li><strong>A single-process port49d on the memory store</strong> also writes every mark to <code>broker.revocations_file</code>. port49d
+  never creates that file, so run <code>port49d init-revocations</code> once at install, as port49d's user
+  (see <a href="../../operate/install/#the-memory-store-trial-port49d-init-revocations">Install</a>); a missing file refuses
+  every start.</li>
+</ul>
+<p>When a revocation was made but the file could not be written, the report says <code>NOT saved to
+broker.revocations_file</code>, <code>port49 revoke</code> exits 3, and <code>port49_revocations_file_failed</code> is 1. Run the revoke again
+once the disk is fixed, and see <a href="../../operate/troubleshooting/#revocations-file-failed">Revocations file failed</a>.</p>
+<h2 id="checking-your-cas-revocation-lists">Checking your CA's revocation lists<a class="headerlink" href="#checking-your-cas-revocation-lists" title="Permanent link">&para;</a></h2>
+<p>A revocation made at your CA reaches port49 only if the broker is told where to look.</p>
+<p><code>certificate_status</code> is <strong>required</strong> wherever a client certificate verifier is configured: in the broker block,
+and in the <code>tls_listener</code> block for devices on RFC 9887 TLS. Leaving it out refuses the config, so skipping the
+check is always a choice you wrote down.</p>
+<p>The device side is on <a href="../../operate/tls/#revocation">TLS</a>. The broker side, which covers the certificates people
+and workloads sign in with, looks like this:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">broker</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">certificate_status</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">crls</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">corp_ca</span>
+<span class="w">        </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://crl.example.com/corp-ca.crl</span>
+<span class="w">        </span><span class="nt">issuer_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/corp-ca.pem</span>
+<span class="w">    </span><span class="c1"># ocsp: {use_aia: true}</span>
+<span class="w">    </span><span class="nt">refresh_interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<span class="w">    </span><span class="nt">on_unavailable</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">refuse</span>
+</code></pre></div>
+<p>To check nothing, write it out:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">broker</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">certificate_status</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">disabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
+<p><code>disabled: true</code> takes no other key, and port49d says so at every start: <code>certificate status checking is disabled
+(broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until</code>port49 revoke --cert<code>`.
+With it, only</code>port49 revoke` ends a certificate.</p>
+<p>Otherwise name at least one <code>crls</code> entry or an <code>ocsp</code> block. A CRL is a <code>file</code> or an <code>http(s)</code> <code>url</code> (exactly one), a
+unique <code>name</code> (lowercase letters, digits and <code>_</code>), and an <code>issuer_file</code>. The lists are fetched or re-read every
+<code>refresh_interval</code> (10 minutes by default, 1 minute to 24 hours). An OCSP block takes a fixed <code>responder</code> or
+<code>use_aia: true</code>, and <code>hash: sha1</code> for a responder that knows no SHA-256 CertID. All keys are in the
+<a href="../../reference/config/port49d/">port49d reference</a>.</p>
+<h3 id="issuer_file-rules"><code>issuer_file</code> rules<a class="headerlink" href="#issuer_file-rules" title="Permanent link">&para;</a></h3>
+<p><code>issuer_file</code> is <strong>required</strong> on every CRL, and it is the CA certificate that signs that list. A list is trusted
+for the issuer it names, so port49d checks the file at start and refuses to start, naming the source, unless:</p>
+<ul>
+<li>it holds exactly <strong>one</strong> PEM block, a certificate, and nothing else;</li>
+<li>it is a <strong>CA</strong> certificate, since only a CA signs a list;</li>
+<li>it is the trust anchor (<code>client_ca_file</code>, or the x509 trust anchor of a workload verifier) or a certificate that
+  anchor signed, since a list for an issuer the broker does not already trust would vouch for certificates
+  it never trusted.</li>
+</ul>
+<p>A list is then used only if it verifies against that certificate: signed by it, with an issuer name encoded exactly
+as the certificate's subject is, an authority key identifier that matches, not dated in the future and not signed
+with a weak algorithm. A delta CRL, a list with a critical extension port49 does not understand, or one scoped in a
+way its certificates do not name is refused, and counted at <code>port49_crl_loads_total{outcome="refused"}</code>; the log
+says why.</p>
+<p><strong>An intermediate CA needs the root's list too.</strong> Name the root's CRL (<code>issuer_file</code> is your <code>client_ca_file</code>
+anchor), or every certificate under the intermediate is refused: port49d checks each CA in the chain, and nothing
+else says whether the intermediate itself was revoked. An OCSP responder the root signs for covers it as well. At
+start port49d says which CA nothing covers, as <code>certificates issued by &lt;CA&gt; will be refused ...: nothing covers
+&lt;CA&gt; itself; name the root CA's CRL</code>, and never refuses to start over it. That is the <code>on_unavailable: refuse</code>
+line; under <code>allow</code> it reads <code>certificates issued by &lt;CA&gt; will be admitted with their revocation status unchecked
+(on_unavailable: allow): nothing covers &lt;CA&gt; itself; name the root CA's CRL</code>, and those certificates are let in.</p>
+<p>Each verified list is kept as <code>crl-&lt;name&gt;.der</code> in <code>broker.state_dir</code> (beside <code>broker.revocations_file</code> for a
+single-process port49d), so a restart during a publisher outage keeps serving it until its next update. Back these
+up with the rest of the state.</p>
+<h3 id="on_unavailable-refuse"><code>on_unavailable: refuse</code><a class="headerlink" href="#on_unavailable-refuse" title="Permanent link">&para;</a></h3>
+<p>When a certificate's status cannot be established, because a CRL is past its next update or an OCSP responder is
+down, <code>on_unavailable</code> decides:</p>
+<ul>
+<li><code>refuse</code> (the default): the broker answers <code>503 certificate_status_unavailable</code> with <code>Retry-After: 60</code>, the
+  reason <code>trust_domain_unresolved</code>. The agent is told to try again, and nothing is minted for that certificate
+  until the status is known.</li>
+<li><code>allow</code> (fail-open): the connection is admitted and the broker says so (<code>admitting a certificate whose revocation status
+  cannot be established</code>). It keeps logins working through an outage, and lets a certificate revoked during the
+  outage in until the list returns. It is the reviewed escape, not a setting to leave on.</li>
+</ul>
+<p>An uncovered status, with no CRL or OCSP source for that issuer, follows the same setting. Under <code>refuse</code> it is
+refused too, and it holds until a source covers it, so retrying does not help; add the CRL. <strong>Under <code>allow</code>, a
+certificate from an issuer nothing covers is admitted with its revocation status unchecked</strong>, like any other
+unavailable status: that is a fail-open case, and the start line quoted under the <code>issuer_file</code> rules is the warning.</p>
+<p>What the broker refuses and what it marks:</p>
+<ul>
+<li>A certificate a CRL or OCSP lists as revoked, or one under a revoked issuing CA, is refused with
+  <code>credential_revoked</code> at login and at every mint.</li>
+<li>If the certificate holds anything (a connection, a device session, an unspent token), port49d also marks it as
+  <code>port49 revoke --cert</code> would, with origin <code>crl &lt;name&gt;</code> or <code>ocsp &lt;responder&gt;</code>, so its live contexts are
+  revoked and its tokens deleted. A revoked issuing CA is refused and not marked.</li>
+<li>Freshness follows the broker's clock, so an NTP step forward can make a fresh list stale. Keep time
+  synchronized on every broker host.</li>
+</ul>
+<p>Watch <code>port49_crl_next_update_timestamp_seconds</code> (an hour before a list passes its next update, at
+<code>time() - port49_crl_next_update_timestamp_seconds &gt; -3600</code>), <code>port49_cert_status_unavailable_total</code> and
+<code>port49_crl_loads_total</code>; they carry a <code>component</code> label of <code>broker</code> or <code>tls_listener</code>. They are in the
+<a href="../../reference/metrics/">metrics reference</a>, and the TLS alerts on the
+<a href="../../reference/alerts/#port49_crl_next_update_passed">alerts reference</a>.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

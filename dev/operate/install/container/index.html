@@ -1,0 +1,3224 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Running port49d, the broker and etcd as containers with Compose.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/operate/install/container/">
+      
+      
+        <link rel="prev" href="../systemd/">
+      
+      
+        <link rel="next" href="../helm/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Install with containers - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#install-with-containers" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Install with containers
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#trial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trial
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-key-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a key version
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A deployment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Directory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admin-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin operations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Admin operations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-3am-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The 3am table
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#brokerstate_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        broker.state_dir
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-issuing-ca-and-a-second-broker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The issuing CA, and a second broker
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rotating-the-encryption-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotating the encryption: key
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-it-will-not-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When it will not start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#etcds-disk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd's disk
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backups
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#trial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trial
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-key-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a key version
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A deployment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Directory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admin-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin operations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Admin operations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-3am-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The 3am table
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#brokerstate_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        broker.state_dir
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#oidc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OIDC
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-issuing-ca-and-a-second-broker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The issuing CA, and a second broker
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rotating-the-encryption-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotating the encryption: key
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-it-will-not-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When it will not start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#etcds-disk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        etcd's disk
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backups
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="install-with-containers">Install with containers<a class="headerlink" href="#install-with-containers" title="Permanent link">&para;</a></h1>
+<p>This is one of three peer shapes (see <a href="../">Install</a>). The Compose stack runs <code>port49d</code>,
+<code>port49-broker</code> and a three-member etcd with client-certificate auth.</p>
+<p>Read the <a href="../#what-every-shape-needs">four requirements</a> on the Install page first, then follow the
+guide below, which is the deployment's own README.</p>
+<p>One peer shape beside systemd and Kubernetes; nothing in port49 requires it. The stack is
+<code>port49d</code>, <code>port49-broker</code> and a three-member etcd with client-certificate auth. <code>make
+compose-smoke</code> brings it up on a fresh PKI, logs a device in, recreates every container with
+its volumes kept, and checks the session, a token minted before the recreate, and the broker's
+<code>broker.state_dir</code> all survived. It also checks that port49d names all three etcd members at or
+above the version floor, that a device key version added by writing a file takes effect with no
+restart, that an admin revoke with no key press is refused, that the break-glass revoke and lift
+work, and that no secret is in any container's environment. CI runs it on every pull request.</p>
+<h2 id="trial">Trial<a class="headerlink" href="#trial" title="Permanent link">&para;</a></h2>
+<p>From the repository root:</p>
+<div class="highlight"><pre><span></span><code>go<span class="w"> </span>run<span class="w"> </span>./tests/compose/cmd/compose-pki<span class="w">        </span><span class="c1"># writes deploy/compose/local/ (valid 24h, git-ignored)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>deploy/compose/compose.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+</code></pre></div>
+<p>Mint a token with the trial's client certificate (<code>alice@example.com</code>):</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>login<span class="w"> </span>--broker<span class="w"> </span>https://127.0.0.1:8443<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--cert<span class="w"> </span>deploy/compose/local/broker/client.pem<span class="w"> </span>--key<span class="w"> </span>deploy/compose/local/broker/client-key.pem<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--broker-ca<span class="w"> </span>deploy/compose/local/broker/broker-ca.pem
+</code></pre></div>
+<p>Bring the whole stack up the first time, or run <code>docker compose build</code> first: only <code>setup</code> and
+<code>port49-broker</code> build, and <code>etcd-init</code> and <code>port49d</code> reuse their tags.</p>
+<p>The trial PKI protects nothing real. TACACS+ is published on <code>127.0.0.1:49</code>, the broker on
+<code>127.0.0.1:8443</code>, and each component's metrics on <code>127.0.0.1:9049</code> and <code>127.0.0.1:9050</code>.</p>
+<p><strong>Ready is not "running".</strong> <code>port49d</code> and <code>port49-broker</code> each have a healthcheck that runs
+<code>healthcheck --ready</code>, which probes <code>/readyz</code>, every ten seconds (the first thirty are a grace
+period). <code>docker compose ps</code> shows <code>healthy</code> only when it passes; <code>running</code> alone says the process
+started. You can ask the same question from the host with <code>curl 127.0.0.1:9049/readyz</code> (port49d) and
+<code>curl 127.0.0.1:9050/readyz</code> (the broker), on the metrics ports; a <code>200</code> is ready, anything else or no
+answer is not.</p>
+<p>Inputs, each an environment variable with a default: <code>PORT49_COMPOSE_LOCAL</code> (<code>./local</code>),
+<code>PORT49_COMPOSE_CONFIG</code> (<code>./config</code>), <code>PORT49_COMPOSE_SUBNET</code> (<code>172.30.49.0/24</code>),
+<code>PORT49_TACACS_PUBLISH</code> (<code>127.0.0.1:49</code>), <code>PORT49_BROKER_PUBLISH</code> (<code>127.0.0.1:8443</code>).</p>
+<h2 id="the-files">The files<a class="headerlink" href="#the-files" title="Permanent link">&para;</a></h2>
+<p><code>setup</code> runs as root at every <code>up</code> and copies each component's files into a volume of its own,
+so no volume holds both etcd identities:</p>
+<table>
+<thead>
+<tr>
+<th>Volume</th>
+<th>Holds</th>
+<th>Mounted in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>port49d-etc</code></td>
+<td><code>port49d.yaml</code>, policy, inventory, etcd CA, port49d's etcd certificate and key, <code>secrets/encryption.key</code></td>
+<td>port49d, read-only</td>
+</tr>
+<tr>
+<td><code>port49d-keys</code></td>
+<td>the device keys, one file per version (<code>tacacs_v1</code>, ...); the directory <code>root:65532</code> 0750, each file <code>root:65532</code> 0440</td>
+<td>port49d, read-only at <code>/run/port49/keys</code></td>
+</tr>
+<tr>
+<td><code>broker-etc</code></td>
+<td><code>port49-broker.yaml</code>, policy, inventory, etcd CA, the broker's etcd and TLS files, <code>secrets/encryption.key</code></td>
+<td>port49-broker, read-only</td>
+</tr>
+<tr>
+<td><code>etcd-pki</code></td>
+<td>the CA and the three members' certificates and keys</td>
+<td>etcd-1..3, read-only</td>
+</tr>
+<tr>
+<td><code>etcd-root</code></td>
+<td>etcd's root certificate and key, and <code>store-roles</code>' output</td>
+<td>etcd-init only</td>
+</tr>
+<tr>
+<td><code>etcd-N-data</code></td>
+<td>each member's data</td>
+<td>that member</td>
+</tr>
+<tr>
+<td><code>broker-state</code></td>
+<td><code>broker.state_dir</code></td>
+<td>port49-broker</td>
+</tr>
+<tr>
+<td><code>port49d-spool</code></td>
+<td>the accounting spool</td>
+<td>port49d</td>
+</tr>
+</tbody>
+</table>
+<p>No secret is in any container's environment, so <code>docker inspect</code> shows none. Each is a file:</p>
+<ul>
+<li>A device key is a file in <code>port49d-keys</code>, named by the policy as
+  <code>{version: 1, secret_ref: file:/run/port49/keys/tacacs_v1}</code>. A new version is a new file and a line in
+  the policy, with no restart (below; <code>make compose-smoke</code> runs that cell).</li>
+<li>Each component's sealing key is <code>secrets/encryption.key</code> in its own <code>-etc</code> volume (<code>root</code> 0755
+  directory, the file <code>65532</code> 0400), the same 32 bytes in both. It is not under <code>/run/port49/keys</code>:
+  a policy may name any file there.</li>
+</ul>
+<p><code>setup</code> places a key once. At every <code>up</code>, per key file: absent in the volume, it is installed; the
+same bytes, it is left alone; different bytes, <code>setup</code> stops the stack with one line naming the file
+(<code>keys are never replaced in place</code>) and the volume is untouched; gone from <code>local/</code>, the installed
+file is kept and a line says so. To change a key, add a new version (below, and "Rotating the
+<code>encryption:</code> key"), never edit <code>local/keys/</code> or <code>local/secrets/</code> under a running stack. The policy
+is the opposite: <code>setup</code> copies <code>config/policy.yaml</code> over the volumes' at every <code>up</code>, so
+<strong>edit <code>config/policy.yaml</code> on the host, then <code>docker compose up -d</code></strong>. port49d reads it at
+<code>policy.watch_interval</code> with no restart. A policy edited inside a volume is reverted at the next <code>up</code>.
+That holds only while the image is the one the containers were made from: an <code>up -d</code> after the
+image was rebuilt (an <code>up -d --build</code>, or a <code>docker compose build</code> after a <code>git pull</code>) recreates
+port49d and the broker, so the policy arrives by a restart, not a reload. Keep image changes and
+policy edits apart: rebuild with <code>docker compose build</code> and <code>up -d</code> as one change, then make policy
+edits with a plain <code>up -d</code>.</p>
+<p>Docker API access is root-equivalent, so guard it as you would the host: <code>docker run</code> with a volume
+reads every file in it.</p>
+<p>Compose's own <code>secrets:</code> is measured (lab <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l84">L84</a>, <code>tests/lab/results/L84-systemd-docker.md</code>) and is <strong>not used
+for device keys</strong>. A file-backed secret starts port49d only if the host file is <code>root:65532</code> mode 0440:
+Compose bind-mounts it as it is and does not apply the long syntax's <code>uid</code>, <code>gid</code> or <code>mode</code>, and the file
+fence refuses <code>0444</code> (the short syntax's documented mode) and a file the operator owns. And adding a second
+secret means <code>docker compose up -d</code>, which recreates port49d: a key version cannot be added with no restart.
+The <code>port49d-keys</code> volume below is the way for device keys. <code>secrets:</code> may carry the encryption key, which is
+read at start and goes through the same file fence (the cell measured a device key's file; the encryption key
+was not measured on its own).</p>
+<h2 id="adding-a-key-version">Adding a key version<a class="headerlink" href="#adding-a-key-version" title="Permanent link">&para;</a></h2>
+<p>A device key is a file named in the policy. Add a version by writing a new file and a new line;
+never rewrite a file in place (port49d reads each file once, and says so if one changes). Run this
+from the repository root, with <code>PORT49_COMPOSE_LOCAL</code> as for <code>up</code> if you set it, and the project
+name <code>port49</code> (<code>docker compose -p</code> changes the volume prefix):</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-i<span class="w"> </span>-v<span class="w"> </span>port49_port49d-keys:/k<span class="w"> </span>--entrypoint<span class="w"> </span>sh<span class="w"> </span>port49-setup:dev<span class="w"> </span>-c<span class="w"> </span><span class="s1">'</span>
+<span class="s1">  DEVICE_KEY=$1   # a new name for every version: never an existing one</span>
+<span class="s1">  umask 077 &amp;&amp; cd /k || exit 1</span>
+<span class="s1">  [ ! -e "$DEVICE_KEY" ] &amp;&amp; [ ! -L "$DEVICE_KEY" ] || { echo "port49: $DEVICE_KEY exists; pick a new key id" &gt;&amp;2; exit 1; }</span>
+<span class="s1">  t=; trap "rm -f \"\$t\"" EXIT; trap "exit 1" INT TERM HUP</span>
+<span class="s1">  t=$(mktemp ./.key.XXXXXX) || exit 1</span>
+<span class="s1">  head -c 16 /dev/urandom | od -An -tx1 | tr -d " \n" &gt; "$t" &amp;&amp; [ "$(wc -c &lt; "$t")" -eq 32 ] &amp;&amp;</span>
+<span class="s1">    chown 0:65532 "$t" &amp;&amp; chmod 0440 "$t" || { echo "port49: the device key was not made" &gt;&amp;2; exit 1; }</span>
+<span class="s1">  ln "$t" "$DEVICE_KEY" || { echo "port49: $DEVICE_KEY exists; pick a new key id" &gt;&amp;2; exit 1; }</span>
+<span class="s1">'</span><span class="w"> </span>sh<span class="w"> </span>tacacs_v2
+</code></pre></div>
+<p>It is the recipe of <code>deploy/systemd/README.md</code> ("Adding a key version"), in the volume: a temporary
+file made in the destination, a no-clobber hard link, nothing left behind on a failure. Type the
+key into the device from the volume, and keep the new file's name for the policy. Then add
+<code>{version: 2, secret_ref: "file:/run/port49/keys/tacacs_v2"}</code> to the key set in <code>config/policy.yaml</code>, under <code>accept:</code> (moving the
+old version out of <code>current:</code> once each device carries the new key), and run <code>docker compose up -d</code>:
+<code>setup</code> copies the policy into both <code>-etc</code> volumes. port49d reads the policy at <code>policy.watch_interval</code> (5 s
+here) and the new version takes effect with no restart: <code>port49_key_secret_files_changed</code> stays 0.</p>
+<p><strong>Order matters.</strong> Put the key file in place first, then add the policy line that names it. To remove a
+key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
+file that is not there makes port49d refuse its start (<code>lstat ...: no such file</code>), so on a restart it
+crash-loops until you restore the file in the <code>port49d-keys</code> volume or take the policy line out.</p>
+<h2 id="a-deployment">A deployment<a class="headerlink" href="#a-deployment" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Bring your own PKI under <code>PORT49_COMPOSE_LOCAL</code>, in the layout <code>compose-pki</code> writes
+  (<code>etcd/</code>, <code>broker/</code>, <code>keys/tacacs_v1</code>, <code>secrets/port49d-encryption.key</code> and
+  <code>secrets/broker-encryption.key</code>; the two sealing keys hold the same 32 bytes). A device key is the shared secret
+  you type into the device; a sealing key is 32 random bytes, made once (the recipe in
+  <code>deploy/systemd/README.md</code>, "Where the secrets live", with the destination changed). Edit <code>config/</code> for your policy and CRL or OCSP
+  (the example sets <code>certificate_status.disabled</code>, which a deployment must not).</li>
+<li>List devices in <code>inventory.yaml</code> by the address port49d sees. A published port
+  may change that address; what it does is policy engine spec §15 <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l39">L39</a> (a). Measured: kept for an off-host device
+  (modelled; <code>tests/lab/results/L39-docker-proxy-on-arista_eos.md</code> and <code>-off-</code>), masqueraded to
+  the compose gateway for a device on another Docker network on the same host. A connection
+  docker-proxy itself relays is unmeasured.</li>
+<li><code>etcd-init</code> applies <code>port49d store-roles</code>' output once and enables auth. After a port49
+  upgrade that changes the roles, re-apply <code>store-roles</code>' output by hand; it is never done
+  silently.</li>
+<li><strong>One store or two.</strong> The example runs one etcd cluster, so <code>stores.session</code> is omitted: the session
+  store is the directory store. A deployment in several regions gives <code>stores.directory</code> an etcd
+  stretched one member per region and each region's <code>stores.session</code> an etcd of its own;
+  <code>port49d store-roles</code> then prints a section per store: run the directory's once against the stretched cluster, and each region's session section against that region's etcd. <code>port49 store status --metrics 127.0.0.1:9049</code> (the metrics
+  port the stack publishes) shows each store as port49d sees it. Name every member's URL in <code>endpoints:</code>, as
+  the example does, never a load balancer or a VIP: port49d prints the version of each at its start and
+  refuses a member below the floor.
+  Complete single-site and multi-region store blocks are in <code>deploy/examples/stores/</code> (written at the
+  systemd paths: change the <code>/etc/port49</code> prefix only if your volumes differ).</li>
+<li><code>context_cache</code> is off here, as everywhere by default, and so is <code>broker.directory</code> (see
+  Directory below).</li>
+</ul>
+<h2 id="directory">Directory<a class="headerlink" href="#directory" title="Permanent link">&para;</a></h2>
+<p>The trial has no directory: a subject names its username, and a group subject mints for no
+one (port49-broker says so at its start). <code>config/port49-broker.yaml</code> carries a commented
+<code>broker.directory:</code> block to resolve humans and their groups from LDAP instead. What each
+key does:</p>
+<ul>
+<li><code>servers</code>: the pool, each <code>uri</code> (<code>ldaps://</code>, or <code>ldap://</code> with <code>start_tls: true</code>), a <code>site</code>
+  and a <code>priority</code>. The broker prefers servers in its own site, then the highest <code>priority</code>, then file order.</li>
+<li><code>site</code> or <code>site_env</code> (default <code>PORT49_SITE</code>): this broker's site. Set <code>PORT49_SITE</code> per
+  broker container in the service's <code>environment:</code> (it is not a secret); replicas in
+  different sites set different values.</li>
+<li><code>ca_file</code>: verifies the servers' certificates.</li>
+<li><code>bind</code>: how the broker authenticates. <code>gssapi</code> (<code>principal</code>, <code>keytab_file</code>, <code>krb5_conf</code>),
+  <code>external</code> (<code>tls_cert_file</code>, <code>tls_key_file</code>) or <code>simple</code> (<code>bind_dn</code> and <code>password_secret_ref</code>, the
+  weakest: the password is named by <code>file:/path</code>, read when the directory opens, never printed; use a
+  file in <code>broker-etc</code>, not <code>env:NAME</code>, which would show in <code>docker inspect</code>).
+  Samba AD (lab <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l43">L43</a>): <code>external</code> is refused with LDAP result 1, which port49 counts as a server fault (every
+  breaker opens, <code>port49_directory_server_up</code> drops to 0), so use <code>simple</code> or <code>gssapi</code>; <code>gssapi</code> is refused
+  under <code>ldap server require strong auth = yes</code> and accepted under <code>allow_sasl_over_tls</code>. Windows Server AD: <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l44">L44</a>.</li>
+<li><code>base_dn</code>, <code>groups_base_dn</code>, <code>principal_attribute</code>, <code>username_attribute</code>: where a person
+  and their groups are found, and which attributes name them. Only directory administrators
+  may write the two attributes: two entries holding one value are both refused.</li>
+<li><code>certificate_mapping</code>: how a client certificate finds its entry. <code>issuer_serial</code> and <code>sid</code>
+  are strong; the others need <code>allow_weak: true</code> and <code>issuers</code>.</li>
+<li><code>nested_groups</code>: <code>in_chain</code> (Active Directory; OpenLDAP answers it empty, so use <code>recursive</code> there), <code>recursive</code> or <code>direct</code>.</li>
+<li><code>grace</code>: how long a stored membership answers when no server does.</li>
+<li><code>prewarm</code>: how often, and for how many principals, group members are looked up ahead of
+  their first login.</li>
+<li><code>broker.refresh_interval</code>: the scheduled re-verification of every live principal.</li>
+</ul>
+<p>The keytab and <code>krb5.conf</code> go in the broker's configuration volume (<code>broker-etc</code>, under
+<code>/etc/port49/</code>), the keytab mode 0600 and owned by uid 65532, as the image runs. A keytab
+that cannot be read, or holds no key for the principal, stops the start with the key named.
+A directory outage never makes <code>/readyz</code> fail: a session on a stored membership goes on
+within <code>grace</code>, and past <code>session.staleness_ceiling</code> (default 4h) a command is denied
+<code>context_stale</code>.</p>
+<h2 id="admin-operations">Admin operations<a class="headerlink" href="#admin-operations" title="Permanent link">&para;</a></h2>
+<p>You run <code>port49 revoke</code> and <code>port49 directory ...</code> on your own workstation, through your agent;
+nothing is run in the stack. Each admin-level call asks for a press of your security key, once
+per operation, and an exposed certificate or token alone authorizes nothing admin-level.
+<code>port49 revoke --principal user:bob@example.com</code> revokes, <code>--lift</code> lifts, and <code>--list</code> shows the
+marks in force.</p>
+<p>The broker needs the attestation roots, the right in the policy, and a session key on your security
+key; the three are set out in <code>deploy/systemd/README.md</code> ("Admin operations"). In this stack:</p>
+<ul>
+<li>put the PEM roots in <code>PORT49_COMPOSE_LOCAL/broker/attestation-roots.pem</code>; <code>setup</code> copies it to
+  <code>/etc/port49/broker/attestation-roots.pem</code> when it is there, and the broker config's
+  <code>broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file</code> names that path. A
+  changed roots file is <code>docker compose up -d</code> (setup copies it) then <code>docker compose kill -s HUP port49-broker</code> (the broker re-reads the roots file at SIGHUP; a file it cannot use keeps the roots in force and logs one line saying so);</li>
+<li>grant <code>api: [revoke_others, lift_revocations]</code> to at least two on-call admins by <code>identity:</code> in
+  <code>config/policy.yaml</code>, even if a <code>group:</code> subject also holds it: a group's rights resolve through
+  the directory, which may be down when you need them.</li>
+</ul>
+<p><strong>Break-glass</strong>, with the stack up but no admin able to reach a running broker: stop the broker,
+revoke through etcd as the broker's own user (the image), and start it again. This stops issuance
+while the broker is down, so it is for when no admin can use the API.</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>port49-broker
+docker<span class="w"> </span>compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>--no-deps<span class="w"> </span>port49-broker<span class="w"> </span>revoke<span class="w"> </span>--offline<span class="w"> </span>--principal<span class="w"> </span>user:bob@example.com
+docker<span class="w"> </span>compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>--no-deps<span class="w"> </span>port49-broker<span class="w"> </span>revoke<span class="w"> </span>--offline<span class="w"> </span>--list
+docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>port49-broker
+</code></pre></div>
+<p><code>--lift</code> instead of the principal's revoke lifts it. <code>init-enrollments</code> and <code>export-enrollments</code>
+are local subcommands of the same form: <code>docker compose run --rm port49-broker init-enrollments</code>.
+Run <code>init-enrollments</code> before the broker's first start; a broker already running finds the new store
+within 30 seconds, and until then its sign-ins answer <code>enrollment_store_lost</code>.
+<code>port49 store status --metrics 127.0.0.1:9050</code> reads the broker's stores on the metrics port.</p>
+<h3 id="the-3am-table">The 3am table<a class="headerlink" href="#the-3am-table" title="Permanent link">&para;</a></h3>
+<p>What the operator sees; the exact lines are the CLI's (spec §5.1.6).</p>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>What you see</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session key not on a security key (TPM, Secure Enclave, file)</td>
+<td><code>port49: admin operations need a security key press, and your session key is in the TPM: ...</code>; exit 1, nothing sent</td>
+<td>log in with a session key on the security key</td>
+</tr>
+<tr>
+<td>Attestation does not chain</td>
+<td><code>401 admin_touch_refused: the touch slot's attestation does not verify: ...</code></td>
+<td>add the root or intermediate to <code>attestation-roots.pem</code>, then <code>docker compose up -d</code> and <code>docker compose kill -s HUP port49-broker</code></td>
+</tr>
+<tr>
+<td>No touch in time</td>
+<td><code>hwkey: no touch within 15s; touch the key when it blinks and try again</code></td>
+<td>run it again</td>
+</tr>
+<tr>
+<td>The identity provider is down</td>
+<td>nothing: your port49 certificate is still valid</td>
+<td>revoke as usual</td>
+</tr>
+<tr>
+<td>Your certificate expired and the provider is down</td>
+<td><code>port49 login --oidc</code> cannot sign in</td>
+<td>another on-call admin revokes; the break-glass above only if none can</td>
+</tr>
+<tr>
+<td>No attestation roots configured</td>
+<td><code>503 admin_touch_unavailable: no attestation roots are configured ...</code></td>
+<td>set the file</td>
+</tr>
+<tr>
+<td>The store is down</td>
+<td><code>503 store_unavailable</code></td>
+<td>the break-glass above, once the store is back but the broker is not</td>
+</tr>
+</tbody>
+</table>
+<h2 id="brokerstate_dir"><code>broker.state_dir</code><a class="headerlink" href="#brokerstate_dir" title="Permanent link">&para;</a></h2>
+<ul>
+<li>One named volume per broker. Never <code>--scale</code>, never <code>deploy.replicas</code>, never an anonymous
+  volume. A second broker is a second service with a volume of its own.</li>
+<li>A fresh named volume copies uid 65532, mode 0700 from the image. A bind mount, or a volume
+  filled by hand, owned by root is not refused at start (root is an accepted owner), but the
+  first <code>marks.json</code> or witness write fails, as the 65532 process cannot write it. Fix:</li>
+</ul>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>&lt;volume&gt;:/s<span class="w"> </span>alpine:3.22<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s1">'chown 65532:65532 /s &amp;&amp; chmod 0700 /s'</span>
+</code></pre></div>
+<h2 id="oidc">OIDC<a class="headerlink" href="#oidc" title="Permanent link">&para;</a></h2>
+<p>The trial is certificate-only. To accept identity-provider tokens, replace <code>broker.client_ca_file</code>
+with the <code>broker.identity</code> block shown commented in <code>config/port49-broker.yaml</code>; an OIDC-only
+broker (no x509 verifier) is valid. The provider's signing keys are kept in <code>broker.state_dir</code>, so
+a broker restarted during a provider outage still validates tokens until <code>jwks_max_age</code>; a fetch
+failure never changes <code>/readyz</code>.</p>
+<ul>
+<li>The broker must reach the provider's discovery and JWKS URLs. Where the site's egress is a proxy,
+  set <code>HTTPS_PROXY</code> on the broker service; the start line says how each issuer is fetched.</li>
+<li>Register <code>https://&lt;broker&gt;:8443/v1/logout</code> as the provider's back-channel logout URL, with
+  "backchannel logout session required" on.</li>
+<li>Each machine client's <code>sub</code> is read from the provider: in Keycloak, the client's "Service account
+  roles" user id; in Entra ID, the service principal's object id.</li>
+</ul>
+<h2 id="the-issuing-ca-and-a-second-broker">The issuing CA, and a second broker<a class="headerlink" href="#the-issuing-ca-and-a-second-broker" title="Permanent link">&para;</a></h2>
+<p><code>port49-broker init-issuer</code> makes the issuing CA on one broker, as the broker's user:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>port49-broker<span class="w"> </span>port49-broker<span class="w"> </span>init-issuer
+</code></pre></div>
+<p>A second broker is a second service with a <code>broker-state</code> volume of its own, and it must hold the
+same CA, or it refuses to start. Copy both files into its volume, keeping them private:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>port49_broker-state:/a<span class="w"> </span>-v<span class="w"> </span>port49_broker2-state:/b<span class="w"> </span>alpine:3.22<span class="w"> </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s1">'install -o 65532 -g 65532 -m 0600 /a/issuing-ca.key /b/ &amp;&amp; install -o 65532 -g 65532 -m 0644 /a/issuing-ca.pem /b/'</span>
+</code></pre></div>
+<p>Complete single-site and multi-region store blocks are in <code>deploy/examples/stores/</code>.</p>
+<h2 id="rotating-the-encryption-key">Rotating the <code>encryption:</code> key<a class="headerlink" href="#rotating-the-encryption-key" title="Permanent link">&para;</a></h2>
+<p>One key, in both components, from one secret, in three steps. A new key is a new file beside the old,
+never a rewrite.</p>
+<ol>
+<li>Make the new sealing key once, as <code>secrets/encryption-e2.key</code> in both <code>-etc</code> volumes
+   (<code>65532</code> 0400), the same 32 bytes in each, with this one command from any directory (project
+   <code>port49</code>; <code>docker compose -p</code> changes the volume prefix). It draws until the last byte is not a
+   newline, makes both temporary files in the destination directories, links them no-clobber, and
+   leaves nothing behind on a failure. It never overwrites: an existing <code>encryption-e2.key</code> is refused.</li>
+</ol>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-i<span class="w"> </span>-v<span class="w"> </span>port49_port49d-etc:/e<span class="w"> </span>-v<span class="w"> </span>port49_broker-etc:/b<span class="w"> </span>--entrypoint<span class="w"> </span>sh<span class="w"> </span>port49-setup:dev<span class="w"> </span>-c<span class="w"> </span><span class="s1">'</span>
+<span class="s1">  KEY_ID=$1   # a new id for every key: never an existing one</span>
+<span class="s1">  : "${KEY_ID:?set KEY_ID to the new key id}"</span>
+<span class="s1">  umask 077 &amp;&amp; cd /e/secrets &amp;&amp; cd /b/secrets || exit 1</span>
+<span class="s1">  n=encryption-$KEY_ID.key</span>
+<span class="s1">  for f in /e/secrets/$n /b/secrets/$n; do</span>
+<span class="s1">    [ ! -e "$f" ] &amp;&amp; [ ! -L "$f" ] || { echo "port49: $f exists; pick a new key id" &gt;&amp;2; exit 1; }</span>
+<span class="s1">  done</span>
+<span class="s1">  t=; u=; trap "rm -f \"\$t\" \"\$u\"" EXIT; trap "exit 1" INT TERM HUP</span>
+<span class="s1">  t=$(mktemp /e/secrets/.key.XXXXXX) &amp;&amp; u=$(mktemp /b/secrets/.key.XXXXXX) || exit 1</span>
+<span class="s1">  ok=</span>
+<span class="s1">  for i in 1 2 3 4 5 6 7 8 9 10; do</span>
+<span class="s1">    head -c 32 /dev/urandom &gt; "$t" &amp;&amp; [ "$(wc -c &lt; "$t")" -eq 32 ] &amp;&amp;</span>
+<span class="s1">      [ "$(tail -c1 "$t" | od -An -tx1 | tr -d " ")" != 0a ] &amp;&amp; ok=1 &amp;&amp; break</span>
+<span class="s1">  done</span>
+<span class="s1">  [ -n "$ok" ] || { echo "port49: no usable 32-byte key in 10 draws" &gt;&amp;2; exit 1; }</span>
+<span class="s1">  cat "$t" &gt; "$u" &amp;&amp; chown 65532:65532 "$t" "$u" &amp;&amp; chmod 0400 "$t" "$u" ||</span>
+<span class="s1">    { echo "port49: the sealing key was not made" &gt;&amp;2; exit 1; }</span>
+<span class="s1">  ln "$t" "/e/secrets/$n" || { echo "port49: /e/secrets/$n exists; pick a new key id" &gt;&amp;2; exit 1; }</span>
+<span class="s1">  ln "$u" "/b/secrets/$n" || { rm -f "/e/secrets/$n"; echo "port49: /b/secrets/$n exists; pick a new key id" &gt;&amp;2; exit 1; }</span>
+<span class="s1">'</span><span class="w"> </span>sh<span class="w"> </span>e2
+</code></pre></div>
+<p>Add it to <code>config/port49d.yaml</code> and <code>config/port49-broker.yaml</code> under <code>encryption:</code> as <code>previous: {id: c2, secret_ref:
+   file:/etc/port49/secrets/encryption-e2.key}</code>, run <code>docker compose up -d</code> (setup copies the config
+   files) and <code>docker compose restart port49d port49-broker</code>. Both open what either key sealed.
+2. Swap: make <code>c2</code> <code>current:</code> and <code>c1</code> <code>previous:</code> in both files, and restart both.
+3. Remove <code>previous:</code> and the old file only after the scheduled directory pass (every <code>refresh_interval</code>)
+   has re-sealed the second-factor records under <code>c2</code>. A record that opens under neither key is never
+   "not enrolled": that sign-in is <code>503 store_unavailable</code>, and the broker's line names
+   <code>port49 directory reset-second-factor</code>. Remove the old key from <code>local/secrets/</code> <strong>first</strong>
+   (<code>port49d-encryption.key</code> and <code>broker-encryption.key</code> are the old key's), so an <code>up</code> in between cannot install it
+   again, and then from the volumes
+   (<code>docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b alpine:3.22 rm /e/secrets/encryption.key /b/secrets/encryption.key</code>,
+   with the old file's name). Setup skips a sealing key that is in neither place; once the config no longer names the
+   old file, every later <code>up</code> starts clean and the old key stays gone.</p>
+<p>A process whose window lacks the directory's current key id refuses to start, naming the directory
+store and the id. Two store blocks reaching one etcd cluster at one prefix are refused too.</p>
+<h2 id="when-it-will-not-start">When it will not start<a class="headerlink" href="#when-it-will-not-start" title="Permanent link">&para;</a></h2>
+<p><code>docker compose logs port49d</code> (or <code>port49-broker</code>) holds the line.</p>
+<p><code>restart: unless-stopped</code> has no limit. A start that fails is tried again, with a restart delay that
+grows to a minute, until you fix the cause or <code>docker compose stop</code> it. So <code>docker compose ps</code> shows a
+restarting container, and the log repeats the line.</p>
+<p>A port49d whose etcd is down at boot comes back on its own when etcd does.</p>
+<table>
+<thead>
+<tr>
+<th>Refusal</th>
+<th>The line</th>
+<th>Where</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A secret file missing or unreadable</td>
+<td><code>config: encryption.current.secret_ref (id "c1") file:/etc/port49/secrets/encryption.key: open ...: permission denied</code> (or the file it names); a key file: <code>config: keys.k version 1 secret_ref file:/run/port49/keys/tacacs_v1: ...</code></td>
+<td><code>docker compose logs port49d</code></td>
+<td>write the file as the table above says (<code>setup</code> installs a key that is absent, and refuses one that differs; it never rewrites one)</td>
+</tr>
+<tr>
+<td>The fence refuses a directory</td>
+<td><code>...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...</code></td>
+<td>same</td>
+<td>fix the mode the line names in the volume (<code>docker run --rm -v &lt;volume&gt;:/v alpine:3.22 chmod go-w /v/&lt;dir&gt;</code>)</td>
+</tr>
+<tr>
+<td>A key readable by a group the container is not in</td>
+<td><code>...is group-readable by gid N, which this process is not in (gid M); ...</code></td>
+<td>same</td>
+<td>the container's group is 65532: <code>chgrp 65532</code> the file in the volume (<code>chmod 0600</code> only if the container's user owns the file: on a <code>root:65532</code> file it makes the key unreadable)</td>
+</tr>
+<tr>
+<td>The issuing CA differs from the store's</td>
+<td><code>issuance: this broker's issuing CA (...) is not the one the store records (...)</code></td>
+<td><code>docker compose logs port49-broker</code></td>
+<td>copy <code>issuing-ca.pem</code> and <code>.key</code> from a broker that holds it (above)</td>
+</tr>
+<tr>
+<td>etcd below the floor</td>
+<td><code>etcd at &lt;url&gt; is version &lt;v&gt;, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...</code></td>
+<td><code>docker compose logs port49d</code></td>
+<td>upgrade the member</td>
+</tr>
+<tr>
+<td>etcd unreachable at boot</td>
+<td>a store refusal after <code>start_timeout</code> (30 s unless you set it), then the container restarts</td>
+<td><code>docker compose logs port49d</code></td>
+<td>nothing: it retries; start etcd</td>
+</tr>
+</tbody>
+</table>
+<h2 id="etcds-disk">etcd's disk<a class="headerlink" href="#etcds-disk" title="Permanent link">&para;</a></h2>
+<p>etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
+datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
+500 ms call timeout in bursts. The <code>etcd_disk_slow</code> alert (<code>deploy/alerts</code>) fires when the WAL fsync
+or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms; a consumer QLC drive failed it (the notes are the <code>load-*</code> files in <code>tests/lab/results/</code>).
+port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The <code>port49_accounting_spool_disk_slow</code> alert watches it.</p>
+<h2 id="backups">Backups<a class="headerlink" href="#backups" title="Permanent link">&para;</a></h2>
+<p>Each etcd data volume and <code>broker-state</code> (the runbook is
+<a href="https://blanketfish.github.io/port49/latest/operate/backup-and-restore/">Backup and restore</a>).</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3277 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Rotating the devices' shared secrets and port49's encryption setting without locking anyone out.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/admin/key-rotation/">
+      
+      
+        <link rel="prev" href="../roles-and-grants/">
+      
+      
+        <link rel="next" href="../revocation/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Key rotation - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#key-rotation" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Key rotation
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#device-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Device keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#add-a-version-with-a-new-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add a version with a new file
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#if-the-file-is-not-there-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        If the file is not there yet
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phasing-out-the-old-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phasing out the old version
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#single_device" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        single_device
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-encryption-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The encryption: key
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The encryption: key">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#before-step-3-what-must-be-gone-or-re-sealed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Before step 3: what must be gone or re-sealed
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Before step 3: what must be gone or re-sealed">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#second-factors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Second factors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tokens-receipts-and-contexts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tokens, receipts and contexts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#directory-pins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Directory pins
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-pin-that-opens-under-neither-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A pin that opens under neither key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rotating-again" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotating again
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backups-and-exports-need-every-key-that-sealed-their-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backups and exports need every key that sealed their records
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-process-that-starts-without-the-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A process that starts without the key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-issuing-ca" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The issuing CA
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The issuing CA">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#first-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-three-refusals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three refusals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#forget-issuer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        forget-issuer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rotate-issuer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rotate-issuer
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-inventory-services-signing-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inventory service's signing key
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#device-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Device keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#add-a-version-with-a-new-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add a version with a new file
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#if-the-file-is-not-there-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        If the file is not there yet
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phasing-out-the-old-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phasing out the old version
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#single_device" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        single_device
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-encryption-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The encryption: key
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The encryption: key">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#before-step-3-what-must-be-gone-or-re-sealed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Before step 3: what must be gone or re-sealed
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Before step 3: what must be gone or re-sealed">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#second-factors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Second factors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tokens-receipts-and-contexts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tokens, receipts and contexts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#directory-pins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Directory pins
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-pin-that-opens-under-neither-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A pin that opens under neither key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rotating-again" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotating again
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backups-and-exports-need-every-key-that-sealed-their-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backups and exports need every key that sealed their records
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-process-that-starts-without-the-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A process that starts without the key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-issuing-ca" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The issuing CA
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The issuing CA">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#first-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First install
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-three-refusals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three refusals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#forget-issuer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        forget-issuer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rotate-issuer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rotate-issuer
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-inventory-services-signing-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The inventory service's signing key
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="key-rotation">Key rotation<a class="headerlink" href="#key-rotation" title="Permanent link">&para;</a></h1>
+<p>Four things rotate, each on its own schedule and each safe in only one order:</p>
+<ol>
+<li>the <strong>device keys</strong>, the secrets shared with RFC 8907 devices (a policy edit, no restart);</li>
+<li>the <strong><code>encryption:</code> key</strong> that seals port49's stored records (three config steps, each a restart);</li>
+<li>the <strong>issuing CA</strong>, when the broker issues certificates (<code>rotate-issuer</code>);</li>
+<li>the inventory service's <strong>signing key</strong>, when you run one.</li>
+</ol>
+<p>A device on TLS (RFC 9887) has no shared key to rotate. Its credential is its certificate; see <a href="../../operate/tls/">TLS</a>.
+Where the secrets live and which files port49 will read is on <a href="../../operate/secrets/">Secrets</a>.</p>
+<h2 id="device-keys">Device keys<a class="headerlink" href="#device-keys" title="Permanent link">&para;</a></h2>
+<p>A device's key is a named <strong>key set</strong> in the policy's <code>keys:</code> block. A set has one <code>current</code> version, any
+number of <code>accept</code> versions that still admit a device, and <code>retired</code> versions kept so a log line can name
+the key a device tried. Key groups, the inventory pin and the device's own record decide which set a
+device is admitted under; the set is where the versions live. Every key and its fields are in the
+<a href="../../reference/config/policy/">policy reference</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">keys</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">core</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">current</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="nv">2</span><span class="p p-Indicator">,</span><span class="nt"> secret_ref</span><span class="p">:</span><span class="w"> </span><span class="s">"file:/etc/port49/keys/core-v2"</span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">accept</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">,</span><span class="nt"> secret_ref</span><span class="p">:</span><span class="w"> </span><span class="s">"file:/etc/port49/keys/core-v1"</span><span class="p p-Indicator">,</span><span class="nt"> retire_after</span><span class="p">:</span><span class="w"> </span><span class="s">"2027-01-31"</span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<h3 id="add-a-version-with-a-new-file">Add a version with a new file<a class="headerlink" href="#add-a-version-with-a-new-file" title="Permanent link">&para;</a></h3>
+<p>A version's secret never changes. port49d reads each key file once, when the version comes into force, and
+holds what it read. So:</p>
+<ol>
+<li>Make the new secret as a <strong>new file</strong> (<code>core-v2</code>) under the key directory, owned and moded as
+   <a href="../../operate/secrets/#the-secret-file-rule">the secret-file rule</a> says. Put the file in place first.</li>
+<li>Edit the policy: the new version becomes <code>current</code>; the old one moves to <code>accept</code> with a <code>retire_after</code>
+   date. Run <code>port49 policy test</code> and <code>port49 policy diff</code> in CI. <code>policy test</code> refuses a <code>secret_ref</code>
+   outside <code>key_secret_refs</code>, and <code>diff</code> names any version that now points at a different reference.</li>
+<li>port49d reads the policy file on its watch interval and at SIGHUP. A new version is in force for
+   the next packet. Nothing restarts, and no open connection is cut by adding a version.</li>
+<li>Put the new key on each device. <code>port49 keys show --policy FILE --inventory FILE DEVICE</code> says which
+   key set a device is admitted under, by which rule, and which version to provision. It never prints the secret.</li>
+<li>Watch the old version empty out (below), then remove it.</li>
+</ol>
+<p><strong>Never edit a key file in place, and never point an existing version at another reference.</strong> port49d refuses
+a policy that gives a version a different <code>secret_ref</code> than the one it has held since it started.</p>
+<p>If a held file is rewritten anyway, or can no longer be read, port49d keeps the bytes it holds, says
+<code>keys.&lt;name&gt; version N: &lt;path&gt; has changed since port49d read it</code> (or, for an unreadable file,
+<code>... can no longer be read (...); port49d keeps the secret it read, but a restart will refuse to start until
+the file is back or the policy no longer names the version</code>), and sets
+<code>port49_key_secret_files_changed</code> above 0 (alert
+<a href="../../reference/alerts/#port49_key_secret_files_changed">port49_key_secret_files_changed</a>). A restart would
+take the new bytes on that replica alone, so two replicas would then hold two secrets for one version.
+Put the new bytes in a new file under a new version number.</p>
+<h3 id="if-the-file-is-not-there-yet">If the file is not there yet<a class="headerlink" href="#if-the-file-is-not-there-yet" title="Permanent link">&para;</a></h3>
+<p>Adding the policy line before the file exists does not take effect, and does no harm to a running port49d:
+the policy already serving stays in force, and the refusal is tried again every 30 seconds until the file
+reads or the policy file changes. On Kubernetes this is the normal case for up to a couple of minutes after
+you add a key to a Secret (the kubelet took 1m34s in the <a href="../../reference/lab-register/#l82">L82</a> run). A SIGHUP
+tries at once.</p>
+<p>After a restart the same mistake is a refused start, so a pod crash-loops until the file is restored or the
+policy line is taken out.</p>
+<p>To remove a key, take the policy line out first, then the file.</p>
+<h3 id="phasing-out-the-old-version">Phasing out the old version<a class="headerlink" href="#phasing-out-the-old-version" title="Permanent link">&para;</a></h3>
+<p><code>retire_after</code> is the last day (UTC) an <code>accept</code> version admits a device. From midnight after it, the
+version admits none. The device's next packet on it is a struck failure and the connection is reset at
+once, so its next connections meet the strike backoff (<code>held_refused</code>).</p>
+<p>A policy edit that removes a version or moves it to <code>retired</code> resets connections on it at their next packet,
+with no strike.</p>
+<p>An <code>accept</code> version with no <code>retire_after</code> is reported by <code>port49 policy test</code> as an indefinitely accepted
+version, which is what rotation exists to prevent.</p>
+<p>To see who is still on the old version, run <code>port49 keys status</code> against the port49d log and the policy:</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>keys<span class="w"> </span>status<span class="w"> </span>--policy<span class="w"> </span>policy.yaml<span class="w"> </span>--inventory<span class="w"> </span>inventory.yaml<span class="w"> </span>/var/log/port49/port49d.log
+</code></pre></div>
+<p>It infers, from each device's latest validated login, which version the device presented. The same fact is
+the gauge <code>port49_key_version_devices{key_ref,version}</code> and, for how long is left,
+<code>port49_key_retirement_seconds</code>; the alerts
+<a href="../../reference/alerts/#port49_key_retirement_within_7d">port49_key_retirement_within_7d</a> and
+<a href="../../reference/alerts/#port49_key_retirement_within_1d">port49_key_retirement_within_1d</a> fire before a
+device is locked out. The series are in the <a href="../../reference/metrics/">metrics reference</a>.</p>
+<p>A device that cannot log in after a rotation is the usual question. <code>port49d keys-diagnose --device NAME
+--capture FILE</code> takes a capture of the device's first packet, tries every version port49d holds, retired
+ones included, and says which one validates. It prints no byte of the packet or of a key.</p>
+<h3 id="single_device"><code>single_device</code><a class="headerlink" href="#single_device" title="Permanent link">&para;</a></h3>
+<p>The key metrics are labelled by <code>key_ref</code>. A name that admits exactly one device would be that device's
+name in a metric, and port49 puts no device identity in a metric label. So a key held by exactly one
+device (a pin, or a key group of one) is reported under <code>key_ref="single_device"</code> and <code>version="any"</code>.
+For those, <code>port49_key_version_devices</code> counts the single-device keys on a version that has a
+<code>retire_after</code>, and <code>port49_key_retirement_seconds</code> is the least time left among them. Which device is on
+which version is <code>port49 keys status</code>'s answer. A key held by two or more devices keeps its own label.</p>
+<p><code>single_device</code> is therefore a reserved name: a policy or an inventory that names it as a <code>key_ref</code> is
+refused at load. Pick another name for the set.</p>
+<h2 id="the-encryption-key">The <code>encryption:</code> key<a class="headerlink" href="#the-encryption-key" title="Permanent link">&para;</a></h2>
+<p>port49 seals tokens, receipts, contexts, directory memberships and pins, and second-factor records at rest under
+<code>encryption.current</code>. <code>encryption.previous</code> is an optional second key that records can still be opened with, which
+is what makes rotation possible.</p>
+<p><strong>Always give a new key a new id.</strong> The ids label every sealed record. port49 refuses a <code>previous</code> whose id equals
+<code>current</code>'s, but it cannot see a new secret put under an old id: records sealed earlier then fail to open, with no
+warning at the start.</p>
+<p>Both keys are 32 bytes; their fields are in the <a href="../../reference/config/port49d/#encryption">reference</a>. Every
+region holds the same set, and the key is the same value in port49d and in the broker.</p>
+<p>Rotation is three steps. <strong>Finish each step in every region, on every port49d and every port49-broker,
+before you begin the next.</strong> Each step is a configuration change and a restart.</p>
+<ol>
+<li><strong>Add the new key as <code>previous</code></strong> everywhere. The old key stays <code>current</code>. Nothing is sealed under the
+   new key yet, but every process can now open what either key seals.</li>
+<li><strong>Swap.</strong> The new key becomes <code>current</code> and the old key <code>previous</code>, everywhere. New records are sealed
+   under the new key, and a process that has not swapped yet can still open them, because step 1 gave it
+   that key.</li>
+<li><strong>Remove <code>previous</code></strong> everywhere, only when the conditions below hold. Keep the old key file as
+   described there.</li>
+</ol>
+<p>Why the order cannot be changed. In step 1 no process seals under the new key, so a process that has not
+restarted yet is never handed a record it cannot open. In step 2 every process already holds both keys, so
+the swap can happen one process at a time. Step 3 is the only step that makes records unreadable, so it
+comes last. Run step 3 on one process early and that process opens nothing a not-yet-swapped neighbour
+still seals under the old key.</p>
+<h3 id="before-step-3-what-must-be-gone-or-re-sealed">Before step 3: what must be gone or re-sealed<a class="headerlink" href="#before-step-3-what-must-be-gone-or-re-sealed" title="Permanent link">&para;</a></h3>
+<p>Do not run step 3 until the records sealed under the old key are gone or re-sealed. Each kind of record has
+its own wait.</p>
+<h4 id="second-factors">Second factors<a class="headerlink" href="#second-factors" title="Permanent link">&para;</a></h4>
+<p>With directory password sign-in, second-factor records and the enrollment mark are re-sealed by the
+broker's scheduled directory pass (every <code>refresh_interval</code>). Wait for a pass to complete after step 2.
+If the broker says <code>the re-seal could not open N second factors; encryption.previous cannot be retired
+while they are sealed under it</code>, do not run step 3.</p>
+<h4 id="tokens-receipts-and-contexts">Tokens, receipts and contexts<a class="headerlink" href="#tokens-receipts-and-contexts" title="Permanent link">&para;</a></h4>
+<p>These are short-lived, and the scheduled pass above does not re-seal them. After step 2 has finished
+everywhere, wait for the <strong>largest</strong> of:</p>
+<ul>
+<li><code>session.max_session_age_default</code> plus <code>session.grace_window</code> (port49d.yaml; 12 hours plus 10 minutes by
+  default, and a policy role can only lower it);</li>
+<li><code>receipt_max_age</code> (2 hours by default);</li>
+<li><code>session.staleness_ceiling</code> (4 hours by default, the age of the snapshots a stopped process is read from);</li>
+<li>20 minutes (a token lives at most 15, and the idempotency records that carry minted tokens are kept under 20);</li>
+<li>the <strong>directory membership lease</strong> (24 hours: <code>broker.directory.grace</code> is capped at 24 hours, and the lease is
+  the larger of the two).</li>
+</ul>
+<p>The lease is on the list because every verify reads a principal's membership record before it rewrites it. A
+record sealed under the old key therefore keeps failing, for that principal, until its lease runs out. This
+holds on a single shared store as well as on a split. Tokens are also purged at every start on etcd.</p>
+<p>Records still under the old key after step 3 do not open:</p>
+<ul>
+<li>a token is dropped from the candidates and counted in <code>port49_crypt_open_failures_total{record="token"}</code>;</li>
+<li>a session's context is denied <code>store_unavailable</code>;</li>
+<li>a second factor is never treated as "not enrolled". For that second factor an operator runs
+  <code>port49 directory reset-second-factor</code>.</li>
+</ul>
+<h4 id="directory-pins">Directory pins<a class="headerlink" href="#directory-pins" title="Permanent link">&para;</a></h4>
+<p><strong>Directory pins</strong> (on a directory store of its own: a split, or more than one region) are re-sealed by the
+same scheduled pass. A pin has no expiry, so it never ages out.</p>
+<p><strong>What to wait for.</strong> After step 2 has finished everywhere, wait for a pass that ended after the last step-2
+restart (<code>port49_directory_pins_reseal_last_complete_timestamp_seconds</code> later than that restart) <strong>with
+<code>port49_directory_pins_sealed_previous</code> at 0.</strong></p>
+<ul>
+<li>Read both on the replica that holds the keyspace (<code>port49_store_keyspace_held</code> 1). A replica that handed the
+  keyspace over keeps the values of its last pass until it restarts. Any region's holder will do, because they
+  all read the one directory store.</li>
+<li>The gauges are absent until a runner completes its first pass after it starts. They are also absent on a
+  single shared store, where a membership record has a lease (the 24 hours above) and there is no pin to
+  re-seal.</li>
+</ul>
+<p><strong>How the pass works.</strong> The runner lists every pin with the key it is sealed under, in pages of 500, and opens
+only the pins not under <code>current</code>. It writes each one still sealed under <code>previous</code> again under <code>current</code>, by a
+compare on the revision it read. A pin that a <code>port49 directory forget</code>, a re-pin or another region's runner
+changed in between is left as that writer wrote it, and the next pass reads it again. Each pin is one
+compare-and-swap, so nothing is left half-written.</p>
+<p>The pass has a budget of half <code>refresh_interval</code>, so it never holds off the stamping refresh. A large fleet can
+take several intervals to finish its first pass.</p>
+<p><strong>What it says.</strong></p>
+<ul>
+<li>A pass that moves pins says <code>directory store: the re-seal sealed N pins under
+  the current key; M are left under encryption.previous</code>.</li>
+<li>If the directory store stops answering or refuses the broker's identity, the pass says
+  <code>directory store: the re-seal of pins stopped: &lt;error&gt;; the next pass starts again</code> and changes no gauge.</li>
+<li>A cancel (shutdown, or the keyspace handed over) stops the pass silently and changes no gauge either.</li>
+<li>A write that fails any other way does not stop the pass. That pin is counted in
+  <code>port49_directory_pins_sealed_previous</code>, it is named once an hour as
+  <code>directory store: &lt;principal&gt;'s pin could not be written under the current key (...)</code>, and the pass goes on
+  with the pins after it.</li>
+<li>A pass that runs out of its budget says
+  <code>directory store: the re-seal of pins ran out of its &lt;budget&gt; budget after sealing N pins (M did not open); the next pass goes on from there</code>
+  once an hour and changes no gauge.</li>
+</ul>
+<p>While step 2 is rolling out, expect <code>the re-seal sealed N pins</code> lines in every region, because regions on
+different <code>current</code> keys move pins back and forth; finish step 2 promptly.</p>
+<h4 id="a-pin-that-opens-under-neither-key">A pin that opens under neither key<a class="headerlink" href="#a-pin-that-opens-under-neither-key" title="Permanent link">&para;</a></h4>
+<p><strong>A pin that opens under neither key</strong> is counted in <code>port49_directory_pins_unopenable</code> (alert
+<a href="../../reference/alerts/#port49_directory_pins_unopenable">port49_directory_pins_unopenable</a>, on the keyspace
+holder). It means a key was retired while it still sealed pins. Reading the pin fails with an unknown-key error
+(<code>ErrUnknownKey</code>).</p>
+<p><strong>What it breaks.</strong> Bind, mint and refresh fail for that principal. From the code (not measured), sessions
+already open are denied <code>context_stale</code> once <code>session.staleness_ceiling</code> has passed. Each pass opens the pin
+again, so <code>port49_crypt_open_failures_total{record="membership"}</code> rises at least once per pass for each such pin,
+and more with traffic, because bind, mint and refresh open it too.</p>
+<p><strong>What the pass says.</strong> The pass never deletes or rewrites such a pin. It says
+<code>directory store: &lt;principal&gt;'s pin does not open (...)</code> once an hour, for at most 20 principals a pass
+(the first 20 in sorted order); the count's line says how many more are not named.</p>
+<ul>
+<li>When the cause is an unknown key, the line says to put the retired key back as <code>previous</code> and restart.</li>
+<li>For any other open error, it says the record does not match its seal and to run
+  <code>port49 directory forget &lt;principal&gt;</code>, because the record was changed outside port49 and no key helps.</li>
+</ul>
+<p><strong>How to recover.</strong> Putting the retired key back as <code>previous</code> and restarting deletes nothing, and the next pass
+re-seals the pin. If that key is gone, <code>port49 directory forget &lt;principal&gt;</code> frees the principal, and the
+person's next sign-in pins them again. Any admin with <code>forget_principals</code> whose own pin opens can run it, and
+every pin that opens is on <code>current</code> after a pass. Confirm that the person who signs in is the same person, as
+on <a href="../../operate/stores/">Stores</a>. There is no offline forget on <code>port49-broker</code>.</p>
+<h3 id="rotating-again">Rotating again<a class="headerlink" href="#rotating-again" title="Permanent link">&para;</a></h3>
+<p>There is one <code>previous</code> slot, so a rotation's step 1 drops whatever key <code>previous</code> held. Begin a rotation only
+after the last one's step 3. The waits above gate that step, so every pin is then under <code>current</code>. Only pins
+have a gauge. A second factor is under <code>current</code> once a pass has completed without the
+<code>could not open N second factors</code> line and without <code>sign-in: the re-seal of second factors stopped</code>.</p>
+<h3 id="backups-and-exports-need-every-key-that-sealed-their-records">Backups and exports need every key that sealed their records<a class="headerlink" href="#backups-and-exports-need-every-key-that-sealed-their-records" title="Permanent link">&para;</a></h3>
+<p>An etcd snapshot and a Velero backup are the raw stores, and each record in them keeps the key that was current
+when that record was written. An enrollment export (<code>port49-broker export-enrollments</code>) keeps each record's seal
+too, and seals only its envelope under the key current at export time. So a backup taken between steps 2 and 3
+needs both keys, and any backup needs every key that was current while its records were written.</p>
+<p><code>port49 directory import</code> refuses a file sealed under a key the broker does not hold and tells you to set that
+key as <code>previous</code>.</p>
+<p><strong>Keep every old key file, offline, as long as any backup that holds its records is kept.</strong> Restoring without it
+loses the second factors and pins sealed under it, and each enrolled person must then run
+<code>port49 directory reset-second-factor</code>. Velero also stores the encryption Secret in the bucket, so a Velero
+restore brings back the key its backup was taken with, and that bucket must be guarded like the key.</p>
+<h3 id="a-process-that-starts-without-the-key">A process that starts without the key<a class="headerlink" href="#a-process-that-starts-without-the-key" title="Permanent link">&para;</a></h3>
+<p>If a process starts without a key the store was last written under, what you see depends on the store:</p>
+<ul>
+<li>On a directory store of its own, the start is refused, naming the store and the key id. Fix <code>encryption:</code>
+  and start again.</li>
+<li>On the session store, the start goes on. port49d (and <code>port49-broker</code>, in its own name) says that the store was last written by a process whose
+  current key it does not hold, the sessions sealed under that key are denied <code>store_unavailable</code>, none is
+  revoked, and <code>port49_crypt_store_key_unknown</code> is 1
+  (<a href="../../reference/alerts/#port49_crypt_store_key_unknown">alert</a>). If the key was retired by mistake, set it
+  as <code>previous</code> again and restart.</li>
+</ul>
+<p>The recipes that make the key file, with the right owner and mode and without ever overwriting an old one,
+are in each shape's install page: <a href="../../operate/install/systemd/">systemd</a>,
+<a href="../../operate/install/container/">container</a>, <a href="../../operate/install/helm/">Helm</a>.
+See also <a href="../../operate/stores/#one-set-of-encryption-keys-everywhere">Stores</a>.</p>
+<h2 id="the-issuing-ca">The issuing CA<a class="headerlink" href="#the-issuing-ca" title="Permanent link">&para;</a></h2>
+<p>This applies only when the broker issues certificates (<code>broker.identity.issuance</code> is set). Every broker on
+one store must issue from the same CA. The CA is two files in <code>broker.state_dir</code>, <code>issuing-ca.pem</code> and
+<code>issuing-ca.key</code>, and the store holds a record of the CA's fingerprint, never its key.</p>
+<h3 id="first-install">First install<a class="headerlink" href="#first-install" title="Permanent link">&para;</a></h3>
+<p>Run <code>init-issuer</code> <strong>once</strong>, on one broker, as that broker's user:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>-u<span class="w"> </span>port49-broker<span class="w"> </span>port49-broker<span class="w"> </span>init-issuer
+</code></pre></div>
+<p>(<code>port49d init-issuer</code> does the same under port49d's configuration.) It writes the key first, then the
+certificate, owner-only. It refuses a configuration without <code>issuance:</code>. Run again where a whole CA already
+is, it writes nothing and says so; a half CA (a key without the certificate, or the reverse) it refuses,
+and it never replaces one.</p>
+<p>Then <strong>copy both files to every other broker's <code>broker.state_dir</code></strong>, keeping them private (<code>0600</code>, the
+broker's user), and restart each. Never run <code>init-issuer</code> on a second broker: that would make a different
+CA. The Helm chart's <code>scripts/copy-issuer.sh</code> does the copying and refuses to overwrite a different CA.</p>
+<p><strong>Compare the fingerprints.</strong> Each broker's start prints a line like
+<code>issuing as &lt;subject&gt; (sha256:&lt;fingerprint&gt;), valid until &lt;date&gt;</code>. Read that line on every broker; the
+fingerprints must be identical. The first broker to start on a store writes its fingerprint as the store's
+record, and every later broker is held to it.</p>
+<h3 id="the-three-refusals">The three refusals<a class="headerlink" href="#the-three-refusals" title="Permanent link">&para;</a></h3>
+<p>A broker whose CA does not match the record refuses to start, and the line names what to do. At 3am
+there are three, all from <code>issuance:</code> in the broker's journal or <code>kubectl logs</code>:</p>
+<table>
+<thead>
+<tr>
+<th>You see</th>
+<th>It means</th>
+<th>Do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>issuance: this broker's issuing CA (&lt;fingerprint&gt;) is behind a promotion: the store records &lt;fingerprint&gt;, promoted from it by &lt;broker&gt; at &lt;time&gt;. Copy issuing-ca.pem, issuing-ca.key and issuing-ca-previous.pem from that broker into broker.state_dir, then start</code></td>
+<td>A rotation was promoted on another broker and this one missed the copy.</td>
+<td>Copy those three files from the broker named, then start.</td>
+</tr>
+<tr>
+<td><code>issuance: this broker's issuing CA (&lt;fingerprint&gt;) is not the one the store records (&lt;fingerprint&gt;, by &lt;broker&gt; at &lt;time&gt;): every broker on one store issues from one CA. Copy issuing-ca.pem and issuing-ca.key from a broker that holds it ...</code></td>
+<td>This broker holds a different CA than the store records, usually a second <code>init-issuer</code> or a restored old volume.</td>
+<td>Copy <code>issuing-ca.pem</code> and <code>issuing-ca.key</code> from a broker that holds the recorded one. Do not run <code>init-issuer</code>.</td>
+</tr>
+<tr>
+<td><code>issuance: the store's issuing CA record kept changing under this start; start again</code></td>
+<td>Two brokers were writing the record at once.</td>
+<td>Start again.</td>
+</tr>
+</tbody>
+</table>
+<p>Do <strong>not</strong> reach for <code>forget-issuer</code> for any of these. It is for one case only: every broker lost the CA
+and no copy exists.</p>
+<h3 id="forget-issuer"><code>forget-issuer</code><a class="headerlink" href="#forget-issuer" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>port49-broker<span class="w"> </span>forget-issuer<span class="w"> </span>--current<span class="w"> </span>sha256:&lt;fingerprint&gt;
+</code></pre></div>
+<p>It removes the store's record of the CA so a new one can be made, then <code>init-issuer</code> on one broker and a
+copy to the others. It names the fingerprint it forgets, so a record that holds a different CA is kept; and
+it deletes at the revision it read, so a broker that recorded in the meantime keeps its record. After it,
+every certificate the old CA issued stops working. Stop every broker on the store before starting one on
+another CA. The current fingerprint is the one a broker's start line prints.</p>
+<h3 id="rotate-issuer"><code>rotate-issuer</code><a class="headerlink" href="#rotate-issuer" title="Permanent link">&para;</a></h3>
+<p><code>rotate-issuer</code> replaces the CA with an overlap, so the certificates already issued stay valid. It is run on
+<strong>one</strong> broker, twice, with copies between:</p>
+<ol>
+<li><strong>Stage.</strong> <code>rotate-issuer</code> makes <code>issuing-ca-next.pem</code> and <code>issuing-ca-next.key</code>. Copy the <strong>certificate
+   only</strong> (<code>issuing-ca-next.pem</code>) to every other broker and restart each, so every broker trusts it. The key
+   stays on this broker. This broker loads the CA only at its start, so restart it too before it promotes.</li>
+<li><strong>Promote.</strong> Run <code>rotate-issuer</code> again on the same broker. The current certificate becomes
+   <code>issuing-ca-previous.pem</code>, the staged pair becomes current. Copy <code>issuing-ca.pem</code>, <code>issuing-ca.key</code> and
+   <code>issuing-ca-previous.pem</code> to every other broker, remove the staged <code>issuing-ca-next.pem</code> there, and restart each,
+   and restart this one too, which holds the old CA in memory until it does.
+   Each issues with the new CA and still trusts the previous one.</li>
+<li><strong>Retire.</strong> After <code>certificate_lifetime</code> has passed since the promotion, remove
+   <code>issuing-ca-previous.pem</code> from every broker and restart each.</li>
+</ol>
+<p>Step 1 before step 2 is what keeps anyone out: a broker that trusts the staged certificate can verify a
+certificate issued under it the moment another broker promotes. A promotion is refused while a previous CA
+from an earlier rotation is still there, since certificates it issued may still be valid. An interrupted
+promotion is finished by running it again. An expired CA is recovered the same way: run <code>rotate-issuer</code>
+twice, restarting every broker after each. The alerts
+<a href="../../reference/alerts/#port49_issuing_ca_expiring">port49_issuing_ca_expiring</a> and
+<a href="../../reference/alerts/#port49_issuing_ca_missing">port49_issuing_ca_missing</a> say when.</p>
+<h2 id="the-inventory-services-signing-key">The inventory service's signing key<a class="headerlink" href="#the-inventory-services-signing-key" title="Permanent link">&para;</a></h2>
+<p>The inventory service signs each bundle with <code>signing_key_file</code>. port49d verifies every bundle against the public keys in
+<code>inventory.service.verify_key_files</code>: list two while the key rotates, the old key's public key and the
+new key's, and SIGHUP re-reads the list. The fields are in the
+<a href="../../reference/config/port49-inventory/">service reference</a> and the
+<a href="../../reference/config/port49d/">port49d reference</a>.</p>
+<p>A bundle names its signing key by an id, the first 8 bytes of the SHA-256 of the public key. A verifier
+picks the verify key with that id; if two files in the list carry the same id (the same key listed under
+two paths), the last one listed is the one a document is checked against. List each public key once. A
+document that does not verify is refused with <code>the document's signature by &lt;id&gt; does not verify</code>, and one
+signed by a key no file holds with <code>the document is signed by &lt;id&gt;, which no verify key holds</code>.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3366 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Configuring Juniper Junos to authenticate and authorize logins through port49, and what the lab did and did not measure on it.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/admin/devices/juniper-junos/">
+      
+      
+        <link rel="prev" href="../cisco-ios-xr/">
+      
+      
+        <link rel="next" href="../nokia-sr-linux/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Juniper Junos - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#juniper-junos" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Juniper Junos
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#reference-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-lab-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the lab measured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#traps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unmeasured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unmeasured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lab-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lab evidence
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#reference-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-lab-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the lab measured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#traps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unmeasured" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unmeasured
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lab-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lab evidence
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="juniper-junos">Juniper Junos<a class="headerlink" href="#juniper-junos" title="Permanent link">&para;</a></h1>
+<p>Set <code>authentication-order tacplus</code> alone, as the reference file does, so that no local password sits behind port49 (what listing <code>password</code> after it does is boxed under Unmeasured). The cost is paid at 3am: while port49 answers ERROR, the ERROR is final and break-glass waits until port49d closes its listener (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md">L4-error-juniper_vjunos-router.md</a>). This page covers vJunos-router, vSRX and SRX hardware. The lab measured nothing on hardware: what is unmeasured on SRX and on hardware is boxed under Unmeasured.</p>
+<h2 id="reference-configuration">Reference configuration<a class="headerlink" href="#reference-configuration" title="Permanent link">&para;</a></h2>
+<p>Load <a href="https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/juniper_junos.set"><code>juniper_junos.set</code></a> (TACACS+ on port 49) or <a href="https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/juniper_junos-tls.set"><code>juniper_junos-tls.set</code></a> (RFC 9887, Junos 26.2R1 or later on routing and switching platforms) with <code>load set terminal</code>. The <a href="../#placeholders">placeholders table</a> says what each placeholder is. Create the break-glass account's password by hand: no file holds one. The lines that matter, quoted from the files:</p>
+<div class="highlight"><pre><span></span><code>delete system authentication-order
+set system authentication-order tacplus
+set system tacplus-server &lt;PORT49_1&gt; secret "&lt;KEY&gt;"
+set system tacplus-server &lt;PORT49_1&gt; routing-instance &lt;MGMT_VRF&gt;
+set system tacplus-server &lt;PORT49_1&gt; source-address &lt;SOURCE_ADDRESS&gt;
+set system login user &lt;BREAKGLASS_USER&gt; class super-user
+</code></pre></div>
+<p>Over TLS the server carries no secret, the port is always set, and the certificate lines are:</p>
+<div class="highlight"><pre><span></span><code>set system tacplus-server &lt;PORT49_1&gt; port &lt;TLS_PORT&gt;
+set system tacplus-server &lt;PORT49_1&gt; tls trusted-ca-group port49
+set system tacplus-server &lt;PORT49_1&gt; tls mutual-authentication certificate-id &lt;CERT_ID&gt;
+set system tacplus-server &lt;PORT49_1&gt; single-connection
+</code></pre></div>
+<p>The login classes and the remote template user are not in the files. They come from your policy: run <code>port49 platform export --classes --config port49d.yaml juniper_junos</code> and load its output after the reference file. Each class's <code>idle-timeout</code> is the least ceiling of the sessions landing in it.</p>
+<h2 id="what-the-lab-measured">What the lab measured<a class="headerlink" href="#what-the-lab-measured" title="Permanent link">&para;</a></h2>
+<ul>
+<li>With port49d stopped, break-glass logs in in 20 to 40 ms; with port49d dark it logs in and runs a command in 160 to 190 ms. Junos asks port49 for no command authorization either way (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router.md">L88-juniper_vjunos-router.md</a>, cells b and d; <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vjunos-router.md">L41-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vsrx.md">L41-juniper_vsrx.md</a>).</li>
+<li>An ERROR is final. Break-glass waits until port49d closes its listener (about 5.5 s at the defaults, bounded at 10.5 s) and then logs in; on 26.2R1.7 the first break-glass login landed at once (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vsrx.md">L4-error-juniper_vsrx.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26.md">L88-juniper_vjunos-router-vjunos26.md</a>, cell c, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vjunos-router.md">L41-juniper_vjunos-router.md</a>). <a href="../../../operate/troubleshooting/#break-glass-does-not-work">Troubleshooting</a> and the <a href="../../../operate/troubleshooting/failure-matrix/#at-3am">failure matrix</a> say what to do while you wait.</li>
+<li>The first server resetting at accept, the second answering: a token login succeeded in 160 to 180 ms (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router.md">L88-juniper_vjunos-router.md</a>, cell f).</li>
+<li><code>idle-timeout</code> per login class: the largest value the device accepts is 4294967295 minutes, and the next value fails the commit. <code>port49 platform export --classes</code> stops there (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vsrx.md">L88-juniper_vsrx.md</a>, cell i).</li>
+<li>A live shell keeps its access until logout. Junos asks port49 only at login unless <code>authorization-time-interval</code> is set; with it set, Junos asked again once, a revoked principal was denied there, and the denial did not end the session (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md">L36-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md">L36-juniper_vsrx.md</a>). <a href="../../../concepts/revocation/#what-revocation-cannot-do">Revocation</a> has the consequence.</li>
+<li>Platform set 1.2.0 adds <code>junoscript **</code> and <code>op **</code> denies to a reply where a deny is the only guard beneath a sent bit; set 1.3.0 adds <code>view-configuration</code> to the bits a reply may send with its reach denied. Over an SSH exec channel, <code>xml-mode netconf need-trailer</code> was refused with set 1.2.0's reply and reached NETCONF with a deny of <code>show configuration</code> alone and with no deny (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-entries-juniper_vjunos-router.md">L26c-entries-juniper_vjunos-router.md</a>; <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-junoscript-juniper_vjunos-router.md">L26c-junoscript-juniper_vjunos-router.md</a>). <a href="../../policy/#platform-sets">Policy</a> says how to pin a set and <code>port49 platform upgrade</code> how to move one.</li>
+<li>Over RFC 9887 on vJunos-router 26.2R1.7: with no port set the device dials 49, it sends the literal server address as the SNI name, and it sends its leaf and its intermediate certificate (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md">L73-juniper_vjunos-router.md</a>, cells a, c, e).</li>
+<li>The reference over TLS on vJunos-router 26.2R1.7, loaded unchanged: break-glass in 40 ms with port49d stopped and 190 ms dark, and a token login through the second server in 190 ms (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26-tls.md">L88-juniper_vjunos-router-vjunos26-tls.md</a>).</li>
+<li>A permit reply of up to 375 bytes, every attribute at most 255, logged in with no lockout on vJunos-router 23.4R2-S2.1 and 26.2R1.7, and break-glass logged in before and after every step. That is a VM; hardware is below (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md">L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md</a>).</li>
+</ul>
+<h2 id="traps">Traps<a class="headerlink" href="#traps" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The device sends the server's IP address as the SNI name over TLS. If you set <code>server_names</code> in port49d's <code>tls_listener</code>, list every address the device may dial, or leave it unset: otherwise the device sees an <code>internal_error</code> alert and port49d logs <code>tls_refused</code> with <code>sni_mismatch</code> (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md">L73-juniper_vjunos-router.md</a>, cell c). See <a href="../../../operate/tls/">TLS</a>.</li>
+<li>Mutual TLS is <code>tls mutual-authentication certificate-id</code> on the server and on the accounting destination. Vendor documentation puts the TLS client at Junos 26.2R1 on routing and switching platforms (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vjunos-router.md">L71-juniper_vjunos-router.md</a>).</li>
+<li><code>idle-timeout</code> is per login class, so it comes from <code>port49 platform export --classes</code>, not from the reference file (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vsrx.md">L88-juniper_vsrx.md</a>, cell i).</li>
+<li><code>source-address</code> must be an address the box holds on the routing instance; an address it does not hold never leaves it. Accounting destinations need the routing instance too, or the records never leave (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router.md">L88-juniper_vjunos-router.md</a>).</li>
+<li>A <code>junoscript</code> deny closes the CLI's <code>xml-mode</code> route and that session's NETCONF on the images the lab ran; it is set 1.2.0 or later that sends it (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-junoscript-juniper_vjunos-router.md">L26c-junoscript-juniper_vjunos-router.md</a>).</li>
+<li>An ERROR is final: keep a console path for the seconds break-glass waits (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md">L4-error-juniper_vjunos-router.md</a>).</li>
+</ul>
+<h2 id="unmeasured">Unmeasured<a class="headerlink" href="#unmeasured" title="Permanent link">&para;</a></h2>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: a reply over 255 bytes on hardware</p>
+<p>Whether Junos on hardware locks a user out when a permit session reply totals more than 255 bytes is unknown (<a href="../../../reference/lab-register/#l78">L78</a>, open). The lab ran two VM images only (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md">the 26.2R1.7 run</a>). The only evidence for hardware is a production prior, not a measurement: the operator's experience on hardware Junos is that a reply over 255 bytes locked the user out. port49 keeps its replies inside a budget for that reason; test any long policy on the hardware you run before you rely on it.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: the Junos TLS certificate enrolment and SRX</p>
+<p>The documented enrolment through the PKI store (generate-key-pair, generate-certificate-request, local-certificate load, a trusted-ca-group) is not shown to work: the lab placed the trust files and the client key through a lab-only root shell, and the note does not record which of two issued certificates the device sent. Whether SRX speaks RFC 9887 at all, and on which releases, is unknown: the lab has not run it, and the vendor documentation quoted in <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vjunos-router.md">the lab's client check</a> puts the TLS client on routing and switching platforms, not SRX.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: the local-password fall-through under tacplus alone, and list handling</p>
+<p>That a login port49 denies falls through to a local password when <code>password</code> is listed after <code>tacplus</code>, that <code>authentication-order tacplus</code> alone refuses a denied login with no fall-through, that <code>set</code> on the list adds to it so a device already holding <code>[ tacplus password ]</code> keeps <code>password</code> (the reference file deletes the list first), and that on 23.4 and on vSRX break-glass lands about 7 s into a store hang, are reported in the reference README and the file's comments. None of these is confirmed here against a note line, and no device debug was captured. Treat them as expectations and check the order with <code>show configuration system authentication-order</code> after you load the file.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: how far the junoscript deny reaches</p>
+<p>Whether the <code>junoscript</code> deny also closes REST, the XML API, <code>outbound-ssh</code> and <code>scp</code> is unknown (<a href="../../../reference/lab-register/#l59">L59</a>, open), and so is what these replies do on a Junos release or hardware family the lab did not run.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: SRX hardware command denies</p>
+<p>An operator reported, from SRX hardware running Junos 23.4R2-S8.7, that a deny naming a hierarchy such as <code>show configuration security</code> was not enforced and that regex denies of <code>xml-mode</code> did not stop <code>xml-mode netconf</code> (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-operator-juniper_srx.md">operator-reported note</a>). The lab did not run those commands on hardware.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: a second re-authorization</p>
+<p>Whether Junos re-authorizes an open session more than once, so whether a revocation made after the first ever reaches it, is unknown (<a href="../../../reference/lab-register/#l40">L40</a>, open). Do not rely on a revocation reaching a Junos session before the device ends it.</p>
+</div>
+<h2 id="lab-evidence">Lab evidence<a class="headerlink" href="#lab-evidence" title="Permanent link">&para;</a></h2>
+<!-- generated by make docs from code; do not edit -->
+
+<table>
+<thead>
+<tr>
+<th>Entry</th>
+<th>Platform</th>
+<th>Image</th>
+<th>Date</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../../../reference/lab-register/#l1">L1 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-juniper_vjunos-router.md">L1-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l1">L1 (open)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L1-juniper_vsrx.md">L1-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l2">L2 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-10-01</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-juniper_vjunos-router.md">L2-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l2">L2 (open)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-10-01</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L2-juniper_vsrx.md">L2-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l4">L4 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-24</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md">L4-error-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l4">L4 (open)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-24</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vsrx.md">L4-error-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l4">L4 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-juniper_vjunos-router.md">L4-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l4">L4 (open)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-juniper_vsrx.md">L4-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l5">L5 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-juniper_vjunos-router.md">L5-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l5">L5 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L5-juniper_vsrx.md">L5-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l6">L6 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-juniper_vjunos-router.md">L6-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l6">L6 (open)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L6-juniper_vsrx.md">L6-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l8">L8 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-juniper_vjunos-router.md">L8-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l8">L8 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L8-juniper_vsrx.md">L8-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l9">L9 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-abbreviations-juniper_vjunos-router.md">L9-abbreviations-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l9">L9 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-abbreviations-juniper_vsrx.md">L9-abbreviations-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l9">L9 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-juniper_vjunos-router.md">L9-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l9">L9 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L9-juniper_vsrx.md">L9-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l10">L10 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-juniper_vjunos-router.md">L10-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l10">L10 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L10-juniper_vsrx.md">L10-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-bits-juniper_vjunos-router.md">L12-bits-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-bits-juniper_vsrx.md">L12-bits-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-configuration-juniper_vjunos-router.md">L12-configuration-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-configuration-juniper_vsrx.md">L12-configuration-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-juniper_vjunos-router.md">L12-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-juniper_vsrx.md">L12-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-netconf-juniper_vjunos-router.md">L12-netconf-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-netconf-juniper_vsrx.md">L12-netconf-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vjunos-router.md">L12-projection-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l12">L12 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-29</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L12-projection-juniper_vsrx.md">L12-projection-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l13">L13 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-juniper_vjunos-router.md">L13-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l13">L13 (open)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-20</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L13-juniper_vsrx.md">L13-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l17">L17 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-21</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L17-juniper_vjunos-router.md">L17-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l17">L17 (open)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-21</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L17-juniper_vsrx.md">L17-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l18">L18 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-22</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-juniper_vjunos-router.md">L18-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l18">L18 (open)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-22</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L18-juniper_vsrx.md">L18-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l24">L24 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L24-juniper_vjunos-router.md">L24-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l24">L24 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L24-juniper_vsrx.md">L24-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26">L26 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26-juniper_vjunos-router.md">L26-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26">L26 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-25</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26-juniper_vsrx.md">L26-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26b">L26b (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26b-juniper_vjunos-router.md">L26b-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26b">L26b (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-09-25</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26b-juniper_vsrx.md">L26b-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-entries-juniper_vjunos-router.md">L26c-entries-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-entries-juniper_vsrx.md">L26c-entries-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-juniper_vjunos-router.md">L26c-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-juniper_vsrx.md">L26c-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-junoscript-juniper_vjunos-router.md">L26c-junoscript-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-junoscript-juniper_vsrx.md">L26c-junoscript-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>SRX-series hardware</td>
+<td>Junos 23.4R2-S8.7</td>
+<td>2026-09-25</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-operator-juniper_srx.md">L26c-operator-juniper_srx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-10-12</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-projected-juniper_vjunos-router.md">L26c-projected-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-10-12</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-projected-juniper_vsrx.md">L26c-projected-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-scripts-juniper_vjunos-router.md">L26c-scripts-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l26c">L26c (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L26c-scripts-juniper_vsrx.md">L26c-scripts-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l28">L28 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-30</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-held-juniper_vjunos-router.md">L28-held-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l28">L28 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L28-juniper_vjunos-router.md">L28-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l29">L29 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-09-30</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L29-reload-juniper_vjunos-router.md">L29-reload-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l34">L34 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-juniper_vjunos-router.md">L34-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l34">L34 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L34-juniper_vsrx.md">L34-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l35">L35 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-juniper_vjunos-router.md">L35-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l35">L35 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-juniper_vsrx.md">L35-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l36">L36 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md">L36-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l36">L36 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md">L36-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l37">L37 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-juniper_vjunos-router.md">L37-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l37">L37 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L37-juniper_vsrx.md">L37-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l41">L41 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vjunos-router.md">L41-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l41">L41 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-juniper_vsrx.md">L41-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l49">L49 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-juniper_vjunos-router.md">L49-oxidized-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l49">L49 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L49-oxidized-juniper_vsrx.md">L49-oxidized-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l51">L51 (closed)</a></td>
+<td>juniper_vjunos</td>
+<td><code>Junos: 23.4R2-S2.1</code></td>
+<td>2026-10-09</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-juniper_vjunos.md">L51-juniper_vjunos.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l51">L51 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-10-09</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L51-juniper_vsrx.md">L51-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l53">L53 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-juniper_vjunos-router.md">L53-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l53">L53 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-06</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L53-juniper_vsrx.md">L53-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l54">L54 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-10-09</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-juniper_vjunos-router.md">L54-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l54">L54 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-10-09</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L54-juniper_vsrx.md">L54-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l57">L57 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L57-juniper_vjunos-router.md">L57-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l57">L57 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L57-juniper_vsrx.md">L57-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l58">L58 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-10-12</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L58-juniper_vjunos-router.md">L58-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l58">L58 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-10-12</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L58-juniper_vsrx.md">L58-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l64">L64 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-juniper_vjunos-router.md">L64-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l64">L64 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L64-juniper_vsrx.md">L64-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l65">L65 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-juniper_vjunos-router.md">L65-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l65">L65 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L65-juniper_vsrx.md">L65-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l66">L66 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-juniper_vjunos-router.md">L66-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l66">L66 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L66-juniper_vsrx.md">L66-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l68">L68 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-juniper_vjunos-router.md">L68-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l68">L68 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-juniper_vsrx.md">L68-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l68">L68 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-10-16</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-juniper_vjunos-router.md">L68-netconf-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l68">L68 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-10-16</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-juniper_vsrx.md">L68-netconf-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l68">L68 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-10-16</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-operator-juniper_vjunos-router.md">L68-netconf-operator-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l68">L68 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-10-16</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-netconf-operator-juniper_vsrx.md">L68-netconf-operator-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l68">L68 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-10-16</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-projected-juniper_vjunos-router.md">L68-projected-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l68">L68 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-10-16</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L68-projected-juniper_vsrx.md">L68-projected-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l71">L71 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vjunos-router.md">L71-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l71">L71 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L71-juniper_vsrx.md">L71-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l73">L73 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 26.2R1.7</td>
+<td>2026-11-05</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md">L73-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l78">L78 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-07</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-23.4R2-S2.1-juniper_vjunos-router.md">L78-vJunos-router-23.4R2-S2.1-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l78">L78 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 26.2R1.7</td>
+<td>2026-10-21</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md">L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l88">L88 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 26.2R1.7</td>
+<td>2026-11-04</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26-tls.md">L88-juniper_vjunos-router-vjunos26-tls.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l88">L88 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 26.2R1.7</td>
+<td>2026-11-04</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26.md">L88-juniper_vjunos-router-vjunos26.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l88">L88 (closed)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 23.4R2-S2.1</td>
+<td>2026-11-04</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router.md">L88-juniper_vjunos-router.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l88">L88 (closed)</a></td>
+<td>juniper_vsrx</td>
+<td>vSRX3 21.4R3.15</td>
+<td>2026-11-04</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vsrx.md">L88-juniper_vsrx.md</a></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

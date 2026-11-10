@@ -1,0 +1,3812 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Writing the policy file that decides who may log in to which devices and what they may run, and checking a change before it ships.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/admin/policy/">
+      
+      
+        <link rel="prev" href="../../operate/troubleshooting/will-not-start/">
+      
+      
+        <link rel="next" href="../roles-and-grants/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Policy - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#policy" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Policy
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-pieces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pieces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#writing-a-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Writing a rule
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Writing a rule">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-a-permit-and-a-deny-both-match" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When a permit and a deny both match
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-modifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output modifiers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scopes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scopes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#on_missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_missing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-include-scope-grant-refusal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The include-scope grant refusal
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security_log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        security_log
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#writing-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Writing tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Writing tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#who-and-where" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Who and where
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#command-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-a-test-clears-a-policy-diff-label" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How a test clears a policy diff label
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A worked example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checking-a-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checking a change
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checking a change">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#port49-policy-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 policy test
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49-policy-diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 policy diff
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="port49 policy diff">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#acknowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        acknowledge:
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-ceiling-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The ceiling line
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-new-grant-is-a-reviewers-call-the-gate-does-not-see-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A new grant is a reviewer's call: the gate does not see it
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-the-checks-in-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the checks in CI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49-policy-replay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 policy replay
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49-explain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 explain
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#platform-sets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform sets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Platform sets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#port49-platform-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 platform upgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49d/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-pieces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The pieces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#writing-a-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Writing a rule
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Writing a rule">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-a-permit-and-a-deny-both-match" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When a permit and a deny both match
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-modifiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output modifiers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scopes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scopes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#on_missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        on_missing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-include-scope-grant-refusal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The include-scope grant refusal
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security_log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        security_log
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#writing-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Writing tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Writing tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#who-and-where" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Who and where
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#command-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-a-test-clears-a-policy-diff-label" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How a test clears a policy diff label
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A worked example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checking-a-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checking a change
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checking a change">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#port49-policy-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 policy test
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49-policy-diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 policy diff
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="port49 policy diff">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#acknowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        acknowledge:
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-ceiling-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The ceiling line
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-new-grant-is-a-reviewers-call-the-gate-does-not-see-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A new grant is a reviewer's call: the gate does not see it
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-the-checks-in-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the checks in CI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49-policy-replay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 policy replay
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49-explain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 explain
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#platform-sets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform sets
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Platform sets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#port49-platform-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49 platform upgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="policy">Policy<a class="headerlink" href="#policy" title="Permanent link">&para;</a></h1>
+<p>The policy file decides who may log in to which devices and what they may run there. It is one YAML
+document that lives in your repository, so a change to access is a change to a file that someone reviews,
+tests and diffs before it ships.</p>
+<p>port49d reads the file on its watch interval and at SIGHUP, and refuses a file that does not load. The tools
+that check a change run offline, against the policy and the inventory file, so CI can run them and nothing
+needs a broker.</p>
+<p>This page shows how the pieces of the file fit together, how to write tests for it and how to review a
+change. Every key is in the <a href="../../reference/config/policy/">policy reference</a>.</p>
+<h2 id="the-pieces">The pieces<a class="headerlink" href="#the-pieces" title="Permanent link">&para;</a></h2>
+<p>A decision is made in four steps, and each has a block in the file:</p>
+<ol>
+<li>A <strong>subject</strong> says who: a directory group of people (<code>group:</code>), a group of workloads
+   (<code>machine_group:</code>), or a list of literal identities (<code>identity:</code>).</li>
+<li>A <strong>scope</strong> says where: a selector over inventory attributes, such as <code>site</code> or <code>os_version</code>.</li>
+<li>A <strong>role</strong> says what: the command rules it permits and denies, a privilege level, and how long a session
+   may last.</li>
+<li>A <strong>grant</strong> ties a subject to a scope with roles.</li>
+</ol>
+<p>Roles and grants have <a href="../roles-and-grants/">their own page</a>. This is a policy that decides one thing:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">platform_set</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.3.0</span>
+
+<span class="nt">keys</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">core</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">current</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">,</span><span class="nt"> secret_ref</span><span class="p">:</span><span class="w"> </span><span class="s">"file:/run/port49/keys/core-v1"</span><span class="p p-Indicator">}</span>
+
+<span class="nt">key_groups</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">match</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">cidr</span><span class="p">:</span><span class="w"> </span><span class="nv">10.0.0.0/8</span><span class="p p-Indicator">},</span><span class="nt"> key_ref</span><span class="p">:</span><span class="w"> </span><span class="nv">core</span><span class="p p-Indicator">}</span>
+
+<span class="nt">scopes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dc_fabric</span>
+<span class="w">    </span><span class="nt">match</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">site</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">dc1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">dc2</span><span class="p p-Indicator">],</span><span class="nt"> role</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">leaf</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">spine</span><span class="p p-Indicator">]}</span>
+<span class="w">    </span><span class="nt">on_missing</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exclude</span>
+
+<span class="nt">roles</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">read_only</span>
+<span class="w">    </span><span class="nt">privilege</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">readonly</span>
+<span class="w">    </span><span class="nt">permit</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"show</span><span class="nv"> </span><span class="s">**"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"terminal</span><span class="nv"> </span><span class="s">length</span><span class="nv"> </span><span class="s">*"</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">max_session_age</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8h</span>
+
+<span class="nt">subjects</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">netops</span>
+<span class="w">    </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="s">"cn=netops,ou=groups,dc=example,dc=com"</span>
+<span class="w">    </span><span class="nt">token_ttl</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">300s</span>
+
+<span class="nt">grants</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="nv">netops</span><span class="p p-Indicator">,</span><span class="nt"> scope</span><span class="p">:</span><span class="w"> </span><span class="nv">dc_fabric</span><span class="p p-Indicator">,</span><span class="nt"> roles</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">read_only</span><span class="p p-Indicator">]}</span>
+
+<span class="nt">tests</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="nv">netops</span><span class="p p-Indicator">,</span><span class="nt"> device</span><span class="p">:</span><span class="w"> </span><span class="nv">leaf1</span><span class="p p-Indicator">,</span><span class="nt"> command</span><span class="p">:</span><span class="w"> </span><span class="s">"show</span><span class="nv"> </span><span class="s">version"</span><span class="p p-Indicator">,</span><span class="nt"> expect</span><span class="p">:</span><span class="w"> </span><span class="nv">permit</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="nv">netops</span><span class="p p-Indicator">,</span><span class="nt"> device</span><span class="p">:</span><span class="w"> </span><span class="nv">leaf1</span><span class="p p-Indicator">,</span><span class="nt"> command</span><span class="p">:</span><span class="w"> </span><span class="s">"configure</span><span class="nv"> </span><span class="s">terminal"</span><span class="p p-Indicator">,</span><span class="nt"> expect</span><span class="p">:</span><span class="w"> </span><span class="nv">deny</span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<p>The <code>keys:</code> and <code>key_groups:</code> blocks say which shared secret admits which device; they are covered in
+<a href="../key-rotation/">Key rotation</a>. The <code>tests:</code> block is covered in <a href="#writing-tests">Writing tests</a>.</p>
+<p>An unknown key, or a second document in the file, is refused, and the error names the key or the line.</p>
+<h2 id="writing-a-rule">Writing a rule<a class="headerlink" href="#writing-a-rule" title="Permanent link">&para;</a></h2>
+<p>A rule is a list of terms matched against the command, one term per argument:</p>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Matches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>word</code></td>
+<td>that argument, ignoring case</td>
+</tr>
+<tr>
+<td><code>*</code></td>
+<td>exactly one argument, any value</td>
+</tr>
+<tr>
+<td><code>**</code></td>
+<td>any number of arguments; only as the last term</td>
+</tr>
+<tr>
+<td><code>@class</code></td>
+<td>one argument in a named set of entity names the platform defines</td>
+</tr>
+<tr>
+<td><code>/regex/</code></td>
+<td>one argument matching the RE2 expression</td>
+</tr>
+</tbody>
+</table>
+<p>A rule matches the whole command. <code>show bgp summary</code> does not match <code>show bgp summary detail</code> unless the
+rule ends in <code>**</code>.</p>
+<h3 id="when-a-permit-and-a-deny-both-match">When a permit and a deny both match<a class="headerlink" href="#when-a-permit-and-a-deny-both-match" title="Permanent link">&para;</a></h3>
+<p>When several roles apply, their permits and denies are pooled. <strong>A permit wins only if it is more specific
+than every deny that matches the command, at every word; otherwise the command is denied.</strong> Two examples:</p>
+<ul>
+<li>A permit of <code>show **</code> does not beat a deny of <code>show running-config **</code>, because the deny names more of the
+  command.</li>
+<li>A permit of <code>copy **</code> against a deny of <code>* * /^(tftp|ftp):/</code>: the permit names the command and the deny names
+  the destination. Each wins a different word, neither dominates, and the deny stands.</li>
+</ul>
+<p>Prefer literals, <code>*</code> and classes to regexes. A regex is the one term whose reach <code>port49 policy diff</code> cannot
+enumerate.</p>
+<p>A regex in a deny may not turn case-insensitivity off. port49 matches ignoring case, so a case-sensitive deny
+could be walked past by changing the case of what is typed. A regex in a permit may.</p>
+<h3 id="output-modifiers">Output modifiers<a class="headerlink" href="#output-modifiers" title="Permanent link">&para;</a></h3>
+<p>Output modifiers after a pipe are judged apart from the command, against the role's <code>pipe:</code> list. The list
+defaults to <code>include **</code>, <code>exclude **</code>, <code>begin **</code>, <code>section **</code>, <code>json</code>, <code>count</code> and <code>no-more</code>. A role that
+sets <code>pipe: {permit: []}</code> allows no pipe at all.</p>
+<h2 id="scopes">Scopes<a class="headerlink" href="#scopes" title="Permanent link">&para;</a></h2>
+<p>A scope selects devices by inventory attribute. <code>match: {site: [dc1, dc2], role: [leaf, spine]}</code> is every
+device whose <code>site</code> is <code>dc1</code> or <code>dc2</code> and whose <code>role</code> is <code>leaf</code> or <code>spine</code>. A scope with no <code>match</code> selects
+every device, and <code>match: {name: core-sw01}</code> pins one.</p>
+<p>A version key takes a comparison, such as <code>os_version: {lt: "4.31.2F"}</code>. The comparison orders vendor version
+strings token by token, not as semver.</p>
+<h3 id="on_missing"><code>on_missing</code><a class="headerlink" href="#on_missing" title="Permanent link">&para;</a></h3>
+<p>Sometimes the inventory cannot describe a device: the sync dropped its <code>os_version</code>, or its version string
+cannot be ordered. The device then has no value for a match key, and <code>on_missing</code> says which way it goes:
+<code>include</code> puts it in the scope, <code>exclude</code> leaves it out.</p>
+<p>The safe direction depends on what the scope does:</p>
+<ul>
+<li>A scope that <strong>delivers a deny</strong> is the one a broken sync could silently lift. A missing value should mean
+  the device is <em>affected</em>: <code>on_missing: include</code>.</li>
+<li>A scope that <strong>gives access</strong> should leave out a device it cannot describe: <code>on_missing: exclude</code>.</li>
+</ul>
+<p>port49 refuses to guess. A scope with a match key that delivers a deny must write <code>on_missing</code>, whether the
+deny comes through <code>attached_roles</code> or through a grant whose role holds a deny. A file that leaves it out does
+not load. Any other scope takes <code>on_missing: exclude</code>.</p>
+<h3 id="the-include-scope-grant-refusal">The include-scope grant refusal<a class="headerlink" href="#the-include-scope-grant-refusal" title="Permanent link">&para;</a></h3>
+<p>A <strong>grant on an <code>on_missing: include</code> scope is refused at load</strong>, whatever its roles carry. The reason: a
+grant is what lets a login reach a device, even when its roles only deny. On an include scope, a device the
+inventory cannot describe would get a session from the grant alone. (A scope with no match key, or one pinned
+by <code>name</code> alone, is the exception; see the end of this section.)</p>
+<p>The error reads:</p>
+<div class="highlight"><pre><span></span><code>grants[1] (subject netops, scope eos_unpatched): scope "eos_unpatched" is on_missing: include and a grant lets
+a login reach a device even when its roles only deny, so a device the inventory cannot describe would get a
+session from this grant; put the grant on a separate scope with the same match and on_missing: exclude, and
+put a mitigation's deny in the include scope's attached_roles (spec §5.5)
+</code></pre></div>
+<p>The fix is two scopes with the same match. The deny goes on the include scope, and the grant on the exclude
+one:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">scopes</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eos_unpatched</span>
+<span class="w">    </span><span class="nt">match</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">platform</span><span class="p">:</span><span class="w"> </span><span class="nv">arista_eos</span><span class="p p-Indicator">,</span><span class="nt"> os_version</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">lt</span><span class="p">:</span><span class="w"> </span><span class="s">"4.31.2F"</span><span class="p p-Indicator">}}</span>
+<span class="w">    </span><span class="nt">on_missing</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">include</span>
+<span class="w">    </span><span class="nt">security_log</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">attached_roles</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">humans</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">no_running_config</span><span class="p p-Indicator">]</span><span class="w">   </span><span class="c1"># a role of denies alone</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eos_unpatched_known</span>
+<span class="w">    </span><span class="nt">match</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">platform</span><span class="p">:</span><span class="w"> </span><span class="nv">arista_eos</span><span class="p p-Indicator">,</span><span class="nt"> os_version</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">lt</span><span class="p">:</span><span class="w"> </span><span class="s">"4.31.2F"</span><span class="p p-Indicator">}}</span>
+<span class="w">    </span><span class="nt">on_missing</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exclude</span><span class="w">             </span><span class="c1"># a grant is earned by data</span>
+
+<span class="nt">roles</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">no_running_config</span>
+<span class="w">    </span><span class="nt">deny</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"show</span><span class="nv"> </span><span class="s">running-config</span><span class="nv"> </span><span class="s">**"</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p>An include scope may attach only roles that cannot widen access: no <code>permit</code>, no <code>privilege</code>, no
+<code>attributes</code>. A role that carries one is refused at load, and the error says to put it on an exclude scope.</p>
+<p>The exception, for both the grant refusal and the attached-roles rule, is a scope with no match key, or one
+pinned by <code>name</code> alone. It has no attribute a device could be missing, so it has nothing to include.</p>
+<h3 id="security_log"><code>security_log</code><a class="headerlink" href="#security_log" title="Permanent link">&para;</a></h3>
+<p>Whoever can edit <code>os_version</code> can lift a mitigation without touching the policy, and the inventory is often
+written by a discovery tool rather than a person. <code>security_log</code> makes a device joining or leaving a scope a
+security record in the log.</p>
+<p>It <strong>defaults to true</strong> for a scope that delivers a deny, so the log says when a device left the mitigation.
+A scope with <code>per_login_mfa</code> and a match key other than <code>name</code> must say <code>security_log: true</code> outright.</p>
+<p>Writing <code>security_log: false</code> on a deny-bearing scope is allowed, because the file chose it, and
+<code>port49 policy test</code> reports it:</p>
+<div class="highlight"><pre><span></span><code>report: deny_scope_unlogged: scope "eos_unpatched" delivers a deny and says security_log: false: an edit of
+os_version or platform that lifts the deny leaves no record (spec §5.5)
+</code></pre></div>
+<p>The report does not fail the run. Remove the line, or write <code>true</code>, unless you have a reason to want the
+silence.</p>
+<h2 id="writing-tests">Writing tests<a class="headerlink" href="#writing-tests" title="Permanent link">&para;</a></h2>
+<p>Tests are the policy's own statement of what it should decide. They do two jobs:</p>
+<ul>
+<li><code>port49 policy test</code> runs every test and fails when one does not hold, so a change that breaks an intended
+  decision fails CI.</li>
+<li><code>port49 policy diff</code> reads the <strong>passing</strong> tests in the new file as the author's evidence that a widening of
+  access is intended. A widening no test (or <a href="#acknowledge"><code>acknowledge:</code></a> entry) accounts for fails the diff.</li>
+</ul>
+<p>Tests go in the top-level <code>tests:</code> list. There are two kinds:</p>
+<ul>
+<li>A <strong>command test</strong> has a <code>command:</code>. It asks: would this subject be permitted this command on this device?</li>
+<li>A <strong>session test</strong> has no <code>command:</code>. It asserts what a login to the device gets: its privilege level, its
+  ceiling, its reply attributes, the subject's API rights or its per-login MFA requirement.</li>
+</ul>
+<h3 id="who-and-where">Who and where<a class="headerlink" href="#who-and-where" title="Permanent link">&para;</a></h3>
+<p>Every test names who it runs as and the device it runs against:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>What it says</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>subject</code></td>
+<td>the subject the test runs as</td>
+<td><code>subject: netops</code></td>
+</tr>
+<tr>
+<td><code>principal</code></td>
+<td>a principal identity, in any form <code>identity:</code> takes; the test runs as whichever subject it resolves to</td>
+<td><code>principal: "user:alice@example.com"</code></td>
+</tr>
+<tr>
+<td><code>device</code></td>
+<td>an inventory device; required</td>
+<td><code>device: leaf1</code></td>
+</tr>
+</tbody>
+</table>
+<p>Give <code>subject</code> or <code>principal</code>, exactly one. A device the inventory does not name fails the test.</p>
+<p>A test is answered in the order the broker answers a mint, as <code>port49 explain</code> does:</p>
+<ul>
+<li>a subject with no grant on the device is a deny, <code>no_grants_matched</code>;</li>
+<li>a device with no platform is refused, <code>device_unconfigured</code>;</li>
+<li>any subject on a quarantined device is a deny, <code>device_quarantined</code>;</li>
+<li>a mint the broker would refuse permits nothing.</li>
+</ul>
+<h3 id="command-tests">Command tests<a class="headerlink" href="#command-tests" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>What it says</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>command</code></td>
+<td>the command line, as a person would type it</td>
+<td><code>command: "show running-config"</code></td>
+</tr>
+<tr>
+<td><code>expect</code></td>
+<td><code>permit</code> or <code>deny</code>; required on a command test</td>
+<td><code>expect: deny</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>the reason code the decision must carry, from the <a href="../../reference/reason-codes/">reason codes</a></td>
+<td><code>reason: no_permit_dominates_deny</code></td>
+</tr>
+</tbody>
+</table>
+<p>The command is evaluated on the words the device sends for it. Where a platform splits an interface name from
+its index (IOS-XE), the test splits it the same way.</p>
+<p><strong>What <code>reason:</code> adds.</strong> Without it, a test checks only the verdict. An <code>expect: deny</code> test passes whatever
+caused the deny, including a reason you did not mean: the subject lost its grant (<code>no_grants_matched</code>), or the
+device was quarantined. With <code>reason:</code>, the test also pins <em>why</em>. For example, this test passes only while a
+deny rule is what refuses the command:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">tests</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="nv">netops</span><span class="p p-Indicator">,</span><span class="nt"> device</span><span class="p">:</span><span class="w"> </span><span class="nv">leaf1</span><span class="p p-Indicator">,</span><span class="nt"> command</span><span class="p">:</span><span class="w"> </span><span class="s">"show</span><span class="nv"> </span><span class="s">running-config"</span><span class="p p-Indicator">,</span><span class="nt"> expect</span><span class="p">:</span><span class="w"> </span><span class="nv">deny</span><span class="p p-Indicator">,</span><span class="nt"> reason</span><span class="p">:</span><span class="w"> </span><span class="nv">no_permit_dominates_deny</span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<p><code>reason:</code> is checked on a permit test too (a permit carries <code>permit_dominates</code>). It must be a code from the
+closed vocabulary, or the file does not load.</p>
+<h3 id="session-tests">Session tests<a class="headerlink" href="#session-tests" title="Permanent link">&para;</a></h3>
+<p>A session test takes no <code>expect</code> or <code>reason</code>. It names at least one of these keys, and passes where the subject
+would be minted a token on the device with every value it names:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>What it asserts</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>level</code></td>
+<td>the privilege level the subject is minted a token at</td>
+<td><code>level: operator</code></td>
+</tr>
+<tr>
+<td><code>max_privilege</code></td>
+<td>the ceiling the token carries, a level or <code>none</code></td>
+<td><code>max_privilege: none</code></td>
+</tr>
+<tr>
+<td><code>priv_lvl</code></td>
+<td>the <code>priv-lvl</code> number (0 to 15) the reply carries, or <code>none</code>; <code>015</code> reads as 15</td>
+<td><code>priv_lvl: 15</code></td>
+</tr>
+<tr>
+<td><code>enable</code></td>
+<td>the subject's enable mode: <code>none</code>, <code>auto</code> or <code>token</code></td>
+<td><code>enable: none</code></td>
+</tr>
+<tr>
+<td><code>reply</code></td>
+<td>the exact session reply, in order; an empty list asserts an empty reply</td>
+<td><code>reply: ["priv-lvl=1", "roles=network-operator"]</code></td>
+</tr>
+<tr>
+<td><code>api</code></td>
+<td>the subject's broker API rights, the whole list, in any order</td>
+<td><code>api: [explain_others]</code></td>
+</tr>
+<tr>
+<td><code>per_login_mfa</code></td>
+<td>the effective per-login requirement, <code>none</code> or a mapping of <code>accept</code> and <code>reuse_for</code></td>
+<td><code>per_login_mfa: none</code></td>
+</tr>
+</tbody>
+</table>
+<p>A session test fails where no token would be minted, for example where the subject has no grant on the
+device. The one exception is a test that asserts <code>api</code> and nothing else: API rights belong to the subject, not
+to a session, so that test passes on any device.</p>
+<h3 id="how-a-test-clears-a-policy-diff-label">How a test clears a <code>policy diff</code> label<a class="headerlink" href="#how-a-test-clears-a-policy-diff-label" title="Permanent link">&para;</a></h3>
+<p>Each label in the <a href="#port49-policy-diff"><code>policy diff</code> table</a> is cleared by a different kind of test. The test
+must be in the new file and must pass.</p>
+<table>
+<thead>
+<tr>
+<th>Label</th>
+<th>The test that clears it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EXPANDS</code></td>
+<td>a command test with <code>expect: permit</code> on a command the change frees, on a device of that group. One test clears every command shape of the same deny and permit; in the example below, one test clears three lines.</td>
+</tr>
+<tr>
+<td><code>RAISES</code></td>
+<td>a session test asserting the new value. The diff prints the test to add.</td>
+</tr>
+<tr>
+<td><code>REGEX-CONSTRAINED</code></td>
+<td>a passing command test with <code>expect: permit</code> on a command the changed rule decides, or, for a deny, on a command it used to refuse. A wider deny whose freed commands you cannot name takes an <a href="#acknowledge"><code>acknowledge:</code></a> entry.</td>
+</tr>
+<tr>
+<td><code>API</code></td>
+<td>a session test whose <code>api:</code> lists the subject's whole new list. The diff prints the test to add.</td>
+</tr>
+<tr>
+<td><code>PRINCIPAL</code>, <code>USERNAME</code></td>
+<td>a session test naming the principal (<code>principal:</code>); a test that asserts only <code>api</code> does not count. A <code>USERNAME</code> change is cleared by a test naming any one of the subject's principals. A <code>PRINCIPAL</code> change whose new subject gains API rights also needs <code>api:</code> with the subject's whole list.</td>
+</tr>
+<tr>
+<td><code>per_login_mfa_weakened</code></td>
+<td>a session test with <code>per_login_mfa:</code> asserting the new requirement, which is <strong>new or changed</strong> against the old file. A test carried over unchanged does not count.</td>
+</tr>
+<tr>
+<td><code>SUBJECT</code></td>
+<td>a session test naming the subject.</td>
+</tr>
+</tbody>
+</table>
+<p>A test that expects <code>deny</code> never clears a widening, since it cannot tell a deny rewritten narrower from one
+rewritten wider. <code>ADAPTER</code>, <code>QUARANTINES</code>, <code>REFUSED</code> and <code>UNRESOLVED</code> are not cleared by tests.</p>
+<p>Once a test clears a label, the diff still prints the change, in lowercase and marked, and passes:
+<code>EXPANDS:</code> becomes <code>expands (a policy test exercises it):</code>, and <code>RAISES:</code> becomes
+<code>raises (a session test asserts it):</code>.</p>
+<h3 id="a-worked-example">A worked example<a class="headerlink" href="#a-worked-example" title="Permanent link">&para;</a></h3>
+<p>The <code>read_only</code> role from the policy above gains a deny, and a test pins it:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">roles</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">read_only</span>
+<span class="w">    </span><span class="nt">privilege</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">readonly</span>
+<span class="w">    </span><span class="nt">permit</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"show</span><span class="nv"> </span><span class="s">**"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"terminal</span><span class="nv"> </span><span class="s">length</span><span class="nv"> </span><span class="s">*"</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">deny</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"show</span><span class="nv"> </span><span class="s">running-config</span><span class="nv"> </span><span class="s">**"</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">max_session_age</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8h</span>
+
+<span class="nt">tests</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="nv">netops</span><span class="p p-Indicator">,</span><span class="nt"> device</span><span class="p">:</span><span class="w"> </span><span class="nv">leaf1</span><span class="p p-Indicator">,</span><span class="nt"> command</span><span class="p">:</span><span class="w"> </span><span class="s">"show</span><span class="nv"> </span><span class="s">version"</span><span class="p p-Indicator">,</span><span class="nt"> expect</span><span class="p">:</span><span class="w"> </span><span class="nv">permit</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="nv">netops</span><span class="p p-Indicator">,</span><span class="nt"> device</span><span class="p">:</span><span class="w"> </span><span class="nv">leaf1</span><span class="p p-Indicator">,</span><span class="nt"> command</span><span class="p">:</span><span class="w"> </span><span class="s">"configure</span><span class="nv"> </span><span class="s">terminal"</span><span class="p p-Indicator">,</span><span class="nt"> expect</span><span class="p">:</span><span class="w"> </span><span class="nv">deny</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="nv">netops</span><span class="p p-Indicator">,</span><span class="nt"> device</span><span class="p">:</span><span class="w"> </span><span class="nv">leaf1</span><span class="p p-Indicator">,</span><span class="nt"> command</span><span class="p">:</span><span class="w"> </span><span class="s">"show</span><span class="nv"> </span><span class="s">running-config"</span><span class="p p-Indicator">,</span><span class="nt"> expect</span><span class="p">:</span><span class="w"> </span><span class="nv">deny</span><span class="p p-Indicator">,</span><span class="nt"> reason</span><span class="p">:</span><span class="w"> </span><span class="nv">no_permit_dominates_deny</span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<p>That is the version on <code>main</code>. A pull request now deletes the <code>deny:</code> line, which lets <code>netops</code> read the
+running configuration. The first thing to fail is the test that pinned the deny. <code>port49 policy test</code> on the
+new file prints:</p>
+<div class="highlight"><pre><span></span><code>FAIL netops on leaf1: "show running-config" -&gt; permit permit_dominates, want deny no_permit_dominates_deny
+3 tests, 1 failed; 0 shadowed denies, 0 unacknowledged; 0 quarantined, 0 projection refusals
+</code></pre></div>
+<p>and exits 1. <code>port49 policy diff --old main-policy.yaml --new policy.yaml --inventory inventory.yaml</code> shows the
+widening, one line per command shape the deny used to cover, and exits 1:</p>
+<div class="highlight"><pre><span></span><code>EXPANDS: netops on leaf1: "show running-config" was denied by "show running-config **" (read_only), now permitted by "show **" (read_only)
+EXPANDS: netops on leaf1: "show running-config &lt;any other argument&gt;" was denied by "show running-config **" (read_only), now permitted by "show **" (read_only)
+EXPANDS: netops on leaf1: "show running-config &lt;any other argument&gt; &lt;any other argument&gt;" was denied by "show running-config **" (read_only), now permitted by "show **" (read_only)
+3 commands changed: 3 widen, 0 narrow; 3 unacknowledged expansions past a deny; 0 unacknowledged privilege raises; 0 unacknowledged per_login_mfa weakenings; 0 unacknowledged regex-constrained widenings; 0 unacknowledged principal or username changes; 0 devices newly quarantined, 0 released; 0 mints newly refused; 0 unresolved; 0 unacknowledged adapter edits; 0 projection refusals; 0 devices newly refused admission
+</code></pre></div>
+<p>If the change is intended, say so with a test. Turn the old test around:</p>
+<div class="highlight"><pre><span></span><code><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subject</span><span class="p">:</span><span class="w"> </span><span class="nv">netops</span><span class="p p-Indicator">,</span><span class="nt"> device</span><span class="p">:</span><span class="w"> </span><span class="nv">leaf1</span><span class="p p-Indicator">,</span><span class="nt"> command</span><span class="p">:</span><span class="w"> </span><span class="s">"show</span><span class="nv"> </span><span class="s">running-config"</span><span class="p p-Indicator">,</span><span class="nt"> expect</span><span class="p">:</span><span class="w"> </span><span class="nv">permit</span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<p>Now <code>port49 policy test</code> prints <code>PASS netops on leaf1: "show running-config" -&gt; permit permit_dominates</code> and
+exits 0, and <code>port49 policy diff</code> prints the same three changes as cleared and exits 0:</p>
+<div class="highlight"><pre><span></span><code>expands (a policy test exercises it): netops on leaf1: "show running-config" was denied by "show running-config **" (read_only), now permitted by "show **" (read_only)
+expands (a policy test exercises it): netops on leaf1: "show running-config &lt;any other argument&gt;" was denied by "show running-config **" (read_only), now permitted by "show **" (read_only)
+expands (a policy test exercises it): netops on leaf1: "show running-config &lt;any other argument&gt; &lt;any other argument&gt;" was denied by "show running-config **" (read_only), now permitted by "show **" (read_only)
+3 commands changed: 3 widen, 0 narrow; 0 unacknowledged expansions past a deny; 0 unacknowledged privilege raises; 0 unacknowledged per_login_mfa weakenings; 0 unacknowledged regex-constrained widenings; 0 unacknowledged principal or username changes; 0 devices newly quarantined, 0 released; 0 mints newly refused; 0 unresolved; 0 unacknowledged adapter edits; 0 projection refusals; 0 devices newly refused admission
+</code></pre></div>
+<p>The reviewer sees one changed test line beside the removed deny: the widening is written down and tested.
+In CI, the job in <a href="#run-the-checks-in-ci">Run the checks in CI</a> blocks the first version of the pull request
+and passes the second.</p>
+<p>A privilege raise works the same way, with a session test. If the same pull request had changed <code>read_only</code>'s
+<code>privilege: readonly</code> to <code>privilege: operator</code>, the diff would print the test it needs:</p>
+<div class="highlight"><pre><span></span><code>RAISES: netops on leaf1: level readonly -&gt; operator, max_privilege none -&gt; none, priv_lvl 1 -&gt; 15, enable none -&gt; none, reply ["priv-lvl=1", "roles=network-operator"] -&gt; ["priv-lvl=15", "roles=network-operator"]; no session test asserts it: add {subject: netops, device: leaf1, priv_lvl: 15, level: operator}
+</code></pre></div>
+<p>Paste <code>{subject: netops, device: leaf1, priv_lvl: 15, level: operator}</code> under <code>tests:</code>, and the line becomes
+<code>raises (a session test asserts it): ...</code> and passes.</p>
+<h2 id="checking-a-change">Checking a change<a class="headerlink" href="#checking-a-change" title="Permanent link">&para;</a></h2>
+<p>Four commands read the policy: <code>port49 policy test</code>, <code>port49 policy diff</code>, <code>port49 policy replay</code> and
+<code>port49 explain</code>. They take <code>--policy FILE --inventory FILE</code> (<code>policy diff</code> takes <code>--old</code> and <code>--new</code> with one
+<code>--inventory</code>). They never read a secret, and with the files given they never ask a broker. Every rule and
+command they print is redacted as the daemon's records are.</p>
+<h3 id="port49-policy-test"><code>port49 policy test</code><a class="headerlink" href="#port49-policy-test" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>policy<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--policy<span class="w"> </span>policy.yaml<span class="w"> </span>--inventory<span class="w"> </span>inventory.yaml<span class="w"> </span><span class="o">[</span>--config<span class="w"> </span>port49d.yaml<span class="o">]</span>
+</code></pre></div>
+<p>It loads the policy against the inventory as port49d does, so every load error is a failure here. Then it
+prints, in order: the platform set, the key check, the reports, the shadowed-deny report, one line per test, and
+a summary. For the policy above, against an inventory whose <code>leaf1</code> is an <code>arista_eos</code> device with <code>site: dc1</code>
+and <code>role: leaf</code>, it prints:</p>
+<div class="highlight"><pre><span></span><code>platform_set: 1.3.0
+keys: checked against the default key_secret_refs (env: variables starting PORT49_KEY_, file: under /run/port49/keys); pass --config to check port49d.yaml's
+report: group_subject: subject "netops" is a group: subject: it mints only with broker.directory configured, through which the broker matches a person to the group; explain and policy tests evaluate it by name
+PASS netops on leaf1: "show version" -&gt; permit permit_dominates
+PASS netops on leaf1: "configure terminal" -&gt; deny no_rule_matched
+2 tests, 0 failed; 0 shadowed denies, 0 unacknowledged; 0 quarantined, 0 projection refusals
+</code></pre></div>
+<p>It exits 1 when any of these holds:</p>
+<ul>
+<li>the policy does not load;</li>
+<li>a test fails;</li>
+<li>a deny is shadowed by a more specific permit and no test exercises it;</li>
+<li>a device is quarantined, now or at a later grant expiry;</li>
+<li>a composition gets a projection's fail-closed reply;</li>
+<li>admission refuses a device;</li>
+<li>a key problem exists: no <code>keys:</code> block, a <code>key_ref</code> the block does not define, or a <code>secret_ref</code> outside
+  <code>key_secret_refs</code>.</li>
+</ul>
+<p>Pass <code>--config</code> to check against your port49d.yaml's <code>key_secret_refs</code>, which is the only key it reads from that
+file. Without it, the default allowance is used and the output says so.</p>
+<p>Lines that begin <code>report:</code> are lint findings. They are review questions, not failures. They include
+<code>deny_scope_unlogged</code> above, <code>no_tests</code> for a file with no tests, <code>grantless_subject</code>, <code>api_rights</code> for each
+subject that holds an <code>api:</code> list, <code>group_subject</code>, <code>acknowledge_stale</code>, <code>dead_rule</code>, <code>fallback_exposure</code> and the
+projection reports. Read them; they are what a reviewer would ask.</p>
+<h3 id="port49-policy-diff"><code>port49 policy diff</code><a class="headerlink" href="#port49-policy-diff" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>policy<span class="w"> </span>diff<span class="w"> </span>--old<span class="w"> </span>main-policy.yaml<span class="w"> </span>--new<span class="w"> </span>policy.yaml<span class="w"> </span>--inventory<span class="w"> </span>inventory.yaml
+</code></pre></div>
+<p>Run it in CI on every pull request that touches the policy (<a href="#run-the-checks-in-ci">Run the checks in CI</a>). It compares the two files for every subject on
+every device, over every command shape the rules distinguish, now and at every later grant expiry. It prints
+each change, and exits 1 on a <strong>widening</strong> that no test or acknowledgment accounts for.</p>
+<p>These labels fail the run. <a href="#how-a-test-clears-a-policy-diff-label">Writing tests</a> shows the test that clears
+each one.</p>
+<table>
+<thead>
+<tr>
+<th>Label</th>
+<th>The change</th>
+<th>What clears it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EXPANDS</code></td>
+<td>a command the old version refused with a deny, at a pipeline stage or on a quarantined device, that the new one permits</td>
+<td>a passing test with <code>expect: permit</code> on that command, on a device of that group</td>
+</tr>
+<tr>
+<td><code>RAISES</code></td>
+<td>a privilege level, <code>priv_lvl</code>, <code>max_privilege</code> ceiling or <code>enable</code> mechanism that went up, or a reply that changed</td>
+<td>a session test (no <code>command:</code>) asserting the new value</td>
+</tr>
+<tr>
+<td><code>REGEX-CONSTRAINED</code></td>
+<td>a permit with a regex or class term added, or a deny with one removed or rewritten</td>
+<td>a passing <code>permit</code> test on a command that rule decides, or an <code>acknowledge:</code> entry for a deny</td>
+</tr>
+<tr>
+<td><code>API</code></td>
+<td><code>api:</code> rights added to a subject</td>
+<td>a session test with <code>api:</code> listing the subject's whole list</td>
+</tr>
+<tr>
+<td><code>PRINCIPAL</code>, <code>USERNAME</code></td>
+<td>an identity that now resolves to another subject, or a <code>username:</code> that changed</td>
+<td>a session test naming the principal</td>
+</tr>
+<tr>
+<td><code>per_login_mfa_weakened</code></td>
+<td>a <code>per_login_mfa</code> requirement removed or loosened on a device</td>
+<td>a session test asserting the new requirement that is <strong>new or changed</strong> against the old file; a test carried over unchanged does not count</td>
+</tr>
+<tr>
+<td><code>SUBJECT</code></td>
+<td>a subject's <code>group:</code> or <code>machine_group:</code> changed, or a new group subject was added</td>
+<td>a session test naming the subject</td>
+</tr>
+<tr>
+<td><code>ADAPTER</code></td>
+<td>an edit to a platform adapter key that changes what port49 decides</td>
+<td>an <code>acknowledge:</code> entry (below)</td>
+</tr>
+<tr>
+<td><code>QUARANTINES</code>, <code>REFUSED</code>, <code>UNRESOLVED</code></td>
+<td>a device newly quarantined, a mint or admission newly refused, a composition the diff could not compare</td>
+<td>fix the cause; no test clears these</td>
+</tr>
+</tbody>
+</table>
+<p>A test that expects <code>deny</code> never acknowledges a widening. The last line of the output counts each kind. A
+lowering, such as a narrower permit or a dropped right, prints and passes.</p>
+<h4 id="acknowledge"><code>acknowledge:</code><a class="headerlink" href="#acknowledge" title="Permanent link">&para;</a></h4>
+<p>Some widenings have no command to flip. A deny rewritten wider, such as <code>/^(wri|rel)/ **</code> as <code>/^wri/ **</code>, frees
+commands the diff cannot list. An adapter edit changes what port49 reads. The author acknowledges these in
+writing, in a top-level block that review reads beside the change:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">acknowledge</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="nv">guard</span><span class="p p-Indicator">,</span><span class="nt"> rule</span><span class="p">:</span><span class="w"> </span><span class="s">"/^(wri|rel)/</span><span class="nv"> </span><span class="s">**"</span><span class="p p-Indicator">,</span><span class="nt"> reason</span><span class="p">:</span><span class="w"> </span><span class="s">"rewritten</span><span class="nv"> </span><span class="s">as</span><span class="nv"> </span><span class="s">/^wri/:</span><span class="nv"> </span><span class="s">rel*</span><span class="nv"> </span><span class="s">commands</span><span class="nv"> </span><span class="s">are</span><span class="nv"> </span><span class="s">allowed</span><span class="nv"> </span><span class="s">on</span><span class="nv"> </span><span class="s">purpose"</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">platform</span><span class="p">:</span><span class="w"> </span><span class="nv">juniper_junos</span><span class="p p-Indicator">,</span><span class="nt"> field</span><span class="p">:</span><span class="w"> </span><span class="nv">rpc_entry_denies</span><span class="p p-Indicator">,</span><span class="nt"> sha256</span><span class="p">:</span><span class="w"> </span><span class="nv">&lt;sha256&gt;</span><span class="p p-Indicator">,</span><span class="nt"> reason</span><span class="p">:</span><span class="w"> </span><span class="s">"moved</span><span class="nv"> </span><span class="s">to</span><span class="nv"> </span><span class="s">set</span><span class="nv"> </span><span class="s">1.2.0"</span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<p>There are two kinds of entry:</p>
+<ul>
+<li>A <code>role</code> and <code>rule</code> entry names the exact removed or rewritten rule.</li>
+<li>A <code>platform</code>, <code>field</code> and <code>sha256</code> entry names the digest <code>policy diff</code> prints for the key's new value, so it
+  covers that edit and no later one.</li>
+</ul>
+<p><code>reason</code> is required in both. An entry that matches nothing is reported as <code>acknowledge_stale</code> and acknowledges
+nothing; delete it. Do not use <code>acknowledge:</code> for an ordinary expansion: a literal deny removed is cleared by a
+test, and an entry for it is reported stale.</p>
+<h4 id="the-ceiling-line">The ceiling line<a class="headerlink" href="#the-ceiling-line" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>session ceiling: netops on 1 devices: 8h0m0s or the default, whichever is less -&gt; 24h0m0s (may lengthen: depends on session.max_session_age_default)
+</code></pre></div>
+<p>The <code>session ceiling:</code> line says that a subject's <code>max_session_age</code> changed: the least of its roles' values, on
+how many devices, from what to what. It prints and does not fail the run, because a longer session is not a
+wider permission. It is what you read when a change touches <code>max_session_age</code>.</p>
+<p>A lengthened ceiling reaches live sessions only when they refresh. This line is not the <code>max_privilege</code> ceiling:
+a raise of that is a <code>RAISES</code> and fails.</p>
+<h4 id="a-new-grant-is-a-reviewers-call-the-gate-does-not-see-it">A new grant is a reviewer's call: the gate does not see it<a class="headerlink" href="#a-new-grant-is-a-reviewers-call-the-gate-does-not-see-it" title="Permanent link">&para;</a></h4>
+<p>The gate judges commands that a deny, a pipeline stage or a quarantine used to refuse. A new grant is none of
+those. A subject that had no grant on a device and now has one gets a single line,</p>
+<div class="highlight"><pre><span></span><code>access: netops gains every grant on leaf1, leaf2
+</code></pre></div>
+<p>and the diff exits 0. A new role on a device the subject already reaches is a <code>widens:</code> line per command shape
+(<code>widens: netops on leaf1: "ping length" was no_rule_matched, now permitted by "ping *" (extra)</code>), and that
+exits 0 too. No test is demanded for either.</p>
+<p>Who gets access to what is a decision for the person reviewing the pull request. Read every <code>access:</code> and
+<code>widens:</code> line, and run <code>port49 access review --policy FILE --inventory FILE --subject NAME</code> to see one
+subject's grants, how many devices each reaches and when each expires.</p>
+<p>Only a grant to an existing, unchanged subject is ungated. The gate still catches:</p>
+<ul>
+<li>a <strong>new <code>group:</code> or <code>machine_group:</code> subject</strong>, whatever its grants: it exits 1 on a
+  <code>SUBJECT: NAME's none -&gt; group ...</code> line until a session test names the subject (a new <code>identity:</code> subject is a
+  <code>PRINCIPAL</code>);</li>
+<li>a grant that adds <code>api:</code> rights;</li>
+<li>a new identity for an existing subject, or a changed group;</li>
+<li>a <code>per_login_mfa</code> weakening that no new or changed session test asserts;</li>
+<li>a privilege raise on a device the subject already reached.</li>
+</ul>
+<h3 id="run-the-checks-in-ci">Run the checks in CI<a class="headerlink" href="#run-the-checks-in-ci" title="Permanent link">&para;</a></h3>
+<p>Run both checks in the CI of the repository that holds your policy, so a failed check blocks the merge:</p>
+<ul>
+<li><strong><code>port49 policy test</code></strong> on every change.</li>
+<li><strong><code>port49 policy diff</code></strong> on every pull request, with <code>--old</code> taken from the branch the pull request
+  merges into (<code>git show origin/main:policy.yaml &gt; /tmp/old-policy.yaml</code>) and <code>--new</code> the pull request's
+  file.</li>
+</ul>
+<p>Both exit 1 on a failure (and 2 on a usage error), so any nonzero exit fails the job. Neither reads a
+secret or asks a broker, so the job needs no credentials. Here is a GitHub Actions job; any CI that can run
+a shell works the same way:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">policy</span>
+<span class="nt">on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pull_request</span>
+<span class="nt">jobs</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">policy</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">runs-on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ubuntu-latest</span>
+<span class="w">    </span><span class="nt">steps</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683</span><span class="w"> </span><span class="c1"># v4.2.2</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Install port49</span>
+<span class="w">        </span><span class="nt">env</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">PORT49_VERSION</span><span class="p">:</span><span class="w"> </span><span class="s">"0.1.0"</span>
+<span class="w">        </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<span class="w">          </span><span class="no">base="https://github.com/blanketfish/port49/releases/download/v${PORT49_VERSION}"</span>
+<span class="w">          </span><span class="no">cd "$RUNNER_TEMP"</span>
+<span class="w">          </span><span class="no">curl -fsSLO "${base}/port49_${PORT49_VERSION}_linux_amd64.tar.gz"</span>
+<span class="w">          </span><span class="no">curl -fsSLO "${base}/SHA256SUMS"</span>
+<span class="w">          </span><span class="no">sha256sum --ignore-missing -c SHA256SUMS</span>
+<span class="w">          </span><span class="no">tar -xzf "port49_${PORT49_VERSION}_linux_amd64.tar.gz" port49</span>
+<span class="w">          </span><span class="no">echo "$RUNNER_TEMP" &gt;&gt; "$GITHUB_PATH"</span>
+<span class="w">          </span><span class="no">"$RUNNER_TEMP/port49" --version</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">port49 policy test</span>
+<span class="w">        </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">port49 policy test --policy policy.yaml --inventory inventory.yaml</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">port49 policy diff</span>
+<span class="w">        </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<span class="w">          </span><span class="no">git fetch --depth=1 origin "$GITHUB_BASE_REF"</span>
+<span class="w">          </span><span class="no">git show FETCH_HEAD:policy.yaml &gt; "$RUNNER_TEMP/old-policy.yaml"</span>
+<span class="w">          </span><span class="no">port49 policy diff --old "$RUNNER_TEMP/old-policy.yaml" --new policy.yaml --inventory inventory.yaml</span>
+</code></pre></div>
+<p>The install step pins a release and checks it against the release's <code>SHA256SUMS</code>; raise
+<code>PORT49_VERSION</code> when you upgrade. <a href="../../operate/install/clients/#download-a-release">Install the clients</a>
+has the same steps for a workstation. In the
+<a href="#a-worked-example">worked example</a>, this job fails the pull request that deletes the deny at its
+<code>policy test</code> step, and passes once the test is turned around.</p>
+<h3 id="port49-policy-replay"><code>port49 policy replay</code><a class="headerlink" href="#port49-policy-replay" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>policy<span class="w"> </span>replay<span class="w"> </span><span class="o">[</span>--line<span class="w"> </span>N<span class="o">]</span><span class="w"> </span><span class="o">[</span>--policy<span class="w"> </span>FILE<span class="w"> </span>--inventory<span class="w"> </span>FILE<span class="o">]</span><span class="w"> </span>decisions.jsonl
+</code></pre></div>
+<p>It re-runs the decisions in a <a href="../../reference/decision-log/">decision log</a> against the policy blob each record
+carries. Use it to check that this build still decides as the build that wrote the record did, or to audit a
+past decision.</p>
+<p>It prints each record that diverged and a summary,
+<code>replayed N records: A agree, D diverge, U unverifiable; S not replayed</code>, and exits 1 if any diverged or could
+not be verified. A record denied before policy ran is counted and not replayed.</p>
+<ul>
+<li>With <code>--policy</code> and <code>--inventory</code>, it rebuilds a blob a redacted record hid.</li>
+<li>With <code>--line N</code>, it replays one record and prints it either way.</li>
+<li>Give <code>-</code> instead of a file to read the log from standard input.</li>
+</ul>
+<h3 id="port49-explain"><code>port49 explain</code><a class="headerlink" href="#port49-explain" title="Permanent link">&para;</a></h3>
+<p><code>explain</code> answers one hypothetical question: what would port49 decide for this subject, on this device, for
+this command?</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>explain<span class="w"> </span>--policy<span class="w"> </span>policy.yaml<span class="w"> </span>--inventory<span class="w"> </span>inventory.yaml<span class="w"> </span>--subject<span class="w"> </span>netops<span class="w"> </span>--device<span class="w"> </span>leaf1<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--command<span class="w"> </span><span class="s2">"configure terminal"</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>deny no_rule_matched
+  subject     netops
+  device      leaf1 (arista_eos)
+  grants      dc_fabric [read_only]
+  roles       read_only
+  level       readonly; max_privilege none
+  session     max_session_age 8h0m0s (the least of its roles')
+  per_login_mfa none
+  command     configure terminal
+  rule        no permit matches
+  permitted by none
+note: arista_eos does not declare config_commands: whether a command typed in configuration mode is sent to port49 at all is unmeasured, so if this is a configuration-mode command the device may apply it whatever this answer says (spec §9, §12)
+</code></pre></div>
+<p>It prints exactly one reason from the <a href="../../reference/reason-codes/">reason codes</a>, and, for a denial, names the
+role that would permit the command. It exits 0 whether the answer is permit or deny; a nonzero exit means a
+policy or a name did not load.</p>
+<p>Leave out <code>--command</code> to see the session instead, and add <code>--show-attributes</code> to see each session attribute and
+where it came from.</p>
+<p><code>explain</code> also tells you when the platform cannot enforce the control you asked about, rather than reporting a
+decision the device will not honor. On a platform that authorizes sessions only, the note says that a session
+ceiling, a revocation, a username change and the session-ceiling warning act at the next authorization request:</p>
+<ul>
+<li>On Junos (<code>juniper_junos</code>), the device makes one after login only if <code>authorization-time-interval</code> is set.
+  With it set, Junos asked again once an interval after login, a revoked principal was denied there, and the
+  denial did not end the session (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vjunos-router.md">L36-juniper_vjunos-router.md</a>, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L36-juniper_vsrx.md">L36-juniper_vsrx.md</a>).
+  On a projected Junos the note also names what ends an idle session: the class <code>idle-timeout</code> that
+  <code>port49 platform export --classes</code> renders from <code>max_session_age</code>.</li>
+<li>On any other session-only platform, the device is not known to make one after login, and the note says not to
+  rely on these controls there.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured: a second re-authorization</p>
+<p>Whether Junos re-authorizes an open session more than once, so whether a control made after the first ever reaches it, is unknown (<a href="../../reference/lab-register/#l40">L40</a>, open). Do not rely on these controls to end a live Junos session.</p>
+</div>
+<p>With neither <code>--policy</code> nor <code>--inventory</code>, <code>explain</code> asks the broker through your agent, from the policy in
+force: <code>port49 explain --device leaf1 --command "show version"</code>. Explaining another person with <code>--principal</code>
+needs <code>api: [explain_others]</code>. The broker's <code>explain</code> records carry hypothetical verdicts, so a dashboard of
+denials should filter <code>event!="explain"</code>.</p>
+<h2 id="platform-sets">Platform sets<a class="headerlink" href="#platform-sets" title="Permanent link">&para;</a></h2>
+<p>The shipped adapters say what each platform's reply looks like, which commands it sends and how its privilege
+is rendered. They come in numbered <strong>platform sets</strong>, and your policy pins one with <code>platform_set:</code>.</p>
+<p>A policy that pins none renders with <code>1.0.0</code> on every later binary, so upgrading port49 never changes what a
+policy renders. <code>port49 platform list</code> and <code>show</code> print the newest set unless you pass <code>--set</code> or the policy.</p>
+<p>Only <code>juniper_junos</code> differs between the sets; the other shipped adapters are the same in every one.</p>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>What it adds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>1.0.0</code></td>
+<td>The first set. Junos is session-only and no level is rendered.</td>
+</tr>
+<tr>
+<td><code>1.1.0</code></td>
+<td>Junos renders your command rules into the session reply (<code>command_projection: junos_regex</code>): permission bits with each bit's reach, carve-outs and the smallest bits a grant needs.</td>
+</tr>
+<tr>
+<td><code>1.2.0</code></td>
+<td><code>rpc_entry_denies: ["junoscript **", "op **"]</code> on Junos. Where a deny is the only guard beneath a sent bit, the reply adds these denies, which close the CLI's <code>xml-mode</code> and <code>op url</code> routes into a native RPC and that session's NETCONF.</td>
+</tr>
+<tr>
+<td><code>1.3.0</code></td>
+<td><code>deny_reach_bits: [view-configuration]</code> on Junos. A reply may send the <code>view-configuration</code> bit where the grant permits a carve-out of it, with the rest of the bit's reach denied on the wire. It is read only where <code>rpc_entry_denies</code> is kept.</td>
+</tr>
+</tbody>
+</table>
+<p>The routes <code>rpc_entry_denies</code> closes, and the bits <code>deny_reach_bits</code> covers, were measured on the two Junos
+images the <a href="../devices/juniper-junos/">Junos page</a> lists, and the evidence table there links each note.</p>
+<div class="admonition warning">
+<p class="admonition-title">Unmeasured</p>
+<p>Whether the <code>junoscript</code> deny also closes REST, the XML API, <code>outbound-ssh</code> and <code>scp</code> is unknown (<a href="../../reference/lab-register/#l59">L59</a>, open),
+and so is what these replies do on a Junos release or hardware family the lab did not run. Test a policy on
+the device before you rely on it there.</p>
+</div>
+<h3 id="port49-platform-upgrade"><code>port49 platform upgrade</code><a class="headerlink" href="#port49-platform-upgrade" title="Permanent link">&para;</a></h3>
+<p>A moved pin changes what the policy renders, so moving it is a reviewed change. Do not edit <code>platform_set</code>
+by hand; run:</p>
+<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>platform<span class="w"> </span>upgrade<span class="w"> </span>--policy<span class="w"> </span>policy.yaml<span class="w"> </span>--inventory<span class="w"> </span>inventory.yaml<span class="w"> </span>--to<span class="w"> </span><span class="m">1</span>.3.0
+</code></pre></div>
+<p>It prints exactly what the move changes:</p>
+<ul>
+<li>each adapter key that differs on a platform your inventory has, and how many devices and subjects it reaches;</li>
+<li>the <code>acknowledge:</code> entry each gated key needs, ready to paste;</li>
+<li>each key a <code>platforms:</code> block keeps its own value for while the built-in under it changes;</li>
+<li>what the move would quarantine or fail closed.</li>
+</ul>
+<p>For a policy pinned to <code>1.1.0</code> and an inventory with one Junos device, the move to <code>1.3.0</code> prints:</p>
+<div class="highlight"><pre><span></span><code>platform_set 1.1.0 -&gt; 1.3.0
+  platforms.juniper_junos.rpc_entry_denies
+    null -&gt; ["junoscript **","op **"]
+    affects 1 devices, 0 subjects
+    gated: add {platform: juniper_junos, field: rpc_entry_denies, sha256: &lt;sha256&gt;, reason: "..."} under acknowledge:
+  platforms.juniper_junos.deny_reach_bits
+    null -&gt; ["view-configuration"]
+    affects 1 devices, 0 subjects
+    gated: add {platform: juniper_junos, field: deny_reach_bits, sha256: &lt;sha256&gt;, reason: "..."} under acknowledge:
+  port49 policy diff fails on the move until every gated entry above is under acknowledge: (spec §12); it also shows the replies the move changes
+</code></pre></div>
+<p>(The <code>&lt;sha256&gt;</code> placeholders stand for the 64-character digests the tool prints; copy them from your own run.)</p>
+<p>It writes nothing unless you add <code>--write</code>, which rewrites the pin in the file and nothing else. Then:</p>
+<ol>
+<li>Commit the policy.</li>
+<li>Let <code>port49 policy diff</code> show the replies the move changes.</li>
+<li>Add the <code>acknowledge:</code> entries it asks for, each with a reason a reviewer can read.</li>
+</ol>
+<p>The diff fails on the move until each gated key is acknowledged.</p>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,4316 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Every key of port49d.yaml and port49-broker.yaml, with its type, default, bound and what a change needs.">
+      
+      
+      
+        <link rel="canonical" href="https://blanketfish.github.io/port49/latest/reference/config/port49d/">
+      
+      
+        <link rel="prev" href="../../../agents/setup-runbook/">
+      
+      
+        <link rel="next" href="../policy/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>port49d configuration - port49</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#port49d-configuration" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            This site describes port49 as it is on main, not a release.
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="port49" class="md-header__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            port49
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              port49d configuration
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="port49" class="md-nav__button md-logo" aria-label="port49" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    port49
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/blanketfish/port49" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/tokens-receipts-contexts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens, receipts and contexts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/identities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/trust-domains/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust domains
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../operate/install/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/systemd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    systemd
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/container/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/install/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/broker-and-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Broker and agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/login/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Signing in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/tls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/secrets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secrets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/backup-and-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup and restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Versions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Troubleshooting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When it will not start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administer
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revocation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/identity-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identity providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../admin/devices/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Devices
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/arista-eos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arista EOS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-ios-xe/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XE
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-nx-os/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco NX-OS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/cisco-ios-xr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cisco IOS XR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/juniper-junos/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Juniper Junos
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/nokia-sr-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Nokia SR Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../admin/devices/other-platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Other platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../agents/setup-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49d configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#top-level-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Top-level keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tls_listener" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tls_listener
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#accounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accounting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#platforms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        platforms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#encryption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        encryption
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        token
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#broker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        broker
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lab
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stores" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stores
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key_secret_refs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        key_secret_refs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#port49-brokeryaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49-broker.yaml
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory file
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../port49-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    port49-inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reason-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reason codes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../decision-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decision log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lab-register/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lab register
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../contributing/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/qualification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Qualification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/releasing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#top-level-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Top-level keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tls_listener" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tls_listener
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#accounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        accounting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#platforms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        platforms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#encryption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        encryption
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        token
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#broker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        broker
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lab
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stores" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stores
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key_secret_refs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        key_secret_refs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#port49-brokeryaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49-broker.yaml
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<!-- generated by make docs from code; do not edit -->
+
+<h1 id="port49d-configuration">port49d configuration<a class="headerlink" href="#port49d-configuration" title="Permanent link">&para;</a></h1>
+<p>port49d reads <code>port49d.yaml</code> once, at start. <code>port49-broker.yaml</code> is the same schema, read by <code>port49-broker</code>.</p>
+<p><strong>A change takes effect at the next restart</strong>, with these exceptions, which an entry marks:</p>
+<ul>
+<li>the policy file and the inventory file, re-read every <code>policy_watch_interval</code> and at SIGHUP</li>
+<li><code>inventory.max_removed_percent</code> and <code>inventory.service.verify_key_files</code>, at SIGHUP</li>
+<li>the <code>tls_listener</code> certificate, key and CA files, every <code>reload_interval</code> and at SIGHUP</li>
+</ul>
+<p><strong>The file that a key version's <code>secret_ref</code> names is read once</strong>, when the version comes into force: at start, or in a policy reload that adds it. Later reads, at SIGHUP and every 30s, only report a file that has changed or can no longer be read. port49d keeps the secret it read, so a changed secret goes in a new file under a new version.</p>
+<p>An unknown key, a second YAML document and a key the loader has removed refuse the start. The error names the line, never the value.</p>
+<p>Durations are written with a unit (<code>30s</code>, <code>15m</code>, <code>12h</code>). A bare number is refused, except where an entry says <code>0</code> is allowed.</p>
+<p>Paths are read as written: a relative path resolves against port49d's working directory, not the file's directory.</p>
+<h2 id="top-level-keys">Top-level keys<a class="headerlink" href="#top-level-keys" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>listen</code></td>
+<td>string</td>
+<td>Address of the TACACS+ listener (RFC 8907), <code>host:port</code>. Default <code>:49</code>. The value <code>none</code> turns the listener off, which needs <code>tls_listener</code>: a file with neither listener is refused. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>metrics_listen</code></td>
+<td>string</td>
+<td>Address of the metrics, <code>/healthz</code> and <code>/readyz</code> listener. Default <code>:9049</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>inventory_file</code></td>
+<td>string</td>
+<td>Path of the device inventory. Exactly one of <code>inventory_file</code> and <code>inventory.service</code> is required. Without a policy the file is read once, at start; with a policy it is re-read at every policy watch and at SIGHUP, and a file that does not load leaves the previous inventory serving. A relative path resolves against port49d's working directory.</td>
+</tr>
+<tr>
+<td><code>receipt_idle_ttl</code></td>
+<td>duration</td>
+<td>How long a receipt stays good after its last presentation: each presentation it answers slides the window forward. Default <code>15m</code>; must be greater than zero and not longer than <code>receipt_max_age</code>. A presentation past either bound is a FAIL on the wire and <code>token_spent</code> in the log. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>receipt_max_age</code></td>
+<td>duration</td>
+<td>The longest a receipt lives from its first redemption, however often it is presented. Default <code>2h</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>context_idle_ttl</code></td>
+<td>duration</td>
+<td>How long a context with no activity is kept. Default <code>12h</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="tls_listener"><code>tls_listener</code><a class="headerlink" href="#tls_listener" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tls_listener.listen</code></td>
+<td>string</td>
+<td>Address of the TACACS+ over TLS 1.3 listener (RFC 9887). Default <code>:300</code>. It may not bind the same address as <code>listen</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.cert_file</code></td>
+<td>string</td>
+<td>Server certificate chain, PEM, leaf first. Required, and it must be readable. Re-read every <code>reload_interval</code> and at SIGHUP.</td>
+</tr>
+<tr>
+<td><code>tls_listener.key_file</code></td>
+<td>string</td>
+<td>Private key of <code>cert_file</code>. Required. Re-read every <code>reload_interval</code> and at SIGHUP; the key must be owned by port49's user or root, with no group or other mode bit.</td>
+</tr>
+<tr>
+<td><code>tls_listener.client_ca_file</code></td>
+<td>string</td>
+<td>The device CA certificates, PEM: the anchors a device certificate must chain to. Required. Re-read every <code>reload_interval</code> and at SIGHUP.</td>
+</tr>
+<tr>
+<td><code>tls_listener.intermediates_file</code></td>
+<td>string</td>
+<td>Optional PEM file of issuing CAs held here, so a device that sends only its leaf certificate still verifies. Re-read every <code>reload_interval</code> and at SIGHUP.</td>
+</tr>
+<tr>
+<td><code>tls_listener.device_identity.match</code></td>
+<td>list of string</td>
+<td>Which certificate names identify a device: <code>dns_name</code>, <code>ip_address</code>, or both, each at most once. Default both. An empty list is refused. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.device_identity.dns_suffixes</code></td>
+<td>list of string</td>
+<td>DNS suffixes a <code>dns_name</code> identity may carry, lower-cased with leading and trailing dots trimmed; letters, digits, <code>-</code> and <code>.</code>, no wildcard. Needs <code>dns_name</code> in <code>match</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.server_names</code></td>
+<td>list of string</td>
+<td>When set, the SNI names a ClientHello may ask for: DNS names (lower-cased) and IP addresses (canonical form). A name that looks like an address but is not one in canonical form is refused. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.handshake_timeout</code></td>
+<td>duration</td>
+<td>How long a TLS handshake may take. Default <code>10s</code>; <code>1s</code> to <code>30s</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.session_ticket_lifetime</code></td>
+<td>duration</td>
+<td>Lifetime of the TLS session tickets the listener issues. Default <code>0s</code>, which issues none; at most <code>1h</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.reload_interval</code></td>
+<td>duration</td>
+<td>How often the certificate, key, CA and intermediates files are re-read. Default <code>1m</code>; <code>10s</code> to <code>1h</code>. SIGHUP re-reads them at once. A change to this key needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.state_dir</code></td>
+<td>string</td>
+<td>Absolute directory where the listener keeps the certificate revocation lists it verified, in its <code>tls_listener</code> subdirectory, so a restart keeps them. Required when <code>certificate_status.crls</code> names any. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.disabled</code></td>
+<td>boolean</td>
+<td>Set <code>true</code> to check no revocation status. Then none of <code>crls</code>, <code>ocsp</code>, <code>refresh_interval</code> and <code>on_unavailable</code> may be set. The block is required: leaving it out is refused, so skipping the check is always a written choice. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.crls.[].name</code></td>
+<td>string</td>
+<td>Name of this revocation list source: lowercase letters, digits and <code>_</code>, starting with a letter, at most 64, and unique in the block. It names the kept file <code>crl-&lt;name&gt;.der</code> and the <code>crl_next_update</code> metric label.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.crls.[].file</code></td>
+<td>string</td>
+<td>Path of a CRL file. Set exactly one of <code>file</code> and <code>url</code>.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.crls.[].url</code></td>
+<td>string</td>
+<td>An <code>http</code> or <code>https</code> URL to fetch the CRL from. Set exactly one of <code>file</code> and <code>url</code>.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.crls.[].issuer_file</code></td>
+<td>string</td>
+<td>Required. The CA certificate that signs the list: the trust anchor, or a certificate the anchor signed.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.ocsp.responder</code></td>
+<td>string</td>
+<td>An <code>http</code> or <code>https</code> URL of a fixed OCSP responder. Set this or <code>use_aia: true</code>.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.ocsp.use_aia</code></td>
+<td>boolean</td>
+<td>Set <code>true</code> to ask each certificate's own OCSP responder, from its Authority Information Access extension. Set this or <code>responder</code>.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.ocsp.timeout</code></td>
+<td>duration</td>
+<td>How long one OCSP request may take. Default <code>2s</code>; <code>100ms</code> to <code>10s</code>.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.ocsp.hash</code></td>
+<td>string</td>
+<td>The hash of the OCSP CertID: <code>sha256</code> (default) or <code>sha1</code>.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.refresh_interval</code></td>
+<td>duration</td>
+<td>How often the revocation lists are fetched or re-read. Default <code>10m</code>; <code>1m</code> to <code>24h</code>.</td>
+</tr>
+<tr>
+<td><code>tls_listener.certificate_status.on_unavailable</code></td>
+<td>string</td>
+<td>What to do when a certificate's status cannot be established: <code>refuse</code> (default) refuses the connection, <code>allow</code> admits it and says so.</td>
+</tr>
+<tr>
+<td><code>tls_listener.expiry_warning_fraction</code></td>
+<td>number</td>
+<td>A device certificate with less than this fraction of its own lifetime left is named once a day. Default <code>0.33</code>, the last third of its life; <code>0</code> turns the warning off; it must be below <code>1</code>. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="keys"><code>keys</code><a class="headerlink" href="#keys" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>keys.&lt;name&gt;.current.version</code></td>
+<td>integer</td>
+<td>Version number of this key, <code>1</code> or greater and unique within the key. The key name must be lowercase letters, digits and <code>_</code>, starting with a letter, at most 64. This <code>keys:</code> block is for a port49d with no policy; with a policy, the policy file's <code>keys:</code> block replaces it and this one is refused. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>keys.&lt;name&gt;.current.secret_ref</code></td>
+<td>secret reference</td>
+<td>Where the shared secret is read from: <code>env:NAME</code> or <code>file:/absolute/path</code>. Required. The secret itself never appears in this file.</td>
+</tr>
+<tr>
+<td><code>keys.&lt;name&gt;.current.retire_after</code></td>
+<td>string</td>
+<td>Not allowed on the current version: retire it by making another version current. On an <code>accept</code> version, the last day (UTC, <code>YYYY-MM-DD</code>) it still admits; midnight after that day it is refused. On a <code>retired</code> version it is refused.</td>
+</tr>
+<tr>
+<td><code>keys.&lt;name&gt;.accept.[].version</code></td>
+<td>integer</td>
+<td>Version number of this key, <code>1</code> or greater and unique within the key. The key name must be lowercase letters, digits and <code>_</code>, starting with a letter, at most 64. This <code>keys:</code> block is for a port49d with no policy; with a policy, the policy file's <code>keys:</code> block replaces it and this one is refused. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>keys.&lt;name&gt;.accept.[].secret_ref</code></td>
+<td>secret reference</td>
+<td>Where the shared secret is read from: <code>env:NAME</code> or <code>file:/absolute/path</code>. Required. The secret itself never appears in this file.</td>
+</tr>
+<tr>
+<td><code>keys.&lt;name&gt;.accept.[].retire_after</code></td>
+<td>string</td>
+<td>Not allowed on the current version: retire it by making another version current. On an <code>accept</code> version, the last day (UTC, <code>YYYY-MM-DD</code>) it still admits; midnight after that day it is refused. On a <code>retired</code> version it is refused.</td>
+</tr>
+<tr>
+<td><code>keys.&lt;name&gt;.retired.[].version</code></td>
+<td>integer</td>
+<td>Version number of this key, <code>1</code> or greater and unique within the key. The key name must be lowercase letters, digits and <code>_</code>, starting with a letter, at most 64. This <code>keys:</code> block is for a port49d with no policy; with a policy, the policy file's <code>keys:</code> block replaces it and this one is refused. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>keys.&lt;name&gt;.retired.[].secret_ref</code></td>
+<td>secret reference</td>
+<td>Where the shared secret is read from: <code>env:NAME</code> or <code>file:/absolute/path</code>. Required. The secret itself never appears in this file.</td>
+</tr>
+<tr>
+<td><code>keys.&lt;name&gt;.retired.[].retire_after</code></td>
+<td>string</td>
+<td>Not allowed on the current version: retire it by making another version current. On an <code>accept</code> version, the last day (UTC, <code>YYYY-MM-DD</code>) it still admits; midnight after that day it is refused. On a <code>retired</code> version it is refused.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="limits"><code>limits</code><a class="headerlink" href="#limits" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>limits.per_nas_connections</code></td>
+<td>integer</td>
+<td>Most simultaneous connections from one device address. Default <code>32</code>; at least <code>1</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>limits.max_connections</code></td>
+<td>integer</td>
+<td>Global cap on simultaneous connections. Leave it out to size it from the open-file limit at start; otherwise <code>64</code> to <code>1048576</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>limits.idle_timeout</code></td>
+<td>duration</td>
+<td>How long a connection may wait for the next packet, and how long a write may take. Default <code>30s</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>limits.malformed_backoff_base</code></td>
+<td>duration</td>
+<td>A source that sends a malformed packet is held this long before its connection is closed; each further strike doubles the hold, up to <code>malformed_backoff_max</code>. Default <code>100ms</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>limits.malformed_backoff_max</code></td>
+<td>duration</td>
+<td>The ceiling of the malformed-packet hold. Default <code>5s</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>limits.malformed_window</code></td>
+<td>duration</td>
+<td>A source's strike count resets when no strike has arrived within this window. Default <code>10m</code>; zero or negative is refused. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>limits.auth_failure_delay_base</code></td>
+<td>duration</td>
+<td>The delay before the FAIL reply to a failed authentication for one device and username; each further failure doubles it, up to <code>auth_failure_delay_max</code>. Default <code>500ms</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>limits.auth_failure_delay_max</code></td>
+<td>duration</td>
+<td>The ceiling of the failed-authentication delay. Default <code>2s</code>; must be greater than zero. Keep it below your devices' shortest TACACS+ reply timeout: a FAIL that arrives after the device gave up reads as an unreachable server, and the device falls back to its local password. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>limits.auth_failure_window</code></td>
+<td>duration</td>
+<td>A device and username's failure count resets when no failure has arrived within this window. Default <code>10m</code>; zero or negative is refused. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="accounting"><code>accounting</code><a class="headerlink" href="#accounting" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>accounting.spool_capacity</code></td>
+<td>integer</td>
+<td>Reserved: it must be at least <code>1</code>, and it does not bound the spool today, which is an append-only durable file. Default <code>10000</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>accounting.spool_path</code></td>
+<td>string</td>
+<td>Path of the accounting spool file. Default <code>/var/lib/port49/acct.jsonl</code>. It may not be the same file as <code>broker.revocations_file</code>. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="platforms"><code>platforms</code><a class="headerlink" href="#platforms" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>platforms.&lt;name&gt;.session_services</code></td>
+<td>list of string</td>
+<td>Replaces the built-in list of authorization <code>service</code> values a session on this platform may arrive with. <code>&lt;name&gt;</code> must be a platform port49 ships an adapter for, or the start is refused. A fleet part-way through a service rename lists both names. Omit the key to take the default; an empty list, or an empty string in it, is refused because it would deny every session on that platform. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>platforms.&lt;name&gt;.enable_username</code></td>
+<td>string</td>
+<td>Moved to the <code>platforms:</code> block of the policy file, where <code>port49 policy test</code> reads it as port49d does. <code>principal</code>, the default, still loads with a notice; any other value is refused. Delete the line.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="encryption"><code>encryption</code><a class="headerlink" href="#encryption" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>encryption.current.id</code></td>
+<td>string</td>
+<td>Identifier of the key every token, receipt and context is sealed under at rest, 1 to 64 of <code>A-Z a-z 0-9 . _ -</code>. It is written into every record the key seals. <code>encryption.current</code> is required. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>encryption.current.secret_ref</code></td>
+<td>secret reference</td>
+<td>Where the key's 32 bytes are read from: <code>env:NAME</code> or <code>file:/absolute/path</code>. The secret must be exactly 32 bytes (AES-256). Needs a restart.</td>
+</tr>
+<tr>
+<td><code>encryption.previous.id</code></td>
+<td>string</td>
+<td>Identifier of the previous key, kept so records sealed under it still open during a rotation. Optional, and it must differ from <code>encryption.current.id</code>: the id labels each record, so a rotation has to change it. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>encryption.previous.secret_ref</code></td>
+<td>secret reference</td>
+<td>Where the previous key's 32 bytes are read from, <code>env:NAME</code> or <code>file:/absolute/path</code>. Naming an <code>id</code> without it is refused. Retire the previous key by removing the block. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="session"><code>session</code><a class="headerlink" href="#session" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>session.grace_window</code></td>
+<td>duration</td>
+<td>How long past <code>session_expires</code> a context is kept: the authorizer denies through it and then deletes the context, and the broker's refresh can resume inside it. Default <code>10m</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>session.ceiling_warning_platforms</code></td>
+<td>list of string</td>
+<td>Platforms you add to the list that receive the session-ceiling warning. Each is a platform name: lowercase letters, digits and <code>_</code>, starting with a letter. Not checked against the shipped platform set. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>session.index_ttl</code></td>
+<td>duration</td>
+<td>How long the context indexes (principal, session id, certificate) outlive a write. They let a revocation reach a live context. Default <code>12h</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>session.max_session_age_default</code></td>
+<td>duration</td>
+<td>The <code>max_session_age</code> a mint uses when the policy names none; <code>session_expires</code> is the authentication time plus this. Default <code>12h</code>; must be greater than zero. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>session.ceiling_warning</code></td>
+<td>duration</td>
+<td>How long before <code>session_expires</code> a permitted reply carries the warning in <code>server_msg</code>. Default <code>30m</code>; <code>0s</code> turns the warning off; at most <code>24h</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>session.staleness_ceiling</code></td>
+<td>duration</td>
+<td>A context whose last refresh is older than this is denied <code>context_stale</code>. Default <code>4h</code>. <code>0s</code> turns the check off, and every start says so; otherwise at least <code>1m</code>. With a broker in the same process, <code>broker.refresh_interval</code> may not exceed half of it. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="token"><code>token</code><a class="headerlink" href="#token" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>token.candidate_cap</code></td>
+<td>integer</td>
+<td>How many unspent tokens may stand for one device and username at once. Past it the mint is refused with the count. Default <code>8</code>; at least <code>1</code>. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="broker"><code>broker</code><a class="headerlink" href="#broker" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>broker.listen</code></td>
+<td>string</td>
+<td>Address the broker's HTTPS API listens on. Required when <code>broker</code> is present. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.tls_cert_file</code></td>
+<td>string</td>
+<td>The broker's server certificate. Required. Read once, at start.</td>
+</tr>
+<tr>
+<td><code>broker.tls_ca_bundle_file</code></td>
+<td>string</td>
+<td>Optional. The CAs clients are to trust for the server certificate, sent on <code>GET /v1/config</code>: the CA in use and, through a rotation, the next. A bundle that does not verify <code>tls_cert_file</code> is not sent. Read once, at start.</td>
+</tr>
+<tr>
+<td><code>broker.tls_key_file</code></td>
+<td>string</td>
+<td>The server certificate's private key. Required. It must be owned by port49's user or root, with no group or other mode bit, not a symlink, and at most 1 MiB. Read once, at start.</td>
+</tr>
+<tr>
+<td><code>broker.client_ca_file</code></td>
+<td>string</td>
+<td>Shorthand for one x509 human verifier: the one trust anchor client certificates are verified against, which must hold exactly one certificate. Use it or <code>broker.identity</code>, not both; with <code>broker.identity</code>, set <code>trust_anchor_file</code> on the x509 verifier instead. Read once, at start.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].type</code></td>
+<td>string</td>
+<td>Which kind of verifier this is. Under <code>humans</code>: <code>x509</code>, <code>oidc</code> or <code>directory_password</code>. Under <code>machines</code>: <code>x509</code> (a workload certificate), <code>oidc</code> or <code>k8s</code>. Each type accepts only its own keys; another type's key is refused.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].trust_anchor_file</code></td>
+<td>string</td>
+<td><code>x509</code> only: the PEM file of the one trust anchor a chain is verified against. At most one <code>x509</code> verifier per list, and the two lists may not name the same file. Read once, at start.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].issuer</code></td>
+<td>string</td>
+<td><code>oidc</code> and <code>k8s</code>: the provider's issuer URL, <code>https</code> with no user information, query or fragment, spelled as the provider spells it in its discovery document. Required.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].client_id</code></td>
+<td>string</td>
+<td><code>oidc</code> under <code>humans</code>, required: the public client's id, which a person's ID token names in <code>aud</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].principal_claim</code></td>
+<td>string</td>
+<td><code>oidc</code> under <code>humans</code>, required, with no default: <code>preferred_username</code>, <code>email</code> or <code>upn</code>. Choose the claim only your provider's administrators can set.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].principal_domains</code></td>
+<td>list of string</td>
+<td><code>oidc</code> and <code>directory_password</code> under <code>humans</code>, required: the domains whose people this verifier may name (<code>user:&lt;name&gt;@&lt;domain&gt;</code>), each a name with a dot and no <code>@</code>, lower-cased. Matched exactly; no subdomain is implied. Two verifiers at different issuers may not share a domain, and a <code>directory_password</code> verifier may not share one with an <code>oidc</code> verifier.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].scopes</code></td>
+<td>list of string</td>
+<td><code>oidc</code> under <code>humans</code>: extra scopes to request beyond <code>openid</code>, each printable ASCII with no space.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].algorithms</code></td>
+<td>list of string</td>
+<td><code>oidc</code> and <code>k8s</code>: the token signature algorithms accepted, from <code>RS256</code>, <code>PS256</code>, <code>ES256</code>, <code>ES384</code> and <code>EdDSA</code>. Default <code>RS256</code>. <code>none</code> and the <code>HS</code> algorithms are refused.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].ca_file</code></td>
+<td>string</td>
+<td><code>oidc</code> and <code>k8s</code>: PEM CA for the provider's TLS certificate. Optional; without it the system roots are used. It must be a readable file.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].second_factor</code></td>
+<td>string</td>
+<td><code>directory_password</code> only, required: <code>totp</code>, the one second factor a password sign-in takes.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].filter</code></td>
+<td>string</td>
+<td><code>directory_password</code> only: an LDAP filter, which must compile, that a person's entry must also match to sign in.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].enrollment.open_until</code></td>
+<td>string</td>
+<td><code>directory_password</code> only: until this RFC 3339 time (for example <code>2026-12-01T00:00:00Z</code>), a person with no authenticator enrolled may enroll one by signing in with their directory password. Outside every enrollment window the sign-in is refused.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].enrollment.new_entries_for</code></td>
+<td>duration</td>
+<td><code>directory_password</code> only: a person whose directory entry was created less than this long ago may enroll. Default <code>336h</code> (14 days); <code>0s</code> turns it off; at most <code>2160h</code> (90 days).</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].enrollment.reopen_for</code></td>
+<td>duration</td>
+<td><code>directory_password</code> only: how long a person's enrollment window stays open after an administrator resets their second factor, and how long <code>reset-second-factor --all</code> reopens enrollment. Default <code>24h</code>; <code>1h</code> to <code>168h</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].rate_limits.failures_per_principal</code></td>
+<td>integer</td>
+<td><code>directory_password</code> only: failed sign-ins allowed per person within <code>window</code>. Default <code>5</code>; <code>1</code> to <code>100</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].rate_limits.failures_per_source</code></td>
+<td>integer</td>
+<td><code>directory_password</code> only: failed sign-ins allowed per source address within <code>window</code>. Default <code>50</code>; <code>0</code> to <code>10000</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].rate_limits.window</code></td>
+<td>duration</td>
+<td><code>directory_password</code> only: the window the failure limits count over. Default <code>15m</code>; <code>1m</code> to <code>24h</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.humans.[].totp_label</code></td>
+<td>string</td>
+<td><code>directory_password</code> only: the issuer name an authenticator app shows. Printable ASCII, no colon, at most 64 bytes.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].type</code></td>
+<td>string</td>
+<td>Which kind of verifier this is. Under <code>humans</code>: <code>x509</code>, <code>oidc</code> or <code>directory_password</code>. Under <code>machines</code>: <code>x509</code> (a workload certificate), <code>oidc</code> or <code>k8s</code>. Each type accepts only its own keys; another type's key is refused.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].trust_anchor_file</code></td>
+<td>string</td>
+<td><code>x509</code> only: the PEM file of the one trust anchor a chain is verified against. At most one <code>x509</code> verifier per list, and the two lists may not name the same file. Read once, at start.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].spiffe_trust_domains</code></td>
+<td>list of string</td>
+<td><code>x509</code> only, and required: the SPIFFE trust domains whose workloads this anchor may name (<code>spiffe://&lt;trust domain&gt;/&lt;path&gt;</code>), each written as the domain is, never folded to lower case.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].issuer</code></td>
+<td>string</td>
+<td><code>oidc</code> and <code>k8s</code>: the provider's issuer URL, <code>https</code> with no user information, query or fragment, spelled as the provider spells it in its discovery document. Required.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].audience</code></td>
+<td>string</td>
+<td>Required for <code>oidc</code> (the API identifier a client-credentials token names in <code>aud</code>) and for <code>k8s</code> (the audience your pods' projected token volume asks for).</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].clients.[].client_id</code></td>
+<td>string</td>
+<td><code>oidc</code> only: a client id that may be a machine principal (<code>app:&lt;client id&gt;</code>). Required, and not repeated.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].clients.[].sub</code></td>
+<td>string</td>
+<td><code>oidc</code> only: the client's own identity at the provider, which its client-credentials tokens carry as <code>sub</code> and no person's token does. Required.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].algorithms</code></td>
+<td>list of string</td>
+<td><code>oidc</code> and <code>k8s</code>: the token signature algorithms accepted, from <code>RS256</code>, <code>PS256</code>, <code>ES256</code>, <code>ES384</code> and <code>EdDSA</code>. Default <code>RS256</code>. <code>none</code> and the <code>HS</code> algorithms are refused.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].ca_file</code></td>
+<td>string</td>
+<td><code>oidc</code> and <code>k8s</code>: PEM CA for the provider's TLS certificate. Optional; without it the system roots are used. It must be a readable file.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].cluster</code></td>
+<td>string</td>
+<td><code>k8s</code> only, required: this cluster's name in port49's records and log lines. Lowercase letters, digits and <code>_</code>, starting with a letter, at most 64; one name per cluster.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].jwks</code></td>
+<td>string</td>
+<td><code>k8s</code> only, required: the <code>https</code> URL the cluster's signing keys are read from, typically the API server's <code>/openid/v1/jwks</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].namespaces</code></td>
+<td>list of string</td>
+<td><code>k8s</code> only, required: the namespaces whose service accounts this cluster may name, by name.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].directory.kind</code></td>
+<td>string</td>
+<td><code>x509</code> only: how a workload certificate finds its directory entry. Must be <code>spiffe_id</code>. Needs <code>broker.directory</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].directory.attribute</code></td>
+<td>string</td>
+<td><code>x509</code> only: the directory attribute that holds the SPIFFE ID. Required, no default, and not the attribute <code>broker.directory</code> uses for <code>username_attribute</code> or <code>principal_attribute</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].directory.allow_weak</code></td>
+<td>boolean</td>
+<td><code>x509</code> only: acknowledges that this mapping is weak. Required to be <code>true</code>, with <code>issuers</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].directory.issuers</code></td>
+<td>list of string</td>
+<td><code>x509</code> only: the RFC 4514 issuer DNs the workload certificate's issuer must be one of. Required.</td>
+</tr>
+<tr>
+<td><code>broker.identity.machines.[].directory.user_filter</code></td>
+<td>string</td>
+<td><code>x509</code> only: the LDAP filter for the entry lookup. Default <code>broker.directory.user_filter</code>.</td>
+</tr>
+<tr>
+<td><code>broker.identity.clock_skew</code></td>
+<td>duration</td>
+<td>How far a token's time claims may differ from the broker's clock. Default <code>1m</code>; <code>0s</code> to <code>5m</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.identity.max_token_age</code></td>
+<td>duration</td>
+<td>The oldest an ID token may be, by its issue time, and still be accepted. Default <code>2h</code>; <code>5m</code> to <code>24h</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.identity.jwks_refresh_interval</code></td>
+<td>duration</td>
+<td>How often each provider's signing keys are re-fetched. Default <code>1h</code>; <code>5m</code> to <code>24h</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.identity.jwks_max_age</code></td>
+<td>duration</td>
+<td>How long fetched keys are trusted without a successful refresh. Default <code>24h</code>; <code>10m</code> to <code>720h</code>; at least twice <code>jwks_refresh_interval</code>, so one missed refresh does not refuse every token. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.identity.issuance.certificate_lifetime</code></td>
+<td>duration</td>
+<td>Lifetime of the certificate the broker issues after a sign-in. Default <code>12h</code>; <code>1h</code> to <code>24h</code>. Writing <code>issuance: {}</code> turns issuance on with this default. Issuance needs a human <code>oidc</code> or <code>directory_password</code> verifier, and a <code>directory_password</code> sign-in needs it. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file</code></td>
+<td>string</td>
+<td>The PEM roots a touch key's attestation chains to. Required when <code>hardware_key_touch</code> is present. SIGHUP re-reads it; a file that does not load keeps the roots in force.</td>
+</tr>
+<tr>
+<td><code>broker.identity.per_login_mfa.idp_mfa.amr</code></td>
+<td>list of string</td>
+<td>Authentication method references the identity provider's ID token may carry as proof of the second factor. Default <code>[mfa]</code>; none may be empty. Counts only beside an <code>x509</code> humans verifier. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.identity.per_login_mfa.idp_mfa.acr_values</code></td>
+<td>string</td>
+<td>The <code>acr_values</code> the sign-in sends to the provider. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.policy_file</code></td>
+<td>string</td>
+<td>Path of the policy file this process admits from. Required. It is watched every <code>policy_watch_interval</code> and re-read at SIGHUP; a file that does not load is refused and the policy in force keeps serving. The file and its directory must be writable by port49's user or root alone.</td>
+</tr>
+<tr>
+<td><code>broker.batch_max</code></td>
+<td>integer</td>
+<td>The most devices in one mint request; a larger sweep pages. Default <code>100</code>; <code>1</code> to <code>1000</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.policy_watch_interval</code></td>
+<td>duration</td>
+<td>How often the policy file is read for a change. A change is loaded once two reads in a row agree, so an edit takes effect within two intervals and a write in progress is not loaded part-way. Default <code>5s</code>; <code>1s</code> to <code>5m</code>. SIGHUP loads what is on disk at once. Write the file atomically: a temporary file renamed over it. A change to this key needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.revocations_file</code></td>
+<td>string</td>
+<td>port49d.yaml only (refused in <code>port49-broker.yaml</code>): where port49d keeps the revocations <code>port49 revoke</code> puts in force, so a restart forgets none. Required in a <code>broker:</code> block, which port49d.yaml accepts only on the memory store. Its directory must exist and be writable by port49's user or root alone, and the name may not be a symlink. port49d never creates it: run <code>port49d init-revocations</code> once per install. port49d rewrites it, mode 0600 and atomically, after every revocation and lift. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.max_conns_per_principal</code></td>
+<td>integer</td>
+<td>The most broker connections one principal may hold; a new one closes the oldest idle one, and is refused with 503 when all are busy. Default <code>4</code>; <code>1</code> to <code>64</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.max_pending_conns_per_source</code></td>
+<td>integer</td>
+<td>The most broker connections one address may hold that are not yet bound to a principal; the next is reset. Default <code>16</code>; <code>1</code> to <code>256</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.disabled</code></td>
+<td>boolean</td>
+<td>Set <code>true</code> to check no revocation status. Then none of <code>crls</code>, <code>ocsp</code>, <code>refresh_interval</code> and <code>on_unavailable</code> may be set. The block is required: leaving it out is refused, so skipping the check is always a written choice. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.crls.[].name</code></td>
+<td>string</td>
+<td>Name of this revocation list source: lowercase letters, digits and <code>_</code>, starting with a letter, at most 64, and unique in the block. It names the kept file <code>crl-&lt;name&gt;.der</code> and the <code>crl_next_update</code> metric label.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.crls.[].file</code></td>
+<td>string</td>
+<td>Path of a CRL file. Set exactly one of <code>file</code> and <code>url</code>.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.crls.[].url</code></td>
+<td>string</td>
+<td>An <code>http</code> or <code>https</code> URL to fetch the CRL from. Set exactly one of <code>file</code> and <code>url</code>.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.crls.[].issuer_file</code></td>
+<td>string</td>
+<td>Required. The CA certificate that signs the list: the trust anchor, or a certificate the anchor signed.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.ocsp.responder</code></td>
+<td>string</td>
+<td>An <code>http</code> or <code>https</code> URL of a fixed OCSP responder. Set this or <code>use_aia: true</code>.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.ocsp.use_aia</code></td>
+<td>boolean</td>
+<td>Set <code>true</code> to ask each certificate's own OCSP responder, from its Authority Information Access extension. Set this or <code>responder</code>.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.ocsp.timeout</code></td>
+<td>duration</td>
+<td>How long one OCSP request may take. Default <code>2s</code>; <code>100ms</code> to <code>10s</code>.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.ocsp.hash</code></td>
+<td>string</td>
+<td>The hash of the OCSP CertID: <code>sha256</code> (default) or <code>sha1</code>.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.refresh_interval</code></td>
+<td>duration</td>
+<td>How often the revocation lists are fetched or re-read. Default <code>10m</code>; <code>1m</code> to <code>24h</code>.</td>
+</tr>
+<tr>
+<td><code>broker.certificate_status.on_unavailable</code></td>
+<td>string</td>
+<td>What to do when a certificate's status cannot be established: <code>refuse</code> (default) refuses the connection, <code>allow</code> admits it and says so.</td>
+</tr>
+<tr>
+<td><code>broker.state_dir</code></td>
+<td>string</td>
+<td>port49-broker.yaml only (refused as a key of <code>port49d.yaml</code>): absolute path of a directory that exists and that neither its group nor others can write (create it mode 0700), where port49-broker keeps the CRLs it verified and its other state. Required under the broker's role, which has no revocations file. It may not be inside <code>inventory.service.state_dir</code> or <code>mirror_dir</code>, nor hold them. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.servers.[].uri</code></td>
+<td>string</td>
+<td>An <code>ldaps://</code> or <code>ldap://</code> URI with a host, and no credentials in it. Plain <code>ldap://</code> needs <code>start_tls: true</code>. Two servers may not share host and port. At least one server is required. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.servers.[].priority</code></td>
+<td>integer</td>
+<td>Among servers of the preferred site, the one with the higher number is preferred. Default <code>0</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.servers.[].site</code></td>
+<td>string</td>
+<td>The site this server belongs to. When the broker's own site is known, servers of that site are tried first. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.servers.[].start_tls</code></td>
+<td>boolean</td>
+<td>Upgrade an <code>ldap://</code> connection with StartTLS. Refused on an <code>ldaps://</code> URI. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.site</code></td>
+<td>string</td>
+<td>The site this broker runs in. Overrides <code>site_env</code>. Servers whose <code>site</code> matches are preferred. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.site_env</code></td>
+<td>string</td>
+<td>Name of the environment variable that holds the site when <code>site</code> is not set. Default <code>PORT49_SITE</code>. It may not be the variable <code>bind.password_secret_ref</code> reads, because the site is logged. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.ca_file</code></td>
+<td>string</td>
+<td>PEM CA that verifies the directory servers' certificates. Required, and it must be readable. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.bind.mechanism</code></td>
+<td>string</td>
+<td>How the broker authenticates to the directory: <code>external</code> (a TLS client certificate), <code>gssapi</code> (Kerberos) or <code>simple</code> (a DN and password). Required. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.bind.tls_cert_file</code></td>
+<td>string</td>
+<td><code>external</code> only, required: the client certificate. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.bind.tls_key_file</code></td>
+<td>string</td>
+<td><code>external</code> only, required: the client certificate's key. It must be owned by port49's user or root, with no group or other mode bit. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.bind.keytab_file</code></td>
+<td>string</td>
+<td><code>gssapi</code> only, required: the Kerberos keytab. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.bind.principal</code></td>
+<td>string</td>
+<td><code>gssapi</code> only, required: the Kerberos principal to bind as. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.bind.krb5_conf</code></td>
+<td>string</td>
+<td><code>gssapi</code> only, required: path of the <code>krb5.conf</code> to use. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.bind.bind_dn</code></td>
+<td>string</td>
+<td><code>simple</code> only, required: the DN to bind as. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.bind.password_secret_ref</code></td>
+<td>secret reference</td>
+<td><code>simple</code> only, required: where the bind password is read from, <code>env:NAME</code> or <code>file:/absolute/path</code>. It is read when the directory opens, not when the file is checked. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.base_dn</code></td>
+<td>string</td>
+<td>Required. The base DN people are searched under; it must parse as an RFC 4514 DN. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.groups_base_dn</code></td>
+<td>string</td>
+<td>The base DN groups are searched under. Default <code>base_dn</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.user_filter</code></td>
+<td>string</td>
+<td>LDAP filter for a person's entry; it must compile. Default <code>(objectClass=person)</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.group_filter</code></td>
+<td>string</td>
+<td>LDAP filter for a group; it must compile. Default <code>(\|(objectClass=group)(objectClass=groupOfNames))</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.principal_attribute</code></td>
+<td>string</td>
+<td>The attribute that holds a person's principal. Default <code>userPrincipalName</code>. Must be an attribute name or OID. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.username_attribute</code></td>
+<td>string</td>
+<td>The attribute that holds the username a device sees. Default <code>sAMAccountName</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.group_name_attribute</code></td>
+<td>string</td>
+<td>The attribute that names a group. Default <code>cn</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.member_attribute</code></td>
+<td>string</td>
+<td>The attribute that lists a group's members. Default <code>member</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.certificate_mapping.kind</code></td>
+<td>string</td>
+<td>How a client certificate finds its entry: <code>issuer_serial</code>, <code>sid</code>, <code>san_upn</code>, <code>san_email</code>, <code>subject_dn</code> or <code>cn</code>. Required when an x509 human verifier is configured, optional otherwise. <code>issuer_serial</code> and <code>sid</code> are strong; the others are weak and need <code>allow_weak</code> and <code>issuers</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.certificate_mapping.attribute</code></td>
+<td>string</td>
+<td>The entry attribute the mapping looks up. Default by kind: <code>altSecurityIdentities</code> for <code>issuer_serial</code>, <code>objectSid</code> for <code>sid</code>, <code>userPrincipalName</code> for <code>san_upn</code>, <code>mail</code> for <code>san_email</code>, <code>distinguishedName</code> for <code>subject_dn</code>, <code>cn</code> for <code>cn</code>. Pointing a strong kind at another attribute makes it weak. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.certificate_mapping.allow_weak</code></td>
+<td>boolean</td>
+<td>Acknowledges a weak mapping. Required <code>true</code> for a weak kind or a repointed strong one, with <code>issuers</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.certificate_mapping.issuers</code></td>
+<td>list of string</td>
+<td>RFC 4514 issuer DNs the mapping is pinned to. Required for a weak or repointed mapping. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.nested_groups</code></td>
+<td>string</td>
+<td>How nested group membership is resolved. Required: <code>in_chain</code> (Active Directory's chain matching), <code>recursive</code> (port49 walks <code>member_attribute</code>) or <code>direct</code> (groups are flat). Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.max_depth</code></td>
+<td>integer</td>
+<td>How deep <code>recursive</code> nesting is followed. Default <code>16</code>; <code>1</code> to <code>64</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.query_timeout</code></td>
+<td>duration</td>
+<td>How long one directory query may take. Default <code>5s</code>; <code>1s</code> to <code>30s</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.health_check.interval</code></td>
+<td>duration</td>
+<td>How often each server is checked. Default <code>30s</code>; <code>5s</code> to <code>5m</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.health_check.timeout</code></td>
+<td>duration</td>
+<td>How long one check may take; at most <code>interval</code>. Default <code>2s</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.circuit_breaker.failure_threshold</code></td>
+<td>integer</td>
+<td>Consecutive failures that open a server's circuit. Default <code>3</code>; <code>1</code> to <code>20</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.circuit_breaker.probe_interval</code></td>
+<td>duration</td>
+<td>How often an open circuit is probed. Default <code>1m</code>; <code>5s</code> to <code>10m</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.failback.stability_window</code></td>
+<td>duration</td>
+<td>How long a preferred server must stay healthy before the broker moves back to it. Default <code>5m</code>; <code>0s</code> to <code>1h</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.grace</code></td>
+<td>duration</td>
+<td>When no directory server answers, the membership stored from the last good lookup is used if it was verified no longer ago than this; older than this, the principal is refused <code>directory_unavailable</code>. A refusal the directory already gave is never overruled. Default <code>4h</code>; <code>0s</code> to <code>24h</code>; not above <code>session.staleness_ceiling</code> when both run in one process. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.prewarm.interval</code></td>
+<td>duration</td>
+<td>How often the broker pre-verifies every known principal. Default <code>1h</code>; <code>0s</code> turns it off; otherwise <code>5m</code> to <code>24h</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.directory.prewarm.max_principals</code></td>
+<td>integer</td>
+<td>The most principals one pre-warm pass verifies. People and, under a workload mapping, workloads each take up to it, so one interval verifies up to twice it. Default <code>10000</code>; <code>1</code> to <code>1000000</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>broker.refresh_interval</code></td>
+<td>duration</td>
+<td>How often the broker re-verifies every live principal and stamps <code>refreshed_at</code>. Default <code>5m</code>; <code>1m</code> to <code>1h</code>. In one process with <code>session.staleness_ceiling</code> it may not exceed half of it. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="lab"><code>lab</code><a class="headerlink" href="#lab" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lab.session_attributes</code></td>
+<td>list of string</td>
+<td>Test lab only; leave it out in production. Attributes attached to a permitted session authorization reply of a seeded context. Not accepted in <code>port49-broker.yaml</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>lab.command_attributes</code></td>
+<td>list of string</td>
+<td>Test lab only. Attributes attached to a permitted per-command authorization reply, a separate list from <code>session_attributes</code> because the lab asks the same question of each reply separately. Not accepted in <code>port49-broker.yaml</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>lab.deny_prefixes</code></td>
+<td>list of string</td>
+<td>Test lab only. Commands the lab denies by prefix, matched on a token boundary: <code>show</code> denies <code>show version</code> but not <code>shower</code>. Not accepted in <code>port49-broker.yaml</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>lab.fault_file</code></td>
+<td>string</td>
+<td>Test lab only. A file naming the fault in force. Its contents are read each time the switch is checked, so editing it takes effect at once; an absent file means no fault. Not accepted in <code>port49-broker.yaml</code>. The path itself needs a restart.</td>
+</tr>
+<tr>
+<td><code>lab.seed_token_file</code></td>
+<td>string</td>
+<td>Test lab only. Where port49d writes the token pairs it mints for <code>seed_tokens</code>, one JSON object per line, mode 0600. Required when <code>seed_tokens</code> is non-empty. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>lab.seed_tokens.[].nas</code></td>
+<td>string</td>
+<td>Test lab only. The device address the seeded token is for. Required.</td>
+</tr>
+<tr>
+<td><code>lab.seed_tokens.[].username</code></td>
+<td>string</td>
+<td>Test lab only. The username the seeded token is for. Required.</td>
+</tr>
+<tr>
+<td><code>lab.seed_tokens.[].enable</code></td>
+<td>boolean</td>
+<td>Test lab only. <code>true</code> also mints an enable token beside the login one.</td>
+</tr>
+<tr>
+<td><code>lab.deny_message_length</code></td>
+<td>integer</td>
+<td>Test lab only. Pads the lab's deny <code>server_msg</code> to this many bytes with a counting pattern. <code>0</code> leaves it; otherwise <code>16</code> to <code>4096</code>. Not accepted in <code>port49-broker.yaml</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>lab.deny_session</code></td>
+<td>boolean</td>
+<td>Test lab only. Fails every session authorization of a seeded context with the padded deny message. Not accepted in <code>port49-broker.yaml</code>. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="inventory"><code>inventory</code><a class="headerlink" href="#inventory" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inventory.max_removed_percent</code></td>
+<td>integer</td>
+<td>The most devices, as a percentage of the devices in force, an inventory reload may take out of service (removed, or kept and newly refused). A reload that takes more is refused and the previous inventory keeps serving. Default <code>10</code>; <code>0</code> refuses every removal; <code>100</code> turns the bound off. An empty inventory is refused whatever this says. SIGHUP re-reads this key, so a deliberate large removal needs no restart: raise it, send SIGHUP, lower it again.</td>
+</tr>
+<tr>
+<td><code>inventory.service.url</code></td>
+<td>string</td>
+<td>Where port49d takes its inventory from when the inventory service publishes it, in place of <code>inventory_file</code>: <code>https://host[:port]</code> with no user information, path, query or fragment. Needs a policy. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>inventory.service.ca_file</code></td>
+<td>string</td>
+<td>Absolute path of the PEM CA that verifies the service's certificate. Required; without it any public CA could vouch for the service. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>inventory.service.tls_cert_file</code></td>
+<td>string</td>
+<td>Absolute path of port49d's client certificate for the service, presented over mutual TLS. Required. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>inventory.service.tls_key_file</code></td>
+<td>string</td>
+<td>Absolute path of the client certificate's key. Required; owned by port49's user or root, no group or other mode bit. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>inventory.service.verify_key_files</code></td>
+<td>list of string</td>
+<td>Absolute paths of the service's signing public keys: two while its key rotates. At least one is required. Every document, from the service or from disk, is verified against them. SIGHUP re-reads the list.</td>
+</tr>
+<tr>
+<td><code>inventory.service.poll_interval</code></td>
+<td>duration</td>
+<td>How often port49d asks the service for the bundle's version. Default <code>30s</code>; <code>5s</code> to <code>10m</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>inventory.service.state_dir</code></td>
+<td>string</td>
+<td>Absolute directory that holds the last document port49d applied, so a restart starts from it with no service. Required, and outside <code>mirror_dir</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>inventory.service.mirror_dir</code></td>
+<td>string</td>
+<td>Optional absolute directory of the shared copy the service writes, read at a cold start when <code>state_dir</code> has none. Outside <code>state_dir</code>. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="stores"><code>stores</code><a class="headerlink" href="#stores" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>stores.directory.backend</code></td>
+<td>string</td>
+<td>Where records live: <code>memory</code> (default) or <code>etcd</code>. A store block on <code>etcd</code> also needs its <code>etcd</code> block; <code>etcd</code> in port49d.yaml needs <code>policy:</code> and no <code>broker:</code> block, and <code>port49-broker.yaml</code> must use <code>etcd</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>stores.directory.packet_deadline</code></td>
+<td>duration</td>
+<td>Bounds all store work for one TACACS+ packet, so a device hears an answer before its own timeout. Default <code>2s</code>; <code>100ms</code> to <code>2s</code>; for the session store at least <code>etcd.call_timeout</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.endpoints</code></td>
+<td>list of string</td>
+<td>etcd endpoints, each <code>https://host:port</code> with no user information, path, query or fragment. At least one. port49 authenticates to etcd by client certificate.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.ca_file</code></td>
+<td>string</td>
+<td>Absolute path of the PEM CA that verifies etcd's certificate. Required.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.prefix</code></td>
+<td>string</td>
+<td>The keyspace prefix. Default <code>/port49/</code>; it must start with <code>/</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.daemon.cert_file</code></td>
+<td>string</td>
+<td>port49d's client certificate for etcd. Required in <code>port49d.yaml</code> on etcd, refused in <code>port49-broker.yaml</code>. Absolute path. Its CN is the etcd user, and a CN of <code>root</code> is refused.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.daemon.key_file</code></td>
+<td>string</td>
+<td>The key of port49d's etcd client certificate, absolute path, owned by port49's user or root with no group or other mode bit.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.broker.cert_file</code></td>
+<td>string</td>
+<td>port49-broker's client certificate for etcd. Required in <code>port49-broker.yaml</code>, refused in <code>port49d.yaml</code>. Absolute path; a CN of <code>root</code> is refused.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.broker.key_file</code></td>
+<td>string</td>
+<td>The key of port49-broker's etcd client certificate, absolute path, owned by port49's user or root with no group or other mode bit.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.roles</code></td>
+<td>string</td>
+<td><code>enforced</code> (default) or <code>unenforced</code>: whether port49d refuses to start when its etcd identity can do more than its role.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.call_timeout</code></td>
+<td>duration</td>
+<td>Bounds each token and context call to etcd. Default <code>500ms</code>; <code>10ms</code> to <code>5s</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.bulk_timeout</code></td>
+<td>duration</td>
+<td>Bounds each bulk scan. Default <code>30s</code>; <code>1s</code> to <code>5m</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.breaker.failures</code></td>
+<td>integer</td>
+<td>Consecutive failures that open a pool's circuit. Default <code>5</code>; <code>1</code> to <code>100</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.breaker.open_for</code></td>
+<td>duration</td>
+<td>How long an opened circuit stays open. Default <code>5s</code>; <code>1s</code> to <code>5m</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.max_in_flight.token</code></td>
+<td>integer</td>
+<td>In-flight token calls. Default <code>64</code>; <code>1</code> to <code>4096</code>. A call that gets no slot within its deadline is refused, never queued.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.max_in_flight.context</code></td>
+<td>integer</td>
+<td>In-flight context calls. Default <code>128</code>; <code>1</code> to <code>4096</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.max_in_flight.bulk</code></td>
+<td>integer</td>
+<td>In-flight bulk scans. Default <code>4</code>; <code>1</code> to <code>4096</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.lease_grace</code></td>
+<td>duration</td>
+<td>How long past a record's own expiry its lease reclaims it. Default <code>5m</code>; <code>1m</code> to <code>1h</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.hold_ttl</code></td>
+<td>duration</td>
+<td>The keyspace hold's lease, which is also how long a pool's circuit stays open before the store is gone. Default <code>15s</code>; <code>10s</code> to <code>60s</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.sweep_interval</code></td>
+<td>duration</td>
+<td>How often the index sweep runs. Default <code>10m</code>; <code>1m</code> to <code>24h</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.start_timeout</code></td>
+<td>duration</td>
+<td>How long port49d waits for the store at start. Default <code>30s</code>; <code>0</code> waits for as long as it takes (a bare <code>0</code> is accepted); otherwise <code>5s</code> to <code>10m</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.health.interval</code></td>
+<td>duration</td>
+<td>port49d.yaml only (refused in <code>port49-broker.yaml</code>): how often the store is checked. Default <code>1s</code>; <code>200ms</code> to <code>10s</code>; for the session store at least <code>call_timeout</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.health.close_after</code></td>
+<td>integer</td>
+<td>port49d.yaml only: consecutive failed checks after which every listener closes, so devices use their local method. Default <code>5</code>; <code>2</code> to <code>60</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.health.open_after</code></td>
+<td>integer</td>
+<td>port49d.yaml only: consecutive passing checks after which the listeners open again. Default <code>3</code>; <code>1</code> to <code>60</code>.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.context_cache.ttl</code></td>
+<td>duration</td>
+<td>port49d.yaml only (refused in <code>port49-broker.yaml</code>): how long command and session authorization may read a context from the cache, which adds to revocation latency. Required when the block is present; <code>100ms</code> to <code>1m</code>. Leave the block out for no cache.</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.context_cache.max_entries</code></td>
+<td>integer</td>
+<td>port49d.yaml only: the most contexts the cache holds. Default <code>65536</code>; <code>1</code> to <code>1048576</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.backend</code></td>
+<td>string</td>
+<td>Where records live: <code>memory</code> (default) or <code>etcd</code>. A store block on <code>etcd</code> also needs its <code>etcd</code> block; <code>etcd</code> in port49d.yaml needs <code>policy:</code> and no <code>broker:</code> block, and <code>port49-broker.yaml</code> must use <code>etcd</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>stores.session.packet_deadline</code></td>
+<td>duration</td>
+<td>Bounds all store work for one TACACS+ packet, so a device hears an answer before its own timeout. Default <code>2s</code>; <code>100ms</code> to <code>2s</code>; for the session store at least <code>etcd.call_timeout</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.endpoints</code></td>
+<td>list of string</td>
+<td>etcd endpoints, each <code>https://host:port</code> with no user information, path, query or fragment. At least one. port49 authenticates to etcd by client certificate.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.ca_file</code></td>
+<td>string</td>
+<td>Absolute path of the PEM CA that verifies etcd's certificate. Required.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.prefix</code></td>
+<td>string</td>
+<td>The keyspace prefix. Default <code>/port49/</code>; it must start with <code>/</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.daemon.cert_file</code></td>
+<td>string</td>
+<td>port49d's client certificate for etcd. Required in <code>port49d.yaml</code> on etcd, refused in <code>port49-broker.yaml</code>. Absolute path. Its CN is the etcd user, and a CN of <code>root</code> is refused.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.daemon.key_file</code></td>
+<td>string</td>
+<td>The key of port49d's etcd client certificate, absolute path, owned by port49's user or root with no group or other mode bit.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.broker.cert_file</code></td>
+<td>string</td>
+<td>port49-broker's client certificate for etcd. Required in <code>port49-broker.yaml</code>, refused in <code>port49d.yaml</code>. Absolute path; a CN of <code>root</code> is refused.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.broker.key_file</code></td>
+<td>string</td>
+<td>The key of port49-broker's etcd client certificate, absolute path, owned by port49's user or root with no group or other mode bit.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.roles</code></td>
+<td>string</td>
+<td><code>enforced</code> (default) or <code>unenforced</code>: whether port49d refuses to start when its etcd identity can do more than its role.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.call_timeout</code></td>
+<td>duration</td>
+<td>Bounds each token and context call to etcd. Default <code>500ms</code>; <code>10ms</code> to <code>5s</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.bulk_timeout</code></td>
+<td>duration</td>
+<td>Bounds each bulk scan. Default <code>30s</code>; <code>1s</code> to <code>5m</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.breaker.failures</code></td>
+<td>integer</td>
+<td>Consecutive failures that open a pool's circuit. Default <code>5</code>; <code>1</code> to <code>100</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.breaker.open_for</code></td>
+<td>duration</td>
+<td>How long an opened circuit stays open. Default <code>5s</code>; <code>1s</code> to <code>5m</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.max_in_flight.token</code></td>
+<td>integer</td>
+<td>In-flight token calls. Default <code>64</code>; <code>1</code> to <code>4096</code>. A call that gets no slot within its deadline is refused, never queued.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.max_in_flight.context</code></td>
+<td>integer</td>
+<td>In-flight context calls. Default <code>128</code>; <code>1</code> to <code>4096</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.max_in_flight.bulk</code></td>
+<td>integer</td>
+<td>In-flight bulk scans. Default <code>4</code>; <code>1</code> to <code>4096</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.lease_grace</code></td>
+<td>duration</td>
+<td>How long past a record's own expiry its lease reclaims it. Default <code>5m</code>; <code>1m</code> to <code>1h</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.hold_ttl</code></td>
+<td>duration</td>
+<td>The keyspace hold's lease, which is also how long a pool's circuit stays open before the store is gone. Default <code>15s</code>; <code>10s</code> to <code>60s</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.sweep_interval</code></td>
+<td>duration</td>
+<td>How often the index sweep runs. Default <code>10m</code>; <code>1m</code> to <code>24h</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.start_timeout</code></td>
+<td>duration</td>
+<td>How long port49d waits for the store at start. Default <code>30s</code>; <code>0</code> waits for as long as it takes (a bare <code>0</code> is accepted); otherwise <code>5s</code> to <code>10m</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.health.interval</code></td>
+<td>duration</td>
+<td>port49d.yaml only (refused in <code>port49-broker.yaml</code>): how often the store is checked. Default <code>1s</code>; <code>200ms</code> to <code>10s</code>; for the session store at least <code>call_timeout</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.health.close_after</code></td>
+<td>integer</td>
+<td>port49d.yaml only: consecutive failed checks after which every listener closes, so devices use their local method. Default <code>5</code>; <code>2</code> to <code>60</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.health.open_after</code></td>
+<td>integer</td>
+<td>port49d.yaml only: consecutive passing checks after which the listeners open again. Default <code>3</code>; <code>1</code> to <code>60</code>.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.context_cache.ttl</code></td>
+<td>duration</td>
+<td>port49d.yaml only (refused in <code>port49-broker.yaml</code>): how long command and session authorization may read a context from the cache, which adds to revocation latency. Required when the block is present; <code>100ms</code> to <code>1m</code>. Leave the block out for no cache.</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.context_cache.max_entries</code></td>
+<td>integer</td>
+<td>port49d.yaml only: the most contexts the cache holds. Default <code>65536</code>; <code>1</code> to <code>1048576</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="policy"><code>policy</code><a class="headerlink" href="#policy" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>policy.file</code></td>
+<td>string</td>
+<td>Path of the policy file a port49d with no <code>broker:</code> block admits from. Required when <code>policy:</code> is present. Refused beside a <code>broker:</code> block, whose policy is <code>broker.policy_file</code>. Re-read every <code>watch_interval</code> and at SIGHUP.</td>
+</tr>
+<tr>
+<td><code>policy.watch_interval</code></td>
+<td>duration</td>
+<td>How often the policy file is read for a change. Default <code>5s</code>; <code>1s</code> to <code>5m</code>. A change to this key needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="key_secret_refs"><code>key_secret_refs</code><a class="headerlink" href="#key_secret_refs" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>key_secret_refs.env_prefix</code></td>
+<td>string</td>
+<td>A policy's key <code>secret_ref: env:NAME</code> may name only variables that begin with this prefix, so a policy writer cannot pick which of the host's secrets becomes a TACACS+ key. Default <code>PORT49_KEY_</code>; at least 4 characters of a variable name, ending in <code>_</code>. Needs a restart.</td>
+</tr>
+<tr>
+<td><code>key_secret_refs.file_dir</code></td>
+<td>string</td>
+<td>A policy's key <code>secret_ref: file:/path</code> may name only files under this directory. Default <code>/run/port49/keys</code>; an absolute, clean path below <code>/</code>. Needs a restart.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="port49-brokeryaml">port49-broker.yaml<a class="headerlink" href="#port49-brokeryaml" title="Permanent link">&para;</a></h2>
+<p><code>port49-broker.yaml</code> has the schema above, read under the broker's role. The broker never speaks TACACS+ and never holds a device key, so the loader refuses the keys below by name: a file that names one does not load, and the error names the key. A few other keys are refused by the check of their own block rather than by this table; the entries above mark them "port49d.yaml only".</p>
+<table>
+<thead>
+<tr>
+<th>Refused key</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>listen</code></td>
+<td>port49-broker never speaks TACACS+; that is port49d's</td>
+</tr>
+<tr>
+<td><code>tls_listener</code></td>
+<td>port49-broker never speaks TACACS+; that is port49d's</td>
+</tr>
+<tr>
+<td><code>keys</code></td>
+<td>device keys are the policy file's keys: block</td>
+</tr>
+<tr>
+<td><code>key_secret_refs</code></td>
+<td>port49-broker reads key names, never a key's secret</td>
+</tr>
+<tr>
+<td><code>accounting</code></td>
+<td>accounting is port49d's</td>
+</tr>
+<tr>
+<td><code>limits</code></td>
+<td>TACACS+ limits are port49d's</td>
+</tr>
+<tr>
+<td><code>receipt_idle_ttl</code></td>
+<td>receipts are port49d's</td>
+</tr>
+<tr>
+<td><code>receipt_max_age</code></td>
+<td>receipts are port49d's</td>
+</tr>
+<tr>
+<td><code>platforms</code></td>
+<td>session services are port49d's</td>
+</tr>
+<tr>
+<td><code>policy</code></td>
+<td>port49-broker's policy is broker.policy_file</td>
+</tr>
+<tr>
+<td><code>broker.revocations_file</code></td>
+<td>on etcd the store keeps the marks (decision 36); remove it</td>
+</tr>
+<tr>
+<td><code>stores.directory.etcd.daemon</code></td>
+<td>the daemon's etcd identity is port49d's alone</td>
+</tr>
+<tr>
+<td><code>stores.session.etcd.daemon</code></td>
+<td>the daemon's etcd identity is port49d's alone</td>
+</tr>
+<tr>
+<td><code>lab.fault_file</code></td>
+<td>the lab's fault switch is port49d's</td>
+</tr>
+<tr>
+<td><code>lab.session_attributes</code></td>
+<td>the lab's answers are port49d's</td>
+</tr>
+<tr>
+<td><code>lab.command_attributes</code></td>
+<td>the lab's answers are port49d's</td>
+</tr>
+<tr>
+<td><code>lab.deny_prefixes</code></td>
+<td>the lab's answers are port49d's</td>
+</tr>
+<tr>
+<td><code>lab.deny_message_length</code></td>
+<td>the lab's answers are port49d's</td>
+</tr>
+<tr>
+<td><code>lab.deny_session</code></td>
+<td>the lab's answers are port49d's</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>
