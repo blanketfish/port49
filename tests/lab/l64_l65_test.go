@@ -818,6 +818,11 @@ func (e *l64Env) portSSH(ctx context.Context) l64SSHRun {
 	return r
 }
 
+// l64Port49Faults are stable parts of the messages cmd/port49/ssh.go prints when it ends ssh itself: the token
+// went stale while ssh ran and no fresh one could be minted (a broker outage, or a slow hop), or the process
+// that asked could not be identified. Neither is the device's answer.
+var l64Port49Faults = []string{"past its expires_at", "could not tell which process asked for the token"}
+
 // l64SSHFault says why a `port49 ssh` run never reached the device, or "" when it did: the command did not
 // start, or it ended non-zero with no ssh -v output at all (ssh never ran: the broker was unreachable, no agent,
 // a setup error of port49's own). A run ssh made, a refusal included, is the device's verdict. A deadline is
@@ -828,6 +833,9 @@ func l64SSHFault(r l64SSHRun) string {
 		return ""
 	case errors.Is(r.err, errL64Start):
 		return "port49 ssh did not start (" + r.err.Error() + ")"
+	case r.exit != 0 && slices.ContainsFunc(l64Port49Faults, func(m string) bool { return strings.Contains(r.stderr, m) }):
+		return fmt.Sprintf("port49 ssh ended with exit %d on its own refusal to send the token (%s), so the device was not "+
+			"measured", r.exit, "a stale token with no fresh mint, or an asker it could not identify")
 	case r.exit != 0 && !strings.Contains(r.stderr, "debug1:"):
 		return fmt.Sprintf("port49 ssh ended with exit %d before ssh ran (no ssh -v output), so the device was never reached", r.exit)
 	}
@@ -1492,10 +1500,10 @@ func runL64L65(e *l64Env, versions string) {
 	// L65 (a): Python's first contact, from an empty known_hosts that hashes.
 	e.cell("L65a", l64CellBudget, func(ctx context.Context) (bool, string) {
 		if err := e.writeConfig(true); err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		if err := e.writeKnownHosts(""); err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		r := e.python(ctx)
 		content := e.readKnownHosts()
@@ -1541,13 +1549,13 @@ func runL64L65(e *l64Env, versions string) {
 	// L65 (e2): port49 ssh against the entry Python filed.
 	e.cell("L65e2", l64CellBudget, func(ctx context.Context) (bool, string) {
 		if e.pyFile == "" {
-			return false, "no entry was filed by L65a, so there is nothing to verify"
+			return e.setupFault("no entry was filed by L65a, so there is nothing to verify")
 		}
 		if err := e.writeKnownHosts(e.pyFile); err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		if e.pyEntry.Blob == "" {
-			return false, "L65a recorded no line for the key Python negotiated, so there is no line to verify"
+			return e.setupFault("L65a recorded no line for the key Python negotiated, so there is no line to verify")
 		}
 		before := l64KnownHostsLines(e.pyFile)
 		r := e.portSSH(ctx)
@@ -1568,10 +1576,10 @@ func runL64L65(e *l64Env, versions string) {
 	e.cell("L65f1", l64CellBudget, func(ctx context.Context) (bool, string) {
 		line, err := e.revokedLine()
 		if err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		if err := e.writeKnownHosts(e.pyFile + line); err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		quiet := e.waitQuiet(ctx)
 		r := e.python(ctx)
@@ -1582,10 +1590,10 @@ func runL64L65(e *l64Env, versions string) {
 	e.cell("L65f2", l64CellBudget, func(ctx context.Context) (bool, string) {
 		line, err := e.revokedLine()
 		if err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		if err := e.writeKnownHosts(line); err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		quiet := e.waitQuiet(ctx)
 		r := e.python(ctx)

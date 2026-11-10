@@ -18,11 +18,9 @@ func TestL44ADCSBindNamesPrivateCopies(t *testing.T) {
 	}
 	defer func(was string) { root = was }(root)
 	root = r
-	inTree := filepath.Join(r, "tests", "lab", "l44-bind-unit-fixture")
-	if err := os.MkdirAll(inTree, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(inTree) })
+	// The fixture lives in a temp directory, so a killed test leaves nothing in the repository; the copies'
+	// path is what is checked against the repository root.
+	inTree := t.TempDir()
 	c := &winCerts{brokerCertFile: filepath.Join(inTree, "broker-adcs.pem"), brokerKeyFile: filepath.Join(inTree, "broker-adcs-key.pem")}
 	for _, p := range []string{c.brokerCertFile, c.brokerKeyFile} {
 		if err := os.WriteFile(p, []byte("fixture "+filepath.Base(p)), 0o600); err != nil {
