@@ -71,7 +71,7 @@ func TestDocsPublish(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			d := repo(t)
 			c.setup(t, d)
-			got, err := decide(d, c.ref, "main")
+			got, err := decide(d, c.ref, "main", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -91,7 +91,7 @@ func TestAPrereleaseTagIsNotARelease(t *testing.T) {
 		t.Run(tag, func(t *testing.T) {
 			d := repo(t)
 			git(t, d, "tag", tag)
-			got, err := decide(d, "refs/tags/"+tag, "main")
+			got, err := decide(d, "refs/tags/"+tag, "main", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,7 +99,7 @@ func TestAPrereleaseTagIsNotARelease(t *testing.T) {
 				t.Errorf("%s: %+v; want no publish, the main banner, no version", tag, got)
 			}
 			// present in git tag -l, it does not take latest from main's deploys
-			if m, _ := decide(d, "refs/heads/main", "main"); !m.Publish || m.Version != "dev" || m.Aliases != "latest" {
+			if m, _ := decide(d, "refs/heads/main", "main", ""); !m.Publish || m.Version != "dev" || m.Aliases != "latest" {
 				t.Errorf("%s changes main's deploy: %+v", tag, m)
 			}
 		})
@@ -111,14 +111,14 @@ func TestAPrereleaseTagIsNotARelease(t *testing.T) {
 		t.Run(tag, func(t *testing.T) {
 			d := repo(t)
 			git(t, d, "tag", tag)
-			got, err := decide(d, "refs/tags/"+tag, "main")
+			got, err := decide(d, "refs/tags/"+tag, "main", "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got != want {
 				t.Errorf("%s: %+v; want %+v", tag, got, want)
 			}
-			if m, _ := decide(d, "refs/heads/main", "main"); !m.Publish || m.Version != "dev" || m.Aliases != "" {
+			if m, _ := decide(d, "refs/heads/main", "main", ""); !m.Publish || m.Version != "dev" || m.Aliases != "" {
 				t.Errorf("%s: main publishes %+v, want dev with no alias", tag, m)
 			}
 		})
@@ -153,7 +153,7 @@ func TestOnlyTheHighestPatchOfALineDeploys(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			d := repo(t)
 			tagged(t, d, c.tags...)
-			got, err := decide(d, c.ref, "main")
+			got, err := decide(d, c.ref, "main", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,7 +196,7 @@ func TestOnlyTagsOnMainCount(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			d := repo(t)
 			c.setup(t, d)
-			got, err := decide(d, c.ref, "main")
+			got, err := decide(d, c.ref, "main", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -204,6 +204,49 @@ func TestOnlyTagsOnMainCount(t *testing.T) {
 				t.Errorf("decide(%q) = %+v, want %+v", c.ref, got, c.want)
 			}
 		})
+	}
+}
+
+// A main run publishes only if its commit is still main's tip. Two quick merges M1 and M2: M2 deploys,
+// and M1's run, or a re-run of it, must not put M1's older docs back on /dev/ (or /latest/, before the
+// first release). Tags ignore -sha: their own rules already stop a lower tag.
+func TestAnOlderMainCommitDoesNotPublish(t *testing.T) {
+	d := repo(t)
+	m1 := git(t, d, "rev-parse", "HEAD")
+	git(t, d, "commit", "-q", "--allow-empty", "-m", "second")
+	m2 := git(t, d, "rev-parse", "HEAD")
+
+	got, err := decide(d, "refs/heads/main", "main", m2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (result{true, wantMain, "dev", "latest"}); got != want {
+		t.Errorf("main's tip: %+v, want %+v", got, want)
+	}
+
+	got, err = decide(d, "refs/heads/main", "main", m1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (result{false, wantMain, "", ""}); got != want {
+		t.Errorf("an older main commit: %+v, want %+v (a newer main push deploys)", got, want)
+	}
+
+	// a commit that is not in the repository is an error, not a publish
+	if got, err := decide(d, "refs/heads/main", "main", "0123456789012345678901234567890123456789"); err == nil {
+		t.Errorf("an unknown commit: %+v, want an error", got)
+	}
+
+	// tags are unchanged: -sha names the tag's commit, never main's tip, and is not compared
+	git(t, d, "tag", "v0.1.0", m1)
+	for _, sha := range []string{m1, m2, ""} {
+		got, err := decide(d, "refs/tags/v0.1.0", "main", sha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := (result{true, "This site describes port49 v0.1.0.", "0.1", "latest"}); got != want {
+			t.Errorf("tag v0.1.0 with -sha %q: %+v, want %+v", sha, got, want)
+		}
 	}
 }
 

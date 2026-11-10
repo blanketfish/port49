@@ -6,7 +6,9 @@
 // The site has one copy per version (mike, on the gh-pages branch):
 //
 //   - main publishes "dev" on every push. It also takes the "latest" alias, but only while no final
-//     release tag exists, so that /latest/ always resolves.
+//     release tag exists, so that /latest/ always resolves. With -sha, a commit that is no longer
+//     main's tip publishes nothing: a newer main push deploys, and a re-run of an older run must not
+//     put its older docs back.
 //   - a final release tag vX.Y.Z that is an ancestor of main publishes "X.Y", but only if it is the
 //     highest patch of its X.Y line: a lower tag pushed late, or a re-run of an old one, must not
 //     overwrite newer docs. It takes "latest" only if it is also the highest final tag overall.
@@ -41,7 +43,8 @@ type result struct {
 }
 
 // decide is what ref deploys. mainRef is the ref a release tag's commit must be an ancestor of.
-func decide(dir, ref, mainRef string) (result, error) {
+// sha is the commit the run builds; for main, a commit that is not mainRef's tip does not publish.
+func decide(dir, ref, mainRef, sha string) (result, error) {
 	noPublish := result{Banner: mainBanner}
 	git := func(args ...string) (string, error) {
 		cmd := exec.Command("git", args...)
@@ -89,6 +92,21 @@ func decide(dir, ref, mainRef string) (result, error) {
 	}
 	switch {
 	case ref == "refs/heads/main":
+		// a run for an older main commit, or a re-run of one, would put older docs back on dev (and on
+		// latest, before the first release): the newer main push deploys instead
+		if sha != "" {
+			commit, err := git("rev-parse", "--verify", "--end-of-options", sha+"^{commit}")
+			if err != nil {
+				return result{}, fmt.Errorf("git rev-parse %s: %w", sha, err)
+			}
+			tip, err := git("rev-parse", "--verify", "--end-of-options", mainRef+"^{commit}")
+			if err != nil {
+				return result{}, fmt.Errorf("git rev-parse %s: %w", mainRef, err)
+			}
+			if commit != tip {
+				return noPublish, nil
+			}
+		}
 		tags, err := finalTags()
 		if err != nil {
 			return result{}, err
@@ -161,14 +179,19 @@ func main() {
 	fs := flag.NewFlagSet("docspublish", flag.ContinueOnError)
 	ref := fs.String("ref", "", "the ref the workflow runs for, as $GITHUB_REF")
 	dir := fs.String("dir", ".", "the repository root")
-	mainRef := fs.String("main", "origin/main", "the ref a release tag must be on")
+	mainRef := fs.String("main", "origin/main", "the ref a release tag must be on, and main's tip")
+	sha := fs.String("sha", "", "the commit the run builds, as $GITHUB_SHA; for main, only the tip of -main publishes")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
-	r, err := decide(*dir, *ref, *mainRef)
+	r, err := decide(*dir, *ref, *mainRef, *sha)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "docspublish:", err)
 		os.Exit(1)
+	}
+	// main publishes on every push unless its commit is no longer main's tip
+	if *ref == "refs/heads/main" && !r.Publish {
+		fmt.Fprintln(os.Stderr, "docspublish: a newer main push deploys")
 	}
 	fmt.Print(format(r))
 }
