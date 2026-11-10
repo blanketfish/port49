@@ -246,7 +246,10 @@ func run() int {
 		if err := notesRewritten(e.Notes, start); err != nil {
 			return err
 		}
-		return diffNotes(notediff, e.Notes)
+		if err := diffNotes(notediff, e.Notes); err != nil {
+			return err
+		}
+		return checkVerdicts(e.ID, e.Notes)
 	}}
 	rep := r.runAll(entries)
 	printReport(rep)
@@ -293,7 +296,8 @@ func notesRewritten(notes []string, start time.Time) error {
 
 // diffNotes reports each rewritten note's changed observations (Task 3). It
 // reports and never fails on a difference: the lab is the truth, and a change
-// is for a person to read (CLAUDE.md, lab register rule 4).
+// is for a person to read (CLAUDE.md, lab register rule 4). A changed claim
+// verdict is the exception, and checkVerdicts fails it.
 func diffNotes(notediff string, notes []string) error {
 	for _, n := range notes {
 		cmd := exec.Command(notediff, "-note", n)
