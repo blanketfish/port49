@@ -77,9 +77,9 @@ certificate request, and the request must be signed by that key. A thief without
     accept the held keys longer, raise `broker.identity.jwks_max_age` and restart. The broker says each state once,
     for example:
 
-  ```text
-  identity: <issuer>: no key refreshed within broker.identity.jwks_max_age (<jwks_max_age>; the last at <time>); every token from it is refused identity_provider_unavailable until a fetch succeeds; certificate logins and live device sessions are unaffected; to accept the held keys meanwhile, raise broker.identity.jwks_max_age (up to 720h) and restart <process>
-  ```
+    ```text
+    identity: <issuer>: no key refreshed within broker.identity.jwks_max_age (<jwks_max_age>; the last at <time>); every token from it is refused identity_provider_unavailable until a fetch succeeds; certificate logins and live device sessions are unaffected; to accept the held keys meanwhile, raise broker.identity.jwks_max_age (up to 720h) and restart <process>
+    ```
 
 - `HTTPS_PROXY` and `NO_PROXY` are honoured for the provider's requests, and the start line says how each issuer is
   fetched.
