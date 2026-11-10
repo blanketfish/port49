@@ -7,7 +7,7 @@ description: "Every metric port49 exports, with its type, labels and meaning."
 
 # Metrics
 
-Every metric port49d and port49-broker export on `/metrics`, with its type, labels and help text, read from the registered collectors. Sections group the series by the second word of the name. No metric carries a device's identity as a label. The last column links the shipped [alerts](alerts.md) whose expression uses the series.
+Every metric port49d and port49-broker export on `/metrics`, with its type, labels and help text. The list is read from the registered collectors. Each section holds the series whose names share a second word, such as `accounting` in `port49_accounting_spool_depth`. No metric carries a device's identity as a label. The last column links each shipped [alert](alerts.md) whose expression uses the series.
 
 ## accounting
 

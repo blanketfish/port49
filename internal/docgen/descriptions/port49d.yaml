@@ -2,7 +2,22 @@
 # comes from the loader (internal/config); `make docs` writes the page and the drift test fails
 # when a key has no entry. A path ending `.[]` is an item of a list and `<name>` is a name you choose.
 _description: "Every key of port49d.yaml and port49-broker.yaml, with its type, default, bound and what a change needs."
-_intro: "port49d reads `port49d.yaml` once, at start, and `port49-broker.yaml` is the same schema read by `port49-broker`. A change takes effect at the next restart, with these exceptions, which an entry marks: the policy file and the inventory file (re-read every `policy_watch_interval` and at SIGHUP), `inventory.max_removed_percent` and `inventory.service.verify_key_files` (SIGHUP), and the `tls_listener` certificate, key and CA files (every `reload_interval` and at SIGHUP). The file that a key version's `secret_ref` names is read once, when the version comes into force (at start, or in a policy reload that adds it); later reads, at SIGHUP and every 30s, only report a file that has changed or can no longer be read, and port49d keeps the secret it read (a changed secret goes in a new file under a new version). An unknown key, a second YAML document and a key the loader has removed refuse the start; the error names the line, never the value. Durations are written with a unit (`30s`, `15m`, `12h`); a bare number is refused, except where an entry says `0` is allowed. Paths are read as written: a relative path resolves against port49d's working directory, not the file's directory."
+_intro: |
+  port49d reads `port49d.yaml` once, at start. `port49-broker.yaml` is the same schema, read by `port49-broker`.
+
+  **A change takes effect at the next restart**, with these exceptions, which an entry marks:
+
+  - the policy file and the inventory file, re-read every `policy_watch_interval` and at SIGHUP
+  - `inventory.max_removed_percent` and `inventory.service.verify_key_files`, at SIGHUP
+  - the `tls_listener` certificate, key and CA files, every `reload_interval` and at SIGHUP
+
+  **The file that a key version's `secret_ref` names is read once**, when the version comes into force: at start, or in a policy reload that adds it. Later reads, at SIGHUP and every 30s, only report a file that has changed or can no longer be read. port49d keeps the secret it read, so a changed secret goes in a new file under a new version.
+
+  An unknown key, a second YAML document and a key the loader has removed refuse the start. The error names the line, never the value.
+
+  Durations are written with a unit (`30s`, `15m`, `12h`). A bare number is refused, except where an entry says `0` is allowed.
+
+  Paths are read as written: a relative path resolves against port49d's working directory, not the file's directory.
 
 listen: "Address of the TACACS+ listener (RFC 8907), `host:port`. Default `:49`. The value `none` turns the listener off, which needs `tls_listener`: a file with neither listener is refused. Needs a restart."
 metrics_listen: "Address of the metrics, `/healthz` and `/readyz` listener. Default `:9049`. Needs a restart."

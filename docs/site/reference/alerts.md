@@ -7,41 +7,53 @@ description: "Every shipped alert rule: its severity, its expression and why its
 
 # Alerts
 
-`port49.rules.yaml` holds one Prometheus alerting rule for each alarm the design and the roadmap
-state. Load it into Prometheus (`rule_files:`), or set `prometheusRule.enabled: true` on the Helm
-chart, which renders the same file as a Prometheus Operator `PrometheusRule`
-(`deploy/helm/port49/files/port49.rules.yaml` is a byte copy, because Helm cannot read outside the
-chart; `tests/alerts` fails if the two differ). `make alerts-check` runs `promtool check rules` and
-`promtool test rules` on it, and `go test ./tests/alerts/` checks that every metric an expression
-names is one port49 registers.
+`port49.rules.yaml` holds one Prometheus alerting rule for each alarm port49 defines. Load it in
+one of two ways:
 
-Two severities. `page` is a fault that is refusing devices or losing records now. `ticket` is one
-that costs nothing yet, or that a person fixes in working hours. Route on the `severity` label.
+- into Prometheus, with `rule_files:`
+- through the Helm chart, with `prometheusRule.enabled: true`. The chart renders the same file as a
+  Prometheus Operator `PrometheusRule`. `deploy/helm/port49/files/port49.rules.yaml` is a byte copy,
+  because Helm cannot read outside the chart, and `tests/alerts` fails if the two differ.
 
-**The job names are the rules' parameter.** The two target rules read Prometheus's own `up` series for
-`job="port49d"` and `job="port49-broker"`. The chart's PodMonitors (rendered with
-`prometheusRule.enabled`) set those names; if you scrape another way, give the jobs those names or
-edit the rules. Without them `port49_target_absent` and `port49_broker_target_absent` fire, which is the
-point of them. The absent rules are fleet-wide: `absent()` stays quiet while any scrape of that job exists,
-so use one Prometheus per port49 fleet, or add a namespace matcher to the two expressions.
+`make alerts-check` runs `promtool check rules` and `promtool test rules` on it. `go test
+./tests/alerts/` checks that every metric an expression names is one port49 registers.
 
-No expression names a device, and none groups by one: the series carry no device identity (design
-§15), and the decision log answers "which devices". The labels used are bounded: `instance`,
+There are two severities; route on the `severity` label.
+
+- `page`: a fault that is refusing devices or losing records now.
+- `ticket`: one that costs nothing yet, or that a person fixes in working hours.
+
+**The job names are the rules' parameter.** Three rules read Prometheus's own `up` series for
+`job="port49d"` and `job="port49-broker"`: `port49_target_down`, `port49_target_absent` and
+`port49_broker_target_absent`. The chart's PodMonitors (rendered with `prometheusRule.enabled`) set
+those names. If you scrape another way, give the jobs those names or edit the rules. Without them,
+`port49_target_absent` and `port49_broker_target_absent` fire, which is the point of them.
+
+The absent rules are fleet-wide: `absent()` stays quiet while any scrape of that job exists. So use
+one Prometheus per port49 fleet, or add a namespace matcher to the two expressions.
+
+No expression names a device, and none groups by one. The series carry no device identity, and the
+decision log answers "which devices". The labels used are bounded: `instance`,
 `key_ref`, `version`, `server`, `issuer`, `outcome`, `feed`, `pool`, `component`.
 
 Each alert below carries a `runbook_url` annotation that points at its section here. The metrics each rule reads are in the [metrics reference](metrics.md). An alert that has just fired: start at the [3am index](../operate/troubleshooting/index.md#an-alert-fired), which gives a short do and don't for each family of alerts.
 
 ## Thresholds and defaults
 
-Each rule is a statement from the design or the roadmap and the rule that answers it. The thresholds
-that follow a default (`close_after` 5, `broker.refresh_interval` 5m, `jwks_max_age` 24h,
-`expiry_warning_fraction` 0.33, `staleness_ceiling` 4h) are those defaults: edit the rule if you set another.
-The `hold_ttl` rules are the exception: they use multiples of the 15s `hold_ttl` default that hold at any
-allowed setting (10s to 1m), so they need no edit.
-**Edit in the safe direction.** A setting lowered below the default can silence its alarm: with
-`close_after: 3` the page on `port49_store_health_failures >= 5` never fires, and with
-`jwks_max_age: 6h` the 12h keys rule fires after tokens are already refused. Recompute each such
-threshold when you change the setting it follows.
+Each row pairs a statement from the design or the roadmap with the rule that answers it.
+
+**A threshold that follows a setting assumes that setting's default.** The defaults are `close_after`
+5, `broker.refresh_interval` 5m, `jwks_max_age` 24h, `expiry_warning_fraction` 0.33 and
+`staleness_ceiling` 4h. Edit the rule if you set another. The `hold_ttl` rules are the exception: they
+use multiples of the 15s `hold_ttl` default that hold at any allowed setting (10s to 1m), so they need
+no edit.
+
+**Edit in the safe direction.** A setting lowered below the default can silence its alarm:
+
+- With `close_after: 3`, the page on `port49_store_health_failures >= 5` never fires.
+- With `jwks_max_age: 6h`, the 12h keys rule fires after tokens are already refused.
+
+Recompute each such threshold when you change the setting it follows.
 
 ## Notes
 

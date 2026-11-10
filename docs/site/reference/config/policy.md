@@ -7,17 +7,18 @@ description: "Every key of the policy file: platform set, platforms, privilege l
 
 # Policy file reference
 
-The policy file says who may do what on which devices. It is one YAML document; an unknown key, a
-second document (a `---` separator) or a key this build does not read is refused, and the error
-names the key or the line. `port49 policy test` loads it the way `port49d` does and runs its
-`tests:`.
+The policy file says who may do what on which devices. `port49 policy test` loads it the way
+`port49d` does and runs its `tests:`.
+
+It is one YAML document. An unknown key, a second document (a `---` separator) or a key this build
+does not read is refused, and the error names the key or the line.
 
 Paths below use `[]` for an item of a list and `<name>` for a key you choose. Every table row is a
 leaf; a key whose value is a block is documented by the keys under it. Durations need a unit, for
 example `60s`.
 
-Rules are written as words, `*` for one word, `**` for any number and `/regex/` or `@class` for a
-term; see the policy guide for the grammar. Rules are never quoted in an error: a refusal names the
+Rules are written as words: `*` for one word, `**` for any number, and `/regex/` or `@class` for a
+term. See the policy guide for the grammar. Rules are never quoted in an error: a refusal names the
 list and the position.
 
 ## Top-level keys
