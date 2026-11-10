@@ -55,8 +55,8 @@ Spec §15 lists every claim about device behavior with an ID (L1–L12). Rules:
 ## Git
 
 - Conventional Commits. Branch per plan: `feature/<plan-slug>` (plan 1 is
-  `feature/protocol-core`). Never commit code directly to `main`; docs-only changes to
-  `main` are fine while the design is in flux.
+  `feature/protocol-core`). Every change to `main`, docs included, lands through a pull
+  request with green CI; the `main` ruleset enforces it.
 - Small, atomic commits, one per plan task step that says "Commit".
 - Commit messages end with:
   ```
