@@ -219,7 +219,11 @@ type Change struct {
 	// `<any other argument>`, and one carrying whitespace is quoted. Vector
 	// is the command exactly as probed: an argument may carry whitespace,
 	// which a deny reads trimmed and a permit does not (spec §3).
-	Command  string
+	Command string
+	// Shown is Vector with every argument made from a value redaction hides
+	// printed Redacted (probeShown): what Command is built from, element by
+	// element, for a printer that places the placeholder itself.
+	Shown    []string
 	Vector   []string
 	Old, New engine.Outcome
 	// PipeEntry is the new version's allowlist entry that permits the
@@ -879,7 +883,8 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 // change records one command whose verdict moved, and whether it is gated.
 func (c *comparison) change(subject string, devices []string, at time.Time, v []string, from, to engine.Outcome,
 	is side, oldRefused string) {
-	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(probeShown(v, c.src, c.secrets)), Vector: v, Old: from, New: to,
+	shown := probeShown(v, c.src, c.secrets)
+	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(shown), Shown: shown, Vector: v, Old: from, New: to,
 		OldRefused: oldRefused}
 	if to.Permit && !from.Permit {
 		switch {
@@ -1234,17 +1239,27 @@ func probeShown(v []string, src map[string][]string, secrets []string) []string 
 	return out
 }
 
+// OtherArgumentText is how a diff line names engine.OtherArgument: port49's
+// own text, never a secret.
+const OtherArgumentText = "<any other argument>"
+
+// DisplayArg is one literal probe argument as a person reads it: quoted when
+// it is empty or carries whitespace.
+func DisplayArg(a string) string {
+	if a == "" || strings.TrimSpace(a) != a || strings.ContainsAny(a, " \t") {
+		return strconv.Quote(a)
+	}
+	return a
+}
+
 // display is a probe vector as a person reads it.
 func display(v []string) string {
 	out := make([]string, len(v))
 	for i, a := range v {
-		switch {
-		case a == engine.OtherArgument:
-			out[i] = "<any other argument>"
-		case a == "" || strings.TrimSpace(a) != a || strings.ContainsAny(a, " \t"):
-			out[i] = strconv.Quote(a)
-		default:
-			out[i] = a
+		if a == engine.OtherArgument {
+			out[i] = OtherArgumentText
+		} else {
+			out[i] = DisplayArg(a)
 		}
 	}
 	return strings.Join(out, " ")
