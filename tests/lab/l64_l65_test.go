@@ -568,6 +568,9 @@ func l64Ended(waitErr, ctxErr error, held bool, name string) (exit int, err erro
 	return exit, err
 }
 
+// errL64Start marks a command that never started: its error is the harness's, not the device's.
+var errL64Start = errors.New("the command did not start")
+
 // l64BeforeOrphanKill is called with the command's pid just before its process group is killed for holding the
 // pipes; a test sets it to see the leader's state then.
 var l64BeforeOrphanKill = func(pid int) {}
@@ -583,19 +586,19 @@ func l64RunGrace(ctx context.Context, grace time.Duration, env []string, dir, na
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	so, err := newL64Pipe()
 	if err != nil {
-		return "", "", 0, err
+		return "", "", 0, fmt.Errorf("%w: %w", errL64Start, err)
 	}
 	se, err := newL64Pipe()
 	if err != nil {
 		_, _ = so.r.Close(), so.w.Close()
-		return "", "", 0, err
+		return "", "", 0, fmt.Errorf("%w: %w", errL64Start, err)
 	}
 	cmd.Stdout, cmd.Stderr = so.w, se.w
 	startErr := cmd.Start()
 	_, _ = so.w.Close(), se.w.Close() // the child holds its own copies
 	if startErr != nil {
 		_, _ = so.r.Close(), se.r.Close()
-		return "", "", 0, startErr
+		return "", "", 0, fmt.Errorf("%w: %w", errL64Start, startErr)
 	}
 	for _, p := range []*l64Pipe{so, se} {
 		go func() {
@@ -811,7 +814,39 @@ func (e *l64Env) portSSH(ctx context.Context) l64SSHRun {
 	r.packets = e.tacacsIn(from, time.Now())
 	r.read = l64ReadSSH(r.stderr)
 	r.other, r.redeems = l64OtherRecords(r.recs), l64Redeems(r.recs)
+	e.noteSSH(r)
 	return r
+}
+
+// l64SSHFault says why a `port49 ssh` run never reached the device, or "" when it did: the command did not
+// start, or it ended non-zero with no ssh -v output at all (ssh never ran: the broker was unreachable, no agent,
+// a setup error of port49's own). A run ssh made, a refusal included, is the device's verdict. A deadline is
+// the cell's TIMEOUT, not a fault.
+func l64SSHFault(r l64SSHRun) string {
+	switch {
+	case errors.Is(r.err, context.DeadlineExceeded):
+		return ""
+	case errors.Is(r.err, errL64Start):
+		return "port49 ssh did not start (" + r.err.Error() + ")"
+	case r.exit != 0 && !strings.Contains(r.stderr, "debug1:"):
+		return fmt.Sprintf("port49 ssh ended with exit %d before ssh ran (no ssh -v output), so the device was never reached", r.exit)
+	}
+	return ""
+}
+
+// noteSSH marks the running cell INVALID when its port49 ssh run was a fault before the device.
+func (e *l64Env) noteSSH(r l64SSHRun) {
+	if why := l64SSHFault(r); why != "" && e.invalid == "" {
+		e.invalid = why
+	}
+}
+
+// setupFault is a cell's setup failing: nothing was measured, so the cell is INVALID and not FAIL.
+func (e *l64Env) setupFault(msg string) (bool, string) {
+	if e.invalid == "" {
+		e.invalid = msg
+	}
+	return false, msg
 }
 
 type l64PyRun struct {
@@ -1572,7 +1607,7 @@ func runL64L65(e *l64Env, versions string) {
 func (e *l64Env) replaced(id string, other bool, fn func(ctx context.Context, typ string) (bool, string)) {
 	e.cell(id, l64CellBudget, func(ctx context.Context) (bool, string) {
 		if e.filedType == "" {
-			return false, "L64a filed no key, so there is no filed type to replace"
+			return e.setupFault("L64a filed no key, so there is no filed type to replace")
 		}
 		typ := e.filedType
 		if other {
@@ -1580,10 +1615,10 @@ func (e *l64Env) replaced(id string, other bool, fn func(ctx context.Context, ty
 		}
 		blob, err := e.freshKey(ctx, typ)
 		if err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		if err := e.writeKnownHosts(fmt.Sprintf("%s %s %s\n", e.node, typ, blob)); err != nil {
-			return false, err.Error()
+			return e.setupFault(err.Error())
 		}
 		quiet := e.waitQuiet(ctx)
 		pass, obs := fn(ctx, typ)
