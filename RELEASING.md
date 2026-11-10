@@ -39,11 +39,13 @@ PEP 440 version. The docs site states the same on its Versions page.
    `docs.yml`'s `deploy` job runs [mike](https://github.com/jimporter/mike), which keeps one built
    copy of the site per version on that branch, and GitHub's own `pages-build-deployment` publishes
    it: there is no `github-pages` environment and no Pages token. Outside `release.yml`, the `deploy`
-   job is the only workflow job with `contents: write`. It pushes only `gh-pages`, with one explicit
-   `git push` (the build runs without the token), and it runs only from a public repository. It
-   decides the version and aliases itself, after fetching the tags, and retries up to 3 times if
-   another deploy moved `gh-pages` first. Keep the `main` ruleset off `gh-pages`, or the bot's push
-   is refused. The job also commits a root `404.html` that sends an old `/port49/<page>` link to
+   job is the only workflow job with `contents: write`. It runs only from a public repository, in
+   two steps that never share the token: `site` fetches `gh-pages` and then the tags, decides the
+   version and aliases itself, builds with mike and commits locally, with no token in its
+   environment; `push` holds the token, runs only git, and pushes `gh-pages` (never forced) from a
+   clean bare repository with hooks and the runner's git configuration off. If another deploy moved
+   `gh-pages` first, `push` fails with "another deploy moved gh-pages; re-run this job": re-run it,
+   there is no automatic retry. Keep the `main` ruleset off `gh-pages`, or the bot's push is refused. The job also commits a root `404.html` that sends an old `/port49/<page>` link to
    `/port49/latest/<page>`, and a root `llms.txt` copied from `latest`.
 8. **Required check.** Add `docs` (the build job in `docs.yml`, named `docs`) to the required
    status checks of the `main` ruleset. What deploys: every push to `main` replaces `/dev/`; a final

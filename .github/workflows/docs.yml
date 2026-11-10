@@ -48,16 +48,23 @@ jobs:
 
   # One copy of the site per version lives on the gh-pages branch (mike), and Pages serves that
   # branch through GitHub's own pages-build job, so this job needs no Pages permission, no OIDC
-  # token and no environment. It is the one job that writes the repository: `contents: write` exists
-  # only for the single `git push ... gh-pages:gh-pages` below. The checkout keeps no credentials, and
-  # the token is removed (`env -u GH_TOKEN`) from every process that builds, so the docs toolchain
-  # never sees it.
+  # token and no environment. It is the one job that writes the repository, and it has two parts that
+  # never share a token:
+  #   - `site` decides, builds with mike and commits to the local gh-pages branch. The docs toolchain
+  #     (pip-installed code, mkdocs, mike) runs here, and no GH_TOKEN is in this step's environment.
+  #     Removing a variable from a child's environment would not be enough: a child can read its
+  #     parent's, and can plant git hooks or config that a later git command would run.
+  #   - `push` holds the token and runs only git. It pushes from a clean bare repository fetched from
+  #     the workspace, with hooks and the runner's git configuration off, so nothing the toolchain
+  #     wrote in the workspace runs with the token. It pushes gh-pages, never forced.
   #
   # Two deploys can overlap, a tag's and the main push after it, so nothing decided earlier is trusted:
-  # the version and aliases come from docspublish run here, after the tags are fetched, not from the
-  # build job (whose answer can be stale by now), and the whole attempt (fetch gh-pages, decide, build,
-  # push) is repeated up to 3 times when the push loses the race for the branch. The group is per ref:
-  # one group for all refs would let a newer pending main deploy cancel a pending tag deploy.
+  # `site` takes the version and aliases from docspublish run here, not from the build job (whose
+  # answer can be stale by now), after fetching gh-pages and then the tags, so every tag whose deploy is
+  # already on the gh-pages it saw is in the tag list it decides from. A deploy that still loses the
+  # race for the branch fails red ("another deploy moved gh-pages; re-run this job"): it is not retried,
+  # because a retry would have to run the toolchain again beside the token. The group is per ref: one
+  # group for all refs would let a newer pending main deploy cancel a pending tag deploy.
   deploy:
     needs: build
     if: needs.build.outputs.publish == 'true' && github.event_name == 'push' && github.event.repository.private == false
@@ -83,42 +90,50 @@ jobs:
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      - env:
-          GH_TOKEN: ${{ github.token }}
+      - id: site
+        env:
           NO_MKDOCS_2_WARNING: '1'
         run: |
           set -eu
+          # gh-pages first, then the tags: a tag whose deploy is already in the gh-pages fetched here
+          # was pushed before this fetch of tags, so it is in the list docspublish decides from
+          git fetch --force origin '+refs/heads/gh-pages:refs/heads/gh-pages' || echo "no gh-pages branch yet"
+          git fetch --tags --force origin '+refs/heads/main:refs/remotes/origin/main'
+          out=$(go run ./tests/ci/cmd/docspublish -ref "$GITHUB_REF")
+          publish=$(printf '%s\n' "$out" | sed -n 's/^publish=//p')
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          if [ "$publish" != true ]; then
+            echo "docspublish: nothing to publish for $GITHUB_REF"
+            exit 0
+          fi
+          banner=$(printf '%s\n' "$out" | sed -n 's/^banner=//p')
+          version=$(printf '%s\n' "$out" | sed -n 's/^version=//p')
+          aliases=$(printf '%s\n' "$out" | sed -n 's/^aliases=//p')
+          echo "deploying $version with aliases: $aliases"
+          PORT49_DOCS_BANNER="$banner" mike deploy --update-aliases --branch gh-pages --remote origin "$version" $aliases
+          # the site root redirects to latest, so a link to /port49/latest/... is the stable deep link
+          mike set-default --branch gh-pages --remote origin latest
+          # the root 404 sends pre-versioning links to latest; the root llms.txt is latest's
           wt="$RUNNER_TEMP/gh-pages"
-          for attempt in 1 2 3; do
-            git worktree remove --force "$wt" 2>/dev/null || true
-            git fetch --tags --force origin '+refs/heads/main:refs/remotes/origin/main'
-            git branch -D gh-pages 2>/dev/null || true
-            git fetch --force origin '+refs/heads/gh-pages:refs/heads/gh-pages' || echo "no gh-pages branch yet"
-            out=$(env -u GH_TOKEN go run ./tests/ci/cmd/docspublish -ref "$GITHUB_REF")
-            publish=$(printf '%s\n' "$out" | sed -n 's/^publish=//p')
-            if [ "$publish" != true ]; then
-              echo "docspublish: nothing to publish for $GITHUB_REF any more"
-              exit 0
-            fi
-            banner=$(printf '%s\n' "$out" | sed -n 's/^banner=//p')
-            version=$(printf '%s\n' "$out" | sed -n 's/^version=//p')
-            aliases=$(printf '%s\n' "$out" | sed -n 's/^aliases=//p')
-            echo "deploying $version with aliases: $aliases"
-            env -u GH_TOKEN PORT49_DOCS_BANNER="$banner" mike deploy --update-aliases --branch gh-pages --remote origin "$version" $aliases
-            # the site root redirects to latest, so a link to /port49/latest/... is the stable deep link
-            env -u GH_TOKEN mike set-default --branch gh-pages --remote origin latest
-            # the root 404 sends pre-versioning links to latest; the root llms.txt is latest's
-            git worktree add "$wt" gh-pages
-            cp .github/docs-404.html "$wt/404.html"
-            cp "$wt/latest/llms.txt" "$wt/llms.txt"
-            git -C "$wt" add 404.html llms.txt
-            git -C "$wt" diff --cached --quiet || git -C "$wt" commit -q -m "docs: root 404 and llms.txt"
-            git worktree remove --force "$wt"
-            if git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages:gh-pages; then
-              exit 0
-            fi
-            echo "the push of gh-pages failed (attempt $attempt of 3)"
-            sleep $((attempt * 5))
-          done
-          echo "gh-pages was not published after 3 attempts" >&2
-          exit 1
+          git worktree add "$wt" gh-pages
+          cp .github/docs-404.html "$wt/404.html"
+          cp "$wt/latest/llms.txt" "$wt/llms.txt"
+          git -C "$wt" add 404.html llms.txt
+          git -C "$wt" diff --cached --quiet || git -C "$wt" commit -q -m "docs: root 404 and llms.txt"
+          git worktree remove --force "$wt"
+      - id: push
+        if: steps.site.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          # only git runs here, from a clean bare repository: no workspace hooks or config, and none of
+          # the runner's, can run with the token
+          export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+          t=$(mktemp -d)
+          git init -q --bare "$t"
+          git -C "$t" fetch -q "$GITHUB_WORKSPACE" gh-pages:gh-pages
+          if ! git -C "$t" -c core.hooksPath=/dev/null -c credential.helper= push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages:gh-pages; then
+            echo "another deploy moved gh-pages; re-run this job" >&2
+            exit 1
+          fi

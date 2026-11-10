@@ -30,6 +30,10 @@ func TestReleasingScopesTheDeployJobsWrite(t *testing.T) {
 	if strings.Contains(s, "is the only\n   workflow job with `contents: write`") || !strings.Contains(s, "Outside `release.yml`, the `deploy`") {
 		t.Error("RELEASING.md must say the deploy job is the only job with contents: write outside release.yml")
 	}
+	if strings.Contains(s, "retries up to 3") || !strings.Contains(s, "re-run it,\n   there is no automatic retry") ||
+		!strings.Contains(s, "another deploy moved gh-pages; re-run this job") {
+		t.Error("RELEASING.md does not say a lost race fails red and the job is re-run")
+	}
 	if !strings.Contains(s, "Only final\n   tags that are on `main` count") {
 		t.Error("RELEASING.md does not say only final tags on main count")
 	}
