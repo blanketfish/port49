@@ -20,10 +20,9 @@ wrong, the first question is which of the two you are looking at.
 
 ## The broker
 
-The broker is the HTTPS service that checks who a person is and decides what they may reach. On each
-request it:
+The broker is the HTTPS service that checks who a person is and decides what they may reach. It:
 
-- resolves group membership from the directory at that moment
+- resolves group membership from the directory at the moment of each request
 - evaluates policy
 - mints the tokens `port49d` later redeems
 

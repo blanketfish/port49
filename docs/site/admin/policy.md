@@ -278,9 +278,9 @@ must be in the new file and must pass.
 |---|---|
 | `EXPANDS` | a command test with `expect: permit` on a command the change frees, on a device of that group. One test clears every command shape of the same deny and permit; in the example below, one test clears three lines. |
 | `RAISES` | a session test asserting the new value. The diff prints the test to add. |
-| `REGEX-CONSTRAINED` | a command test with `expect: permit` on a command the changed rule decides. A deny rewritten wider has no command to test; it takes an [`acknowledge:`](#acknowledge) entry. |
+| `REGEX-CONSTRAINED` | a passing command test with `expect: permit` on a command the changed rule decides, or, for a deny, on a command it used to refuse. A wider deny whose freed commands you cannot name takes an [`acknowledge:`](#acknowledge) entry. |
 | `API` | a session test whose `api:` lists the subject's whole new list. The diff prints the test to add. |
-| `PRINCIPAL`, `USERNAME` | a session test naming the principal (`principal:`). |
+| `PRINCIPAL`, `USERNAME` | a session test naming the principal (`principal:`); a test that asserts only `api` does not count. A `USERNAME` change is cleared by a test naming any one of the subject's principals. A `PRINCIPAL` change whose new subject gains API rights also needs `api:` with the subject's whole list. |
 | `per_login_mfa_weakened` | a session test with `per_login_mfa:` asserting the new requirement, which is **new or changed** against the old file. A test carried over unchanged does not count. |
 | `SUBJECT` | a session test naming the subject. |
 

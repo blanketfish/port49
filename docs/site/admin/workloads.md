@@ -34,8 +34,8 @@ Four rules carry the design:
    Anyone who can get that CA to sign a certificate with a SPIFFE ID inside those domains is that workload.
 2. **Give each host its own provisioner**, with the SPIFFE ID fixed in the provisioner's template (`uris`), so a
    host can only ever obtain its own name. A shared provisioner lets any enrolled host ask for another's.
-3. **The certificate must name the CA's CRL.** step-ca's CRL carries a critical issuing distribution point, so
-   port49 applies it only to a certificate whose CRL distribution points name it exactly. A certificate without
+3. **The certificate must name the CA's CRL.** port49 applies step-ca's CRL, which carries a critical issuing
+   distribution point, only to a certificate whose CRL distribution points name it exactly. A certificate without
    that name is undecided, and the broker refuses it with **503 `certificate_status_unavailable`** (under
    `broker.certificate_status.on_unavailable: refuse`, the default; `allow` would admit it and say so).
 

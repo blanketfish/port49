@@ -294,7 +294,7 @@ The policy file on disk was refused or will not settle; an older policy is servi
 port49_policy_file_refused == 1
 ```
 
-**Source:** A policy file on disk that is refused or will not settle, from `port49_policy_reloads_total{outcome}`
+**Source:** A policy file on disk that is refused or will not settle: `port49_policy_file_refused == 1`
 
 **Why this threshold:** An edit in progress is refused for seconds; five minutes is a file that stayed wrong.
 

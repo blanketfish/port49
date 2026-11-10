@@ -189,7 +189,8 @@ a stop: do not go on until the check passes.
     If the store was restored without `--bump-revision` anyway, also restart every port49d only after step 5's
     first runner has said its put-back line. Two things go wrong otherwise:
 
-    - a port49d restarted before it loads the restored marks, and enforces none the restore lost;
+    - a port49d restarted before then loads the restored marks, so it enforces none of the revocations the
+      restore lost;
     - a port49d started after the restore seals below what a port49d that ran across it knows, so its
       logins are denied `store_unavailable` until that process writes at the key.
 
