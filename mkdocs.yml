@@ -12,14 +12,15 @@ strict: true
 
 # Listing a plugin replaces the default list, so search stays named. Every version's canonical link names
 # /latest/, so a search engine indexes one copy of a page, not one per release; Material draws the
-# version dropdown (extra.version below), so mike's own selector is off.
+# version dropdown (extra.version below).
 plugins:
   - search
   - mike:
       canonical_version: latest
       # latest is a real copy of the release it names, not a symlink, so it is served the same on any host
       alias_type: copy
-      version_selector: false
+      # version_selector stays at its default (true): Material's base.html draws its dropdown only when
+      # the mike plugin's selector is on, and mike adds no selector of its own for the material theme.
 
 theme:
   name: material
