@@ -34,13 +34,15 @@ Four rules carry the design:
    Anyone who can get that CA to sign a certificate with a SPIFFE ID inside those domains is that workload.
 2. **Give each host its own provisioner**, with the SPIFFE ID fixed in the provisioner's template (`uris`), so a
    host can only ever obtain its own name. A shared provisioner lets any enrolled host ask for another's.
-3. **The certificate must name the CA's CRL.** port49 applies step-ca's CRL, which carries a critical issuing
-   distribution point, only to a certificate whose CRL distribution points name it exactly. A certificate without
+3. **The certificate must name the CA's CRL.** step-ca's CRL carries a critical issuing distribution point, so
+   port49 applies it only to a certificate whose CRL distribution points name it exactly. A certificate without
    that name is undecided, and the broker refuses it with **503 `certificate_status_unavailable`** (under
-   `broker.certificate_status.on_unavailable: refuse`, the default; `allow` would admit it and say so). The template
-   below adds the extension. Replace its URL with the name your CA's CRL carries (`crl.idpURL`
-   when set, otherwise `https://<the first of ca.json's dnsNames>/1.0/crl`) and check it with
-   `step crl inspect`. This was measured on step-ca ([L48](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md)).
+   `broker.certificate_status.on_unavailable: refuse`, the default; `allow` would admit it and say so).
+
+    The template below adds the extension. Replace its URL with the name your CA's CRL carries (`crl.idpURL`
+    when set, otherwise `https://<the first of ca.json's dnsNames>/1.0/crl`) and check it with
+    `step crl inspect`. This was measured on step-ca ([L48](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md)).
+
 4. **For an immediate stop, use `port49 revoke`** ([Revocation](revocation.md)) rather than waiting for the CA's CRL
    to be republished and read.
 
@@ -156,10 +158,12 @@ and on Samba `dsdb_json_audit` at level 5. port49 prescribes no deny ACL; the me
 [L50 note for Samba](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L50-samba_ad.md).
 
 **A person's entry is never a workload.** An entry that holds a SPIFFE ID in `attribute` is refused as a person, and
-the reverse. Still, writing a SPIFFE ID onto a person's entry takes effect at the next directory refresh, whereas
-`port49 revoke --principal user:<email>` is immediate; until the refresh the entry could serve both domains. Only a
-directory administrator can open that window, which is the same person who could add the user to any group.
-Revoke the person, then fix the entry ([Revocation](revocation.md)).
+the reverse.
+
+There is one window. Writing a SPIFFE ID onto a person's entry takes effect at the next directory refresh, whereas
+`port49 revoke --principal user:<email>` is immediate, so until the refresh the entry could serve both domains.
+Only a directory administrator can open that window, and that is the same person who could add the user to any
+group. If it happens, revoke the person, then fix the entry ([Revocation](revocation.md)).
 
 The directory itself is configured under `broker.directory`; see
 [Identity providers](identity-providers.md#the-directory).
