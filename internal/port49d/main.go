@@ -1742,7 +1742,7 @@ type readiness struct{ why atomic.Pointer[string] }
 const (
 	readyStarting = "starting: the TACACS+ listener is not open yet"
 	readyWaiting  = "waiting for a first bundle from the inventory service"
-	readyStore    = "waiting for the store: the TACACS+ listener stays closed until etcd answers (plan 7d)"
+	readyStore    = "waiting for the store: the TACACS+ listener stays closed until etcd answers"
 	readyDraining = "draining: port49d is shutting down, and the TACACS+ listener is closed or closing"
 	readyServing  = "serving"
 )

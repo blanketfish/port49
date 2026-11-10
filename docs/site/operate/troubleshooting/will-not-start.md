@@ -98,8 +98,8 @@ that replaces the task, and a Compose `depends_on` with `condition: service_heal
 `docker compose ps`, a load balancer's member check.
 
 The reason is the 3am case. Whenever port49d waits for its store it keeps its listener closed, and
-`/readyz` answers `503 waiting for the store: the TACACS+ listener stays closed until etcd answers (plan
-7d)`. Two cases differ in how long it waits:
+`/readyz` answers `503 waiting for the store: the TACACS+ listener stays closed until etcd answers`.
+Two cases differ in how long it waits:
 
 - **A store lost while port49d runs.** It waits with no limit and comes back by itself when etcd does.
   Devices find TCP 49 refused and fall to their local method meanwhile.
