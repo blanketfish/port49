@@ -32,10 +32,13 @@ scrape_configs:
       - targets: ["<broker-host>:9050"]
 ```
 
-On Helm, `prometheusRule.enabled: true` renders the rules as a `PrometheusRule` and a `PodMonitor` for
-each workload, with `job` set to `port49d` and `port49-broker`. It needs the Prometheus Operator's CRDs,
-and `prometheusRule.labels` must be the labels your Prometheus selects on; the same labels go on the
-monitors. If your Prometheus selects PodMonitors on other labels, set them on the monitors yourself.
+On Helm, `prometheusRule.enabled: true` renders the rules as a `PrometheusRule`, and a `PodMonitor` for
+each workload with `job` set to `port49d` and `port49-broker`.
+
+- It needs the Prometheus Operator's CRDs.
+- `prometheusRule.labels` must be the labels your Prometheus selects on. The same labels go on the
+  monitors.
+- If your Prometheus selects PodMonitors on other labels, set them on the monitors yourself.
 
 The metrics ports listen on every address of the host or pod and need no credential. Restrict them to
 your Prometheus (and, on Kubernetes, the kubelet, whose probes use the same port). The chart renders no
@@ -66,8 +69,10 @@ The rules assume the defaults of the settings they watch (`close_after`, `refres
 ## The disk etcd and the spool need
 
 etcd needs a disk with sustained WAL fsync p99 under 10 ms. Datacenter NVMe and cloud SSD volumes
-qualify; a consumer QLC drive does not. A drive that stalls pushes port49's store calls past the 500 ms
-call timeout in bursts, and a store call that times out is a token login answered `store_unavailable`.
+qualify; a consumer QLC drive does not.
+
+A drive that stalls pushes port49's store calls past the 500 ms call timeout in bursts. A store call
+that times out is a token login answered `store_unavailable`.
 
 Two alerts watch for it:
 
@@ -76,12 +81,14 @@ Two alerts watch for it:
   `etcd_disk_backend_commit_duration_seconds` is over 25 ms. It reads etcd's own metrics, so scrape etcd.
 - `port49_accounting_spool_disk_slow`
   ([reference](../reference/alerts.md#port49_accounting_spool_disk_slow)) fires after 10 minutes when the
-  p99 of `port49_accounting_spool_sync_seconds` is over 10 ms. port49d acknowledges an accounting record
-  only after it is synced to the spool, so a slow disk under `accounting.spool_path` slows every
-  accounting reply, and a device may see accounting fail. The 10 ms is port49's own threshold, not an
-  etcd figure.
+  p99 of `port49_accounting_spool_sync_seconds` is over 10 ms. The 10 ms is port49's own threshold, not
+  an etcd figure.
 
-The sizing defaults were measured on a cloud SSD volume that passed every load cell; the same run on a
+  It matters because port49d acknowledges an accounting record only after the record is synced to the
+  spool. A slow disk under `accounting.spool_path` slows every accounting reply, and a device may see
+  accounting fail.
+
+The sizing defaults were measured on a cloud SSD volume that passed every load cell. The same run on a
 consumer QLC drive failed. The figures and the gates applied to them are in
 [`tests/lab/results/load-beehive-gates.md`](https://github.com/blanketfish/port49/blob/main/tests/lab/results/load-beehive-gates.md).
 Put the session etcd and the accounting spool on disks that meet the 10 ms line before you rely on
@@ -89,25 +96,32 @@ either.
 
 ## Accounting is delivered at least once
 
-port49d writes each accounting record to its spool and forwards it to the decision log. A crash between
-forwarding a record and removing it from the spool forwards that record again at the next start, and a
-record the log refuses is offered again. So the log can hold the same `account` record twice.
+port49d writes each accounting record to its spool and forwards it to the decision log. The log can
+hold the same `account` record twice, in two ways:
 
-Dedupe on `task_id`. The log carries it for exactly this, and on Junos it is the only per-record counter
-the device sends. It is not unique alone: a device numbers its tasks within one login, so the next login
-starts again at 1. Key on `task_id` together with `device.nas`, `flags` and `record.raw` (the arguments
-the device sent, so a start, a stop and a watchdog update of one task stay distinct). Never drop a record
-because its `task_id` was seen once before.
+- A crash between forwarding a record and removing it from the spool forwards that record again at
+  the next start.
+- A record the log refuses is offered again.
+
+**Dedupe on `task_id` together with `device.nas`, `flags` and `record.raw`.** The log carries
+`task_id` for exactly this, and on Junos it is the only per-record counter the device sends. It is not
+unique alone: a device numbers its tasks within one login, so the next login starts again at 1. The
+other three keys keep records apart that share a `task_id`. `record.raw` holds the arguments the device
+sent, so a start, a stop and a watchdog update of one task stay distinct.
+
+Never drop a record because its `task_id` was seen once before.
 
 `port49_accounting_spool_drops_total` is different: it counts records port49d discarded, and the `stage`
 label says where. Any rise pages ([port49_accounting_spool_drops](../reference/alerts.md#port49_accounting_spool_drops)).
 
 ## Shedding
 
-port49d holds one pool of connection slots across both TACACS+ listeners, `limits.max_connections`
-(left unset, it is sized from the open-file limit at start). When the pool is full, a new connection is
-reset at once, so the device moves to its next server now instead of waiting out its own timeout. That
-is meant, and it is never silent. port49d says so on its log when shedding begins:
+port49d holds one pool of connection slots across both TACACS+ listeners, `limits.max_connections`.
+Left unset, it is sized from the open-file limit at start.
+
+When the pool is full, a new connection is reset at once. The device then moves to its next server
+now, instead of waiting out its own timeout. That is meant, and it is never silent. port49d says so on
+its log when shedding begins:
 
 ```text
 port49d: shedding: all <N> TACACS+ connection slots (limits.max_connections) are in use; each new connection is reset at Accept and the device tries its next server
@@ -126,8 +140,9 @@ over five minutes. Its warning, the ticket
 holds more than 80% of `port49_connections_max` open for ten minutes.
 
 A shed device tries its next server, and with none left it falls to local authentication. Raise
-`limits.max_connections` or add replicas before the near-cap ticket becomes the page. The pool counts
-only accepted connections: the per-source limits are checked first and count in
+`limits.max_connections` or add replicas before the near-cap ticket becomes the page.
+
+The pool counts only accepted connections. The per-source limits are checked first, and they count in
 `port49_connection_events_total`, not here.
 
 ## Logs

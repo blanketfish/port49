@@ -343,9 +343,12 @@ store and the id. Two store blocks reaching one etcd cluster at one prefix are r
 ## When it will not start
 
 <!-- --8<-- [start:will_not_start] -->
-`docker compose logs port49d` (or `port49-broker`) holds the line. `restart: unless-stopped` has no
-limit: a start that fails is tried again, with a restart delay that grows to a minute, until you fix the cause or `docker
-compose stop` it, so `docker compose ps` shows a restarting container and the log repeats the line.
+`docker compose logs port49d` (or `port49-broker`) holds the line.
+
+`restart: unless-stopped` has no limit. A start that fails is tried again, with a restart delay that
+grows to a minute, until you fix the cause or `docker compose stop` it. So `docker compose ps` shows a
+restarting container, and the log repeats the line.
+
 A port49d whose etcd is down at boot comes back on its own when etcd does.
 
 | Refusal | The line | Where | Fix |

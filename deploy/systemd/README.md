@@ -373,10 +373,11 @@ refused too.
 ## When it will not start
 
 <!-- --8<-- [start:will_not_start] -->
-`journalctl -u port49d -b` (or `-u port49-broker`) holds the line. The units set no start limit, so
-a start that fails is tried again every ten seconds, and a port49d whose etcd is down at boot
-comes back on its own when etcd does; journald rate-limits a repeated line. Fix the cause and the next
-try starts.
+`journalctl -u port49d -b` (or `-u port49-broker`) holds the line. Fix the cause and the next try
+starts.
+
+The units set no start limit, so a start that fails is tried again every ten seconds. A port49d whose
+etcd is down at boot comes back on its own when etcd does. journald rate-limits a repeated line.
 
 | Refusal | The line | Where | Fix |
 |---|---|---|---|

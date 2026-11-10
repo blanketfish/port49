@@ -6,12 +6,18 @@ description: The refusals port49d prints at start, what each means and how to fi
 # When it will not start
 
 port49d and port49-broker refuse to start rather than start wrong. Each refusal is one line that names
-the file, the setting or the key; read it first. The sections below are for the three deployment shapes,
-which are peers: each says where the line is and what to do.
+the file, the setting or the key. Read that line first.
 
-The fastest check on any shape is the metrics port: `curl <host>:9049/readyz` for port49d and
-`curl <host>:9050/readyz` for the broker. `serving` with a 200 means the process is up. Anything else
-is a 503 with a line that says why (`starting`, `waiting for the store`, `draining`).
+The sections below cover the three deployment shapes, which are peers. Each says where to find the
+line and what to do.
+
+**The fastest check on any shape is the metrics port:**
+
+- `curl <host>:9049/readyz` for port49d
+- `curl <host>:9050/readyz` for the broker
+
+`serving` with a 200 means the process is up. Anything else is a 503 with a line that says why
+(`starting`, `waiting for the store`, `draining`).
 
 ## systemd
 
@@ -48,26 +54,32 @@ issuance: this broker's issuing CA (<fingerprint>) is behind a promotion: the st
 The chart's `scripts/copy-issuer.sh` cannot fix it: it never overwrites a broker's CA, and this broker
 holds the old one. Copy the three files by hand:
 
-1. Find the broker the line names and the two PVCs. The chart's StatefulSet is `<release>-broker` and
-   makes one claim per ordinal, `data-<release>-broker-<ordinal>`. The files live in `state/` inside it.
-2. Start a throwaway debug pod for each PVC. The claims are `ReadWriteOnce`, which one node can mount:
-   set each debug pod's `nodeName` to the node of the broker pod that holds that claim, or the pod stays
-   pending. The image has no shell, so use an image that has one (the chart README's backup note uses a
-   throwaway alpine pod the same way).
-3. Read the three files off the source broker's claim (mount it `readOnly: true`; `kubectl exec ... -- tar c
-   -C /s/state issuing-ca.pem issuing-ca.key issuing-ca-previous.pem` streams them) and write them into
-   `state/` on the crash-looping broker's claim. Set the owner to 65532:65532 and the mode to 0600.
+1. Find the broker the line names, and the two PVCs. The chart's StatefulSet is `<release>-broker`. It
+   makes one claim per ordinal, `data-<release>-broker-<ordinal>`, and the files live in `state/`
+   inside it.
+2. Start a throwaway debug pod for each PVC.
+    - The claims are `ReadWriteOnce`, which only one node can mount. Set each debug pod's `nodeName` to
+      the node of the broker pod that holds that claim, or the debug pod stays pending.
+    - The port49 image has no shell, so use an image that has one. The chart README's backup note uses
+      a throwaway alpine pod the same way.
+3. Read the three files off the source broker's claim, mounted `readOnly: true`.
+   `kubectl exec ... -- tar c -C /s/state issuing-ca.pem issuing-ca.key issuing-ca-previous.pem`
+   streams them. Write them into `state/` on the crash-looping broker's claim, with owner 65532:65532
+   and mode 0600.
 4. Delete the debug pods and let the broker start. Compare the `issuing as ... (sha256:<fingerprint>)`
    line on every broker; the fingerprints must be identical.
 
-Do not run `init-issuer` on this broker (it would make a different CA), and do not run `forget-issuer`
-(every certificate the old CA issued stops working). The
-[key rotation page](../../admin/key-rotation.md#the-three-refusals) has the other two refusals.
+Two commands look like fixes and are not:
+
+- Do not run `init-issuer` on this broker. It would make a different CA.
+- Do not run `forget-issuer`. Every certificate the old CA issued would stop working.
+
+The [key rotation page](../../admin/key-rotation.md#the-three-refusals) has the other two refusals.
 
 ## Which healthcheck to use where
 
 Both `port49d` and `port49-broker` have a `healthcheck` subcommand, for an image with no shell and no
-curl, and `port49-inventory healthcheck` takes the same flags. It asks the process's own
+curl. `port49-inventory healthcheck` takes the same flags. The subcommand asks the process's own
 `metrics_listen`, and it exits 0 or 1.
 
 | Command | Asks | Means |
@@ -94,10 +106,12 @@ The reason is the 3am case. Whenever port49d waits for its store it keeps its li
 - **A cold start while the store is down.** It waits `start_timeout` (30 seconds by default; `0` waits as
   long as it takes), then exits 1, and systemd or compose starts it again.
 
-A supervisor that restarts on `--ready` turns the first case into a restart loop, and in the second
-adds restarts of its own to the ones the exit already causes. Each restart throws away what the process
-holds in memory, its cached directory membership and pins, and serves from its stored snapshot only up
-to `session.staleness_ceiling`. A store outage must never restart-loop port49d.
+A supervisor that restarts on `--ready` makes both cases worse. It turns the first into a restart
+loop. In the second, it adds restarts of its own to the ones the exit already causes.
+
+Each restart throws away what the process holds in memory: its cached directory membership and pins.
+The restarted process serves from its stored snapshot only up to `session.staleness_ceiling`. A store
+outage must never restart-loop port49d.
 
 !!! warning "The shipped compose.yaml probes with `--ready`, and `docker stack deploy` acts on it"
     `compose.yaml` runs `healthcheck --ready` for port49d and the broker, which is right for
@@ -108,11 +122,13 @@ to `session.staleness_ceiling`. A store outage must never restart-loop port49d.
     raise `retries` from 3 to 6. The shipped `interval: 10s` and `retries: 3` are a 30-second window,
     which is not enough (next paragraph).
 
-Even `/healthz` has a gap. Between one run of port49d and the next after a store loss, `/healthz` and
-`/readyz` are unbound for seconds. Give a check that restarts on failure a window of more than 30
-seconds. The chart does: `/healthz` every 10 seconds with six failures, 60 seconds. Compose's shipped
-healthcheck (10 seconds, three retries, a 30-second start period) does not meet it, and does not need to,
-because compose restarts nothing on it.
+**Give a check that restarts on failure a window of more than 30 seconds.** Even `/healthz` has a gap:
+between one run of port49d and the next after a store loss, `/healthz` and `/readyz` are unbound for
+seconds.
+
+- The chart meets this: `/healthz` every 10 seconds with six failures is 60 seconds.
+- Compose's shipped healthcheck (10 seconds, three retries, a 30-second start period) does not. It
+  does not need to, because compose restarts nothing on it.
 
 On Kubernetes the chart already does this: `/readyz` is the readiness probe, so a not-ready pod leaves
 the Service, and `/healthz` is the liveness probe.

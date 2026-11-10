@@ -20,41 +20,48 @@ wrong, the first question is which of the two you are looking at.
 
 ## The broker
 
-The broker is the HTTPS service that checks who a person is and decides what they may reach. It
-resolves group membership from the directory at the moment of each request, evaluates policy, and
-mints the tokens `port49d` later redeems. It also issues the short-lived certificates for OIDC and
-directory sign-ins. [Concepts](../concepts/index.md) follows one login through it; [Identities](../concepts/identities.md)
+The broker is the HTTPS service that checks who a person is and decides what they may reach. On each
+request it:
+
+- resolves group membership from the directory at that moment
+- evaluates policy
+- mints the tokens `port49d` later redeems
+
+It also issues the short-lived certificates for OIDC and directory sign-ins.
+[Concepts](../concepts/index.md) follows one login through it. [Identities](../concepts/identities.md)
 covers the three ways a person proves who they are.
 
 You install it with the rest of the server, in the shape you chose: see [Install](install/index.md).
-Its certificate and the CA the clients trust are on the [TLS](tls.md) page. Its state directory,
-`broker.state_dir`, holds the revocation marks and must survive a restart; the install page says
-what else must.
+Its certificate and the CA the clients trust are on the [TLS](tls.md) page.
+
+Its state directory, `broker.state_dir`, holds the revocation marks and must survive a restart. The
+install page says what else must.
 
 What an operator sees when the broker is down:
 
-- A person who is not logged in cannot log in. For an OIDC or directory sign-in, `port49 login` says
-  `the broker at <broker> did not answer` and when the certificate it holds is valid until. Trying
-  again when the broker answers is the whole remedy; a new sign-in would fail at the same place. A
-  certificate login that cannot reach the broker ends with the end of `agent.log`.
-- A person who is logged in finds that `port49 token` fails with the broker's unavailability (the
-  `broker_unavailable` code of `port49 token --json`; see [Signing in](login.md#port49-token)).
-- A device login already in progress is answered by `port49d` from the store, not by the broker, so
-  it carries on. How long it carries on is `session.staleness_ceiling`, on the
+- **A person who is not logged in cannot log in.** For an OIDC or directory sign-in, `port49 login`
+  says `the broker at <broker> did not answer`, and until when the certificate it holds is valid.
+  Trying again when the broker answers is the whole remedy; a new sign-in would fail at the same
+  place. A certificate login that cannot reach the broker ends by printing the end of `agent.log`.
+- **A person who is logged in cannot mint.** `port49 token` fails because the broker is unavailable:
+  the `broker_unavailable` code of `port49 token --json` (see [Signing in](login.md#port49-token)).
+- **A device login already in progress carries on.** `port49d` answers it from the store, not the
+  broker. How long it carries on is `session.staleness_ceiling`, on the
   [`port49d` reference](../reference/config/port49d.md).
 
 ## The agent
 
 `port49 login` proves the person's identity to the broker once, and starts the agent to keep what
-that produced. The agent holds the mutual-TLS connection open and, if the key lives on a hardware
-token, the token's unlocked session. Every other `port49` command (`token`, `ssh`, `refresh`,
-`identity`, `revoke`) asks the agent over its socket. None of them signs in again, which is why a
-second terminal needs no second login.
+that produced. The agent holds the mutual-TLS connection open. If the key lives on a hardware token,
+it also holds the token's unlocked session.
+
+Every other `port49` command (`token`, `ssh`, `refresh`, `identity`, `revoke`) asks the agent over
+its socket. None of them signs in again, so a second terminal needs no second login.
 
 - **Where it is.** The socket is `$XDG_RUNTIME_DIR/port49/agent.sock`. With `XDG_RUNTIME_DIR` unset it
-  is `port49-<uid>/agent.sock` under the system's temporary directory. The directory is created `0700`
-  and the agent refuses to use one that is not that user's alone, because whoever can reach the
-  socket can mint as that person.
+  is `port49-<uid>/agent.sock` under the system's temporary directory. The directory is created `0700`.
+  The agent refuses to use one that is not that user's alone, because whoever can reach the socket
+  can mint as that person.
 - **Its log.** `agent.log`, in the same directory. `port49 login` prints its path and, when the agent
   exits at start, the last lines of it.
 - **No flag moves it.** A command that says `no agent at <path>` is looking where its own
@@ -76,9 +83,9 @@ The agent ends itself. It exits at whichever comes first:
   [Revocation](../concepts/revocation.md));
 - `SIGTERM` or `SIGINT`.
 
-`port49 refresh` asks the agent to re-authenticate its session and to extend each live device session
-the policy in force still grants. It prints `this login lasts until <time>`, which is where the
-agent will exit next, and one line per device.
+`port49 refresh` asks the agent to do two things: re-authenticate its session, and extend each live
+device session that the policy in force still grants. It prints `this login lasts until <time>`,
+which is when the agent will exit next, and one line per device.
 
 When the agent is gone, every command says `no agent at <path>` and names `port49 login` as the next
 step. That is the whole recovery. A token already minted is single use and short-lived whether or
@@ -87,10 +94,11 @@ not an agent is running.
 ### One agent, one identity
 
 A second `port49 login` to a running agent does not start another. It refreshes the running one, and
-only when the broker and the certificate are the same ones. A login for another broker, or with
-another certificate, is refused with `already holds the agent`, because refreshing would extend one
-identity's device sessions while the person believed they had switched. Stop the first agent (or let
-its session end) before switching.
+only when the broker and the certificate are the same ones.
+
+A login for another broker, or with another certificate, is refused with `already holds the agent`.
+Refreshing would extend one identity's device sessions while the person believed they had switched.
+To switch, stop the first agent, or let its session end.
 
 A hardware key adds one more case: [Hardware keys](hardware-keys.md) covers what a locked or
 absent key looks like and how to put the PIN back.
