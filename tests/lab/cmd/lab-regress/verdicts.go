@@ -42,11 +42,23 @@ func splitRow(ln string) []string {
 	if !strings.HasPrefix(ln, "|") {
 		return nil
 	}
-	cells := strings.Split(strings.Trim(ln, "|"), "|")
-	for i := range cells {
-		cells[i] = strings.TrimSpace(cells[i])
+	ln = strings.TrimSuffix(strings.TrimPrefix(ln, "|"), "|")
+	// An escaped pipe, \|, belongs to its cell (a regexp in a code span, say); only a bare one ends it.
+	var cells []string
+	var cur strings.Builder
+	for i := 0; i < len(ln); i++ {
+		switch {
+		case ln[i] == '\\' && i+1 < len(ln) && ln[i+1] == '|':
+			cur.WriteString(`\|`)
+			i++
+		case ln[i] == '|':
+			cells = append(cells, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteByte(ln[i])
+		}
 	}
-	return cells
+	return append(cells, strings.TrimSpace(cur.String()))
 }
 
 func isSeparator(cells []string) bool {
@@ -79,7 +91,15 @@ func verdictRows(note string) []verdictRow {
 	col := -1 // the verdict column of the table being read, or -1
 	header := ""
 	inTable := false
+	fenced := false
 	for _, ln := range strings.Split(note, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "```") {
+			fenced, inTable = !fenced, false
+			continue
+		}
+		if fenced {
+			continue // a code fence's lines are quoted text: no heading, row or bullet
+		}
 		if strings.HasPrefix(ln, "#") {
 			heading = strings.TrimSpace(strings.TrimLeft(ln, "#"))
 		}
