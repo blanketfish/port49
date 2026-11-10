@@ -203,7 +203,7 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	w := l.win
 	since := w.clock(t)
 	brokerDN := "CN=port49,OU=Svc," + dirBase
-	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: w.certs.brokerCertFile, TLSKeyFile: w.certs.brokerKeyFile}
+	adcsExt := w.certs.adcsBind(t)
 	cbtInstalled := w.facts.NTDSLDAP["LdapEnforceChannelBinding"]
 	cbt := cbtInstalled
 	if cbt == "" {
@@ -322,7 +322,7 @@ func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
 	t.Helper()
 	w := l.win
 	brokerDN := "CN=port49,OU=Svc," + dirBase
-	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: w.certs.brokerCertFile, TLSKeyFile: w.certs.brokerKeyFile}
+	adcsExt := w.certs.adcsBind(t)
 	var (
 		t0      time.Time
 		stopped bool
@@ -529,7 +529,7 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 		l44Case{"highbit-signbyte", "the same, alice holding the serial with its DER sign byte", c.aliceHighBit, c.aliceHighBitKey, winAltSecSignByte})
 	aliceDN := "CN=alice,OU=Staff," + dirBase
 	brokerDN := "CN=port49,OU=Svc," + dirBase
-	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: c.brokerCertFile, TLSKeyFile: c.brokerKeyFile}
+	adcsExt := c.adcsBind(t)
 	var b strings.Builder
 	b.WriteString("\n### KB5014754: what the DC itself maps\n\n" +
 		"Each certificate is offered to the KDC by PKINIT (MIT `kinit`) as `alice@CORP.EXAMPLE.COM`, alice holding exactly " +

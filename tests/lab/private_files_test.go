@@ -12,7 +12,23 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/blanketfish/port49/internal/directory"
 )
+
+// adcsBind is L44's EXTERNAL bind with the AD CS-issued broker certificate, as this process loads it
+// (directory.LoadCredentials reads the pair through the fence): private copies, since w.dir is in the tree.
+func (c *winCerts) adcsBind(t testing.TB) directory.Bind {
+	cert, err := labPrivateSecret(t, c.brokerCertFile)
+	if err != nil {
+		panic(fmt.Sprintf("the AD CS bind certificate %s cannot be staged: %v", c.brokerCertFile, err))
+	}
+	key, err := labPrivateSecret(t, c.brokerKeyFile)
+	if err != nil {
+		panic(fmt.Sprintf("the AD CS bind key %s cannot be staged: %v", c.brokerKeyFile, err))
+	}
+	return directory.Bind{Mechanism: "external", TLSCertFile: cert, TLSKeyFile: key}
+}
 
 // The fence walks every directory above a trust, policy or secret file and refuses one that others can
 // write (decision 53 ruling 11). A lab host's checkout lives under a group-writable ~/git, so nothing
