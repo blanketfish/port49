@@ -12,7 +12,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -504,14 +506,31 @@ func TestWorkloadTLSTrustFailureIsFinal(t *testing.T) {
 		}
 	}
 	// A refused connection is still a broker outage.
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	addr := l.Addr().String()
-	l.Close()
-	down := withFlag(flags, "--broker", "https://"+addr)
+	down := withFlag(flags, "--broker", "https://"+refusedAddr(t))
 	var out, errb bytes.Buffer
 	if code := run(append(append([]string{"workload", "token"}, down...), "leaf1"), &out, &errb); code != exitTemporary {
 		t.Fatalf("refused connection: exit %d stderr %q", code, errb.String())
 	}
+}
+
+// refusedAddr is an address every connection to is refused, for the whole test: a TCP socket bound to
+// it and never listening holds the port, so no other test can take it, and a SYN to it is answered
+// with a reset (#66). A listener closed before the dial frees the port for any test running alongside.
+func refusedAddr(t *testing.T) string {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { syscall.Close(fd) })
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(sa.(*syscall.SockaddrInet4).Port))
 }
 
 // identity exits 77 like token for a 200 that does not decode (M-7).

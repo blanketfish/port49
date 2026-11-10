@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -64,10 +65,7 @@ func TestProbeAnswersPassOrFail(t *testing.T) {
 }
 
 func TestProbeNamesWhatWentWrong(t *testing.T) {
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	addr := l.Addr().String()
-	l.Close()
-	if got := Probe(addr, creds()); got != "fail:refused" {
+	if got := Probe(refusedAddr(t), creds()); got != "fail:refused" {
 		t.Errorf("a closed port is %q", got)
 	}
 }
@@ -107,11 +105,29 @@ func TestLoopPrintsOneClosedLinePerSecond(t *testing.T) {
 	}
 }
 
+// refusedAddr is an address every connection to is refused, for the whole test: a TCP socket bound to
+// it and never listening holds the port, so no other test can take it, and a SYN to it is answered
+// with a reset (#66). A listener closed before the dial frees the port for any test running alongside.
+func refusedAddr(t *testing.T) string {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { syscall.Close(fd) })
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(sa.(*syscall.SockaddrInet4).Port))
+}
+
 func TestLoopRetriesOnceAndSaysSo(t *testing.T) {
 	var out bytes.Buffer
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	addr := l.Addr().String()
-	l.Close()
+	addr := refusedAddr(t)
 	Loop(&out, addr, creds(), 1500*time.Millisecond, 50*time.Millisecond)
 	for _, ln := range strings.Split(strings.TrimSpace(out.String()), "\n") {
 		if f := strings.Fields(ln); len(f) != 3 || f[1] != "fail:refused" || f[2] != "fail:refused" {
