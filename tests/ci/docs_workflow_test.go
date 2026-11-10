@@ -197,6 +197,11 @@ func TestTheDocsBuildRunsStrictWithHashes(t *testing.T) {
 				if !strings.Contains(ln, "--require-hashes") {
 					t.Errorf("a pip install without --require-hashes: %q", ln)
 				}
+				// the same flags as deploy's install, so the pull request's check proves the deploy's
+				// install works on CI's Python (deploy never runs on a pull request)
+				if !strings.Contains(ln, "--only-binary=:all:") {
+					t.Errorf("the build's pip install lacks --only-binary=:all:, which deploy uses: %q", ln)
+				}
 			}
 		}
 	}
