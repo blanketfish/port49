@@ -241,13 +241,15 @@ that fail, and then says nothing more until a pass forwards them.
 
 The retry lines come from the other regions, the ones following a logout made elsewhere. If such a region
 cannot finish reaching the logout in its own session store, its `a logout made elsewhere (...) reached`
-line carries `not every step finished (...)`, and the logout is tried again after a wait that doubles from 1
-second to at most 64 seconds. Its mints and refreshes are refused meanwhile. The first failure's line
-carries the `port49 revoke` remedy for ending the person's live sessions at once; the lines after it read
+line carries `not every step finished (...)`. The logout is then tried again after a wait that doubles from 1
+second to at most 64 seconds, and the region's mints and refreshes are refused meanwhile.
+
+**Look for the first line of the run, not the latest.** The first failure's line carries the `port49 revoke`
+remedy for ending the person's live sessions at once. The lines after it read
 `still not reached after N tries (...); tried again in <wait> (the remedy was said with the first failure)`.
-Look for the first line of the run, not the latest. A logout the broker can never reach is not tried again:
-its line ends `not every step finished (...)` with no wait and no remedy, and the next takeover of that
-keyspace reaches it once more.
+
+A logout the broker can never reach is not tried again. Its line ends `not every step finished (...)` with no
+wait and no remedy, and the next takeover of that keyspace reaches it once more.
 
 ### A person who signs in again during a cut
 

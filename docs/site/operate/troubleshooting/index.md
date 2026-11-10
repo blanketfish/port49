@@ -80,19 +80,21 @@ get around the outage; the devices already fall to local.
 
 **It means:** it depends on the platform, and on how long the device has been failing.
 
-- **An `ERROR` is final on some platforms.** While port49d answers `ERROR` (its store is failing), Cisco
-  IOS XE refuses the local account
-  ([the IOS XE note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md)),
-  and so does Junos under the reference `authentication-order tacplus`
-  ([vJunos-router](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md),
-  [vSRX](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vsrx.md)).
-  Cisco IOS XR over TLS does the same
-  ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)). The
-  local account works again once port49d closes its listener (about 5.5 seconds at the defaults) or is
-  stopped. Nokia SR Linux logs the local account in at once
-  ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L87-nokia_srlinux.md)).
-  The device pages say what each other platform does: [IOS XE](../../admin/devices/cisco-ios-xe.md),
-  [IOS XR](../../admin/devices/cisco-ios-xr.md), [Junos](../../admin/devices/juniper-junos.md).
+- **An `ERROR` is final on some platforms.** While port49d answers `ERROR` (its store is failing):
+    - Cisco IOS XE refuses the local account
+      ([the IOS XE note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md)).
+    - So does Junos under the reference `authentication-order tacplus`
+      ([vJunos-router](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md),
+      [vSRX](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vsrx.md)).
+    - Cisco IOS XR over TLS does the same
+      ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)).
+    - Nokia SR Linux logs the local account in at once
+      ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L87-nokia_srlinux.md)).
+
+    On the platforms that refuse it, the local account works again once port49d closes its listener (about
+    5.5 seconds at the defaults) or is stopped. The device pages say what each other platform does:
+    [IOS XE](../../admin/devices/cisco-ios-xe.md), [IOS XR](../../admin/devices/cisco-ios-xr.md),
+    [Junos](../../admin/devices/juniper-junos.md).
 - **A device that failed over keeps answering locally for a while.** After its servers failed, the device
   itself answers for a window and sends port49 nothing: a token login is refused during it, and
   break-glass works. Measured (cells f2 and f3 for IOS XE, cells a and f for XR, of the closed
