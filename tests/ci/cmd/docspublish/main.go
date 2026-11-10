@@ -1,10 +1,17 @@
-// Command docspublish decides whether the docs workflow deploys the site for a ref, and what
-// the site's banner says. It prints publish=true|false and banner=<text> in the form
-// $GITHUB_OUTPUT takes. Run from the repository root with the full history and tags fetched.
+// Command docspublish decides what the docs workflow deploys for a ref: whether to publish, the
+// site's banner, the mike version to publish it as, and the aliases that version takes. It prints
+// publish=true|false, banner=<text>, version=<name> and aliases=<space-separated, may be empty> in
+// the form $GITHUB_OUTPUT takes. Run from the repository root with the full history and tags fetched.
 //
-// Only the highest final release tag (vX.Y.Z, compared numerically) deploys and moves the banner to that version. main deploys
-// until the first release tag exists. Every other ref, a pull request included, builds only and
-// carries the main banner, so the banner is never empty.
+// The site has one copy per version (mike, on the gh-pages branch):
+//
+//   - main publishes "dev" on every push. It also takes the "latest" alias, but only while no final
+//     release tag exists, so that /latest/ always resolves.
+//   - a final release tag vX.Y.Z that is an ancestor of main publishes "X.Y", but only if it is the
+//     highest patch of its X.Y line: a lower tag pushed late, or a re-run of an old one, must not
+//     overwrite newer docs. It takes "latest" only if it is also the highest final tag overall.
+//   - every other ref, a pull request included, builds only and carries the main banner, so the
+//     banner is never empty.
 package main
 
 import (
@@ -23,57 +30,93 @@ const mainBanner = "This site describes port49 as it is on main, not a release."
 // form are all something else.
 var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// decide is whether ref publishes and the banner to build with. mainRef is the ref a release
-// tag's commit must be an ancestor of.
-func decide(dir, ref, mainRef string) (bool, string, error) {
+// result is what the workflow deploys: Version is empty and Aliases empty unless Publish is true.
+type result struct {
+	Publish bool
+	Banner  string
+	Version string // the mike version: "dev" or "X.Y"
+	Aliases string // space-separated mike aliases
+}
+
+// decide is what ref deploys. mainRef is the ref a release tag's commit must be an ancestor of.
+func decide(dir, ref, mainRef string) (result, error) {
+	noPublish := result{Banner: mainBanner}
 	git := func(args ...string) (string, error) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
 		out, err := cmd.Output()
 		return string(out), err
 	}
-	switch {
-	case ref == "refs/heads/main":
-		tags, err := git("tag", "-l", "v*")
+	// finalTags is every final release tag of the repository.
+	finalTags := func() ([]string, error) {
+		out, err := git("tag", "-l", "v*")
 		if err != nil {
-			return false, "", fmt.Errorf("git tag -l: %w", err)
+			return nil, fmt.Errorf("git tag -l: %w", err)
 		}
-		for _, tag := range strings.Fields(tags) {
+		var tags []string
+		for _, tag := range strings.Fields(out) {
 			if releaseTag.MatchString(tag) {
-				return false, mainBanner, nil
+				tags = append(tags, tag)
 			}
 		}
-		return true, mainBanner, nil
+		return tags, nil
+	}
+	switch {
+	case ref == "refs/heads/main":
+		tags, err := finalTags()
+		if err != nil {
+			return result{}, err
+		}
+		r := result{Publish: true, Banner: mainBanner, Version: "dev"}
+		if len(tags) == 0 {
+			r.Aliases = "latest"
+		}
+		return r, nil
 	case strings.HasPrefix(ref, "refs/tags/"):
 		tag := strings.TrimPrefix(ref, "refs/tags/")
 		if !releaseTag.MatchString(tag) {
-			return false, mainBanner, nil
+			return noPublish, nil
 		}
-		tags, err := git("tag", "-l", "v*")
+		tags, err := finalTags()
 		if err != nil {
-			return false, "", fmt.Errorf("git tag -l: %w", err)
+			return result{}, err
 		}
-		// a lower tag pushed late, or a re-run of an old one, must not overwrite newer docs
-		for _, other := range strings.Fields(tags) {
-			if releaseTag.MatchString(other) && newer(other, tag) {
-				return false, mainBanner, nil
+		latest := true
+		for _, other := range tags {
+			if !newer(other, tag) {
+				continue
 			}
+			// a lower patch pushed late, or a re-run of one, must not overwrite its line's newer docs
+			if line(other) == line(tag) {
+				return noPublish, nil
+			}
+			latest = false
 		}
 		cmd := exec.Command("git", "merge-base", "--is-ancestor", ref, mainRef)
 		cmd.Dir = dir
 		switch err := cmd.Run().(type) {
 		case nil:
-			return true, "This site describes port49 " + tag + ".", nil
+			r := result{Publish: true, Banner: "This site describes port49 " + tag + ".", Version: line(tag)}
+			if latest {
+				r.Aliases = "latest"
+			}
+			return r, nil
 		case *exec.ExitError:
 			if err.ExitCode() == 1 { // not an ancestor
-				return false, mainBanner, nil
+				return noPublish, nil
 			}
-			return false, "", fmt.Errorf("git merge-base: %w", err)
+			return result{}, fmt.Errorf("git merge-base: %w", err)
 		default:
-			return false, "", fmt.Errorf("git merge-base: %w", err)
+			return result{}, fmt.Errorf("git merge-base: %w", err)
 		}
 	}
-	return false, mainBanner, nil
+	return noPublish, nil
+}
+
+// line is the X.Y of final tag vX.Y.Z, the mike version of its docs.
+func line(tag string) string {
+	parts := strings.Split(tag[1:], ".")
+	return parts[0] + "." + parts[1]
 }
 
 // newer is whether final tag a is a higher version than final tag b, compared numerically.
@@ -89,8 +132,8 @@ func newer(a, b string) bool {
 	return false
 }
 
-func format(publish bool, banner string) string {
-	return fmt.Sprintf("publish=%t\nbanner=%s\n", publish, banner)
+func format(r result) string {
+	return fmt.Sprintf("publish=%t\nbanner=%s\nversion=%s\naliases=%s\n", r.Publish, r.Banner, r.Version, r.Aliases)
 }
 
 func main() {
@@ -101,10 +144,10 @@ func main() {
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
-	publish, banner, err := decide(*dir, *ref, *mainRef)
+	r, err := decide(*dir, *ref, *mainRef)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "docspublish:", err)
 		os.Exit(1)
 	}
-	fmt.Print(format(publish, banner))
+	fmt.Print(format(r))
 }

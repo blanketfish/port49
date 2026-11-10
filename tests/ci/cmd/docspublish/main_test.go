@@ -33,6 +33,15 @@ func repo(t *testing.T) string {
 	return dir
 }
 
+// tagged commits and tags each tag on main, in order, so a later tag is a descendant of an earlier one.
+func tagged(t *testing.T, d string, tags ...string) {
+	t.Helper()
+	for _, tag := range tags {
+		git(t, d, "commit", "-q", "--allow-empty", "-m", tag)
+		git(t, d, "tag", tag)
+	}
+}
+
 func TestDocsPublish(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -40,33 +49,37 @@ func TestDocsPublish(t *testing.T) {
 		ref     string
 		publish bool
 		banner  string
+		version string
+		aliases string
 	}{
-		{"main with no release tag", func(t *testing.T, d string) {}, "refs/heads/main", true, wantMain},
-		{"main with a release tag", func(t *testing.T, d string) { git(t, d, "tag", "v0.1.0") }, "refs/heads/main", false, wantMain},
-		{"main with only a pre-release tag", func(t *testing.T, d string) { git(t, d, "tag", "v0.1.0-rc1") }, "refs/heads/main", true, wantMain},
-		{"a release tag on main", func(t *testing.T, d string) { git(t, d, "tag", "v0.1.0") }, "refs/tags/v0.1.0", true, "This site describes port49 v0.1.0."},
+		// main publishes dev on every push; latest follows it only until a release exists
+		{"main with no release tag", func(t *testing.T, d string) {}, "refs/heads/main", true, wantMain, "dev", "latest"},
+		{"main with a release tag", func(t *testing.T, d string) { git(t, d, "tag", "v0.1.0") }, "refs/heads/main", true, wantMain, "dev", ""},
+		{"main with only a pre-release tag", func(t *testing.T, d string) { git(t, d, "tag", "v0.1.0-rc1") }, "refs/heads/main", true, wantMain, "dev", "latest"},
+		{"a release tag on main", func(t *testing.T, d string) { git(t, d, "tag", "v0.1.0") }, "refs/tags/v0.1.0", true, "This site describes port49 v0.1.0.", "0.1", "latest"},
 		{"a release tag off main", func(t *testing.T, d string) {
 			git(t, d, "checkout", "-q", "-b", "side")
 			git(t, d, "commit", "-q", "--allow-empty", "-m", "side")
 			git(t, d, "tag", "v0.1.0")
 			git(t, d, "checkout", "-q", "main")
-		}, "refs/tags/v0.1.0", false, wantMain},
-		{"a pull request", func(t *testing.T, d string) {}, "refs/pull/7/merge", false, wantMain},
-		{"another branch", func(t *testing.T, d string) {}, "refs/heads/feature/x", false, wantMain},
-		{"an empty ref", func(t *testing.T, d string) {}, "", false, wantMain},
+		}, "refs/tags/v0.1.0", false, wantMain, "", ""},
+		{"a pull request", func(t *testing.T, d string) {}, "refs/pull/7/merge", false, wantMain, "", ""},
+		{"another branch", func(t *testing.T, d string) {}, "refs/heads/feature/x", false, wantMain, "", ""},
+		{"an empty ref", func(t *testing.T, d string) {}, "", false, wantMain, "", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			d := repo(t)
 			c.setup(t, d)
-			publish, banner, err := decide(d, c.ref, "main")
+			got, err := decide(d, c.ref, "main")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if publish != c.publish || banner != c.banner {
-				t.Errorf("decide(%q) = %v, %q; want %v, %q", c.ref, publish, banner, c.publish, c.banner)
+			want := result{c.publish, c.banner, c.version, c.aliases}
+			if got != want {
+				t.Errorf("decide(%q) = %+v; want %+v", c.ref, got, want)
 			}
-			if banner == "" {
+			if got.Banner == "" {
 				t.Error("the banner is empty")
 			}
 		})
@@ -78,82 +91,90 @@ func TestAPrereleaseTagIsNotARelease(t *testing.T) {
 		t.Run(tag, func(t *testing.T) {
 			d := repo(t)
 			git(t, d, "tag", tag)
-			publish, banner, err := decide(d, "refs/tags/"+tag, "main")
+			got, err := decide(d, "refs/tags/"+tag, "main")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if publish || banner != wantMain {
-				t.Errorf("%s: publish %v, banner %q; want false and the main banner", tag, publish, banner)
+			if got != (result{false, wantMain, "", ""}) {
+				t.Errorf("%s: %+v; want no publish, the main banner, no version", tag, got)
 			}
-			// present in git tag -l, it does not stop main's deploys
-			if publish, _, _ := decide(d, "refs/heads/main", "main"); !publish {
-				t.Errorf("%s stops main's deploys", tag)
+			// present in git tag -l, it does not take latest from main's deploys
+			if m, _ := decide(d, "refs/heads/main", "main"); !m.Publish || m.Version != "dev" || m.Aliases != "latest" {
+				t.Errorf("%s changes main's deploy: %+v", tag, m)
 			}
 		})
 	}
-	for tag, banner := range map[string]string{
-		"v0.1.0":    "This site describes port49 v0.1.0.",
-		"v10.20.30": "This site describes port49 v10.20.30.",
+	for tag, want := range map[string]result{
+		"v0.1.0":    {true, "This site describes port49 v0.1.0.", "0.1", "latest"},
+		"v10.20.30": {true, "This site describes port49 v10.20.30.", "10.20", "latest"},
 	} {
 		t.Run(tag, func(t *testing.T) {
 			d := repo(t)
 			git(t, d, "tag", tag)
-			publish, got, err := decide(d, "refs/tags/"+tag, "main")
+			got, err := decide(d, "refs/tags/"+tag, "main")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !publish || got != banner {
-				t.Errorf("%s: publish %v, banner %q; want true and %q", tag, publish, got, banner)
+			if got != want {
+				t.Errorf("%s: %+v; want %+v", tag, got, want)
 			}
-			if publish, _, _ := decide(d, "refs/heads/main", "main"); publish {
-				t.Errorf("%s does not stop main's deploys", tag)
+			if m, _ := decide(d, "refs/heads/main", "main"); !m.Publish || m.Version != "dev" || m.Aliases != "" {
+				t.Errorf("%s: main publishes %+v, want dev with no alias", tag, m)
 			}
 		})
 	}
 }
 
-// Only the highest final tag deploys: a lower one pushed late, or its workflow re-run, would
-// overwrite the newer release's docs. Versions compare numerically.
-func TestOnlyTheHighestReleaseTagDeploys(t *testing.T) {
+// Each X.Y line deploys only its highest patch, and only the highest final tag overall takes the
+// latest alias: a lower tag pushed late, or its workflow re-run, would overwrite newer docs.
+// Versions compare numerically.
+func TestOnlyTheHighestPatchOfALineDeploys(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		tags    []string
 		ref     string
 		publish bool
+		version string
+		aliases string
 	}{
-		{"v0.1.9 pushed after v0.2.0", []string{"v0.2.0", "v0.1.9"}, "refs/tags/v0.1.9", false},
-		{"v0.2.0 after v0.1.9", []string{"v0.1.9", "v0.2.0"}, "refs/tags/v0.2.0", true},
-		{"v0.10.0 against v0.9.0", []string{"v0.9.0", "v0.10.0"}, "refs/tags/v0.10.0", true},
-		{"v0.9.0 against v0.10.0", []string{"v0.10.0", "v0.9.0"}, "refs/tags/v0.9.0", false},
-		{"the major version counts", []string{"v1.0.0", "v0.99.99"}, "refs/tags/v0.99.99", false},
-		{"a higher pre-release does not count", []string{"v0.1.0", "v0.2.0-rc1", "v1"}, "refs/tags/v0.1.0", true},
-		{"a re-run of the only tag", []string{"v0.1.0"}, "refs/tags/v0.1.0", true},
+		{"v0.1.9 pushed after v0.2.0 is a lower line and still the line's highest", []string{"v0.2.0", "v0.1.9"}, "refs/tags/v0.1.9", true, "0.1", ""},
+		{"v0.2.0 after v0.1.9", []string{"v0.1.9", "v0.2.0"}, "refs/tags/v0.2.0", true, "0.2", "latest"},
+		{"v0.1.9 after v0.1.10 loses to its own line", []string{"v0.1.10", "v0.1.9"}, "refs/tags/v0.1.9", false, "", ""},
+		{"v0.1.10 against v0.1.9", []string{"v0.1.9", "v0.1.10"}, "refs/tags/v0.1.10", true, "0.1", "latest"},
+		{"v0.1.0 after v0.1.1", []string{"v0.1.1", "v0.1.0"}, "refs/tags/v0.1.0", false, "", ""},
+		{"v0.1.1 supersedes v0.1.0 in the same line", []string{"v0.1.0", "v0.1.1"}, "refs/tags/v0.1.1", true, "0.1", "latest"},
+		{"a patch of an older line takes no latest", []string{"v0.2.0", "v0.1.0", "v0.1.1"}, "refs/tags/v0.1.1", true, "0.1", ""},
+		{"v0.10.0 against v0.9.0", []string{"v0.9.0", "v0.10.0"}, "refs/tags/v0.10.0", true, "0.10", "latest"},
+		{"v0.9.0 against v0.10.0", []string{"v0.10.0", "v0.9.0"}, "refs/tags/v0.9.0", true, "0.9", ""},
+		{"the major version counts", []string{"v1.0.0", "v0.99.99"}, "refs/tags/v0.99.99", true, "0.99", ""},
+		{"a higher pre-release does not count", []string{"v0.1.0", "v0.2.0-rc1", "v1"}, "refs/tags/v0.1.0", true, "0.1", "latest"},
+		{"a re-run of the only tag", []string{"v0.1.0"}, "refs/tags/v0.1.0", true, "0.1", "latest"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := repo(t)
-			for _, tag := range c.tags {
-				git(t, d, "commit", "-q", "--allow-empty", "-m", tag)
-				git(t, d, "tag", tag)
-			}
-			publish, banner, err := decide(d, c.ref, "main")
+			tagged(t, d, c.tags...)
+			got, err := decide(d, c.ref, "main")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if publish != c.publish {
-				t.Errorf("publish = %v, want %v", publish, c.publish)
+			if got.Publish != c.publish || got.Version != c.version || got.Aliases != c.aliases {
+				t.Errorf("decide = %+v, want publish %v version %q aliases %q", got, c.publish, c.version, c.aliases)
 			}
-			if !publish && banner != wantMain {
-				t.Errorf("banner = %q, want the main banner", banner)
+			if !got.Publish && got.Banner != wantMain {
+				t.Errorf("banner = %q, want the main banner", got.Banner)
 			}
 		})
 	}
 }
 
-func TestTheOutputIsTwoOutputLines(t *testing.T) {
-	if got, want := format(true, "b"), "publish=true\nbanner=b\n"; got != want {
+func TestTheOutputIsFourOutputLines(t *testing.T) {
+	if got, want := format(result{true, "b", "0.1", "latest"}), "publish=true\nbanner=b\nversion=0.1\naliases=latest\n"; got != want {
 		t.Errorf("format = %q, want %q", got, want)
 	}
-	if got, want := format(false, wantMain), "publish=false\nbanner="+wantMain+"\n"; got != want {
+	if got, want := format(result{true, wantMain, "dev", ""}), "publish=true\nbanner="+wantMain+"\nversion=dev\naliases=\n"; got != want {
+		t.Errorf("format = %q, want %q", got, want)
+	}
+	if got, want := format(result{false, wantMain, "", ""}), "publish=false\nbanner="+wantMain+"\nversion=\naliases=\n"; got != want {
 		t.Errorf("format = %q, want %q", got, want)
 	}
 }
