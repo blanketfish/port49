@@ -92,7 +92,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L3-nxos}
     notes: [tests/lab/results/L3-nxos-cisco_nxos.md]
   - id: L9-abbreviations
-    verdicts: none
     measured_minutes: 6.6
     run: '^TestL9JunosAbbreviations$'
     platforms: vjunos,vsrx
@@ -115,7 +114,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L24}
     notes: [tests/lab/results/L24-juniper_vjunos-router.md, tests/lab/results/L24-juniper_vsrx.md]
   - id: L12-configuration
-    verdicts: none
     measured_minutes: 4.6
     run: '^TestL12JunosConfiguration$'
     platforms: vjunos,vsrx
@@ -123,7 +121,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L12-configuration}
     notes: [tests/lab/results/L12-configuration-juniper_vjunos-router.md, tests/lab/results/L12-configuration-juniper_vsrx.md]
   - id: L12-netconf
-    verdicts: none
     measured_minutes: 4.3
     run: '^TestL12JunosNetconf$'
     platforms: vjunos,vsrx
@@ -131,7 +128,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L12-netconf}
     notes: [tests/lab/results/L12-netconf-juniper_vjunos-router.md, tests/lab/results/L12-netconf-juniper_vsrx.md]
   - id: L12-wire
-    verdicts: none
     measured_minutes: 18.6
     run: '^TestL12JunosWire$'
     platforms: vjunos,vsrx
@@ -154,7 +150,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L26b}
     notes: [tests/lab/results/L26b-juniper_vjunos-router.md, tests/lab/results/L26b-juniper_vsrx.md]
   - id: L26c
-    verdicts: none
     measured_minutes: 6.5
     run: '^TestL26cJunosRPCReach$'
     platforms: vjunos,vsrx
@@ -434,7 +429,7 @@ entries:
     timeout_minutes: 30
     notes: [tests/lab/results/L42-openldap.md, tests/lab/results/L42-samba_ad.md, tests/lab/results/L43-openldap.md, tests/lab/results/L43-samba_ad.md]
   - id: L45-L46
-    verdicts: none
+    no_verdict_notes: [tests/lab/results/L45-keycloak.md]
     measured_minutes: 7.2
     run: '^(TestL45LogoutToken|TestL46FreshAuthentication)$'
     rows: [L45, L46]

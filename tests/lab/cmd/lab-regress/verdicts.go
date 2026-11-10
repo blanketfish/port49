@@ -33,6 +33,12 @@ var (
 	proseVerdict = regexp.MustCompile(`^(?:[-*]\s+)?\*\*(?:(\([^)]*\))\s+)?(PASS|FAIL|INVALID|OBSERVED|TIMEOUT|SKIPPED)\b[^*]*\*\*`)
 	// A qualification note's bullet: "- `token_login` (re-measures L1): **pass**. ..." or "**not_run**".
 	cellVerdict = regexp.MustCompile("^- `([^`]+)`[^*]*?: \\*\\*([a-z_]+)\\*\\*")
+	// A ruling bullet: "- **Ruling 15 may close on this run:** true (...)".
+	boldClaim = regexp.MustCompile(`^- \*\*([^*]+?):\*\*\s+(true|false)\b`)
+	// The words a "Read off the table" bullet states its verdict in: true or false anywhere, or one of these
+	// first.
+	readOffBool = regexp.MustCompile(`\b(true|false)\b`)
+	readOffLead = regexp.MustCompile(`^(not reached|refused|ran|reached|accepted)\b`)
 	// A Go duration, "1m12.9s", "320ms", "1h2m": the numbers a rerun moves.
 	durationRe = regexp.MustCompile(`\b\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s)(?:\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s))*\b`)
 )
@@ -110,6 +116,11 @@ func verdictRows(note string) []verdictRow {
 				add(heading+"\x00prose\x00"+m[1], labelFor(heading, strings.TrimSpace(m[1]+" "+m[2])), m[2])
 			} else if m := cellVerdict.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
 				add(heading+"\x00cell\x00"+m[1], labelFor(heading, m[1]), m[2])
+			} else if m := boldClaim.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
+				add(heading+"\x00claim\x00"+m[1], labelFor(heading, m[1]), m[2])
+			} else if strings.HasPrefix(strings.ToLower(heading), "read off") && strings.HasPrefix(ln, "- ") {
+				claim, rest := readOffClaim(strings.TrimPrefix(ln, "- "))
+				add(heading+"\x00readoff\x00"+claim, labelFor(heading, claim), readOffVerdict(rest))
 			}
 			continue
 		}
@@ -138,6 +149,29 @@ func verdictRows(note string) []verdictRow {
 		add(heading+"\x00"+header+"\x00"+cells[0], labelFor(heading, cells[0]), verdict)
 	}
 	return rows
+}
+
+// readOffClaim splits a "Read off the table" bullet into its claim and the rest: at the first ": " or " = ",
+// "explicit anchors: true: ..." and "JunosFacts.CaseSensitive = false: ...". A bullet with neither is all claim.
+func readOffClaim(b string) (claim, rest string) {
+	i, j := strings.Index(b, ": "), strings.Index(b, " = ")
+	switch {
+	case i < 0 && j < 0:
+		return b, ""
+	case j >= 0 && (i < 0 || j < i):
+		return b[:j], b[j+3:]
+	}
+	return b[:i], b[i+2:]
+}
+
+// readOffVerdict is the verdict of a bullet's rest: the word it opens with ("not reached", "refused", ...) and
+// every true or false in it, in order. The prose around them is not compared.
+func readOffVerdict(rest string) string {
+	var words []string
+	if m := readOffLead.FindString(rest); m != "" {
+		words = append(words, m)
+	}
+	return strings.Join(append(words, readOffBool.FindAllString(rest, -1)...), " ")
 }
 
 // labelFor is what a report names a row by: its first cell, and the heading it sits under.
