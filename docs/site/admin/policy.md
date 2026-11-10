@@ -516,10 +516,17 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install port49
+        env:
+          PORT49_VERSION: "0.1.0"
         run: |
-          # Put a port49 release build on PATH, as Install the clients describes;
-          # the static build suits CI. Then:
-          port49 --version
+          base="https://github.com/blanketfish/port49/releases/download/v${PORT49_VERSION}"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "${base}/port49_${PORT49_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "${base}/SHA256SUMS"
+          sha256sum --ignore-missing -c SHA256SUMS
+          tar -xzf "port49_${PORT49_VERSION}_linux_amd64.tar.gz" port49
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/port49" --version
       - name: port49 policy test
         run: port49 policy test --policy policy.yaml --inventory inventory.yaml
       - name: port49 policy diff
@@ -529,7 +536,9 @@ jobs:
           port49 policy diff --old "$RUNNER_TEMP/old-policy.yaml" --new policy.yaml --inventory inventory.yaml
 ```
 
-Getting the CLI is on [Install the clients](../operate/install/clients.md). In the
+The install step pins a release and checks it against the release's `SHA256SUMS`; raise
+`PORT49_VERSION` when you upgrade. [Install the clients](../operate/install/clients.md#download-a-release)
+has the same steps for a workstation. In the
 [worked example](#a-worked-example), this job fails the pull request that deletes the deny at its
 `policy test` step, and passes once the test is turned around.
 

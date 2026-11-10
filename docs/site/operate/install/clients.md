@@ -35,6 +35,28 @@ Check which one you have, and its version:
 port49 --version
 ```
 
+## Download a release
+
+Each release on [GitHub Releases](https://github.com/blanketfish/port49/releases) carries the client
+archive for each system, `port49_<version>_<os>_<arch>.tar.gz`, and a `SHA256SUMS` file covering every
+asset. Download the archive and the sums, check the archive against them, then unpack `port49` onto your
+`PATH`:
+
+```sh
+PORT49_VERSION=0.1.0
+base="https://github.com/blanketfish/port49/releases/download/v${PORT49_VERSION}"
+curl -fsSLO "${base}/port49_${PORT49_VERSION}_linux_amd64.tar.gz"
+curl -fsSLO "${base}/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+tar -xzf "port49_${PORT49_VERSION}_linux_amd64.tar.gz" port49
+sudo install -m 0755 port49 /usr/local/bin/port49
+```
+
+On macOS, use `darwin` in the archive name, and `shasum -a 256 --ignore-missing -c SHA256SUMS` to check it.
+Each asset also has a build provenance attestation. With the GitHub CLI, `gh attestation verify
+port49_${PORT49_VERSION}_linux_amd64.tar.gz --repo blanketfish/port49` checks that the release workflow built
+it.
+
 ## PKCS#11 on Linux, macOS and Homebrew
 
 A hardware key needs the YubiKey PKCS#11 module, `libykcs11`. `port49 hwkey setup` and
