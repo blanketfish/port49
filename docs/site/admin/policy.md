@@ -345,6 +345,8 @@ expands (a policy test exercises it): netops on leaf1: "show running-config <any
 ```
 
 The reviewer sees one changed test line beside the removed deny: the widening is written down and tested.
+In CI, the job in [Run the checks in CI](#run-the-checks-in-ci) blocks the first version of the pull request
+and passes the second.
 
 A privilege raise works the same way, with a session test. If the same pull request had changed `read_only`'s
 `privilege: readonly` to `privilege: operator`, the diff would print the test it needs:
@@ -408,7 +410,7 @@ projection reports. Read them; they are what a reviewer would ask.
 port49 policy diff --old main-policy.yaml --new policy.yaml --inventory inventory.yaml
 ```
 
-Run it in CI on every pull request that touches the policy. It compares the two files for every subject on
+Run it in CI on every pull request that touches the policy ([Run the checks in CI](#run-the-checks-in-ci)). It compares the two files for every subject on
 every device, over every command shape the rules distinguish, now and at every later grant expiry. It prints
 each change, and exits 1 on a **widening** that no test or acknowledgment accounts for.
 
@@ -491,6 +493,45 @@ Only a grant to an existing, unchanged subject is ungated. The gate still catche
 - a new identity for an existing subject, or a changed group;
 - a `per_login_mfa` weakening that no new or changed session test asserts;
 - a privilege raise on a device the subject already reached.
+
+### Run the checks in CI
+
+Run both checks in the CI of the repository that holds your policy, so a failed check blocks the merge:
+
+- **`port49 policy test`** on every change.
+- **`port49 policy diff`** on every pull request, with `--old` taken from the branch the pull request
+  merges into (`git show origin/main:policy.yaml > /tmp/old-policy.yaml`) and `--new` the pull request's
+  file.
+
+Both exit 1 on a failure (and 2 on a usage error), so any nonzero exit fails the job. Neither reads a
+secret or asks a broker, so the job needs no credentials. Here is a GitHub Actions job; any CI that can run
+a shell works the same way:
+
+```yaml
+name: policy
+on: pull_request
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install port49
+        run: |
+          # Put a port49 release build on PATH, as Install the clients describes;
+          # the static build suits CI. Then:
+          port49 --version
+      - name: port49 policy test
+        run: port49 policy test --policy policy.yaml --inventory inventory.yaml
+      - name: port49 policy diff
+        run: |
+          git fetch --depth=1 origin "$GITHUB_BASE_REF"
+          git show FETCH_HEAD:policy.yaml > "$RUNNER_TEMP/old-policy.yaml"
+          port49 policy diff --old "$RUNNER_TEMP/old-policy.yaml" --new policy.yaml --inventory inventory.yaml
+```
+
+Getting the CLI is on [Install the clients](../operate/install/clients.md). In the
+[worked example](#a-worked-example), this job fails the pull request that deletes the deny at its
+`policy test` step, and passes once the test is turned around.
 
 ### `port49 policy replay`
 
