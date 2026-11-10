@@ -72,6 +72,10 @@ func TestTheSiteIsVersionedByMike(t *testing.T) {
 				if opts["canonical_version"] != "latest" {
 					t.Errorf("the mike plugin's canonical_version is %v, want latest", opts["canonical_version"])
 				}
+				// a copy is served the same on any host; a symlink alias depends on the host following it
+				if opts["alias_type"] != "copy" {
+					t.Errorf("the mike plugin's alias_type is %v, want copy", opts["alias_type"])
+				}
 				// Material draws its own selector; mike's would add a second one
 				if opts["version_selector"] != false {
 					t.Errorf("the mike plugin's version_selector is %v, want false (Material's dropdown is the selector)", opts["version_selector"])

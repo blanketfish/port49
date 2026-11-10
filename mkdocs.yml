@@ -17,6 +17,8 @@ plugins:
   - search
   - mike:
       canonical_version: latest
+      # latest is a real copy of the release it names, not a symlink, so it is served the same on any host
+      alias_type: copy
       version_selector: false
 
 theme:
