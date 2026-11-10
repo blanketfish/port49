@@ -39,6 +39,10 @@ func TestReleasingScopesTheDeployJobsWrite(t *testing.T) {
 		!strings.Contains(s, "There is no automatic retry") {
 		t.Error("RELEASING.md does not say a lost race fails red and all jobs of the run are re-run")
 	}
+	// the main-only outcomes the operator sees, in the workflow's and docspublish's words
+	if !strings.Contains(s, `"superseded by a newer main push; nothing to do"`) || !strings.Contains(s, `"a newer main push deploys"`) {
+		t.Error("RELEASING.md does not say what an older main run prints: a newer main push deploys, or superseded")
+	}
 	if !strings.Contains(s, "Only final\n   tags that are on `main` count") {
 		t.Error("RELEASING.md does not say only final tags on main count")
 	}

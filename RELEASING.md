@@ -44,10 +44,16 @@ PEP 440 version. The docs site states the same on its Versions page.
    itself, builds with mike, commits locally and uploads the branch as a git bundle. The `push-pages`
    job runs only git on a verified bundle: it has no checkout and runs no repository code, and it
    pushes `gh-pages`, never forced. Outside `release.yml`, the `push-pages` job is the only workflow job with
-   `contents: write`. If another deploy moved `gh-pages` first, the push is rejected and the job fails with
+   `contents: write`. A `main` run deploys only if its commit is still the tip of `main`: when two
+   merges land close together, the older run either decides there is nothing to publish
+   ("a newer main push deploys") or, if its push is rejected after the newer run's, ends green with
+   "superseded by a newer main push; nothing to do". Either way the newer run deploys. Any other
+   rejected push (a tag's, or the newest `main` run's losing to a tag's) fails red with
    "another deploy moved gh-pages; re-run all jobs of this run": re-run all jobs, not just the failed
-   one, which would push the same stale bundle. There is no automatic retry. Keep the `main` ruleset
-   off `gh-pages`, or the bot's push is refused. The deploy also commits a root `404.html` that
+   one, which would push the same stale bundle. A re-run is safe for both refs: a tag re-run deploys
+   only the highest patch of its line, and a `main` re-run deploys nothing once a newer `main` commit
+   exists. There is no automatic retry. Keep the `main` ruleset off `gh-pages`, or the bot's push is
+   refused. The deploy also commits a root `404.html` that
    sends an old `/port49/<page>` link to `/port49/latest/<page>`, and a root `llms.txt` copied from
    `latest`.
 8. **Required check.** Add `docs` (the build job in `docs.yml`, named `docs`) to the required
