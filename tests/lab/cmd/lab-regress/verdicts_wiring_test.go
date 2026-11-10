@@ -52,7 +52,7 @@ func TestAfterRunFailsAnEntryWhoseVerdictChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := afterRun(e, start, "true")
-	if err == nil || !strings.Contains(err.Error(), "PASS -> FAIL") || !strings.Contains(err.Error(), "L1") {
+	if err == nil || !strings.Contains(err.Error(), "PASS | <d> -> FAIL | <d>") || !strings.Contains(err.Error(), "L1") {
 		t.Fatalf("a flipped row must fail the entry, naming it and old -> new: %v", err)
 	}
 }

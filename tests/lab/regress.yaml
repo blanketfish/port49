@@ -45,7 +45,7 @@ entries:
      notes: [tests/lab/results/L71-cisco_iol-xe.md]}
   - {id: L73-xrd261, no_verdict_notes: [tests/lab/results/L71-cisco_xrd.md],measured_minutes: 9.7, run: '^TestL73$', platforms: xrd261, rows: [L73, L71], env: {PORT49_LAB_REMEASURE: "L73,L71"},
      notes: [tests/lab/results/L73-cisco_xrd.md, tests/lab/results/L71-cisco_xrd.md]}
-  - {id: L76-srlinux, verdicts: none, measured_minutes: 3.0, run: '^TestL76$', platforms: srlinux, rows: [L76], env: {PORT49_LAB_REMEASURE: L76},
+  - {id: L76-srlinux,measured_minutes: 3.0, run: '^TestL76$', platforms: srlinux, rows: [L76], env: {PORT49_LAB_REMEASURE: L76},
      notes: [tests/lab/results/L76-nokia_srlinux.md]}
   - {id: L80-nxos106, measured_minutes: 7.4, target: lab-qualify, run: '^TestQualify$', platforms: nxos106, rows: [L80],
      env: {PORT49_LAB_QUALIFY: "1", PORT49_LAB_REMEASURE: L80},
@@ -61,7 +61,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L5}
     notes: [tests/lab/results/L5-arista_eos.md, tests/lab/results/L5-juniper_vjunos-router.md, tests/lab/results/L5-juniper_vsrx.md, tests/lab/results/L5-cisco_nxos.md, tests/lab/results/L5-cisco_iosxe.md]
   - id: L7
-    verdicts: none
     measured_minutes: 9.2
     run: '^(TestL7EAPI|TestL7NXAPI)$'
     platforms: eos,nxos
@@ -84,7 +83,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L3}
     notes: [tests/lab/results/L3-arista_eos.md, tests/lab/results/L3-cisco_nxos.md, tests/lab/results/L3-cisco_iosxe.md]
   - id: L3-nxos
-    verdicts: none
     measured_minutes: 3.6
     run: '^TestL3NXOSEnable$'
     platforms: nxos
@@ -134,7 +132,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: "L12,L9"}
     notes: [tests/lab/results/L12-juniper_vjunos-router.md, tests/lab/results/L12-juniper_vsrx.md, tests/lab/results/L9-juniper_vjunos-router.md, tests/lab/results/L9-juniper_vsrx.md]
   - id: L26
-    verdicts: none
     measured_minutes: 13.7
     run: '^TestL26JunosKeywords$'
     platforms: vjunos,vsrx
@@ -177,7 +174,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L26c-junoscript}
     notes: [tests/lab/results/L26c-junoscript-juniper_vjunos-router.md, tests/lab/results/L26c-junoscript-juniper_vsrx.md]
   - id: L57
-    verdicts: none
     measured_minutes: 4.8
     run: '^TestL57JunosGroups$'
     platforms: vjunos,vsrx
@@ -226,7 +222,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L31}
     notes: [tests/lab/results/L31-arista_eos.md, tests/lab/results/L31-cisco_nxos.md, tests/lab/results/L31-cisco_iosxe.md]
   - id: L34
-    verdicts: none
     measured_minutes: 102.9
     run: '^TestSessionLifetime$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
@@ -260,7 +255,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L37}
     notes: [tests/lab/results/L37-arista_eos.md, tests/lab/results/L37-juniper_vjunos-router.md, tests/lab/results/L37-juniper_vsrx.md, tests/lab/results/L37-cisco_nxos.md, tests/lab/results/L37-cisco_iosxe.md]
   - id: L38
-    verdicts: none
     measured_minutes: 3.5
     run: '^TestIOSXEOpenSessionUnreachable$'
     platforms: iosxe
@@ -275,7 +269,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L41}
     notes: [tests/lab/results/L41-arista_eos.md, tests/lab/results/L41-juniper_vjunos-router.md, tests/lab/results/L41-juniper_vsrx.md, tests/lab/results/L41-cisco_nxos.md, tests/lab/results/L41-cisco_iosxe.md]
   - id: L49-eos
-    verdicts: none
     measured_minutes: 6.9
     run: '^TestL49Oxidized$'
     platforms: eos
@@ -284,7 +277,6 @@ entries:
     timeout_minutes: 90
     notes: [tests/lab/results/L49-oxidized-arista_eos.md]
   - id: L49-vjunos
-    verdicts: none
     measured_minutes: 7.5
     run: '^TestL49Oxidized$'
     platforms: vjunos
@@ -293,7 +285,6 @@ entries:
     timeout_minutes: 90
     notes: [tests/lab/results/L49-oxidized-juniper_vjunos-router.md]
   - id: L49-vsrx
-    verdicts: none
     measured_minutes: 7.2
     run: '^TestL49Oxidized$'
     platforms: vsrx
@@ -302,7 +293,6 @@ entries:
     timeout_minutes: 90
     notes: [tests/lab/results/L49-oxidized-juniper_vsrx.md]
   - id: L49-nxos
-    verdicts: none
     measured_minutes: 9.6
     run: '^TestL49Oxidized$'
     platforms: nxos
@@ -311,7 +301,6 @@ entries:
     timeout_minutes: 90
     notes: [tests/lab/results/L49-oxidized-cisco_nxos.md]
   - id: L49-iosxe
-    verdicts: none
     measured_minutes: 8.0
     run: '^TestL49Oxidized$'
     platforms: iosxe
@@ -328,7 +317,6 @@ entries:
     timeout_minutes: 60
     notes: [tests/lab/results/L90-oxidized-arista_eos.md]
   - id: L53
-    verdicts: none
     measured_minutes: 28.6
     run: '^TestL53HostKeyScan$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
@@ -419,7 +407,6 @@ entries:
     timeout_minutes: 30
     notes: [tests/lab/results/L42-openldap.md, tests/lab/results/L42-samba_ad.md, tests/lab/results/L43-openldap.md, tests/lab/results/L43-samba_ad.md]
   - id: L45-L46
-    no_verdict_notes: [tests/lab/results/L45-keycloak.md]
     measured_minutes: 7.2
     run: '^(TestL45LogoutToken|TestL46FreshAuthentication)$'
     rows: [L45, L46]
@@ -427,7 +414,6 @@ entries:
     timeout_minutes: 30
     notes: [tests/lab/results/L45-keycloak.md, tests/lab/results/L46-keycloak.md]
   - id: L48
-    verdicts: none
     measured_minutes: 17.9
     run: '^TestL48StepCA$'
     rows: [L48]

@@ -39,7 +39,7 @@ func TestVerdictChangesNone(t *testing.T) {
 func TestVerdictChangesChangedRow(t *testing.T) {
 	newer := strings.Replace(noteL64, "| L64c | PASS |", "| L64c | FAIL |", 1)
 	got := verdictChanges(noteL64, newer)
-	if len(got) != 1 || !strings.HasPrefix(got[0], "L64c") || !strings.HasSuffix(got[0], ": PASS -> FAIL") {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "L64c") || !strings.HasSuffix(got[0], ": PASS | <d> -> FAIL | <d>") {
 		t.Fatalf("want one change L64c: PASS -> FAIL, got %v", got)
 	}
 }
@@ -47,7 +47,7 @@ func TestVerdictChangesChangedRow(t *testing.T) {
 func TestVerdictChangesOtherSpellings(t *testing.T) {
 	newer := strings.Replace(noteObs, "| c | OBSERVED |", "| c | **FAIL** |", 1)
 	got := verdictChanges(noteObs, newer)
-	if len(got) != 1 || got[0] != "c: OBSERVED -> FAIL" {
+	if len(got) != 1 || got[0] != "c: OBSERVED | the store hung -> FAIL | the store hung" {
 		t.Fatalf("got %v", got)
 	}
 }
@@ -55,20 +55,26 @@ func TestVerdictChangesOtherSpellings(t *testing.T) {
 func TestVerdictChangesAddedAndRemovedRows(t *testing.T) {
 	added := noteL64 + "\n| cell | outcome | elapsed |\n|---|---|---|\n| L64e | PASS | 1s |\n"
 	got := verdictChanges(noteL64, added)
-	if len(got) != 1 || !strings.HasPrefix(got[0], "L64e") || !strings.HasSuffix(got[0], ": added (PASS)") {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "L64e") || !strings.HasSuffix(got[0], ": added (PASS | <d>)") {
 		t.Fatalf("an added row is a change: %v", got)
 	}
 	removed := strings.Replace(noteL64, "| L64b | PASS | 1m12.9s |\n", "", 1)
 	got = verdictChanges(noteL64, removed)
-	if len(got) != 1 || !strings.HasPrefix(got[0], "L64b") || !strings.HasSuffix(got[0], ": removed (was PASS)") {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "L64b") || !strings.HasSuffix(got[0], ": removed (was PASS | <d>)") {
 		t.Fatalf("a removed row is a change: %v", got)
 	}
 }
 
-func TestVerdictChangesIgnoresTablesWithoutVerdictColumn(t *testing.T) {
+// A table with no result column (timings, wire captures keyed by a port) is not read; one that has any is read
+// in every column after its key, and so is a matrix of bare yes/no rows under any headers.
+func TestVerdictChangesReadsOnlyResultTables(t *testing.T) {
 	a := "| FAIL delayed by | SSH login |\n|---|---|\n| 2s | refused |\n"
 	b := "| FAIL delayed by | SSH login |\n|---|---|\n| 2s | logged in |\n"
 	if got := verdictChanges(a, b); len(got) != 0 {
-		t.Fatalf("not a verdict table: %v", got)
+		t.Fatalf("not a result table: %v", got)
+	}
+	m := "| capture | tip | perm |\n|---|---|---|\n| `show x` | yes | no |\n"
+	if got := verdictChanges(m, strings.Replace(m, "| no |", "| yes |", 1)); len(got) != 1 {
+		t.Fatalf("a flipped matrix cell flags: %v", got)
 	}
 }

@@ -10,42 +10,56 @@ import (
 	"strings"
 )
 
-// A results note states a claim's verdict in one of two shapes:
+// A results note states what a claim measured in a few shapes, and lab-regress compares each with HEAD's:
 //
-//   - a markdown table whose header has a verdict column: "outcome", "verdict", "result", "SSH result",
-//     "held", "against the docs", or "agrees with decision N". Its rows are keyed by the nearest heading,
-//     the header row and the first cell.
-//   - a bold verdict in prose: "- **(d) FAIL**: ..." or "**PASS.** ...", keyed by the nearest heading and
-//     its "(d)" label.
+//   - a markdown table: every column after the first (the row key) is compared as its full normalised text,
+//     except a free-text transcript or rationale column (a header containing "transcript" or "what the device
+//     said", or exactly "why"). A row is keyed by the nearest heading, the header row and its first cell.
+//   - a bold verdict in prose ("- **(d) FAIL**: ...", "**PASS.** ..."), a qualification bullet
+//     ("- `cell` (...): **pass**."), and a ruling bullet ("- **Ruling 15 may close on this run:** true (...)"),
+//     keyed by their subject.
+//   - a bullet under a "Read off" heading: keyed by its subject (the text before the first ": " or " = "),
+//     compared on its full normalised remainder.
+//   - a "<claim>: yes|no|true|false" inside a sentence ("Same URI SAN: yes (...); same public key: yes").
 //
-// Tables without such a column (timings, captures) are not compared. A note that parses no verdict row is
-// refused unless its manifest entry says `verdicts: none` (checkVerdicts), so a shape this parser misses
-// fails loudly.
+// A note that parses no row is refused unless its manifest entry says `verdicts: none` (checkVerdicts), so a
+// shape this parser misses fails loudly. Comparing full text costs a person a look when a harness reworded a
+// cell; a cut that hid a real change would let a wrong claim stand.
 
 type verdictRow struct{ key, label, verdict string }
 
-// allColumns marks a table whose every column after the first is a verdict (a "Verdict against the control" table).
-const allColumns = -2
-
 var (
-	verdictColumn = regexp.MustCompile(`^(outcome|verdict|result|ssh result|held|against the docs|agrees with decision \d+)$`)
 	// A bold verdict opening a line, bulleted or not: "**(d) FAIL**" or "**PASS.**".
 	proseVerdict = regexp.MustCompile(`^(?:[-*]\s+)?\*\*(?:(\([^)]*\))\s+)?(PASS|FAIL|INVALID|OBSERVED|TIMEOUT|SKIPPED)\b[^*]*\*\*`)
 	// A qualification note's bullet: "- `token_login` (re-measures L1): **pass**. ..." or "**not_run**".
 	cellVerdict = regexp.MustCompile("^- `([^`]+)`[^*]*?: \\*\\*([a-z_]+)\\*\\*")
 	// A ruling bullet: "- **Ruling 15 may close on this run:** true (...)".
-	boldClaim = regexp.MustCompile(`^- \*\*([^*]+?):\*\*\s+(true|false)\b`)
-	// The words a "Read off the table" bullet states its verdict in: true or false anywhere, or one of these
-	// first.
-	readOffBool = regexp.MustCompile(`\b(true|false)\b`)
-	readOffLead = regexp.MustCompile(`^(not reached|refused|ran|reached|accepted)\b`)
-	// The observation columns, read only when a table has no verdict column.
-	weakColumn = regexp.MustCompile(`^(observed|reply|inert)$`)
-	// An RFC 3339 timestamp, and a run of 12 or more hex characters (a container id, a digest).
-	timeRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`)
-	hexRe  = regexp.MustCompile(`\b[0-9a-f]{12,}\b`)
-	// A Go duration, "1m12.9s", "320ms", "1h2m": the numbers a rerun moves.
+	boldClaim = regexp.MustCompile(`^- \*\*([^*]+?):\*\*\s+((?:true|false)\b.*)$`)
+	// A bullet that states a value in bold after a colon: "- class_level_apply_groups: `show ...`: **stripped**; ...".
+	boldValue = regexp.MustCompile(`^- [^*]+?: \*\*[A-Za-z_]+\*\*`)
+	// A yes/no claim inside a sentence: ": yes", ": no", ": true", ": false" closing a clause.
+	claimYN = regexp.MustCompile(`: (yes|no|true|false)\b`)
+	// A header that makes a table a table of results: a verdict word, or a column the device's answer sits in.
+	// Only such a table is read (timing, wire-capture and setup tables hold values no claim rests on, and
+	// their rows are keyed by a port or a packet id that moves every run).
+	resultColumn = regexp.MustCompile(`^(outcome|verdict|result|ssh result|held|against the docs|agrees with decision \d+|observed|reply|inert|device answered|the device|typed (first|second) .*|(sid|sub) = .*)$`)
+	// A free-text column header the comparison leaves out.
+	excludedColumn = regexp.MustCompile(`transcript|what the device said`)
+
+	// What a rerun moves, normalised before comparing: an RFC 3339 timestamp, a Go duration ("1m12.9s"), a run
+	// of 12 or more hex characters (a container id, a digest), a 16-character upper-case id (a ctx_id), an
+	// address with a port, "port 41234", a temp path, an etcd revision ("at 320"), a tty ("port=vty6").
+	timeRe     = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`)
 	durationRe = regexp.MustCompile(`\b\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s)(?:\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s))*\b`)
+	hexRe      = regexp.MustCompile(`\b[0-9a-f]{12,}\b`)
+	ctxRe      = regexp.MustCompile(`\b[A-Z0-9]{16}\b`)
+	addrRe     = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+\b|\[[0-9a-fA-F:]+\]:\d+`)
+	portRe     = regexp.MustCompile(`\bport \d{4,5}\b`)
+	tmpRe      = regexp.MustCompile(`/tmp/\S+`)
+	revRe      = regexp.MustCompile(`\bat \d+\b(?:\.\d+)?`)
+	ttyRe      = regexp.MustCompile(`\bport=[^\s;,)]*`)
+	lineRe     = regexp.MustCompile(`\b(?:vty|tty|con|pts/)\d+\b`)
+	rttRe      = regexp.MustCompile(`\d+\.\d+(?:/\d+\.\d+)+ ms`)
 )
 
 func splitRow(ln string) []string {
@@ -81,30 +95,30 @@ func isSeparator(cells []string) bool {
 	return len(cells) > 0
 }
 
-// verdictText is a verdict cell with the bold marks off and its durations normalised: the harness writes
-// how long a step took into the cell ("refused in 2.09s"), and a rerun moves that.
-func verdictText(cell string) string {
-	s := strings.Trim(cell, "* ")
+// norm is a cell's text with the values a rerun moves normalised away, in this order, and its ';'-separated
+// parts sorted (records arrive in a different order from run to run).
+func norm(cell string) string {
+	s := strings.NewReplacer("`", "", "*", "").Replace(cell)
 	s = timeRe.ReplaceAllString(s, "<t>")
 	s = durationRe.ReplaceAllString(s, "<d>")
-	return hexRe.ReplaceAllString(s, "<hex>")
+	s = hexRe.ReplaceAllString(s, "<hex>")
+	s = ctxRe.ReplaceAllString(s, "<id>")
+	s = addrRe.ReplaceAllString(s, "<addr>")
+	s = portRe.ReplaceAllString(s, "port <p>")
+	s = tmpRe.ReplaceAllString(s, "<tmp>")
+	s = revRe.ReplaceAllString(s, "at <rev>")
+	s = ttyRe.ReplaceAllString(s, "port=<tty>")
+	s = lineRe.ReplaceAllString(s, "<tty>")
+	s = rttRe.ReplaceAllString(s, "<rtt>")
+	parts := strings.Split(s, ";")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, "; ")
 }
 
-// leadingPhrase is an observation cell's verdict: what it says before its detail. Backticks are dropped,
-// timestamps, durations and long hex ids normalised, and the text cut at the first ';', ':', '/', '(', ',' or
-// " in <d>". "printed its output in 100ms: 'Arista'" is "printed its output"; the detail varies per run.
-func leadingPhrase(cell string) string {
-	s := verdictText(strings.NewReplacer("`", "", "*", "").Replace(cell))
-	if i := strings.IndexAny(s, ";:/(,"); i >= 0 {
-		s = s[:i]
-	}
-	if i := strings.Index(s, " in <d>"); i >= 0 {
-		s = s[:i]
-	}
-	return strings.TrimSpace(s)
-}
-
-// verdictRows lists the verdict rows of a note in order. A key that repeats gets a "#2", "#3" suffix.
+// verdictRows lists the rows of a note in order. A key that repeats gets a "#2", "#3" suffix.
 func verdictRows(note string) []verdictRow {
 	var rows []verdictRow
 	seen := map[string]int{}
@@ -115,11 +129,9 @@ func verdictRows(note string) []verdictRow {
 		}
 		rows = append(rows, verdictRow{key, label, verdict})
 	}
-	heading := ""
-	col := -1 // the verdict column of the table being read, or -1
-	header := ""
-	inTable := false
-	fenced := false
+	heading, header := "", ""
+	var compared []int // the columns of the table being read that are compared
+	inTable, fenced, isResult := false, false, false
 	for _, ln := range strings.Split(note, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(ln), "```") {
 			fenced, inTable = !fenced, false
@@ -134,61 +146,98 @@ func verdictRows(note string) []verdictRow {
 		cells := splitRow(ln)
 		if cells == nil {
 			inTable = false
-			if m := proseVerdict.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
-				add(heading+"\x00prose\x00"+m[1], labelFor(heading, strings.TrimSpace(m[1]+" "+m[2])), m[2])
-			} else if m := cellVerdict.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
-				add(heading+"\x00cell\x00"+m[1], labelFor(heading, m[1]), m[2])
-			} else if m := boldClaim.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
-				add(heading+"\x00claim\x00"+m[1], labelFor(heading, m[1]), m[2])
-			} else if strings.HasPrefix(strings.ToLower(heading), "read off") && strings.HasPrefix(ln, "- ") {
-				claim, rest := readOffClaim(strings.TrimPrefix(ln, "- "))
-				if v := readOffVerdict(rest); v != "" { // a bullet that states no verdict is prose
-					add(heading+"\x00readoff\x00"+claim, labelFor(heading, claim), v)
-				}
-			}
+			proseRows(strings.TrimRight(ln, " \t"), heading, add)
 			continue
 		}
 		if !inTable {
 			// the first row of a table is its header
-			inTable, col, header = true, -1, strings.Join(cells, "|")
+			inTable, header, compared = true, strings.Join(cells, "|"), nil
+			isResult = false
 			for i, c := range cells {
-				if verdictColumn.MatchString(strings.ToLower(c)) && col < 0 {
-					col = i
+				l := strings.ToLower(strings.Trim(c, "*` "))
+				isResult = isResult || resultColumn.MatchString(l)
+				if i > 0 && !excludedColumn.MatchString(l) && l != "why" {
+					compared = append(compared, i)
 				}
-			}
-			if col < 0 {
-				// No verdict column: the observation columns, compared by their leading phrase.
-				for i, c := range cells {
-					if weakColumn.MatchString(strings.ToLower(c)) && col < 0 {
-						col = i
-					}
-				}
-			}
-			if col < 0 && strings.HasPrefix(strings.ToLower(heading), "verdict") {
-				col = allColumns // "### Verdict against the control": every column after the first is a verdict
 			}
 			continue
 		}
-		if isSeparator(cells) || col == -1 || (col >= 0 && col >= len(cells)) || len(cells) < 2 {
+		if isSeparator(cells) || len(cells) < 2 || (!isResult && !boolMatrixRow(cells)) {
 			continue
 		}
-		verdict := ""
-		if col == allColumns {
-			var parts []string
-			for _, c := range cells[1:] {
-				parts = append(parts, leadingPhrase(c))
+		var parts []string
+		for _, i := range compared {
+			if i < len(cells) {
+				parts = append(parts, norm(cells[i]))
 			}
-			verdict = strings.Join(parts, " | ")
-		} else {
-			verdict = leadingPhrase(cells[col])
 		}
-		add(heading+"\x00"+header+"\x00"+cells[0], labelFor(heading, cells[0]), verdict)
+		add(heading+"\x00"+header+"\x00"+cells[0], labelFor(heading, cells[0]), strings.Join(parts, " | "))
 	}
 	return rows
 }
 
-// readOffClaim splits a "Read off the table" bullet into its claim and the rest: at the first ": " or " = ",
-// "explicit anchors: true: ..." and "JunosFacts.CaseSensitive = false: ...". A bullet with neither is all claim.
+// boolMatrixRow is whether every cell after the first is a bare yes, no, true, false or "not parsed": a row of
+// a matrix of answers, whatever its headers say (L57's "capture | p49g-tip | ..." table).
+func boolMatrixRow(cells []string) bool {
+	for _, c := range cells[1:] {
+		switch strings.ToLower(strings.Trim(c, "*` ")) {
+		case "yes", "no", "true", "false", "not parsed":
+		default:
+			return false
+		}
+	}
+	return len(cells) > 1
+}
+
+// proseRows reads the verdicts a line that is not a table row states.
+func proseRows(ln, heading string, add func(key, label, verdict string)) {
+	t := strings.TrimSpace(ln)
+	switch {
+	case proseVerdict.MatchString(t):
+		m := proseVerdict.FindStringSubmatch(t)
+		add(heading+"\x00prose\x00"+m[1], labelFor(heading, strings.TrimSpace(m[1]+" "+m[2])), m[2])
+	case cellVerdict.MatchString(t):
+		m := cellVerdict.FindStringSubmatch(t)
+		add(heading+"\x00cell\x00"+m[1], labelFor(heading, m[1]), m[2])
+	case boldClaim.MatchString(t):
+		m := boldClaim.FindStringSubmatch(t)
+		add(heading+"\x00claim\x00"+m[1], labelFor(heading, m[1]), norm(m[2]))
+	case boldValue.MatchString(t):
+		i := boldValue.FindStringIndex(t)[0]
+		add(heading+"\x00bold\x00"+strings.TrimPrefix(t[:i], "- "), labelFor(heading, strings.TrimPrefix(t[:i], "- ")), norm(t[i:]))
+	case strings.HasPrefix(strings.ToLower(heading), "read off") && strings.HasPrefix(ln, "- "):
+		claim, rest := readOffClaim(strings.TrimPrefix(ln, "- "))
+		add(heading+"\x00readoff\x00"+claim, labelFor(heading, claim), norm(rest))
+	default:
+		yesNoClaims(t, heading, add)
+	}
+}
+
+// yesNoClaims reads each "<claim>: yes|no|true|false" in a sentence. A claim runs back from its colon to the
+// previous '(', ';', sentence end, earlier claim, or the line's start.
+func yesNoClaims(t, heading string, add func(key, label, verdict string)) {
+	if strings.HasPrefix(t, "#") {
+		return
+	}
+	prev := 0
+	for _, m := range claimYN.FindAllStringSubmatchIndex(t, -1) {
+		start := prev
+		for _, d := range []string{"(", ";", ". "} {
+			if i := strings.LastIndex(t[start:m[0]], d); i >= 0 {
+				start += i + len(d)
+			}
+		}
+		claim := strings.TrimSpace(strings.TrimLeft(strings.NewReplacer("*", "").Replace(t[start:m[0]]), "-+ \t"))
+		prev = m[1]
+		if len(claim) < 3 || len(claim) > 140 {
+			continue
+		}
+		add(heading+"\x00yn\x00"+claim, labelFor(heading, claim), t[m[2]:m[3]])
+	}
+}
+
+// readOffClaim splits a "Read off the table" bullet into its subject and the rest: at the first ": " or " = ",
+// "explicit anchors: true: ..." and "JunosFacts.CaseSensitive = false: ...". A bullet with neither is all subject.
 func readOffClaim(b string) (claim, rest string) {
 	i, j := strings.Index(b, ": "), strings.Index(b, " = ")
 	switch {
@@ -200,16 +249,6 @@ func readOffClaim(b string) (claim, rest string) {
 	return b[:i], b[i+2:]
 }
 
-// readOffVerdict is the verdict of a bullet's rest: the word it opens with ("not reached", "refused", ...) and
-// every true or false in it, in order. The prose around them is not compared.
-func readOffVerdict(rest string) string {
-	var words []string
-	if m := readOffLead.FindString(rest); m != "" {
-		words = append(words, m)
-	}
-	return strings.Join(append(words, readOffBool.FindAllString(rest, -1)...), " ")
-}
-
 // labelFor is what a report names a row by: its first cell, and the heading it sits under.
 func labelFor(heading, first string) string {
 	if heading == "" {
@@ -218,8 +257,8 @@ func labelFor(heading, first string) string {
 	return fmt.Sprintf("%s (under %q)", first, heading)
 }
 
-// verdictChanges describes each verdict row whose verdict differs between the committed note and the
-// rewritten one, and each row added or removed.
+// verdictChanges describes each row whose verdict differs between the committed note and the rewritten one,
+// and each row added or removed.
 func verdictChanges(old, now string) []string {
 	oldRows, newRows := verdictRows(old), verdictRows(now)
 	was := map[string]string{}
@@ -270,7 +309,7 @@ func gitShow(path string) (string, error) {
 // checkVerdicts fails an entry whose rewritten notes changed a claim's verdict from HEAD's: a flaked or
 // regressed cell must not pass because the binary exited 0. It names the entry, the note, the row, and
 // old -> new. Every manifest note belongs to a closed row, so it must exist at HEAD, and a note that parses
-// no verdict row is refused unless the entry says `verdicts: none`.
+// no row is refused unless the entry says `verdicts: none`.
 func checkVerdicts(e Entry) error { return checkVerdictsWith(e, gitShow) }
 
 func checkVerdictsWith(e Entry, show func(path string) (string, error)) error {
@@ -287,7 +326,7 @@ func checkVerdictsWith(e Entry, show func(path string) (string, error)) error {
 		now := string(raw)
 		switch rows := len(verdictRows(now)); {
 		case noVerdicts(e, n) && rows > 0:
-			return fmt.Errorf("%s: %s is marked as stating no verdicts but parses %d verdict rows: remove the mark", e.ID, n, rows)
+			return fmt.Errorf("%s: %s is marked as stating no verdicts but parses %d rows: remove the mark", e.ID, n, rows)
 		case noVerdicts(e, n):
 			continue
 		case rows == 0:
