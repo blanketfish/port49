@@ -92,8 +92,10 @@ jobs:
           # gh-pages first, then the tags: a tag whose deploy is already in the gh-pages fetched here
           # was pushed before this fetch of tags, so it is in the list docspublish decides from
           git fetch --force origin '+refs/heads/gh-pages:refs/heads/gh-pages' || echo "no gh-pages branch yet"
+          # the same fetch updates origin/main: a main run, or a re-run, whose commit is no longer
+          # main's tip publishes nothing, so it cannot put older docs back on dev (or latest)
           git fetch --tags --force origin '+refs/heads/main:refs/remotes/origin/main'
-          out=$(go run ./tests/ci/cmd/docspublish -ref "$GITHUB_REF")
+          out=$(go run ./tests/ci/cmd/docspublish -ref "$GITHUB_REF" -sha "$GITHUB_SHA")
           publish=$(printf '%s\n' "$out" | sed -n 's/^publish=//p')
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           if [ "$publish" != true ]; then
@@ -132,9 +134,11 @@ jobs:
   #
   # The group is per ref and only here. Deploy writes nothing, so it needs none. A main run's push can
   # then neither queue behind nor cancel a tag run's pending push; a newer pending push of the same ref
-  # supersedes an older one, which is right because its build is newer. A push that loses the race to
-  # another ref's push is rejected and fails red; the message says to re-run all jobs of the run, since
-  # re-running only this job would push the same stale bundle.
+  # supersedes an older one, which is right because its build is newer. A rejected main push whose
+  # commit is no longer main's tip lost to a newer main run, which deploys newer docs: it ends green,
+  # "superseded". Any other rejected push (a tag's, or main's tip losing to a tag) fails red; the message
+  # says to re-run all jobs of the run, since re-running only this job would push the same stale bundle.
+  # Re-running a main run is safe: docspublish publishes main only from main's tip.
   push-pages:
     needs: deploy
     if: needs.deploy.outputs.publish == 'true' && github.event_name == 'push' && github.event.repository.private == false
@@ -161,6 +165,16 @@ jobs:
           git -C "$t" bundle verify "$b"
           git -C "$t" -c transfer.fsckObjects=true fetch -q "$b" gh-pages:gh-pages
           if ! git -C "$t" -c core.hooksPath=/dev/null -c credential.helper= push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages:gh-pages; then
-            echo "another deploy moved gh-pages; re-run all jobs of this run" >&2
+            # main only: if main has moved on, the newer main run deploys newer docs, so losing to it is
+            # no failure. Main's tip is read with no token (the repository is public, as the if: requires).
+            if [ "$GITHUB_REF" = refs/heads/main ]; then
+              tip=$(git -c core.hooksPath=/dev/null -c credential.helper= ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main)
+              tip=${tip%%[[:space:]]*}
+              if [ -n "$tip" ] && [ "$tip" != "$GITHUB_SHA" ]; then
+                echo "superseded by a newer main push; nothing to do"
+                exit 0
+              fi
+            fi
+            echo "another deploy moved gh-pages; re-run all jobs of this run (not only this job: it would retry the same stale bundle)" >&2
             exit 1
           fi

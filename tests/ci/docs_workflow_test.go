@@ -173,9 +173,10 @@ func TestThePushJobRunsOnlyGitOnAVerifiedBundle(t *testing.T) {
 		t.Fatalf("push-pages has %d steps, want a download and one run of git", len(pp.Steps))
 	}
 	dl, run := pp.Steps[0], pp.Steps[1]
-	if !regexp.MustCompile(`^actions/download-artifact@[0-9a-f]{40}$`).MatchString(dl.Uses) ||
+	// name and path only: a run-id or github-token input would download another run's bundle
+	if !regexp.MustCompile(`^actions/download-artifact@[0-9a-f]{40}$`).MatchString(dl.Uses) || len(dl.With) != 2 ||
 		dl.With["name"] != "gh-pages-bundle" || dl.With["path"] != "${{ runner.temp }}/bundle" {
-		t.Errorf("push-pages' first step is %q with %v, want the pinned download of gh-pages-bundle into $RUNNER_TEMP/bundle", dl.Uses, dl.With)
+		t.Errorf("push-pages' first step is %q with %v, want the pinned download of gh-pages-bundle into $RUNNER_TEMP/bundle, with no other input", dl.Uses, dl.With)
 	}
 	for _, s := range pp.Steps {
 		if strings.HasPrefix(s.Uses, "actions/checkout@") || strings.HasPrefix(s.Uses, "actions/setup-") {
@@ -231,6 +232,67 @@ func TestThePushJobRunsOnlyGitOnAVerifiedBundle(t *testing.T) {
 			t.Errorf("push-pages loops or waits (%q): a lost race fails red and the whole run is re-run", loop)
 		}
 	}
+	// the token is in the push URL and nowhere else in the script
+	if n := strings.Count(run.Run, "GH_TOKEN"); n != 1 {
+		t.Errorf("push-pages names GH_TOKEN %d times, want once, in the push", n)
+	}
+}
+
+// A rejected main push whose commit is no longer main's tip lost to a newer main push, which deploys
+// newer docs: it ends green with "superseded", not red. The check reads main's tip with no token, the
+// same clean git flags, and only for main; a rejected tag push, or a main push that is still the tip,
+// fails red as before.
+func TestARejectedMainPushThatASupersedingPushBeatIsGreen(t *testing.T) {
+	f, _ := docs(t)
+	run := f.Jobs["push-pages"].Steps[1].Run
+	lines := strings.Split(run, "\n")
+	find := func(s string) int {
+		for i, ln := range lines {
+			if strings.Contains(ln, s) {
+				return i
+			}
+		}
+		return -1
+	}
+	push, guard, lsRemote, superseded, red := find(" push "), find(`if [ "$GITHUB_REF" = refs/heads/main ]; then`),
+		find("ls-remote"), find(`echo "superseded by a newer main push; nothing to do"`), find("another deploy moved gh-pages; re-run all jobs of this run")
+	if push < 0 || guard < 0 || lsRemote < 0 || superseded < 0 || red < 0 ||
+		!(push < guard && guard < lsRemote && lsRemote < superseded && superseded < red) {
+		t.Fatalf("push-pages must push (%d), then for main only (%d) read main's tip (%d) and end superseded (%d), before the red message (%d)",
+			push, guard, lsRemote, superseded, red)
+	}
+	if !strings.Contains(lines[push], "if ! git") {
+		t.Errorf("the guard is not on the push's failure: %q", lines[push])
+	}
+	ls := lines[lsRemote]
+	if !strings.Contains(ls, `ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main`) {
+		t.Errorf("the ls-remote is %q, want main's tip read from the public URL", ls)
+	}
+	for _, bad := range []string{"GH_TOKEN", "x-access-token", "github.token", "@github.com"} {
+		if strings.Contains(ls, bad) {
+			t.Errorf("the ls-remote carries a token (%q): %q", bad, ls)
+		}
+	}
+	if !strings.Contains(ls, "-c core.hooksPath=/dev/null") || !strings.Contains(ls, "-c credential.helper=") {
+		t.Errorf("the ls-remote lacks the push's clean flags: %q", ls)
+	}
+	// green only when main's tip is another commit; an empty answer stays red
+	if !strings.Contains(run, `[ -n "$tip" ] && [ "$tip" != "$GITHUB_SHA" ]`) {
+		t.Error("push-pages does not compare main's tip with $GITHUB_SHA")
+	}
+	if strings.TrimSpace(lines[superseded+1]) != "exit 0" || strings.TrimSpace(lines[red+1]) != "exit 1" {
+		t.Errorf("superseded must exit 0 and the rejection exit 1: %q, %q", lines[superseded+1], lines[red+1])
+	}
+	// the main-only block closes before the red message, so every tag rejection is red
+	fis := 0
+	for _, ln := range lines[superseded+1 : red] {
+		if strings.TrimSpace(ln) == "fi" {
+			fis++
+		}
+	}
+	if fis != 2 || strings.Count(run, "refs/heads/main ]") != 1 {
+		t.Error("the superseded check is not one main-only block that ends before the red message")
+	}
 }
 
 // Concurrency: deploy is read-only and has no group. The group is on push-pages, the one job that writes
@@ -269,6 +331,15 @@ func TestTheDocsDeployDecidesAtDeployTime(t *testing.T) {
 	}
 	if !strings.Contains(script, `"publish=$publish" >> "$GITHUB_OUTPUT"`) {
 		t.Error("the site step does not report publish")
+	}
+	// docspublish compares the run's commit with main's tip, freshly fetched before it runs, so a run or
+	// re-run of an older main commit publishes nothing
+	main := at("git fetch --tags --force origin '+refs/heads/main:refs/remotes/origin/main'")
+	if main < 0 || main > decide {
+		t.Error("the site step does not fetch origin/main before docspublish")
+	}
+	if !strings.Contains(script, `go run ./tests/ci/cmd/docspublish -ref "$GITHUB_REF" -sha "$GITHUB_SHA")`) {
+		t.Error(`the site step's docspublish lacks -sha "$GITHUB_SHA"`)
 	}
 }
 
