@@ -17,7 +17,8 @@ import (
 //
 //   - a markdown table: every column after the first (the row key) is compared, except a free-text transcript
 //     or rationale column (a header containing "transcript" or "what the device said", or exactly "why"). A
-//     verdict column (outcome, verdict, result, held, reply, ...; every column of a yes/no matrix row) is
+//     table of bare yes/no matrix rows is compared under any headers. A
+//     verdict column (outcome, verdict, result, held, reply, ...) is
 //     compared on its full normalised text, its parentheticals on their verdict words; a narrative column
 //     (observed, the device, any other) on its verdict words only (verdictTokens). A narrative change whose
 //     verdict words held is printed for a person and does not fail the entry. A row is keyed by the nearest
@@ -301,8 +302,9 @@ func verdictRows(note string) []verdictRow {
 		var verdict, shown []string
 		for _, i := range compared {
 			if i < len(cells) {
-				// every column of a bare yes/no matrix row is a verdict column, whatever its header says
-				verdict = append(verdict, compareCell(cells[i], matrix || (i < len(isVerdict) && isVerdict[i])))
+				// a bare yes/no matrix row is compared whatever its headers say; its cells need no verdict
+				// column, as a bare answer's verdict words are the answer
+				verdict = append(verdict, compareCell(cells[i], i < len(isVerdict) && isVerdict[i]))
 				shown = append(shown, norm(cells[i]))
 			}
 		}

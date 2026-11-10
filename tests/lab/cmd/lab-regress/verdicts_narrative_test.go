@@ -56,7 +56,8 @@ func TestNarrativeColumnsCompareTheSetOfVerdictWords(t *testing.T) {
 // "no" before a word is a determiner ("no error", "no data after the server's first data"), which comes and
 // goes with what a capture held; a bare "no" is an answer and flags. "the reset's packet" is a possessive noun.
 func TestDeterminerNoAndPossessivesAreNotVerdictWords(t *testing.T) {
-	note := "| cell | observed |\n|---|---|\n| c | login ok true (no error), device sent 9 bytes |\n"
+	// the before-cell holds no other "no", so a "no" read as a verdict word would change its set
+	note := "| cell | observed |\n|---|---|\n| c | login ok true, device sent 9 bytes |\n"
 	if flips(t, note, "device sent 9 bytes", "device sent no data after the server's first data") {
 		t.Error("a determiner `no` is not a verdict word")
 	}
@@ -137,6 +138,19 @@ func TestAParentheticalInAVerdictColumnIsNarrative(t *testing.T) {
 	code := h + "| a | refused `^show( *\\|.*)?$` |\n"
 	if !flips(t, code, "( *", "(x*") {
 		t.Error("parentheses inside a code span are the cell's text, not a parenthetical")
+	}
+}
+
+// A bare yes/no matrix cell compares the same on its text and on its verdict words, so a narrative column of a
+// matrix row is not promoted to a verdict column: the row that grows "no (the second try)" next run reads as
+// the same answer, and a flipped cell still flags.
+func TestAMatrixRowsNarrativeCellIsComparedByItsVerdictWords(t *testing.T) {
+	note := "| cell | outcome | observed |\n|---|---|---|\n| a | yes | no |\n"
+	if got := verdictChanges(note, strings.Replace(note, "| no |", "| no (the second try) |", 1)); len(got) != 0 {
+		t.Errorf("the same answer with a note beside it is not a verdict change: %v", got)
+	}
+	if !flips(t, note, "| no |", "| yes |") {
+		t.Error("a flipped matrix cell must flag")
 	}
 }
 

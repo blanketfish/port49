@@ -79,6 +79,12 @@ func TestTTYNamesAndPingFiguresDoNotFlag(t *testing.T) {
 	if got := verdictChanges(a, b); len(got) != 0 {
 		t.Fatalf("a tty name and a ping figure are not verdicts: %v", got)
 	}
+	// Nor a narrative change worth printing: each moves every run, and a note on every run is ignored.
+	for _, c := range [][2]string{{"vty4", "tty435"}, {"40.031/40.110/40.190/0.052", "41.091/40.496/41.354/0.469"}} {
+		if _, n := compareNotes(a, strings.Replace(a, c[0], c[1], 1)); len(n) != 0 {
+			t.Errorf("%s -> %s printed a narrative change: %v", c[0], c[1], n)
+		}
+	}
 }
 
 func TestReadOffAndRulingBulletsAreComparedOnTheirFullText(t *testing.T) {
