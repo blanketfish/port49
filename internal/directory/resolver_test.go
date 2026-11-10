@@ -100,6 +100,11 @@ func TestGraceReadsTheStoreAfterARestart(t *testing.T) {
 	if c, err := restarted.Current(context.Background(), a.Principal); err != nil || c.Source != Grace {
 		t.Fatalf("a mint within grace: %+v %v", c, err)
 	}
+	// The resolver answers; the mint is decided later and may still be
+	// refused, so the log says what grace did, not that a token was minted (#12).
+	if w.say.count("minted") != 0 || w.say.count("answered from a membership verified") != 1 {
+		t.Fatalf("the grace line claims a mint the gate may refuse: %v", w.say.l)
+	}
 	w.clk.Add(time.Hour + time.Minute)
 	_, err = restarted.Current(context.Background(), a.Principal)
 	if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "past directory.grace") {

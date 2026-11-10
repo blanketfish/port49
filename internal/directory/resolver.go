@@ -493,7 +493,9 @@ func (r *Resolver) grace(ctx context.Context, read func(context.Context) (store.
 			ErrUsernameTaken, m.Username, m.Principal, subj)
 	}
 	r.count("grace")
-	r.sayOnce("grace:"+m.Principal, time.Hour, "directory: %s minted from a membership verified %s ago (grace)",
+	// The mint is decided after this, and its gate may still refuse it, so
+	// the line says what grace answered and never that a token was minted (#12).
+	r.sayOnce("grace:"+m.Principal, time.Hour, "directory: %s answered from a membership verified %s ago (grace)",
 		printsafe.Line(m.Principal, spiffe.MaxLen), age.Round(time.Minute))
 	return Answer{Membership: m, Source: Grace}, nil
 }
