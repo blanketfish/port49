@@ -5,10 +5,15 @@ description: Defining roles, granting them to people, groups and workloads, and 
 
 # Roles and grants
 
-A **role** is what may be done: command rules, a privilege level, optional attributes, a session length and
-an optional per-login proof. A **subject** is who. A **grant** gives a subject some roles in a scope. The whole
-vocabulary is in the [policy reference](../reference/config/policy.md); how rules are written and how a
-change is reviewed is on [Policy](policy.md).
+Three blocks of the policy file decide who gets what:
+
+- A **role** is what may be done: command rules, a privilege level, optional attributes, a session length and
+  an optional per-login proof.
+- A **subject** is who.
+- A **grant** gives a subject some roles in a scope.
+
+The whole vocabulary is in the [policy reference](../reference/config/policy.md). How rules are written, how
+to test them and how a change is reviewed is on [Policy](policy.md).
 
 ## Roles
 
@@ -25,18 +30,21 @@ roles:
     per_login_mfa: {accept: [hardware_key_touch]}
 ```
 
-`privilege` names a level from `privilege_levels:`. `readonly`, `operator` and `admin` always exist and keep
-that order; you may add levels with a `parent:`, the level a platform renders one as where it has no
-rendering of its own. A role's `permit` and `deny` lists follow the rules on [Policy](policy.md#writing-a-rule).
-`attributes:` adds attribute strings to the reply, per platform or under `all`; a grant may add its own.
+- `privilege` names a level from `privilege_levels:`. `readonly`, `operator` and `admin` always exist and keep
+  that order. You may add levels with a `parent:`: the level a platform renders the new one as where it has no
+  rendering of its own.
+- A role's `permit` and `deny` lists follow the rules on [Policy](policy.md#writing-a-rule).
+- `attributes:` adds attribute strings to the reply, per platform or under `all`. A grant may add its own.
 
 ### `max_session_age`
 
 `max_session_age` is how long a person's session on a device may last: a duration of at least `1m`, or
 `never`. It is set per role, and a session's ceiling is the **least** of the roles that compose on that device.
-A role that says nothing takes `session.max_session_age_default` from [port49d.yaml](../reference/config/port49d.md)
-(12 hours unless you set it), and a `max_session_age:` with no value is refused. If every role says `never`,
-so does the session.
+
+- A role that says nothing takes `session.max_session_age_default` from
+  [port49d.yaml](../reference/config/port49d.md) (12 hours unless you set it).
+- A `max_session_age:` with no value is refused.
+- If every role says `never`, so does the session.
 
 `port49 explain` prints the result for a subject and device:
 
@@ -75,29 +83,36 @@ subjects:
     token_ttl: 60s
 ```
 
-A subject that has both `group:` and `machine_group:`, or either one with `identity:`, is refused: a subject is
-one trust domain, so a person and a workload each get their own. A person never matches a `machine_group:`
-subject and a workload never matches a `group:` subject, and `attached_roles.machines` reaches the machine
-domain alone. `token_ttl` (30 to 900 seconds) is required on any subject a grant names.
+A subject that has both `group:` and `machine_group:`, or either one with `identity:`, is refused. A subject is
+one [trust domain](../concepts/trust-domains.md), so a person and a workload each get their own:
+
+- a person never matches a `machine_group:` subject;
+- a workload never matches a `group:` subject;
+- `attached_roles.machines` reaches the machine domain alone.
+
+`token_ttl` (30 to 900 seconds) is required on any subject a grant names.
 
 ### `machine_group:`
 
 A `machine_group:` is the machine-side twin of `group:`: it names a group in the directory, but its members are
 workloads. The broker resolves a workload through the verifier's directory mapping
 (`broker.identity.machines[].directory`) and matches it to the subjects whose group it is in. With no mapping
-configured, a `machine_group:` subject mints for no one, and port49d's start says so. Its members take the
-username their own entry gives, or the one an `identity:` subject listing the same SPIFFE ID declares, so
-a `machine_group:` subject declares no `username:` and one that does is refused: one name for many
-workloads would put them all in one device login. See [Workloads](workloads.md).
+configured, a `machine_group:` subject mints for no one, and port49d's start says so.
+
+A `machine_group:` subject declares no `username:`, and one that does is refused: one name for many workloads
+would put them all in one device login. Its members take the username their own entry gives, or the one an
+`identity:` subject listing the same SPIFFE ID declares. See [Workloads](workloads.md).
 
 ### Usernames
 
-The device sees a username, not a principal. For a person, the directory supplies it, so a `group:` subject
-and an `identity:` subject for a `user:` principal declare none when `broker.directory` is on. A literal identity
-for a machine declares one (`username: svc-config-backup` above), lowercase and printable ASCII, and
-never `remote`, a `p49-` name or a platform's system user. A subject whose identities are all SPIFFE IDs
-may leave it out where the directory mapping supplies one; `port49 policy test` reports it as
-`workload_no_username` since an offline run cannot know.
+The device sees a username, not a principal.
+
+- **For a person**, the directory supplies it. A `group:` subject, and an `identity:` subject for a `user:`
+  principal, declare none when `broker.directory` is on.
+- **For a machine**, a literal identity declares one (`username: svc-config-backup` above): lowercase and
+  printable ASCII, and never `remote`, a `p49-` name or a platform's system user.
+- A subject whose identities are all SPIFFE IDs may leave it out where the directory mapping supplies one.
+  An offline run cannot know whether it does, so `port49 policy test` reports it as `workload_no_username`.
 
 ### `api:` rights
 
@@ -123,15 +138,16 @@ subjects:
 | `import_enrollments` | import the enrollment store | yes |
 | `sync`, `keys_show`, `replay` | nothing yet: reserved, declared and reported, granting nothing until an endpoint exists | n/a |
 
-An admin-level right needs a press of the person's security key on top, bound to that one call, so an exposed
-certificate or agent session alone authorizes nothing admin-level. On a broker with no attestation roots loaded
-every admin call is refused; see [Hardware keys](../operate/hardware-keys.md). A right withdrawn by a policy
-reload is gone at the next call.
+An admin-level right also needs a press of the person's security key, bound to that one call. An exposed
+certificate or agent session alone therefore authorizes nothing admin-level. On a broker with no attestation
+roots loaded, every admin call is refused; see [Hardware keys](../operate/hardware-keys.md). A right withdrawn
+by a policy reload is gone at the next call.
 
 An `api:` list reads like a grant of authority over other people's sessions, and CI treats it as one:
-`port49 policy test` prints a `report: api_rights` line per subject and names the admin-level ones, and
-`port49 policy diff` fails on a subject that **gains** a right until a session test asserts the subject's
-whole list:
+
+- `port49 policy test` prints a `report: api_rights` line per subject and names the admin-level ones.
+- `port49 policy diff` fails on a subject that **gains** a right until a session test asserts the subject's
+  whole list (see [Writing tests](policy.md#writing-tests)):
 
 ```yaml
 tests:
@@ -149,18 +165,28 @@ grants:
   - {subject: netops_oncall, scope: dc_fabric, roles: [bgp_operator], max_privilege: admin, expires: "2026-12-01"}
 ```
 
-A grant names a declared subject and scope and at least one role, each listed once; two grants with the same
-subject, scope and roles are refused, so merge them. `expires` is a date (the start of that day, UTC) or an
-RFC 3339 time, after which the grant stops matching, and `port49 policy diff` and `policy test` read the policy
-at every later expiry as well as now. `max_privilege` is a ceiling on the level a token from the grant may
-carry, which is how far `enable` may take the session; with no `enable` on the subject, nothing escalates to it.
-`enable` is `none` (the default), `auto` or `token`. A grant on a scope that is `on_missing: include` is refused (a scope with no
-match key, or pinned by `name` alone, is the exception);
-see [Policy](policy.md#the-include-scope-grant-refusal).
+A grant names a declared subject and scope and at least one role, each listed once. Two grants with the same
+subject, scope and roles are refused, so merge them.
 
-When one person matches several subjects, the grants of all of them compose: the roles are the union, the
-level is the highest of the roles, the ceiling is the highest across the grants, and `max_session_age` is the
-least. Reordering grants never changes a decision.
+- `expires` is a date (the start of that day, UTC) or an RFC 3339 time, after which the grant stops matching.
+  `port49 policy diff` and `policy test` read the policy at every later expiry as well as now.
+- `max_privilege` is a ceiling on the level a token from the grant may carry, which is how far `enable` may
+  take the session. With no `enable` on the subject, nothing escalates to it. The subject's `enable` is `none`
+  (the default), `auto` or `token`.
+
+A grant on a scope that is `on_missing: include` is refused (a scope with no match key, or pinned by `name`
+alone, is the exception); see [Policy](policy.md#the-include-scope-grant-refusal).
+
+When one person matches several subjects, the grants of all of them compose:
+
+| What | How it composes |
+|---|---|
+| roles | the union |
+| level | the highest of the roles |
+| ceiling (`max_privilege`) | the highest across the grants |
+| `max_session_age` | the least |
+
+Reordering grants never changes a decision.
 
 ### `per_login_mfa`
 
@@ -200,27 +226,49 @@ Do not put the requirement on an `on_missing: exclude` scope to be able to grant
 `port49 policy test` reports that shape as `per_login_mfa_on_missing_exclude`: a sync that drops `tier` lifts the
 per-login proof from the device.
 
-`accept` is a list of `hardware_key_touch` (a touch on the token holding the session key), `idp_mfa` (a fresh
-identity-provider sign-in showing a second factor) or both. Leaving the block out means no requirement; there
-is no `none`. `reuse_for` is how long one proof covers later logins, from `0m` (a proof at every login) to `8h`,
-and `15m` when left out.
+#### The keys
+
+- `accept` is a list of `hardware_key_touch` (a touch on the token holding the session key), `idp_mfa` (a fresh
+  identity-provider sign-in showing a second factor) or both. Leaving the block out means no requirement;
+  there is no `none`.
+- `reuse_for` is how long one proof covers later logins, from `0m` (a proof at every login) to `8h`, and `15m`
+  when left out.
+
+#### When several levels set it
 
 The levels stack and the strictest wins. On a device the requirement is the **intersection** of the `accept`
-lists of every level that applies, with the least `reuse_for`, and a lower level never weakens a higher one.
-An empty intersection is a load error naming both levels. A scope that selects by an attribute other than
-`name` must declare `on_missing` and `security_log: true`, since whoever edits the attribute can lift the
-requirement; `port49 policy test` also reports `per_login_mfa_on_missing_exclude` where an exclude scope
-could lose it. A scope pinned by `name` needs neither.
+lists of every level that applies, with the least `reuse_for`. A lower level never weakens a higher one, and
+an empty intersection is a load error naming both levels.
 
-A machine principal is exempt except under a level that sets `applies_to_machines: true`, and a workload proves
-with `hardware_key_touch` alone, from a key and touch slot on one token. A mint under an unmet requirement is
-answered `deny` with the reason `per_login_mfa_required` and a challenge; a requirement no method this broker
-can verify satisfies is `per_login_mfa_unavailable` for that device. A requirement gates logins and refreshes,
-never a live session: adding one revokes nothing. `port49 policy diff` fails, as `per_login_mfa_weakened`, on a weakening
-that no session test asserts. The test must be new or changed against the old file; one carried over
-unchanged does not count. Widening the scope above to `accept: [hardware_key_touch, idp_mfa]` prints
-`per_login_mfa_weakened: netops on core1: accept [hardware_key_touch] reuse_for 5m (defaults ∩ scope core) -> accept [hardware_key_touch, idp_mfa] reuse_for 5m (defaults ∩ scope core); no session test asserts it: add {subject: netops, device: core1, per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 5m}}`
-and exits 1.
+A scope that selects by an attribute other than `name` must declare `on_missing` and `security_log: true`,
+since whoever edits the attribute can lift the requirement. `port49 policy test` also reports
+`per_login_mfa_on_missing_exclude` where an exclude scope could lose it. A scope pinned by `name` needs
+neither.
+
+#### Machines
+
+A machine principal is exempt except under a level that sets `applies_to_machines: true`. A workload proves
+with `hardware_key_touch` alone, from a key and touch slot on one token.
+
+#### What a login sees
+
+- A mint under an unmet requirement is answered `deny` with the reason `per_login_mfa_required` and a
+  challenge.
+- A requirement that no method this broker can verify satisfies is `per_login_mfa_unavailable` for that
+  device.
+- A requirement gates logins and refreshes, never a live session: adding one revokes nothing.
+
+#### Reviewing a change
+
+`port49 policy diff` fails, as `per_login_mfa_weakened`, on a weakening that no session test asserts. The test
+must be new or changed against the old file; one carried over unchanged does not count. Widening the scope
+above to `accept: [hardware_key_touch, idp_mfa]` prints this and exits 1:
+
+```text
+per_login_mfa_weakened: netops on core1: accept [hardware_key_touch] reuse_for 5m (defaults ∩ scope core) -> accept [hardware_key_touch, idp_mfa] reuse_for 5m (defaults ∩ scope core); no session test asserts it: add {subject: netops, device: core1, per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 5m}}
+```
+
+The line ends with the session test to add; [Writing tests](policy.md#session-tests) covers the keys.
 
 ## Reading why a grant applied
 
@@ -237,7 +285,13 @@ Signed in, `port49 identity` prints whom the broker resolves you to (your subjec
 line reads, for example, `per_login_mfa accept hardware_key_touch (defaults ∩ scope core); reuse_for 5m (scope core); applies to humans`, or `per_login_mfa none`: the default is never invisible.
 
 For a review, `port49 access review --policy FILE --inventory FILE --subject NAME` prints one subject's grant
-table, with the roles, ceiling, expiry and device count per row. To offboard a machine subject or a literal
-identity, `port49 grants remove --subject NAME` prints the policy without the subject's grants and its block,
-`--write` replaces the file, and `--pr` opens the pull request that carries the removal; the result must load
-against the inventory before anything is written. People in a directory group are offboarded in the directory.
+table, with the roles, ceiling, expiry and device count per row.
+
+To offboard a machine subject or a literal identity, use `port49 grants remove --subject NAME`:
+
+- by itself, it prints the policy without the subject's grants and its block;
+- `--write` replaces the file;
+- `--pr` opens the pull request that carries the removal.
+
+The result must load against the inventory before anything is written. People in a directory group are
+offboarded in the directory.
