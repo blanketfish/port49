@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -263,6 +264,21 @@ func (s *Server) Unrecorded() []string {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	// The answer is held until answer returns, so the page counting and the
+	// shifts it does after writing are done before the client can read the
+	// page and ask for the next one, on this connection or a new one.
+	rec := httptest.NewRecorder()
+	s.answer(rec, r)
+	for k, v := range rec.Header() {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(rec.Code)
+	w.Write(rec.Body.Bytes())
+}
+
+// answer serves one request into w, then counts a list page and makes any
+// shift that page calls for.
+func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	req := Request{Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Host: r.Host,
 		Authorization: r.Header.Get("Authorization")}
 	var gql struct {
