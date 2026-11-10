@@ -3,18 +3,25 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // A results note states what a claim measured in a few shapes, and lab-regress compares each with HEAD's:
 //
-//   - a markdown table: every column after the first (the row key) is compared as its full normalised text,
-//     except a free-text transcript or rationale column (a header containing "transcript" or "what the device
-//     said", or exactly "why"). A row is keyed by the nearest heading, the header row and its first cell.
+//   - a markdown table: every column after the first (the row key) is compared, except a free-text transcript
+//     or rationale column (a header containing "transcript" or "what the device said", or exactly "why"). A
+//     verdict column (outcome, verdict, result, held, reply, ...; every column of a yes/no matrix row) is
+//     compared on its full normalised text, its parentheticals on their verdict words; a narrative column
+//     (observed, the device, any other) on its verdict words only (verdictTokens). A narrative change whose
+//     verdict words held is printed for a person and does not fail the entry. A row is keyed by the nearest
+//     heading, the header row and its first cell.
 //   - a bold verdict in prose ("- **(d) FAIL**: ...", "**PASS.** ..."), a qualification bullet
 //     ("- `cell` (...): **pass**."), and a ruling bullet ("- **Ruling 15 may close on this run:** true (...)"),
 //     keyed by their subject.
@@ -26,7 +33,12 @@ import (
 // shape this parser misses fails loudly. Comparing full text costs a person a look when a harness reworded a
 // cell; a cut that hid a real change would let a wrong claim stand.
 
-type verdictRow struct{ key, label, verdict string }
+// A row's verdict is what decides a flag; shown is its compared columns' normalised text, which a report prints
+// and which, when it changes while verdict does not, is a narrative change: printed, never failed.
+type verdictRow struct{ key, label, verdict, shown string }
+
+// narrativeOut is where checkVerdicts prints a narrative change for a person to read.
+var narrativeOut io.Writer = os.Stdout
 
 var (
 	// A bold verdict opening a line, bulleted or not: "**(d) FAIL**" or "**PASS.**".
@@ -42,7 +54,11 @@ var (
 	// A header that makes a table a table of results: a verdict word, or a column the device's answer sits in.
 	// Only such a table is read (timing, wire-capture and setup tables hold values no claim rests on, and
 	// their rows are keyed by a port or a packet id that moves every run).
-	resultColumn = regexp.MustCompile(`^(outcome|verdict|result|ssh result|held|against the docs|agrees with decision \d+|observed|reply|inert|device answered|the device|typed (first|second) .*|(sid|sub) = .*)$`)
+	resultColumn = regexp.MustCompile(`^(outcome|verdict|result|ssh result|held|against the docs|agrees with decision \d+|observed|reply|inert|device answered|the device|what the device saw|typed (first|second) .*|(sid|sub) = .*)$`)
+	// A verdict column: its cell states the verdict itself, so its full normalised text is compared. Every other
+	// compared column is narrative (observed, the device, what the device saw, a command's column, a count...).
+	// `reply` is port49's reply in an observation table: its role strings are what the claim rests on (L22).
+	verdictColumn = regexp.MustCompile(`^(outcome|verdict|result|ssh result|held|against the docs|agrees with decision \d+|reply|inert|device answered|typed (first|second) .*|(sid|sub) = .*)$`)
 	// A free-text column header the comparison leaves out.
 	excludedColumn = regexp.MustCompile(`transcript|what the device said`)
 
@@ -118,19 +134,118 @@ func norm(cell string) string {
 	return strings.Join(parts, "; ")
 }
 
+// verdictWords are the words a narrative cell's verdict is read from: a closed vocabulary, matched as whole
+// words, case-insensitive. Besides the words below it holds every reason code of internal/decision/reasons.go,
+// loaded from the code (identity_ambiguous, store_unavailable, credential_revoked, ...), and an LDAP "Result
+// Code <n>" kept whole with its number. The directory and store packages export no clean list of snake_case
+// sentinel names, so reasons.go is the only code-loaded source.
+var verdictWords = func() *regexp.Regexp {
+	alts := []string{`result\s+code\s+\d+`, `not\s+reached`, `not\s+observed`}
+	for _, r := range decision.Reasons() {
+		alts = append(alts, regexp.QuoteMeta(string(r)))
+	}
+	alts = append(alts, "pass", "fail", "invalid", "timeout", "refused", "accepted", "rejected", "ran", "reached",
+		"opened", "observed", "denied", "permitted", "allowed", "failed", "succeeded", "yes", "no", "true", "false",
+		"stripped", "expanded", "closed", "reset")
+	return regexp.MustCompile(`(?i)\b(?:` + strings.Join(alts, "|") + `)\b`)
+}()
+
+var (
+	spaceRun       = regexp.MustCompile(`\s+`)
+	determinerNext = regexp.MustCompile(`^\s+[A-Za-z_<]`) // "no" then a word: "no error", "no <d>"
+)
+
+// verdictTokens is the sorted set of verdict words in a cell's normalised text, as "{refused yes}". Two uses of
+// a verdict word are not verdicts and are skipped:
+//   - a word followed by "'s" is a possessive noun: "the reset's packet" names a packet, it does not say a
+//     connection was reset;
+//   - "no" followed by a word is a determiner: "no error", "no data after the server's first data", "no request
+//     in the capture" describe what a capture held, and come and go with timing (L73). A bare "no" (an answer,
+//     "inert: no", "no;") is a verdict.
+//
+// A set, not a multiset: how many times a word occurs is how many connections a device opened, retried or
+// accounted for, which a rerun moves. The 11-06 full regression (719721c7) shows it: L37's "connections:"
+// lists ran 2 "accepted" one run and 5 the next, 2 "refused" and then 6, with the same verdict. A word that
+// appears or disappears ("accepted; refused" -> "accepted", identity_ambiguous -> "no server answered") flags.
+func verdictTokens(s string) string {
+	var toks []string
+	for _, m := range verdictWords.FindAllStringIndex(s, -1) {
+		tok, rest := spaceRun.ReplaceAllString(strings.ToLower(s[m[0]:m[1]]), " "), s[m[1]:]
+		if strings.HasPrefix(rest, "'s") || strings.HasPrefix(rest, "’s") || (tok == "no" && determinerNext.MatchString(rest)) {
+			continue
+		}
+		toks = append(toks, tok)
+	}
+	slices.Sort(toks)
+	return "{" + strings.Join(slices.Compact(toks), " ") + "}"
+}
+
+// splitParens splits a cell into its text outside top-level parentheses and the parentheticals' contents. A
+// parenthesis inside a code span is the span's text (a regexp such as `^show( *\|.*)?$`), not a parenthetical.
+func splitParens(cell string) (outside, inside string) {
+	var out, in strings.Builder
+	depth, code := 0, false
+	for _, r := range cell {
+		switch {
+		case r == '`':
+			code = !code
+		case !code && r == '(':
+			depth++
+			in.WriteRune(' ')
+			continue
+		case !code && r == ')' && depth > 0:
+			depth--
+			in.WriteRune(' ')
+			continue
+		}
+		if depth > 0 {
+			in.WriteRune(r)
+		} else {
+			out.WriteRune(r)
+		}
+	}
+	return out.String(), in.String()
+}
+
+// compareCell is what decides whether a compared cell changed.
+//
+// A verdict column's cell is compared on its full normalised text, but a parenthetical in it is narrative and
+// compared on its verdict words only. Why: a parenthetical annotates the verdict before it with what the run
+// happened to see. L29-reload's vJunos rows read "printed its output in 200ms (the reset's packet:
+// `type=acct`)" on some runs and plain "printed its output in 200ms" on others, depending on which packet the
+// device sent first after the change, while the verdict stayed the same. A verdict word inside the parenthetical
+// ("(the second attempt refused)") still flags.
+//
+// A narrative column's cell is compared on its verdict words: its text carries figures a rerun moves and no
+// normaliser can tell from a real difference (byte counts, round trips, "purged 153 token(s)", step counts).
+func compareCell(cell string, verdict bool) string {
+	if !verdict {
+		return verdictTokens(norm(cell))
+	}
+	// A parenthetical with no verdict word compares as no parenthetical at all.
+	outside, inside := splitParens(cell)
+	if toks := verdictTokens(norm(inside)); toks != "{}" {
+		return norm(outside) + " " + toks
+	}
+	return norm(outside)
+}
+
 // verdictRows lists the rows of a note in order. A key that repeats gets a "#2", "#3" suffix.
 func verdictRows(note string) []verdictRow {
 	var rows []verdictRow
 	seen := map[string]int{}
-	add := func(key, label, verdict string) {
+	addRow := func(key, label, verdict, shown string) {
 		seen[key]++
 		if seen[key] > 1 {
 			key = fmt.Sprintf("%s#%d", key, seen[key])
 		}
-		rows = append(rows, verdictRow{key, label, verdict})
+		rows = append(rows, verdictRow{key, label, verdict, shown})
 	}
+	// A bullet or prose verdict is compared on its full text, which is also what a report shows.
+	add := func(key, label, verdict string) { addRow(key, label, verdict, verdict) }
 	heading, header := "", ""
-	var compared []int // the columns of the table being read that are compared
+	var compared []int   // the columns of the table being read that are compared
+	var isVerdict []bool // per column of that table: a verdict column (full text) or narrative (verdict words)
 	inTable, fenced, isResult := false, false, false
 	for _, ln := range strings.Split(note, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(ln), "```") {
@@ -152,26 +267,30 @@ func verdictRows(note string) []verdictRow {
 		if !inTable {
 			// the first row of a table is its header
 			inTable, header, compared = true, strings.Join(cells, "|"), nil
-			isResult = false
+			isResult, isVerdict = false, make([]bool, len(cells))
 			for i, c := range cells {
 				l := strings.ToLower(strings.Trim(c, "*` "))
 				isResult = isResult || resultColumn.MatchString(l)
+				isVerdict[i] = verdictColumn.MatchString(l)
 				if i > 0 && !excludedColumn.MatchString(l) && l != "why" {
 					compared = append(compared, i)
 				}
 			}
 			continue
 		}
-		if isSeparator(cells) || len(cells) < 2 || (!isResult && !boolMatrixRow(cells)) {
+		matrix := boolMatrixRow(cells)
+		if isSeparator(cells) || len(cells) < 2 || (!isResult && !matrix) {
 			continue
 		}
-		var parts []string
+		var verdict, shown []string
 		for _, i := range compared {
 			if i < len(cells) {
-				parts = append(parts, norm(cells[i]))
+				// every column of a bare yes/no matrix row is a verdict column, whatever its header says
+				verdict = append(verdict, compareCell(cells[i], matrix || (i < len(isVerdict) && isVerdict[i])))
+				shown = append(shown, norm(cells[i]))
 			}
 		}
-		add(heading+"\x00"+header+"\x00"+cells[0], labelFor(heading, cells[0]), strings.Join(parts, " | "))
+		addRow(heading+"\x00"+header+"\x00"+cells[0], labelFor(heading, cells[0]), strings.Join(verdict, " | "), strings.Join(shown, " | "))
 	}
 	return rows
 }
@@ -260,29 +379,36 @@ func labelFor(heading, first string) string {
 // verdictChanges describes each row whose verdict differs between the committed note and the rewritten one,
 // and each row added or removed.
 func verdictChanges(old, now string) []string {
+	changes, _ := compareNotes(old, now)
+	return changes
+}
+
+// compareNotes is verdictChanges plus the narrative changes: rows whose verdict held while their shown text
+// changed. Both name the row and print its normalised text, old -> new.
+func compareNotes(old, now string) (changes, narrative []string) {
 	oldRows, newRows := verdictRows(old), verdictRows(now)
-	was := map[string]string{}
+	was, is := map[string]verdictRow{}, map[string]bool{}
 	for _, r := range oldRows {
-		was[r.key] = r.verdict
+		was[r.key] = r
 	}
-	var out []string
-	inNew := map[string]bool{}
 	for _, r := range newRows {
-		inNew[r.key] = true
-		v, ok := was[r.key]
+		is[r.key] = true
+		o, ok := was[r.key]
 		switch {
 		case !ok:
-			out = append(out, fmt.Sprintf("%s: added (%s)", r.label, r.verdict))
-		case v != r.verdict:
-			out = append(out, fmt.Sprintf("%s: %s -> %s", r.label, v, r.verdict))
+			changes = append(changes, fmt.Sprintf("%s: added (%s)", r.label, r.shown))
+		case o.verdict != r.verdict:
+			changes = append(changes, fmt.Sprintf("%s: %s -> %s", r.label, o.shown, r.shown))
+		case o.shown != r.shown:
+			narrative = append(narrative, fmt.Sprintf("%s: %s -> %s", r.label, o.shown, r.shown))
 		}
 	}
 	for _, r := range oldRows {
-		if !inNew[r.key] {
-			out = append(out, fmt.Sprintf("%s: removed (was %s)", r.label, r.verdict))
+		if !is[r.key] {
+			changes = append(changes, fmt.Sprintf("%s: removed (was %s)", r.label, r.shown))
 		}
 	}
-	return out
+	return changes, narrative
 }
 
 // noVerdicts is whether a note of the entry states no claim verdict (an observation-only note): the entry
@@ -332,8 +458,12 @@ func checkVerdictsWith(e Entry, show func(path string) (string, error)) error {
 		case rows == 0:
 			return fmt.Errorf("%s: %s parses no verdict rows: a shape verdicts.go misses, or the entry needs `verdicts: none`", e.ID, n)
 		}
-		for _, c := range verdictChanges(old, now) {
+		changes, narrative := compareNotes(old, now)
+		for _, c := range changes {
 			all = append(all, fmt.Sprintf("%s: %s: %s", e.ID, n, c))
+		}
+		for _, c := range narrative {
+			fmt.Fprintf(narrativeOut, "lab-regress: %s: %s: narrative changed (not a verdict, not failed): %s\n", e.ID, n, c)
 		}
 	}
 	if len(all) > 0 {
