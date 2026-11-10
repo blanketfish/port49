@@ -1,18 +1,41 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"slices"
 	"strings"
 )
 
-// A verdict table is a markdown table whose header has an "outcome" or "verdict"
-// column (the harness writes "| cell | outcome | elapsed |" and
-// "| Cell | Verdict | Observation |"). Its rows are keyed by the first cell.
-// Tables without such a column (timings, captures) are not compared.
+// A results note states a claim's verdict in one of two shapes:
+//
+//   - a markdown table whose header has a verdict column: "outcome", "verdict", "result", "SSH result",
+//     "held", "against the docs", or "agrees with decision N". Its rows are keyed by the nearest heading,
+//     the header row and the first cell.
+//   - a bold verdict in prose: "- **(d) FAIL**: ..." or "**PASS.** ...", keyed by the nearest heading and
+//     its "(d)" label.
+//
+// Tables without such a column (timings, captures) are not compared. A note that parses no verdict row is
+// refused unless its manifest entry says `verdicts: none` (checkVerdicts), so a shape this parser misses
+// fails loudly.
 
-type verdictRow struct{ key, verdict string }
+type verdictRow struct{ key, label, verdict string }
+
+// allColumns marks a table whose every column after the first is a verdict (a "Verdict against the control" table).
+const allColumns = -2
+
+var (
+	verdictColumn = regexp.MustCompile(`^(outcome|verdict|result|ssh result|held|against the docs|agrees with decision \d+)$`)
+	// A bold verdict opening a line, bulleted or not: "**(d) FAIL**" or "**PASS.**".
+	proseVerdict = regexp.MustCompile(`^(?:[-*]\s+)?\*\*(?:(\([^)]*\))\s+)?(PASS|FAIL|INVALID|OBSERVED|TIMEOUT|SKIPPED)\b[^*]*\*\*`)
+	// A qualification note's bullet: "- `token_login` (re-measures L1): **pass**. ..." or "**not_run**".
+	cellVerdict = regexp.MustCompile("^- `([^`]+)`[^*]*?: \\*\\*([a-z_]+)\\*\\*")
+	// A Go duration, "1m12.9s", "320ms", "1h2m": the numbers a rerun moves.
+	durationRe = regexp.MustCompile(`\b\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s)(?:\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s))*\b`)
+)
 
 func splitRow(ln string) []string {
 	ln = strings.TrimSpace(ln)
@@ -35,44 +58,78 @@ func isSeparator(cells []string) bool {
 	return len(cells) > 0
 }
 
-// verdictRows lists the verdict-table rows of a note in order. A key repeated
-// in the note (two tables, one cell name) gets a "#2", "#3" suffix.
+// verdictText is a verdict cell with the bold marks off and its durations normalised: the harness writes
+// how long a step took into the cell ("refused in 2.09s"), and a rerun moves that.
+func verdictText(cell string) string {
+	return durationRe.ReplaceAllString(strings.Trim(cell, "* "), "<d>")
+}
+
+// verdictRows lists the verdict rows of a note in order. A key that repeats gets a "#2", "#3" suffix.
 func verdictRows(note string) []verdictRow {
 	var rows []verdictRow
 	seen := map[string]int{}
-	col := -1 // the verdict column of the table being read, or -1
-	inHeader := false
-	for _, ln := range strings.Split(note, "\n") {
-		cells := splitRow(ln)
-		if cells == nil {
-			col, inHeader = -1, false
-			continue
-		}
-		if !inHeader && col == -1 {
-			// a candidate header row
-			for i, c := range cells {
-				if l := strings.ToLower(c); l == "outcome" || l == "verdict" {
-					col = i
-				}
-			}
-			inHeader = true
-			continue
-		}
-		if isSeparator(cells) || col < 0 || col >= len(cells) {
-			continue
-		}
-		key := cells[0]
+	add := func(key, label, verdict string) {
 		seen[key]++
 		if seen[key] > 1 {
 			key = fmt.Sprintf("%s#%d", key, seen[key])
 		}
-		rows = append(rows, verdictRow{key, strings.Trim(cells[col], "* ")})
+		rows = append(rows, verdictRow{key, label, verdict})
+	}
+	heading := ""
+	col := -1 // the verdict column of the table being read, or -1
+	header := ""
+	inTable := false
+	for _, ln := range strings.Split(note, "\n") {
+		if strings.HasPrefix(ln, "#") {
+			heading = strings.TrimSpace(strings.TrimLeft(ln, "#"))
+		}
+		cells := splitRow(ln)
+		if cells == nil {
+			inTable = false
+			if m := proseVerdict.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
+				add(heading+"\x00prose\x00"+m[1], labelFor(heading, strings.TrimSpace(m[1]+" "+m[2])), m[2])
+			} else if m := cellVerdict.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
+				add(heading+"\x00cell\x00"+m[1], labelFor(heading, m[1]), m[2])
+			}
+			continue
+		}
+		if !inTable {
+			// the first row of a table is its header
+			inTable, col, header = true, -1, strings.Join(cells, "|")
+			for i, c := range cells {
+				if verdictColumn.MatchString(strings.ToLower(c)) && col < 0 {
+					col = i
+				}
+			}
+			if col < 0 && strings.HasPrefix(strings.ToLower(heading), "verdict") {
+				col = allColumns // "### Verdict against the control": every column after the first is a verdict
+			}
+			continue
+		}
+		if isSeparator(cells) || col == -1 || (col >= 0 && col >= len(cells)) || len(cells) < 2 {
+			continue
+		}
+		verdict := ""
+		if col == allColumns {
+			verdict = verdictText(strings.Join(cells[1:], " | "))
+		} else {
+			verdict = verdictText(cells[col])
+		}
+		add(heading+"\x00"+header+"\x00"+cells[0], labelFor(heading, cells[0]), verdict)
 	}
 	return rows
 }
 
-// verdictChanges describes each verdict-table row whose verdict differs between
-// the committed note and the rewritten one, and each row added or removed.
+// labelFor is what a report names a row by: its first cell, and the heading it sits under.
+func labelFor(heading, first string) string {
+	if heading == "" {
+		return first
+	}
+	return fmt.Sprintf("%s (under %q)", first, heading)
+}
+
+// verdictChanges describes each verdict row whose verdict differs between the committed note and the
+// rewritten one, and each row added or removed.
 func verdictChanges(old, now string) []string {
 	oldRows, newRows := verdictRows(old), verdictRows(now)
 	was := map[string]string{}
@@ -86,45 +143,68 @@ func verdictChanges(old, now string) []string {
 		v, ok := was[r.key]
 		switch {
 		case !ok:
-			out = append(out, fmt.Sprintf("%s: added (%s)", r.key, r.verdict))
+			out = append(out, fmt.Sprintf("%s: added (%s)", r.label, r.verdict))
 		case v != r.verdict:
-			out = append(out, fmt.Sprintf("%s: %s -> %s", r.key, v, r.verdict))
+			out = append(out, fmt.Sprintf("%s: %s -> %s", r.label, v, r.verdict))
 		}
 	}
 	for _, r := range oldRows {
 		if !inNew[r.key] {
-			out = append(out, fmt.Sprintf("%s: removed (was %s)", r.key, r.verdict))
+			out = append(out, fmt.Sprintf("%s: removed (was %s)", r.label, r.verdict))
 		}
 	}
 	return out
 }
 
-// committedNote is the note as HEAD has it; ok is false when HEAD has none
-// (a new note has no verdicts to compare against).
-func committedNote(path string) (string, bool) {
-	out, err := exec.Command("git", "show", "HEAD:"+path).Output()
-	if err != nil {
-		return "", false
-	}
-	return string(out), true
+// noVerdicts is whether a note of the entry states no claim verdict (an observation-only note): the entry
+// says `verdicts: none`, or lists the note in no_verdict_notes.
+func noVerdicts(e Entry, note string) bool {
+	return e.Verdicts == "none" || slices.Contains(e.NoVerdictNotes, note)
 }
 
-// checkVerdicts fails an entry whose rewritten notes changed a claim's verdict
-// from HEAD's: a flaked or regressed cell must not pass because the binary
-// exited 0. It names the entry, the row, and old -> new.
-func checkVerdicts(id string, notes []string) error {
-	var all []string
-	for _, n := range notes {
-		old, ok := committedNote(n)
-		if !ok {
-			continue
+// gitShow is the note as HEAD has it. Any git failure is an error: git missing, a dubious-ownership
+// refusal, a run outside the repository, a note HEAD does not have.
+func gitShow(path string) (string, error) {
+	out, err := exec.Command("git", "show", "HEAD:"+path).Output()
+	if err != nil {
+		msg := err.Error()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			msg += ": " + strings.TrimSpace(string(ee.Stderr))
 		}
-		now, err := os.ReadFile(n)
+		return "", fmt.Errorf("%s has no readable copy at HEAD (%s)", path, msg)
+	}
+	return string(out), nil
+}
+
+// checkVerdicts fails an entry whose rewritten notes changed a claim's verdict from HEAD's: a flaked or
+// regressed cell must not pass because the binary exited 0. It names the entry, the note, the row, and
+// old -> new. Every manifest note belongs to a closed row, so it must exist at HEAD, and a note that parses
+// no verdict row is refused unless the entry says `verdicts: none`.
+func checkVerdicts(e Entry) error { return checkVerdictsWith(e, gitShow) }
+
+func checkVerdictsWith(e Entry, show func(path string) (string, error)) error {
+	var all []string
+	for _, n := range e.Notes {
+		old, err := show(n)
+		if err != nil {
+			return fmt.Errorf("%s: %w", e.ID, err)
+		}
+		raw, err := os.ReadFile(n)
 		if err != nil {
 			return err
 		}
-		for _, c := range verdictChanges(old, string(now)) {
-			all = append(all, fmt.Sprintf("%s: %s: %s", id, n, c))
+		now := string(raw)
+		switch rows := len(verdictRows(now)); {
+		case noVerdicts(e, n) && rows > 0:
+			return fmt.Errorf("%s: %s is marked as stating no verdicts but parses %d verdict rows: remove the mark", e.ID, n, rows)
+		case noVerdicts(e, n):
+			continue
+		case rows == 0:
+			return fmt.Errorf("%s: %s parses no verdict rows: a shape verdicts.go misses, or the entry needs `verdicts: none`", e.ID, n)
+		}
+		for _, c := range verdictChanges(old, now) {
+			all = append(all, fmt.Sprintf("%s: %s: %s", e.ID, n, c))
 		}
 	}
 	if len(all) > 0 {

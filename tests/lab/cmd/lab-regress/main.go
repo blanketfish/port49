@@ -243,13 +243,7 @@ func run() int {
 		if sk := scan.Skipped(); len(sk) > 0 {
 			return &skippedError{Tests: sk}
 		}
-		if err := notesRewritten(e.Notes, start); err != nil {
-			return err
-		}
-		if err := diffNotes(notediff, e.Notes); err != nil {
-			return err
-		}
-		return checkVerdicts(e.ID, e.Notes)
+		return afterRun(e, start, notediff)
 	}}
 	rep := r.runAll(entries)
 	printReport(rep)
@@ -257,6 +251,18 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// afterRun is what judges an entry whose binary exited 0 and did not skip: its notes were rewritten, the
+// changed observations are reported, and a changed claim verdict fails it.
+func afterRun(e Entry, start time.Time, notediff string) error {
+	if err := notesRewritten(e.Notes, start); err != nil {
+		return err
+	}
+	if err := diffNotes(notediff, e.Notes); err != nil {
+		return err
+	}
+	return checkVerdicts(e)
 }
 
 func pick(all []Entry, only string) []Entry {

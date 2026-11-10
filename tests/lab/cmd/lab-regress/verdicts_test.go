@@ -39,7 +39,7 @@ func TestVerdictChangesNone(t *testing.T) {
 func TestVerdictChangesChangedRow(t *testing.T) {
 	newer := strings.Replace(noteL64, "| L64c | PASS |", "| L64c | FAIL |", 1)
 	got := verdictChanges(noteL64, newer)
-	if len(got) != 1 || got[0] != "L64c: PASS -> FAIL" {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "L64c") || !strings.HasSuffix(got[0], ": PASS -> FAIL") {
 		t.Fatalf("want one change L64c: PASS -> FAIL, got %v", got)
 	}
 }
@@ -55,12 +55,12 @@ func TestVerdictChangesOtherSpellings(t *testing.T) {
 func TestVerdictChangesAddedAndRemovedRows(t *testing.T) {
 	added := noteL64 + "\n| cell | outcome | elapsed |\n|---|---|---|\n| L64e | PASS | 1s |\n"
 	got := verdictChanges(noteL64, added)
-	if len(got) != 1 || got[0] != "L64e: added (PASS)" {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "L64e") || !strings.HasSuffix(got[0], ": added (PASS)") {
 		t.Fatalf("an added row is a change: %v", got)
 	}
 	removed := strings.Replace(noteL64, "| L64b | PASS | 1m12.9s |\n", "", 1)
 	got = verdictChanges(noteL64, removed)
-	if len(got) != 1 || got[0] != "L64b: removed (was PASS)" {
+	if len(got) != 1 || !strings.HasPrefix(got[0], "L64b") || !strings.HasSuffix(got[0], ": removed (was PASS)") {
 		t.Fatalf("a removed row is a change: %v", got)
 	}
 }
