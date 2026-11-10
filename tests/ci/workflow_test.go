@@ -184,10 +184,7 @@ func workflowProblems(name string, raw []byte) []string {
 			if s.Uses != "" && !pinned.MatchString(s.Uses) {
 				add("job %s: %q is not pinned by a full commit SHA", id, s.Uses)
 			}
-			// docs.yml's deploy is the one checkout that keeps its credentials: mike pushes gh-pages with
-			// them. TestTheDocsDeployPushesOnlyGhPages holds that job to its own rules.
-			keeps := name == "docs.yml" && id == "deploy"
-			if strings.HasPrefix(s.Uses, "actions/checkout@") && !keeps && fmt.Sprint(s.With["persist-credentials"]) != "false" {
+			if strings.HasPrefix(s.Uses, "actions/checkout@") && fmt.Sprint(s.With["persist-credentials"]) != "false" {
 				add("job %s: a checkout without persist-credentials: false", id)
 			}
 			for _, bad := range []string{"github.event", "github.head_ref", "github.ref_name", "secrets."} {

@@ -41,82 +41,145 @@ func TestTheDocsDeployIsGatedOnAPublicRepository(t *testing.T) {
 	}
 }
 
+// deployScript is the deploy job's run steps joined, with the env of the step that deploys.
+func deployScript(t *testing.T) (script string, dep job) {
+	t.Helper()
+	f, _ := docs(t)
+	dep = f.Jobs["deploy"]
+	var parts []string
+	for _, s := range dep.Steps {
+		if s.Run != "" {
+			parts = append(parts, s.Run)
+		}
+	}
+	return strings.Join(parts, "\n"), dep
+}
+
 // The deploy job is the one job that writes the repository, and it writes one branch: gh-pages.
 func TestTheDocsDeployPushesOnlyGhPages(t *testing.T) {
-	f, _ := docs(t)
-	dep := f.Jobs["deploy"]
+	script, dep := deployScript(t)
 	if p := dep.Permissions; len(p) != 1 || p["contents"] != "write" {
 		t.Errorf("deploy's permissions are %v, want exactly contents: write", p)
 	}
-	conc, _ := dep.Concurrency.(map[string]any)
-	if conc["group"] != "gh-pages" || conc["cancel-in-progress"] != false {
-		t.Errorf("deploy's concurrency is %v, want group gh-pages and cancel-in-progress: false", dep.Concurrency)
-	}
-	var checkout, install, name, email, deploy, setDefault bool
+	var checkout, install, deploying bool
 	for _, s := range dep.Steps {
 		if strings.HasPrefix(s.Uses, "actions/checkout@") {
 			checkout = true
 			if s.With["fetch-depth"] != 0 {
-				t.Errorf("deploy's checkout fetch-depth is %v, want 0 (mike reads history and tags)", s.With["fetch-depth"])
+				t.Errorf("deploy's checkout fetch-depth is %v, want 0 (docspublish reads history and tags)", s.With["fetch-depth"])
 			}
-			// mike pushes with the checkout's credentials; this is the one job allowed to keep them
-			if s.With["persist-credentials"] != true {
-				t.Errorf("deploy's checkout persist-credentials is %v, want true (mike pushes gh-pages with it)", s.With["persist-credentials"])
+			// the build runs without the repository token; only the one push command is given it
+			if s.With["persist-credentials"] != false {
+				t.Errorf("deploy's checkout persist-credentials is %v, want false", s.With["persist-credentials"])
+			}
+		}
+		if strings.Contains(s.Run, "mike deploy") {
+			deploying = true
+			if s.Env["GH_TOKEN"] != "${{ github.token }}" {
+				t.Errorf("the deploy step's GH_TOKEN is %q, want ${{ github.token }}", s.Env["GH_TOKEN"])
 			}
 		}
 		for _, ln := range strings.Split(s.Run, "\n") {
-			switch {
-			case strings.Contains(ln, "pip install"):
+			if strings.Contains(ln, "pip install") {
 				install = true
-				if !strings.Contains(ln, "--require-hashes") || !strings.Contains(ln, "packaging/requirements-docs.txt") {
-					t.Errorf("deploy installs without the hashed docs requirements: %q", ln)
-				}
-			case strings.Contains(ln, "git config") && strings.Contains(ln, "user.name"):
-				name = true
-			case strings.Contains(ln, "git config") && strings.Contains(ln, "user.email"):
-				email = true
-			case strings.Contains(ln, "mike deploy"):
-				deploy = true
-				for _, want := range []string{"--push", "--update-aliases", "--branch gh-pages", "--remote origin", `"$VERSION"`, "$ALIASES"} {
+				for _, want := range []string{"--require-hashes", "--only-binary=:all:", "packaging/requirements-docs.txt"} {
 					if !strings.Contains(ln, want) {
-						t.Errorf("deploy's mike deploy line %q lacks %s", ln, want)
-					}
-				}
-				if s.Env["VERSION"] != "${{ needs.build.outputs.version }}" || s.Env["ALIASES"] != "${{ needs.build.outputs.aliases }}" ||
-					s.Env["PORT49_DOCS_BANNER"] != "${{ needs.build.outputs.banner }}" {
-					t.Errorf("the mike deploy step's env is %v, want VERSION, ALIASES and PORT49_DOCS_BANNER from build's outputs", s.Env)
-				}
-			case strings.Contains(ln, "mike set-default"):
-				setDefault = true
-				for _, want := range []string{"--push", "--branch gh-pages", "--remote origin", "latest"} {
-					if !strings.Contains(ln, want) {
-						t.Errorf("deploy's mike set-default line %q lacks %s", ln, want)
+						t.Errorf("deploy's install %q lacks %s", ln, want)
 					}
 				}
 			}
 		}
 	}
-	for what, ok := range map[string]bool{"a checkout": checkout, "a hashed install": install, "a git user.name": name,
-		"a git user.email": email, "mike deploy": deploy, "mike set-default": setDefault} {
+	for what, ok := range map[string]bool{"a checkout": checkout, "a hashed install": install, "a mike deploy step": deploying} {
 		if !ok {
-			t.Errorf("deploy has no %s step", what)
+			t.Errorf("deploy has no %s", what)
 		}
 	}
-	// no other command in the job may push: mike's own --push is the only one
-	for _, s := range dep.Steps {
-		if strings.Contains(s.Run, "git push") {
-			t.Errorf("deploy runs git push: %q", s.Run)
+	for _, ln := range strings.Split(script, "\n") {
+		ln = strings.TrimSpace(ln)
+		switch {
+		case strings.Contains(ln, "mike "):
+			// mike builds and commits locally; it never gets the token and never pushes
+			if !strings.Contains(ln, "env -u GH_TOKEN") || strings.Contains(ln, "--push") {
+				t.Errorf("a mike command that holds the token or pushes: %q", ln)
+			}
+			if !strings.Contains(ln, "--branch gh-pages") || !strings.Contains(ln, "--remote origin") {
+				t.Errorf("a mike command that does not name its branch and remote: %q", ln)
+			}
+		case strings.Contains(ln, "git push"):
+			// the one command that uses the token, and it pushes gh-pages, fast-forward only
+			if !strings.Contains(ln, "gh-pages:gh-pages") || !strings.Contains(ln, "${GH_TOKEN}") ||
+				strings.Contains(ln, "--force") || strings.Contains(ln, " -f ") || strings.Contains(ln, "+") {
+				t.Errorf("a git push that is not a plain gh-pages:gh-pages push with the token: %q", ln)
+			}
+		case strings.Contains(ln, "GH_TOKEN") && !strings.Contains(ln, "env -u GH_TOKEN"):
+			t.Errorf("the token is used outside the push: %q", ln)
 		}
+	}
+	if strings.Count(script, "git push") != 1 {
+		t.Errorf("deploy has %d git push commands, want exactly one", strings.Count(script, "git push"))
 	}
 }
 
-func TestTheDocsBuildOutputsWhatDeployReads(t *testing.T) {
+// Two deploys can overlap: a tag's and the main push that follows it. The decision is made inside the
+// job, after the tags are fetched, so a deploy never acts on what the build job saw earlier, and a
+// deploy that loses the race for gh-pages starts over from the branch as it now is.
+func TestTheDocsDeployDecidesAtDeployTimeAndRetries(t *testing.T) {
+	script, dep := deployScript(t)
+	conc, _ := dep.Concurrency.(map[string]any)
+	if conc["group"] != "gh-pages-${{ github.ref }}" || conc["cancel-in-progress"] != false {
+		t.Errorf("deploy's concurrency is %v, want group gh-pages-${{ github.ref }} and cancel-in-progress: false "+
+			"(a group per ref: a pending main deploy must not cancel a pending tag deploy)", dep.Concurrency)
+	}
+	for _, stale := range []string{"needs.build.outputs.version", "needs.build.outputs.aliases", "needs.build.outputs.banner"} {
+		if strings.Contains(raw(t), stale) {
+			t.Errorf("docs.yml reads %s: the build job's decision is stale by the time deploy runs", stale)
+		}
+	}
+	at := func(s string) int { return strings.Index(script, s) }
+	fetch, decide, deploy, push := at("git fetch --tags --force origin"), at("cmd/docspublish"), at("mike deploy"), at("git push")
+	if fetch < 0 || decide < 0 || deploy < 0 || push < 0 || !(fetch < decide && decide < deploy && deploy < push) {
+		t.Errorf("deploy must fetch tags (%d), run docspublish (%d), mike deploy (%d), then push (%d), in that order", fetch, decide, deploy, push)
+	}
+	if !strings.Contains(script, "for attempt in 1 2 3") {
+		t.Error("deploy has no bounded retry: for attempt in 1 2 3")
+	}
+	// each attempt starts from gh-pages as it is on origin now
+	if !strings.Contains(script, "+refs/heads/gh-pages:refs/heads/gh-pages") {
+		t.Error("deploy's retry does not refetch gh-pages")
+	}
+	if !strings.Contains(script, "exit 1") {
+		t.Error("deploy does not fail when every attempt fails")
+	}
+	if !strings.Contains(script, "mike set-default") || !strings.Contains(script, "latest") {
+		t.Error("deploy does not set the site root's default to latest")
+	}
+}
+
+// The root 404.html and llms.txt ride in a commit on gh-pages, in the same push as the site.
+func TestTheDocsDeployWritesTheRoot404(t *testing.T) {
+	script, _ := deployScript(t)
+	for _, want := range []string{`.github/docs-404.html "$wt/404.html"`, `"$wt/latest/llms.txt" "$wt/llms.txt"`, "git worktree"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("deploy does not %q", want)
+		}
+	}
+	if at := strings.Index(script, "docs-404.html"); at < strings.Index(script, "mike set-default") || at > strings.Index(script, "git push") {
+		t.Error("the 404 commit is not between mike's commits and the push")
+	}
+}
+
+func raw(t *testing.T) string { _, r := docs(t); return r }
+
+// The build job decides publish for the gate; the banner and version are the deploy job's to decide.
+func TestTheDocsBuildOutputsOnlyTheGate(t *testing.T) {
 	f, _ := docs(t)
 	out := f.Jobs["build"].Outputs
-	for _, k := range []string{"publish", "banner", "version", "aliases"} {
-		if want := "${{ steps.publish.outputs." + k + " }}"; out[k] != want {
-			t.Errorf("build's output %s is %q, want %q", k, out[k], want)
-		}
+	if want := "${{ steps.publish.outputs.publish }}"; out["publish"] != want {
+		t.Errorf("build's output publish is %q, want %q", out["publish"], want)
+	}
+	if len(out) != 1 {
+		t.Errorf("build's outputs are %v, want only publish", out)
 	}
 }
 
