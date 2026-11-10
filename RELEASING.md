@@ -36,17 +36,20 @@ PEP 440 version. The docs site states the same on its Versions page.
 6. **Public packages.** When the repository goes public, make the GHCR package `port49` and the
    chart package public.
 7. **Docs site.** Settings, Pages, source **Deploy from a branch**: `gh-pages`, folder `/ (root)`.
-   `docs.yml`'s `deploy` job runs [mike](https://github.com/jimporter/mike), which keeps one built
+   `docs.yml` runs [mike](https://github.com/jimporter/mike), which keeps one built
    copy of the site per version on that branch, and GitHub's own `pages-build-deployment` publishes
-   it: there is no `github-pages` environment and no Pages token. Outside `release.yml`, the `deploy`
-   job is the only workflow job with `contents: write`. It runs only from a public repository, in
-   two steps that never share the token: `site` fetches `gh-pages` and then the tags, decides the
-   version and aliases itself, builds with mike and commits locally, with no token in its
-   environment; `push` holds the token, runs only git, and pushes `gh-pages` (never forced) from a
-   clean bare repository with hooks and the runner's git configuration off. If another deploy moved
-   `gh-pages` first, `push` fails with "another deploy moved gh-pages; re-run this job": re-run it,
-   there is no automatic retry. Keep the `main` ruleset off `gh-pages`, or the bot's push is refused. The job also commits a root `404.html` that sends an old `/port49/<page>` link to
-   `/port49/latest/<page>`, and a root `llms.txt` copied from `latest`.
+   it: there is no `github-pages` environment and no Pages token. The deploy is two jobs, and only
+   on a public repository. The docs toolchain runs in the `deploy` job, which has no write token
+   (`contents: read`): it fetches `gh-pages` and then the tags, decides the version and aliases
+   itself, builds with mike, commits locally and uploads the branch as a git bundle. The `push-pages`
+   job runs only git on a verified bundle: it has no checkout and runs no repository code, and it
+   pushes `gh-pages`, never forced. Outside `release.yml`, the `push-pages` job is the only workflow job with
+   `contents: write`. If another deploy moved `gh-pages` first, the push is rejected and the job fails with
+   "another deploy moved gh-pages; re-run all jobs of this run": re-run all jobs, not just the failed
+   one, which would push the same stale bundle. There is no automatic retry. Keep the `main` ruleset
+   off `gh-pages`, or the bot's push is refused. The deploy also commits a root `404.html` that
+   sends an old `/port49/<page>` link to `/port49/latest/<page>`, and a root `llms.txt` copied from
+   `latest`.
 8. **Required check.** Add `docs` (the build job in `docs.yml`, named `docs`) to the required
    status checks of the `main` ruleset. What deploys: every push to `main` replaces `/dev/`; a final
    `vX.Y.Z` tag on `main` replaces `/X.Y/` if it is the highest patch of that line, and moves

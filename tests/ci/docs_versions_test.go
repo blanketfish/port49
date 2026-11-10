@@ -27,12 +27,17 @@ func TestReleasingScopesTheDeployJobsWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(b)
-	if strings.Contains(s, "is the only\n   workflow job with `contents: write`") || !strings.Contains(s, "Outside `release.yml`, the `deploy`") {
-		t.Error("RELEASING.md must say the deploy job is the only job with contents: write outside release.yml")
+	if !strings.Contains(s, "Outside `release.yml`, the `push-pages` job is the only workflow job with\n   `contents: write`") {
+		t.Error("RELEASING.md must say push-pages is the only job with contents: write outside release.yml")
 	}
-	if strings.Contains(s, "retries up to 3") || !strings.Contains(s, "re-run it,\n   there is no automatic retry") ||
-		!strings.Contains(s, "another deploy moved gh-pages; re-run this job") {
-		t.Error("RELEASING.md does not say a lost race fails red and the job is re-run")
+	if !strings.Contains(s, "The docs toolchain runs in the `deploy` job, which has no write token") ||
+		!strings.Contains(s, "job runs only git on a verified bundle") {
+		t.Error("RELEASING.md does not say the toolchain runs with no write token and the push job runs only git on a verified bundle")
+	}
+	if strings.Contains(s, "retries up to 3") || strings.Contains(s, "re-run this job") ||
+		!strings.Contains(s, "another deploy moved gh-pages; re-run all jobs of this run") ||
+		!strings.Contains(s, "There is no automatic retry") {
+		t.Error("RELEASING.md does not say a lost race fails red and all jobs of the run are re-run")
 	}
 	if !strings.Contains(s, "Only final\n   tags that are on `main` count") {
 		t.Error("RELEASING.md does not say only final tags on main count")

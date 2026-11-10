@@ -3,7 +3,7 @@ name: docs
 # The site builds on every pull request, so `docs` can be a required check. It deploys, with mike,
 # for a push to main (as "dev") or a final release tag that is the highest patch of its X.Y line
 # (as "X.Y"), and only once the repository is public: tests/ci/cmd/docspublish decides the
-# version and its aliases, the `if:` line the rest.
+# version and its aliases, the `if:` lines the rest.
 
 on:
   push:
@@ -46,35 +46,29 @@ jobs:
           PORT49_DOCS_BANNER: ${{ steps.publish.outputs.banner }}
       - run: PORT49_DOCS_SITE=site go test ./tests/ci/ -run '^TestTheBuiltSite' -count=1
 
-  # One copy of the site per version lives on the gh-pages branch (mike), and Pages serves that
-  # branch through GitHub's own pages-build job, so this job needs no Pages permission, no OIDC
-  # token and no environment. It is the one job that writes the repository, and it has two parts that
-  # never share a token:
-  #   - `site` decides, builds with mike and commits to the local gh-pages branch. The docs toolchain
-  #     (pip-installed code, mkdocs, mike) runs here, and no GH_TOKEN is in this step's environment.
-  #     Removing a variable from a child's environment would not be enough: a child can read its
-  #     parent's, and can plant git hooks or config that a later git command would run.
-  #   - `push` holds the token and runs only git. It pushes from a clean bare repository fetched from
-  #     the workspace, with hooks and the runner's git configuration off, so nothing the toolchain
-  #     wrote in the workspace runs with the token. It pushes gh-pages, never forced.
+  # One copy of the site per version lives on the gh-pages branch (mike), and Pages serves that branch
+  # through GitHub's own pages-build job, so nothing here needs a Pages permission, an OIDC token or an
+  # environment. The deploy is two jobs, because steps of one job share a machine and only a job
+  # boundary keeps a token from the code that builds the site:
+  #   - `deploy` runs the docs toolchain (pip-installed code, mkdocs, mike) in a job with no write token:
+  #     `contents: read`, and no token anywhere in it. It builds, commits gh-pages in its own checkout
+  #     and uploads that branch as a git bundle.
+  #   - `push-pages` has the write token, and runs only git on a verified bundle: no checkout, no
+  #     setup action, no repository code.
   #
   # Two deploys can overlap, a tag's and the main push after it, so nothing decided earlier is trusted:
-  # `site` takes the version and aliases from docspublish run here, not from the build job (whose
-  # answer can be stale by now), after fetching gh-pages and then the tags, so every tag whose deploy is
-  # already on the gh-pages it saw is in the tag list it decides from. A deploy that still loses the
-  # race for the branch fails red ("another deploy moved gh-pages; re-run this job"): it is not retried,
-  # because a retry would have to run the toolchain again beside the token. The group is per ref: one
-  # group for all refs would let a newer pending main deploy cancel a pending tag deploy.
+  # `deploy` takes the version and aliases from docspublish run in that job, not from the build job
+  # (whose answer can be stale by now), after fetching gh-pages and then the tags, so every tag whose
+  # deploy is already on the gh-pages it saw is in the tag list it decides from.
   deploy:
     needs: build
     if: needs.build.outputs.publish == 'true' && github.event_name == 'push' && github.event.repository.private == false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    concurrency:
-      group: gh-pages-${{ github.ref }}
-      cancel-in-progress: false
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      publish: ${{ steps.site.outputs.publish }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -121,19 +115,52 @@ jobs:
           git -C "$wt" add 404.html llms.txt
           git -C "$wt" diff --cached --quiet || git -C "$wt" commit -q -m "docs: root 404 and llms.txt"
           git worktree remove --force "$wt"
-      - id: push
-        if: steps.site.outputs.publish == 'true'
-        env:
+          git bundle create "$RUNNER_TEMP/gh-pages.bundle" gh-pages
+      - if: steps.site.outputs.publish == 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: gh-pages-bundle
+          path: ${{ runner.temp }}/gh-pages.bundle
+          retention-days: 1
+          if-no-files-found: error
+          overwrite: true
+
+  # The only job with a write token. It runs no repository code: a pinned download, then git, which
+  # verifies the bundle, fetches it into a clean bare repository (objects checked), and pushes gh-pages
+  # from there with hooks, the runner's git configuration and any credential helper off. The push is
+  # never forced: a stale bundle is rejected, never applied.
+  #
+  # The group is per ref and only here. Deploy writes nothing, so it needs none. A main run's push can
+  # then neither queue behind nor cancel a tag run's pending push; a newer pending push of the same ref
+  # supersedes an older one, which is right because its build is newer. A push that loses the race to
+  # another ref's push is rejected and fails red; the message says to re-run all jobs of the run, since
+  # re-running only this job would push the same stale bundle.
+  push-pages:
+    needs: deploy
+    if: needs.deploy.outputs.publish == 'true' && github.event_name == 'push' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: gh-pages-push-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: gh-pages-bundle
+          path: ${{ runner.temp }}/bundle
+      - env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          # only git runs here, from a clean bare repository: no workspace hooks or config, and none of
-          # the runner's, can run with the token
           export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+          b="$RUNNER_TEMP/bundle/gh-pages.bundle"
           t=$(mktemp -d)
           git init -q --bare "$t"
-          git -C "$t" fetch -q "$GITHUB_WORKSPACE" gh-pages:gh-pages
+          git -C "$t" bundle verify "$b"
+          git -C "$t" -c transfer.fsckObjects=true fetch -q "$b" gh-pages:gh-pages
           if ! git -C "$t" -c core.hooksPath=/dev/null -c credential.helper= push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages:gh-pages; then
-            echo "another deploy moved gh-pages; re-run this job" >&2
+            echo "another deploy moved gh-pages; re-run all jobs of this run" >&2
             exit 1
           fi
