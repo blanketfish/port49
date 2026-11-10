@@ -35,7 +35,8 @@ import (
 
 // A row's verdict is what decides a flag; shown is its compared columns' normalised text, which a report prints
 // and which, when it changes while verdict does not, is a narrative change: printed, never failed.
-type verdictRow struct{ key, label, verdict, shown string }
+// alias is the key with an account's number taken out, for pairing a row a run renamed (compareNotes).
+type verdictRow struct{ key, alias, label, verdict, shown string }
 
 // narrativeOut is where checkVerdicts prints a narrative change for a person to read.
 var narrativeOut io.Writer = os.Stdout
@@ -66,6 +67,7 @@ var (
 	// of 12 or more hex characters (a container id, a digest), a 16-character upper-case id (a ctx_id), an
 	// address with a port, "port 41234", a temp path, an etcd revision ("at 320"), a tty ("port=vty6").
 	timeRe     = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`)
+	clockRe    = regexp.MustCompile(`\b\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b`) // a wall-clock time: "01:55:38.000Z"
 	durationRe = regexp.MustCompile(`\b\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s)(?:\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s))*\b`)
 	hexRe      = regexp.MustCompile(`\b[0-9a-f]{12,}\b`)
 	ctxRe      = regexp.MustCompile(`\b[A-Z0-9]{16}\b`)
@@ -77,6 +79,15 @@ var (
 	lineRe     = regexp.MustCompile(`\b(?:vty|tty|con|pts/)\d+\b`)
 	rttRe      = regexp.MustCompile(`\d+\.\d+(?:/\d+\.\d+)+ ms`)
 )
+
+// An account's number: letters then digits, a whole word ("alice03", "slice01"). A bare number ("30", L8's
+// lengths) and a mixed id ("L65e1") are not.
+var poolAccount = regexp.MustCompile(`\b([A-Za-z]+)\d+\b`)
+
+// The L73 harness's mark on a connection opened before the login (tests/lab/l73_tlswire.go, l73Describe): the
+// readiness probe's, outside the measured window, captured or not depending on timing. It is the harness's own
+// fixed phrase, so it is matched as one: no general rule tells it from a measured connection.
+const readinessProbe = " (opened before the login: the readiness probe's connection)"
 
 func splitRow(ln string) []string {
 	ln = strings.TrimSpace(ln)
@@ -114,8 +125,9 @@ func isSeparator(cells []string) bool {
 // norm is a cell's text with the values a rerun moves normalised away, in this order, and its ';'-separated
 // parts sorted (records arrive in a different order from run to run).
 func norm(cell string) string {
-	s := strings.NewReplacer("`", "", "*", "").Replace(cell)
+	s := strings.NewReplacer("`", "", "*", "", readinessProbe, "").Replace(cell)
 	s = timeRe.ReplaceAllString(s, "<t>")
+	s = clockRe.ReplaceAllString(s, "<t>")
 	s = durationRe.ReplaceAllString(s, "<d>")
 	s = hexRe.ReplaceAllString(s, "<hex>")
 	s = ctxRe.ReplaceAllString(s, "<id>")
@@ -234,15 +246,15 @@ func compareCell(cell string, verdict bool) string {
 func verdictRows(note string) []verdictRow {
 	var rows []verdictRow
 	seen := map[string]int{}
-	addRow := func(key, label, verdict, shown string) {
+	addRow := func(key, alias, label, verdict, shown string) {
 		seen[key]++
 		if seen[key] > 1 {
 			key = fmt.Sprintf("%s#%d", key, seen[key])
 		}
-		rows = append(rows, verdictRow{key, label, verdict, shown})
+		rows = append(rows, verdictRow{key, alias, label, verdict, shown})
 	}
 	// A bullet or prose verdict is compared on its full text, which is also what a report shows.
-	add := func(key, label, verdict string) { addRow(key, label, verdict, verdict) }
+	add := func(key, label, verdict string) { addRow(key, key, label, verdict, verdict) }
 	heading, header := "", ""
 	var compared []int   // the columns of the table being read that are compared
 	var isVerdict []bool // per column of that table: a verdict column (full text) or narrative (verdict words)
@@ -290,7 +302,9 @@ func verdictRows(note string) []verdictRow {
 				shown = append(shown, norm(cells[i]))
 			}
 		}
-		addRow(heading+"\x00"+header+"\x00"+cells[0], labelFor(heading, cells[0]), strings.Join(verdict, " | "), strings.Join(shown, " | "))
+		// a wall-clock time in the key (session-*'s "at the ceiling + 10 s (01:55:38.000Z)") moves every run
+		key := heading + "\x00" + header + "\x00" + clockRe.ReplaceAllString(cells[0], "<t>")
+		addRow(key, poolAccount.ReplaceAllString(key, "$1<n>"), labelFor(heading, cells[0]), strings.Join(verdict, " | "), strings.Join(shown, " | "))
 	}
 	return rows
 }
@@ -393,18 +407,39 @@ func compareNotes(old, now string) (changes, narrative []string) {
 	}
 	for _, r := range newRows {
 		is[r.key] = true
-		o, ok := was[r.key]
+	}
+	// A row whose key is gone pairs, in order, with a new row whose key differs from it only in an account's
+	// number (poolAccount): the same row under the account this run drew.
+	gone := map[string][]verdictRow{}
+	for _, r := range oldRows {
+		if !is[r.key] {
+			gone[r.alias] = append(gone[r.alias], r)
+		}
+	}
+	compare := func(o, r verdictRow) {
 		switch {
-		case !ok:
-			changes = append(changes, fmt.Sprintf("%s: added (%s)", r.label, r.shown))
 		case o.verdict != r.verdict:
 			changes = append(changes, fmt.Sprintf("%s: %s -> %s", r.label, o.shown, r.shown))
 		case o.shown != r.shown:
 			narrative = append(narrative, fmt.Sprintf("%s: %s -> %s", r.label, o.shown, r.shown))
 		}
 	}
+	for _, r := range newRows {
+		if o, ok := was[r.key]; ok {
+			compare(o, r)
+			continue
+		}
+		if g := gone[r.alias]; len(g) > 0 {
+			compare(g[0], r)
+			gone[r.alias] = g[1:]
+			continue
+		}
+		changes = append(changes, fmt.Sprintf("%s: added (%s)", r.label, r.shown))
+	}
+	// what pairing left in gone, in order, was removed
 	for _, r := range oldRows {
-		if !is[r.key] {
+		if g := gone[r.alias]; len(g) > 0 && g[0].key == r.key {
+			gone[r.alias] = g[1:]
 			changes = append(changes, fmt.Sprintf("%s: removed (was %s)", r.label, r.shown))
 		}
 	}
