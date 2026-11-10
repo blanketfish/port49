@@ -7,6 +7,7 @@ on:
 permissions: {contents: read}
 jobs:
   smoke:
+    name: systemd-smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     # A GitHub-hosted runner is ephemeral and its vTPM, if it has one, is nobody's key: the key-host guard
