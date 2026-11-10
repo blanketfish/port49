@@ -35,11 +35,17 @@ PEP 440 version. The docs site states the same on its Versions page.
    outside collaborators": **Require approval for all outside collaborators**.
 6. **Public packages.** When the repository goes public, make the GHCR package `port49` and the
    chart package public.
-7. **Docs site.** Settings, Pages, source **GitHub Actions**. The `github-pages` environment's
-   deployment branches and tags are restricted to `main` and the `v*` tag pattern. `docs.yml`'s
-   `deploy` job is the only one that names it, and it deploys only from a public repository.
+7. **Docs site.** Settings, Pages, source **Deploy from a branch**: `gh-pages`, folder `/ (root)`.
+   `docs.yml`'s `deploy` job runs [mike](https://github.com/jimporter/mike), which keeps one built
+   copy of the site per version on that branch, and GitHub's own `pages-build-deployment` publishes
+   it: there is no `github-pages` environment and no Pages token. The `deploy` job is the only
+   workflow job with `contents: write`, it pushes only `gh-pages`, and it runs only from a public
+   repository. Keep the `main` ruleset off `gh-pages`, or the bot's push is refused.
 8. **Required check.** Add `docs` (the build job in `docs.yml`, named `docs`) to the required
-   status checks of the `main` ruleset. The site deploys only for the highest final `vX.Y.Z` tag.
+   status checks of the `main` ruleset. What deploys: every push to `main` replaces `/dev/`; a final
+   `vX.Y.Z` tag on `main` replaces `/X.Y/` if it is the highest patch of that line, and moves
+   `/latest/` (the alias the site root redirects to) if it is also the highest final tag. Before the
+   first final tag, `/latest/` is an alias of `/dev/`. A lower patch pushed late deploys nothing.
 9. **Link check.** At go-public, run one external link check over the built site (for example
    `lychee` on `site/`) and fix what it finds.
 

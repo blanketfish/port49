@@ -14,6 +14,12 @@ import (
 // The site is versioned by mike (/port49/dev/, /port49/<X.Y>/, /port49/latest/): the dropdown is
 // Material's, fed by mike's versions.json, and every deep link names a version so it cannot rot.
 
+func init() {
+	mustSay["operate/versions.md"] = append(mustSay["operate/versions.md"],
+		"## Which version of these docs you are reading", "`/latest/`", "`/dev/`", "version selector",
+	)
+}
+
 func TestTheSiteIsVersionedByMike(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(repoRoot, "mkdocs.yml"))
 	if err != nil {
