@@ -185,25 +185,26 @@ For that, the broker needs three things.
 - **Attestation roots**, so it can check your key: Yubico's PIV roots, in a PEM file, named from an
   `identity:` block (which replaces `client_ca_file`):
 
-  ```yaml
-  broker:
-    identity:
-      humans:
-        - {type: x509, trust_anchor_file: /etc/port49/broker/client-ca.pem}
-      per_login_mfa:
-        hardware_key_touch: {attestation_roots_file: /etc/port49/broker/attestation-roots.pem}
-  ```
+    ```yaml
+    broker:
+      identity:
+        humans:
+          - {type: x509, trust_anchor_file: /etc/port49/broker/client-ca.pem}
+        per_login_mfa:
+          hardware_key_touch: {attestation_roots_file: /etc/port49/broker/attestation-roots.pem}
+    ```
 
 - **The right**, in the policy, on subjects that name people by `identity:`:
 
-  ```yaml
-  subjects:
-    - {name: oncall_a, identity: ["user:a@example.com"], api: [revoke_others, lift_revocations]}
-    - {name: oncall_b, identity: ["user:b@example.com"], api: [revoke_others, lift_revocations]}
-  ```
+    ```yaml
+    subjects:
+      - {name: oncall_a, identity: ["user:a@example.com"], api: [revoke_others, lift_revocations]}
+      - {name: oncall_b, identity: ["user:b@example.com"], api: [revoke_others, lift_revocations]}
+    ```
 
-  Name at least two on-call admins by `identity:`, even if a `group:` subject also holds the
-  right: a group's rights resolve through the directory, which may be down when you need them.
+    Name at least two on-call admins by `identity:`, even if a `group:` subject also holds the
+    right: a group's rights resolve through the directory, which may be down when you need them.
+
 - **A session key on the security key**, from `port49 login` (`key: pkcs11:...`).
 
 **Break-glass.** With every broker stopped, on a broker host, as the broker's user:
