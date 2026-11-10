@@ -109,8 +109,9 @@ var releaseJobPerms = map[string]map[string]string{
 // jobPermsOK is whether p is what job id of workflow name may hold.
 func jobPermsOK(name, id string, p any) bool {
 	if name == "docs.yml" && id == "deploy" {
+		// mike pushes the gh-pages branch with the job's GITHUB_TOKEN: its one write, and no token for Pages
 		m, ok := p.(map[string]any)
-		return ok && len(m) == 2 && m["pages"] == "write" && m["id-token"] == "write"
+		return ok && len(m) == 1 && m["contents"] == "write"
 	}
 	if name != "release.yml" {
 		return readOnly(p)
@@ -183,7 +184,10 @@ func workflowProblems(name string, raw []byte) []string {
 			if s.Uses != "" && !pinned.MatchString(s.Uses) {
 				add("job %s: %q is not pinned by a full commit SHA", id, s.Uses)
 			}
-			if strings.HasPrefix(s.Uses, "actions/checkout@") && fmt.Sprint(s.With["persist-credentials"]) != "false" {
+			// docs.yml's deploy is the one checkout that keeps its credentials: mike pushes gh-pages with
+			// them. TestTheDocsDeployPushesOnlyGhPages holds that job to its own rules.
+			keeps := name == "docs.yml" && id == "deploy"
+			if strings.HasPrefix(s.Uses, "actions/checkout@") && !keeps && fmt.Sprint(s.With["persist-credentials"]) != "false" {
 				add("job %s: a checkout without persist-credentials: false", id)
 			}
 			for _, bad := range []string{"github.event", "github.head_ref", "github.ref_name", "secrets."} {

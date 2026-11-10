@@ -36,6 +36,7 @@ type job struct {
 	ContinueOnError any               `yaml:"continue-on-error"`
 	Env             map[string]string `yaml:"env"`
 	Needs           any               `yaml:"needs"`
+	Outputs         map[string]string `yaml:"outputs"`
 	Concurrency     any               `yaml:"concurrency"`
 	Environment     any               `yaml:"environment"`
 	Permissions     map[string]any    `yaml:"permissions"`
@@ -117,17 +118,13 @@ func TestOnlyThePublishersHoldIDToken(t *testing.T) {
 		for id, j := range f.Jobs {
 			holds := j.Permissions["id-token"] != nil
 			may := name == "release.yml" && (id == "pypi" || id == "goreleaser" || id == "image" || id == "chart")
-			pages := name == "docs.yml" && id == "deploy"
-			if holds && !may && !pages {
+			if holds && !may {
 				t.Errorf("%s: job %s holds id-token", name, id)
 			}
 			if may && j.Permissions["id-token"] != "write" {
 				t.Errorf("release.yml: job %s does not hold id-token: write", id)
 			}
-			if pages && (len(j.Permissions) != 2 || j.Permissions["pages"] != "write" || j.Permissions["id-token"] != "write") {
-				t.Errorf("docs.yml: deploy holds %v, want exactly pages: write and id-token: write", j.Permissions)
-			}
-			if j.Permissions["pages"] != nil && !pages {
+			if j.Permissions["pages"] != nil {
 				t.Errorf("%s: job %s holds pages", name, id)
 			}
 		}
@@ -143,7 +140,8 @@ func TestOnlyThePublishersHoldIDToken(t *testing.T) {
 			t.Errorf("job %s names an environment (%v)", id, j.Environment)
 		}
 	}
-	// docs.yml's deploy is the only job anywhere that names github-pages, and it names nothing else
+	// no job names github-pages: the docs deploy pushes the gh-pages branch, and Pages builds that
+	// through GitHub's own pages-build job, which needs no environment and no OIDC token
 	for name := range allWorkflows(t) {
 		wf, _ := load(t, "../../.github/workflows/"+name)
 		for id, j := range wf.Jobs {
@@ -157,7 +155,7 @@ func TestOnlyThePublishersHoldIDToken(t *testing.T) {
 			case map[string]any:
 				env, _ = e["name"].(string)
 			}
-			if (env == "github-pages") != (name == "docs.yml" && id == "deploy") {
+			if env == "github-pages" {
 				t.Errorf("%s: job %s names environment %q", name, id, env)
 			}
 		}

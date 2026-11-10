@@ -7,8 +7,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The docs workflow's own rules (plan 13, Task 2): it builds on every pull request and deploys
-// only from a public repository. Nothing here runs a workflow.
+// The docs workflow's own rules (plan 13, Task 2; versioned by mike): it builds on every pull request
+// and deploys only from a public repository, by pushing one version of the site to the gh-pages branch.
+// Nothing here runs a workflow.
 
 const docsPublishIf = "github.event_name == 'push' && github.event.repository.private == false"
 
@@ -23,47 +24,99 @@ func TestTheDocsDeployIsGatedOnAPublicRepository(t *testing.T) {
 	if want := "needs.build.outputs.publish == 'true' && " + docsPublishIf; dep.If != want {
 		t.Errorf("deploy.if is %q, want %q", dep.If, want)
 	}
-	var upload *step
-	build := f.Jobs["build"]
-	for i, s := range build.Steps {
-		if strings.HasPrefix(s.Uses, "actions/upload-pages-artifact@") {
-			upload = &build.Steps[i]
-		}
-	}
-	if upload == nil {
-		t.Fatal("build has no upload-pages-artifact step")
-	}
-	if want := "steps.publish.outputs.publish == 'true' && " + docsPublishIf; upload.If != want {
-		t.Errorf("the upload step's if is %q, want %q", upload.If, want)
-	}
-	if upload.With["path"] != "site" {
-		t.Errorf("the upload's path is %v, want site", upload.With["path"])
-	}
-	if last := build.Steps[len(build.Steps)-1]; last.Uses != upload.Uses {
-		t.Error("the upload is not build's last step")
-	}
 	if n, ok := dep.Needs.(string); !ok || n != "build" {
 		t.Errorf("deploy.needs is %v, want build", dep.Needs)
-	}
-	if dep.Concurrency == nil {
-		t.Error("deploy has no concurrency")
 	}
 	if f.Concurrency != nil || topLevel(raw, "concurrency:") != "" {
 		t.Error("docs.yml has top-level concurrency: one group would cancel queued pull-request builds")
 	}
-	if len(dep.Steps) != 1 || !strings.HasPrefix(dep.Steps[0].Uses, "actions/deploy-pages@") || dep.Steps[0].ID != "deployment" {
-		t.Errorf("deploy's steps are %+v, want exactly deploy-pages with id deployment", dep.Steps)
+	// the build job only checks; nothing in it publishes
+	for _, s := range f.Jobs["build"].Steps {
+		if strings.HasPrefix(s.Uses, "actions/upload-pages-artifact@") || strings.HasPrefix(s.Uses, "actions/deploy-pages@") {
+			t.Errorf("build uses %s: the site is deployed by mike, not by the Pages actions", s.Uses)
+		}
 	}
-	if hasUses(dep, "actions/checkout@") {
-		t.Error("deploy has a checkout")
+	if dep.Environment != nil {
+		t.Errorf("deploy names an environment (%v): Pages builds the gh-pages branch itself", dep.Environment)
 	}
-	env, _ := dep.Environment.(map[string]any)
-	if env["name"] != "github-pages" || env["url"] != "${{ steps.deployment.outputs.page_url }}" {
-		t.Errorf("deploy's environment is %v", dep.Environment)
+}
+
+// The deploy job is the one job that writes the repository, and it writes one branch: gh-pages.
+func TestTheDocsDeployPushesOnlyGhPages(t *testing.T) {
+	f, _ := docs(t)
+	dep := f.Jobs["deploy"]
+	if p := dep.Permissions; len(p) != 1 || p["contents"] != "write" {
+		t.Errorf("deploy's permissions are %v, want exactly contents: write", p)
 	}
-	p := dep.Permissions
-	if len(p) != 2 || p["pages"] != "write" || p["id-token"] != "write" {
-		t.Errorf("deploy's permissions are %v, want exactly pages: write and id-token: write", p)
+	conc, _ := dep.Concurrency.(map[string]any)
+	if conc["group"] != "gh-pages" || conc["cancel-in-progress"] != false {
+		t.Errorf("deploy's concurrency is %v, want group gh-pages and cancel-in-progress: false", dep.Concurrency)
+	}
+	var checkout, install, name, email, deploy, setDefault bool
+	for _, s := range dep.Steps {
+		if strings.HasPrefix(s.Uses, "actions/checkout@") {
+			checkout = true
+			if s.With["fetch-depth"] != 0 {
+				t.Errorf("deploy's checkout fetch-depth is %v, want 0 (mike reads history and tags)", s.With["fetch-depth"])
+			}
+			// mike pushes with the checkout's credentials; this is the one job allowed to keep them
+			if s.With["persist-credentials"] != true {
+				t.Errorf("deploy's checkout persist-credentials is %v, want true (mike pushes gh-pages with it)", s.With["persist-credentials"])
+			}
+		}
+		for _, ln := range strings.Split(s.Run, "\n") {
+			switch {
+			case strings.Contains(ln, "pip install"):
+				install = true
+				if !strings.Contains(ln, "--require-hashes") || !strings.Contains(ln, "packaging/requirements-docs.txt") {
+					t.Errorf("deploy installs without the hashed docs requirements: %q", ln)
+				}
+			case strings.Contains(ln, "git config") && strings.Contains(ln, "user.name"):
+				name = true
+			case strings.Contains(ln, "git config") && strings.Contains(ln, "user.email"):
+				email = true
+			case strings.Contains(ln, "mike deploy"):
+				deploy = true
+				for _, want := range []string{"--push", "--update-aliases", "--branch gh-pages", "--remote origin", `"$VERSION"`, "$ALIASES"} {
+					if !strings.Contains(ln, want) {
+						t.Errorf("deploy's mike deploy line %q lacks %s", ln, want)
+					}
+				}
+				if s.Env["VERSION"] != "${{ needs.build.outputs.version }}" || s.Env["ALIASES"] != "${{ needs.build.outputs.aliases }}" ||
+					s.Env["PORT49_DOCS_BANNER"] != "${{ needs.build.outputs.banner }}" {
+					t.Errorf("the mike deploy step's env is %v, want VERSION, ALIASES and PORT49_DOCS_BANNER from build's outputs", s.Env)
+				}
+			case strings.Contains(ln, "mike set-default"):
+				setDefault = true
+				for _, want := range []string{"--push", "--branch gh-pages", "--remote origin", "latest"} {
+					if !strings.Contains(ln, want) {
+						t.Errorf("deploy's mike set-default line %q lacks %s", ln, want)
+					}
+				}
+			}
+		}
+	}
+	for what, ok := range map[string]bool{"a checkout": checkout, "a hashed install": install, "a git user.name": name,
+		"a git user.email": email, "mike deploy": deploy, "mike set-default": setDefault} {
+		if !ok {
+			t.Errorf("deploy has no %s step", what)
+		}
+	}
+	// no other command in the job may push: mike's own --push is the only one
+	for _, s := range dep.Steps {
+		if strings.Contains(s.Run, "git push") {
+			t.Errorf("deploy runs git push: %q", s.Run)
+		}
+	}
+}
+
+func TestTheDocsBuildOutputsWhatDeployReads(t *testing.T) {
+	f, _ := docs(t)
+	out := f.Jobs["build"].Outputs
+	for _, k := range []string{"publish", "banner", "version", "aliases"} {
+		if want := "${{ steps.publish.outputs." + k + " }}"; out[k] != want {
+			t.Errorf("build's output %s is %q, want %q", k, out[k], want)
+		}
 	}
 }
 
