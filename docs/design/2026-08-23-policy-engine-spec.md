@@ -3459,6 +3459,11 @@ granted where needed rather than forking `read_only_admin`, `read_only_operator`
 | commands only | contributes nothing to the max | `no_disruptive`, `cve_2026_xxxx` |
 | privilege only | no rules | `elevated_session` |
 
+**`baseline`, `reach_deny` and `rpc_entry` are reserved role names.** They are the roles port49's
+own projected denies carry (§8; decisions 44 and 48), and the projection tells its denies from a
+policy's by that name. A policy role with one of them is a load error whose message names the role
+and says to rename it (decision 58).
+
 ### Attributes are transported, not understood
 
 Vendor attributes are unbounded — F5 partitions, Palo Alto access domains, Fortinet
@@ -11981,6 +11986,13 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
    putting the key back as `previous` undoes, or by a lost key, which a forget by any admin whose
    own pin opens cures; the pass keeps every pin that opens on `current`. An offline forget would
    be a path around the touch-gated, recorded broker API.
+
+**58. The names of port49's own roles are reserved (issue #16).** The projection marks its denies
+by `Rule.Role`: `baseline` (§8), `rpc_entry` (decision 44) and `reach_deny` (decision 48). A policy
+role with one of those names skipped the provability check, so a Junos reply failed closed
+`unsound` and blamed a projection defect, or had its deny labelled port49's. The three names are
+refused at load, the message naming the role and saying to rename it, from one list in
+`internal/platform`. The match is exact; `Baseline` and `baseline_ops` are other names.
 
 ---
 
