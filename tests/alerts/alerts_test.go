@@ -267,8 +267,8 @@ func TestReadmeHoldTTLDefaultIsTheCodes(t *testing.T) {
 	}
 }
 
-// runbookURL is where the docs site explains an alert: site_url from mkdocs.yml, the alerts page, the
-// alert's anchor.
+// runbookURL is where the docs site explains an alert: site_url from mkdocs.yml, latest, the alerts
+// page, the alert's anchor.
 func runbookURL(t *testing.T, alert string) string {
 	t.Helper()
 	var mk struct {
@@ -280,7 +280,8 @@ func runbookURL(t *testing.T, alert string) string {
 	if !strings.HasPrefix(mk.SiteURL, "https://") || !strings.HasSuffix(mk.SiteURL, "/") {
 		t.Fatalf("mkdocs.yml site_url = %q, want an https URL ending in /", mk.SiteURL)
 	}
-	return mk.SiteURL + "reference/alerts/#" + alert
+	// site_url is the bare root; a runbook link names latest so it outlives the release it was written for
+	return mk.SiteURL + "latest/reference/alerts/#" + alert
 }
 
 func TestEveryRuleHasARunbookURL(t *testing.T) {
