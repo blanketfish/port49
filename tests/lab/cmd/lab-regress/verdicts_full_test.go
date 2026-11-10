@@ -71,6 +71,16 @@ func TestRunToRunNoiseDoesNotFlag(t *testing.T) {
 	}
 }
 
+// A verdict cell's ';' parts are compared as a set of parts: L35's records come back in another order on a
+// rerun, and an `outcome` column is compared on its full text, so only the sort keeps the order out.
+func TestAReorderedRecordListInAVerdictCellDoesNotFlag(t *testing.T) {
+	note := "| step | outcome |\n|---|---|\n| 3 | refused in 1s; records [deny credential_revoked]; accounting stop |\n"
+	if got := verdictChanges(note, strings.Replace(note, "refused in 1s; records [deny credential_revoked]; accounting stop",
+		"accounting stop; refused in 1s; records [deny credential_revoked]", 1)); len(got) != 0 {
+		t.Fatalf("the same records in another order are not a verdict change: %v", got)
+	}
+}
+
 // The tty a login lands on (vty4, tty435) and the round-trip figures of a ping move every run.
 func TestTTYNamesAndPingFiguresDoNotFlag(t *testing.T) {
 	h := "| user | observed | reason | tty | ping |\n|---|---|---|---|---|\n"
