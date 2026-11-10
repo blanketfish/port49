@@ -7,8 +7,10 @@ description: Letting an AI agent operate network devices through port49 with its
 
 An AI agent that runs commands on network devices is a workload: a program with no person at the keyboard.
 port49 treats it like one. It gets an identity of its own, a grant of its own, and a record of its own in the
-decision log. This page is for the operator who sets that up, and for the agent that reads it before it acts.
-Every sentence is an instruction, so it says what to do and what never to do.
+decision log.
+
+This page is for the operator who sets that up, and for the agent that reads it before it acts. Every
+sentence is an instruction: it says what to do, and what never to do.
 
 ## The rules
 
@@ -16,20 +18,32 @@ Every sentence is an instruction, so it says what to do and what never to do.
    a person's shell with that person's agent running. A command it ran there would be recorded under the
    person, and the person's grants would be the agent's.
 2. **The agent has a subject of its own, with the narrowest roles.** The subject names the agent's one
-   identity: a workload certificate (`spiffe://<trust domain>/<path>`), a Kubernetes service account
-   (`system:serviceaccount:<namespace>:<name>`) or a machine OIDC client (`app:<client_id>`). Give it a
-   read-only role first and widen it only when a human decides to. See
-   [Workloads](../admin/workloads.md) and [Roles and grants](../admin/roles-and-grants.md#machine_group).
-3. **The tooling mints and presents the token. The token never enters the agent's context.** Use the Ansible
-   lookup, which reads the token from the `port49` command and hands it to the connection and nowhere else, or
-   the Python library's `port49.netmiko.connect` with a `port49.Workload`, which mints with the agent's own
-   certificate and hands the token to the Netmiko connection and nowhere else ([step 4b](#4b-or-run-it-from-python)).
-   Never use `port49.Agent`, and never call `connect` without `workload=`: both use a person's session. Never run
-   `port49 token`, `port49 workload token` or `port49 ssh` in a shell: on success they print the token (and
-   `port49 token --json` the broker's whole answer, token included) on standard output, which is the
-   transcript, or they use a person's login. Never print, log or `cat` a token, a certificate's key file, a
-   password, an ID token, or a dump of the environment, and keep `no_log: true` on every Ansible task that
-   holds one. The agent passes the key file's path to the tooling and never opens it.
+   identity, which is one of:
+
+    - a workload certificate (`spiffe://<trust domain>/<path>`)
+    - a Kubernetes service account (`system:serviceaccount:<namespace>:<name>`)
+    - a machine OIDC client (`app:<client_id>`)
+
+    Give it a read-only role first, and widen it only when a human decides to. See
+    [Workloads](../admin/workloads.md) and [Roles and grants](../admin/roles-and-grants.md#machine_group).
+
+3. **The tooling mints and presents the token. The token never enters the agent's context.** Use one of
+   these two, each of which hands the token to the connection and nowhere else:
+
+    - the Ansible lookup, which reads the token from the `port49` command
+    - the Python library's `port49.netmiko.connect` with a `port49.Workload`, which mints with the
+      agent's own certificate ([step 4b](#4b-or-run-it-from-python))
+
+    Never use `port49.Agent`, and never call `connect` without `workload=`: both use a person's session.
+
+    Never run `port49 token`, `port49 workload token` or `port49 ssh` in a shell. Each either uses a
+    person's login, or on success prints the token on standard output, which is the transcript.
+    `port49 token --json` prints the broker's whole answer, token included.
+
+    Never print, log or `cat` a token, a certificate's key file, a password, an ID token, or a dump of
+    the environment. Keep `no_log: true` on every Ansible task that holds one. The agent passes the key
+    file's path to the tooling and never opens it.
+
 4. **A refusal arrives as a reason code.** The agent reads the code from its tooling and stops. It never
    retries a deny, and it never tries another device, another identity or a person's login to get round it.
    The next section says where the code appears on each path.
@@ -53,12 +67,15 @@ Read it from the tooling the agent already runs. These are the four paths, and w
 Three things about that table.
 
 - **`port49 ssh:` is a person's path, not the agent's.** `port49 ssh` mints through the agent that
-  `port49 login` started, which holds a person's session; with no such agent it prints a line that also
-  starts `port49 ssh:`. An agent with its own identity runs neither. If an agent ever reports a line that
-  starts `port49 ssh:`, it ran `port49 ssh`, which is a person's path (rule 1): stop, and tell a human.
+  `port49 login` started, which holds a person's session. With no such agent, it prints a line that also
+  starts `port49 ssh:`. An agent with its own identity runs neither.
+
+    If an agent ever reports a line that starts `port49 ssh:`, it ran `port49 ssh`, which is a person's
+    path (rule 1). Stop, and tell a human.
+
 - **On ansible-core 2.16 to 2.18 the code is in the warning.** Those versions censor the message of a failed
-  `no_log` task and show only `censored`. The lookup also raises the same message as a `[WARNING]` line, printed
-  beside the censored result: read the code there. On 2.19 and later the task's error holds it.
+  `no_log` task and show only `censored`. The lookup also raises the same message as a `[WARNING]` line,
+  printed beside the censored result: read the code there. On 2.19 and later, the task's error holds it.
 - **A second factor is the one refusal whose message may not hold the code, and it names a person's step.**
   A device that asks for a proof the agent cannot give is `per_login_mfa_required`. The Python `MFARequired`
   message reads
@@ -84,9 +101,10 @@ for device, refusal in res.refused.items():
 ```
 
 `port49.Workload` presents the agent's own certificate. `port49.Agent` presents whatever person logged in on
-the machine, so an agent never constructs one. Never print `res` or `res.tokens`, and never take a token out of
-them for a connection of the agent's own: to run a command, use `connect` ([step 4b](#4b-or-run-it-from-python)),
-which mints for itself.
+the machine, so an agent never constructs one.
+
+Never print `res` or `res.tokens`, and never take a token out of them for a connection of the agent's own.
+To run a command, use `connect` ([step 4b](#4b-or-run-it-from-python)), which mints for itself.
 
 ## `per_login_mfa_required` devices stay human
 
@@ -95,16 +113,21 @@ provider (see [Roles and grants](../admin/roles-and-grants.md#per_login_mfa)). K
 Two things in the code decide how that works for an agent, and the second is easy to get wrong.
 
 - **A machine is exempt from the requirement by default.** A `per_login_mfa` level applies to a workload
-  only when it says `applies_to_machines: true` (spec §5.1.5). So a requirement alone does **not** keep an
-  agent off the device. An agent whose subject is granted there is minted a token, and nothing asks it for a
-  proof. What keeps it off is that **no grant of the agent's subject reaches the device**. For the agent
-  that is `deny no_grants_matched`, as the worked example below shows.
+  only when it says `applies_to_machines: true`. So a requirement alone does **not** keep an agent off the
+  device: an agent whose subject is granted there is minted a token, and nothing asks it for a proof.
+
+    What keeps it off is that **no grant of the agent's subject reaches the device**. For the agent that
+    is `deny no_grants_matched`, as the worked example below shows.
+
 - **With `applies_to_machines: true` an agent cannot meet it.** A workload proves only with
   `hardware_key_touch`, from a PKCS#11 key and a touch key on one token. A person touches that key; an agent
-  has nobody to touch it. Without the proof the mint is `deny per_login_mfa_required`, and a Kubernetes
-  service account has no key to touch, so it is never proved at all. A requirement the broker cannot
-  verify for the device is `deny per_login_mfa_unavailable`. All three codes are in
-  `internal/decision/reasons.go` and spec §5.7.
+  has nobody to touch it.
+
+    - Without the proof, the mint is `deny per_login_mfa_required`.
+    - A Kubernetes service account has no key to touch, so it is never proved at all.
+    - A requirement the broker cannot verify for the device is `deny per_login_mfa_unavailable`.
+
+    All three codes are on the [Reason codes](../reference/reason-codes.md) page.
 
 What the agent does on either code: stop, name the device and the code, and ask a human. It never looks for a
 touch key, never asks for a PIN, never starts a sign-in, and never runs `port49 token`, nor the
@@ -172,16 +195,19 @@ tests:
   - {subject: agent_readonly, device: core1, command: "show version", expect: deny}
 ```
 
-The permits are an allow-list of the `show` commands the agent needs, not `show **`. A `show` that prints the
-device's configuration (`show running-config`, `show startup-config`, `show tech-support`) prints its AAA lines
-and its local users' secrets, and the output lands in the agent's context. So the role also denies each of
-them. The allow-list is the fence. Over SSH the denies also hold if someone later widens the permit to
-`show **` (re-run with that permit, each of the four is `deny no_permit_dominates_deny`), because an
-interactive SSH session on `arista_eos` sends the command with its words spelled out: `sh run` reaches port49 as
+**The permits are an allow-list of the `show` commands the agent needs, not `show **`.** The allow-list is
+the fence. A `show` that prints the device's configuration (`show running-config`, `show startup-config`,
+`show tech-support`) prints its AAA lines and its local users' secrets. That output would land in the
+agent's context, so the role also denies each of them.
+
+**Over SSH, the denies also hold if someone later widens the permit to `show **`.** Re-run with that
+permit, and each of the four is `deny no_permit_dominates_deny`. They hold because an interactive SSH
+session on `arista_eos` sends the command with its words spelled out: `sh run` reaches port49 as
 `show running-config` ([L21-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L21-arista_eos.md);
-`expands_abbreviations: true` in `platforms/1.3.0/arista_eos.yaml`). EOS ships no policy class for
-configuration views, so the denies name the commands. Add the equivalents of your own platform from its
-[device page](../admin/devices/index.md) before you grant it.
+`expands_abbreviations: true` in `platforms/1.3.0/arista_eos.yaml`).
+
+EOS ships no policy class for configuration views, so the denies name the commands. Before you grant
+another platform, add its equivalents from its [device page](../admin/devices/index.md).
 
 !!! warning "Unmeasured"
     Whether EOS sends a command spelled out over eAPI or NETCONF is unknown, because the lab measured an
@@ -247,9 +273,10 @@ note: arista_eos does not declare config_commands: whether a command typed in co
 
 ### 4. Run a `show` command through the Ansible lookup
 
-The play mints once, in a `set_fact` with `no_log: true`, in workload mode: the four of `broker`, `broker_ca`,
-`cert` and `key` make the lookup run `port49 workload token` instead of any person's agent. The agent's
-certificate and key stay in files that only it can read. Never open them.
+The play mints once, in a `set_fact` with `no_log: true`, in workload mode. Workload mode is set by giving
+all four of `broker`, `broker_ca`, `cert` and `key`: they make the lookup run `port49 workload token`
+instead of using any person's agent. The agent's certificate and key stay in files that only it can read.
+Never open them.
 
 ```yaml
 - hosts: leaf1
@@ -278,29 +305,46 @@ certificate and key stay in files that only it can read. Never open them.
         var: out.stdout_lines
 ```
 
-The command task keeps `no_log: true` because it receives `ansible_password`, so Ansible censors its own
-result. `register: out` keeps the result in a variable, and the `debug` prints one key of it, the command's
-output, which holds no token. Never drop `no_log` from the mint or the command task to see output, and never
-`debug` `port49`, `out` or `ansible_password`. Keep `gather_facts: false`, keep the mint first, and keep
-`| default(omit)` exactly as shown, for the reasons on
-[Install the clients](../operate/install/clients.md#the-ansible-collection).
+How the play keeps the token out of the output:
 
-If the mint is refused, the play stops for that host. On ansible-core 2.19 and later the error ends with the
-code, for example `port49: core1: deny no_grants_matched: <detail>`. On 2.16 to 2.18 the task shows only
-`censored` and the same text is in the `[WARNING]` line beside it. Report that line and stop. Leave out any of
-`broker`, `broker_ca`, `cert` and `key` and the lookup would use a person's agent instead of the agent's
-certificate, so always give all four. The Python `Workload` and this lookup take a certificate and key, and no
-token file; a Kubernetes service-account agent is a human's setup ([Workloads](../admin/workloads.md#kubernetes-service-accounts)).
+- The command task keeps `no_log: true` because it receives `ansible_password`, so Ansible censors its
+  own result.
+- `register: out` keeps the result in a variable. The `debug` prints one key of it, the command's
+  output, which holds no token.
+- Never drop `no_log` from the mint or the command task to see output, and never `debug` `port49`, `out`
+  or `ansible_password`.
+- Keep `gather_facts: false`, keep the mint first, and keep `| default(omit)` exactly as shown, for the
+  reasons on [Install the clients](../operate/install/clients.md#the-ansible-collection).
+
+If the mint is refused, the play stops for that host. Report the line that holds the code, and stop.
+
+- On ansible-core 2.19 and later, the error ends with the code, for example
+  `port49: core1: deny no_grants_matched: <detail>`.
+- On 2.16 to 2.18, the task shows only `censored`, and the same text is in the `[WARNING]` line beside it.
+
+**Always give all four of `broker`, `broker_ca`, `cert` and `key`.** Leave out any one, and the lookup
+would use a person's agent instead of the agent's certificate.
+
+The Python `Workload` and this lookup take a certificate and key, and no token file. A Kubernetes
+service-account agent is a human's setup ([Workloads](../admin/workloads.md#kubernetes-service-accounts)).
 
 ### 4b. Or run it from Python
 
-`port49.netmiko.connect` with `workload=` mints through `port49 workload token` with the agent's certificate,
-checks the device's host key under its inventory name before the token is sent
-([Install the clients](../operate/install/clients.md#netmiko-and-host-keys)), and returns a Netmiko
-connection. The token reaches no return value except the connection itself, which holds it as Netmiko's
-`password` and `secret` to log in again, and Netmiko's own log filter holds it to mask it, until `disconnect()`.
-Call `disconnect()`, or use the connection as a context manager, when done. It is in no exception or traceback.
-Never print, log or pickle the connection's attributes.
+`port49.netmiko.connect` with `workload=` does three things:
+
+1. It mints through `port49 workload token` with the agent's certificate.
+2. It checks the device's host key under its inventory name before the token is sent
+   ([Install the clients](../operate/install/clients.md#netmiko-and-host-keys)).
+3. It returns a Netmiko connection.
+
+**The token reaches no return value except the connection itself.** It is in no exception or traceback.
+Until `disconnect()`, two things hold it:
+
+- the connection, as Netmiko's `password` and `secret`, to log in again
+- Netmiko's own log filter, to mask it
+
+Call `disconnect()`, or use the connection as a context manager, when done. Never print, log or pickle the
+connection's attributes.
 
 ```python
 import port49
@@ -319,20 +363,29 @@ finally:
     conn.disconnect()
 ```
 
-A refusal raises before anything connects: `Denied`, whose `.code` and `.reason` are the reason code, or
-`MFARequired` for a device that asks for a person's second factor ([above](#per_login_mfa_required-devices-stay-human)).
-Report the code and stop. Netmiko keeps the token on the connection as `password` (and `secret` with
-`enable=True`) to log in again, so never print `conn`, `vars(conn)` or either attribute. Never call
-`connect` without `workload=`: with none it uses a person's agent (rule 1), and with no person's agent it
-raises `NoAgent`. Each `connect` runs `port49 workload token` once for its one device and never again.
+A refusal raises before anything connects. Report the code and stop.
+
+- `Denied`: its `.code` and `.reason` are the reason code.
+- `MFARequired`: the device asks for a person's second factor ([above](#per_login_mfa_required-devices-stay-human)).
+
+Netmiko keeps the token on the connection as `password` (and `secret` with `enable=True`) to log in again.
+So never print `conn`, `vars(conn)` or either attribute.
+
+Never call `connect` without `workload=`. With none, it uses a person's agent (rule 1); with no person's
+agent, it raises `NoAgent`. Each `connect` runs `port49 workload token` once for its one device and never
+again.
 
 ### 5. What is recorded
 
 Each command the device asks about reaches `port49d`, which writes one `authorize_command` record
-([Decision log](../reference/decision-log.md)). The agent's records carry its principal, the command as
-`request.vector` and the subject that matched, `policy.subject`, which here is `agent_readonly`. The
-principal in them is `spiffe://example.com/agent/netops-readonly`, never a person's, so a query on it
-returns the agent's commands and nothing else. A denied command is recorded too, with its reason.
+([Decision log](../reference/decision-log.md)). The agent's records carry:
+
+- its principal, `spiffe://example.com/agent/netops-readonly`, never a person's
+- the command, as `request.vector`
+- the subject that matched, as `policy.subject`, which here is `agent_readonly`
+
+So a query on the principal returns the agent's commands and nothing else. A denied command is recorded
+too, with its reason.
 
 ## What the agent never does
 
