@@ -27,9 +27,12 @@ another principal needs the `revoke_others` right and a press of the operator's 
 Without the right the call is refused and the refusal is logged. `port49 revoke --help` lists every
 flag, and [Administer: revocation](../admin/revocation.md) is the runbook.
 
-A **standing mark** is kept in the store (with a copy in `broker.state_dir`), or on the memory store in
-`broker.revocations_file`, so a restart forgets nothing. It does not expire, because the agent reconnects with the same key by itself and a mark that
-a fresh handshake could outlive would be undone without anyone acting.
+A **standing mark** is a revocation that stays in force until someone lifts it. It is kept in the store
+(with a copy in `broker.state_dir`), or, on the memory store, in `broker.revocations_file`, so a restart
+forgets nothing.
+
+A mark does not expire. The agent reconnects with the same key by itself, so a mark that a fresh handshake
+could outlive would be undone without anyone acting.
 
 ## What happens, in order
 

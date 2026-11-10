@@ -5,15 +5,17 @@ description: How port49 knows who is logging in, for people and for workloads.
 
 # Identities
 
-port49 does not keep users. It checks a credential that something else issued, and from there on every
-path looks the same: a principal, groups from the directory, a session. Which verifiers a broker
-trusts is configuration: `broker.identity.humans` and `broker.identity.machines` in the
-[port49d reference](../reference/config/port49d.md). What a verifier accepts decides the principal's
+port49 does not keep users. It checks a credential that something else issued. From there on every
+path looks the same: a principal (the identity port49 derived from the credential), groups from the
+directory, and a session.
+
+Which verifiers a broker trusts is configuration: `broker.identity.humans` and `broker.identity.machines`
+in the [port49d reference](../reference/config/port49d.md). What a verifier accepts decides the principal's
 [trust domain](trust-domains.md).
 
-**Groups never come from a credential.** They are read from the directory when a token is minted.
-An OIDC deployment with no directory therefore addresses people only by literal identity in policy,
-which is workable for a small team and is the point at which a directory earns its place.
+**Groups never come from a credential.** They are read from the directory when a token is minted. So an
+OIDC deployment with no directory can name people in policy only by literal identity. That is workable for
+a small team, and it is the point at which a directory earns its place.
 
 ## People
 
@@ -23,39 +25,46 @@ downstream.
 ### An x509 client certificate
 
 `port49 login` presents a client certificate in a mutual-TLS handshake to the broker. The broker
-validates the chain, expiry, revocation status and the client-authentication usage, and the handshake
-itself is the proof the person holds the key. The agent's session *is* that held connection: every
-token for the rest of the day is minted over it, so a run across hundreds of devices is a batch mint
-with no further key use. If the connection drops, the next sign-in is one more PIN or touch if the key
-is on a hardware token. See [Hardware keys](../operate/hardware-keys.md).
+validates the chain, expiry, revocation status and the client-authentication usage. The handshake itself
+is the proof that the person holds the key.
+
+The agent's session *is* that held connection. Every token for the rest of the day is minted over it, so a
+run across hundreds of devices is a batch mint with no further key use. If the connection drops, and the
+key is on a hardware token, the next sign-in costs one more PIN or touch. See
+[Hardware keys](../operate/hardware-keys.md).
 
 The certificate must map to exactly one directory entry. Zero matches deny; more than one denies loudly
-rather than picking the first. The mapping kind is `broker.directory.certificate_mapping`. Strong
-kinds bind to a key (`issuer_serial`, `sid`); weak kinds bind to a name (`san_upn`, `san_email`,
-`subject_dn`, `cn`) and are refused at load without `allow_weak: true` and an issuer pin, because any
-other trusted CA could otherwise issue a certificate bearing the same name.
+rather than picking the first. The mapping kind is `broker.directory.certificate_mapping`:
+
+- **Strong** kinds bind to a key: `issuer_serial`, `sid`.
+- **Weak** kinds bind to a name: `san_upn`, `san_email`, `subject_dn`, `cn`. They are refused at load
+  without `allow_weak: true` and an issuer pin, because any other trusted CA could otherwise issue a
+  certificate bearing the same name.
 
 ### OIDC, with a certificate port49 issues
 
-`port49 login --oidc` signs in at the organization's identity provider with the authorization-code
-flow (PKCE). The broker validates the ID token against the provider's published keys and then issues
-the person a **short-lived client certificate** (12 hours by default) for a key generated on their own
-host. From then on the session is the certificate path's held connection. The agent holds no token.
-That is the path for a company with no PKI.
+This is the path for a company with no PKI. `port49 login --oidc` signs in at the organization's identity
+provider with the authorization-code flow (PKCE). The broker validates the ID token against the provider's
+published keys. Then it issues the person a **short-lived client certificate** (12 hours by default) for a
+key generated on their own host. From then on the session is the certificate path's held connection, and
+the agent holds no token.
 
 Where the key lives is `issued_key_store` in the client configuration ([client
-reference](../reference/config/client.md)). If the provider is down, people already holding a
-certificate keep working until it ends. A key kept in a file is copyable, and whoever copies it holds
+reference](../reference/config/client.md)). A key kept in a file is copyable, and whoever copies it holds
 the session until the certificate ends; a key in a TPM or hardware token is not.
+
+If the provider is down, people already holding a certificate keep working until it ends.
 
 ### A directory password and an authenticator code
 
 `port49 login --directory` is for a company with neither a PKI nor an identity provider. The person's
-directory password and a TOTP code go to the broker over its TLS. The broker checks the code, then the
-password by a single bind as the person's own directory entry (LDAPS or StartTLS), and issues the same
-certificate as the OIDC path. The password is never stored, logged or given to a device. Attempts are
-limited per person and per source address, counted before they are judged. Service accounts do not sign
-in this way, and a workload's directory entry is refused.
+directory password and a TOTP code go to the broker over its TLS. The broker checks the code first, then
+the password, by a single bind as the person's own directory entry (LDAPS or StartTLS). Then it issues the
+same certificate as the OIDC path.
+
+The password is never stored, logged or given to a device. Attempts are limited per person and per source
+address, counted before they are judged. Service accounts do not sign in this way, and a workload's
+directory entry is refused.
 
 ### Extending a session
 

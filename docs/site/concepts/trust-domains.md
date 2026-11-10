@@ -40,9 +40,11 @@ broker:
         namespaces: [netops]
 ```
 
-The values are placeholders; the full key list is in the reference. `issuance: {}` turns on certificate
-issuance with its defaults; the broker refuses an OIDC human verifier without it, unless an x509 human verifier sits beside it and
-the verifier serves only as a per-login MFA proof.
+The values are placeholders; the full key list is in the reference.
+
+`issuance: {}` turns on certificate issuance with its defaults. The broker refuses an OIDC human verifier
+without it. The one exception is an OIDC verifier that sits beside an x509 human verifier and serves only as
+a per-login MFA proof.
 
 ## What follows from the rule
 
@@ -61,9 +63,9 @@ the verifier serves only as a per-login MFA proof.
   whose ID token a person presents; `audience` names the API in the access token a service obtains.
   Both are checks on `aud`, and the list the token matched decides the domain.
 - **Certificate anchors may not overlap.** The handshake verifies against both anchors, and the one the
-  chain ends at is the domain. A chain that ends at both is refused at the TLS handshake, which leaves a
+  chain ends at is the domain. A chain that ends at both is refused at the TLS handshake. That leaves a
   line in the broker's log and a count of `identity_refused` handshake failures, not a decision record.
-  Put the two anchors in unrelated hierarchies: the broker refuses to start if one anchor directly signs
+  Put the two anchors in unrelated hierarchies. The broker refuses to start if one anchor directly signs
   the other, and refuses at a request whose chain shows a deeper overlap.
 - **A workload never authenticates with a directory password.** The password sign-in refuses a workload's
   entry, and the verifier's `filter` keeps a person-shaped service account out.
