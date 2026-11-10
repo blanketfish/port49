@@ -40,6 +40,7 @@ theme:
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
+  # The page is wider than Material's default (docs/site/stylesheets/extra.css: width only, no color).
   features:
     - navigation.sections
     - navigation.indexes
@@ -54,6 +55,9 @@ extra:
     alias: true
   # A tag build sets PORT49_DOCS_BANNER (plan 13, Task 2); main builds say they are not a release.
   banner: !ENV [PORT49_DOCS_BANNER, "This site describes port49 as it is on main, not a release."]
+
+extra_css:
+  - stylesheets/extra.css
 
 markdown_extensions:
   - admonition

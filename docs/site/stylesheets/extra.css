@@ -1,0 +1,5 @@
+/* Wider page than Material's 61rem default: config and evidence tables need the room. It sets the
+   width only, so the light and dark schemes stay the theme's own (tests/ci/docs_theme_test.go). */
+.md-grid {
+  max-width: 1440px;
+}

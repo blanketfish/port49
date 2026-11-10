@@ -76,11 +76,34 @@ func TestTheBannerOverrideHardCodesNoColor(t *testing.T) {
 	if hex := regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b`).FindString(s); hex != "" {
 		t.Errorf("docs/overrides/main.html holds the color %q: use the theme's variables", hex)
 	}
-	cfg, err := os.ReadFile(filepath.Join("..", "..", "mkdocs.yml"))
+	b, err = os.ReadFile(filepath.Join("..", "..", "mkdocs.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(cfg), "extra_css") {
-		t.Error("mkdocs.yml adds a stylesheet: it would need its own dark rules")
+	var cfg struct {
+		ExtraCSS []string `yaml:"extra_css"`
+	}
+	if err := yaml.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	// the one stylesheet sets the page width; a color in it would need its own dark rules
+	if len(cfg.ExtraCSS) != 1 || cfg.ExtraCSS[0] != "stylesheets/extra.css" {
+		t.Fatalf("mkdocs.yml extra_css is %v, want only stylesheets/extra.css", cfg.ExtraCSS)
+	}
+	css, err := os.ReadFile(filepath.Join(docsRoot, "stylesheets", "extra.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := string(css)
+	for _, bad := range []string{"color", "background", "border", "shadow", "fill", "rgb(", "hsl(", "@import", "url("} {
+		if strings.Contains(c, bad) {
+			t.Errorf("stylesheets/extra.css holds %q: it sets the page width only", bad)
+		}
+	}
+	if hex := regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b`).FindString(c); hex != "" {
+		t.Errorf("stylesheets/extra.css holds the color %q", hex)
+	}
+	if !strings.Contains(c, ".md-grid") || !strings.Contains(c, "max-width") {
+		t.Error("stylesheets/extra.css does not widen .md-grid")
 	}
 }
