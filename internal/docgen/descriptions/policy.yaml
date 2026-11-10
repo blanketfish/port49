@@ -101,7 +101,7 @@ defaults.per_login_mfa.applies_to_machines: &mfa_machines "Set `true` to require
 "tests.[].device": "The inventory device the test runs against. Required."
 "tests.[].command": "The command to authorize. A test without a command is a session test."
 "tests.[].expect": "`permit` or `deny`. Required with a command; not allowed on a session test."
-"tests.[].reason": "The reason code a denial must carry, from the closed decision-reason vocabulary."
+"tests.[].reason": "Optional, with a command. The reason code the decision must carry for the test to pass, on a permit or a deny: for example `no_grants_matched` or `permit_dominates`. A code that is not on the reason codes page is refused at load. Not allowed on a session test."
 "tests.[].level": "Session test: the privilege level the subject must be minted a token at."
 "tests.[].max_privilege": "Session test: the ceiling the token must carry, a level or `none`."
 "tests.[].priv_lvl": "Session test: the `priv-lvl` number (0 to 15) the reply must carry, or `none`."

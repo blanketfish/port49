@@ -145,7 +145,7 @@ list and the position.
 | `tests.[].device` | string | The inventory device the test runs against. Required. |
 | `tests.[].command` | string | The command to authorize. A test without a command is a session test. |
 | `tests.[].expect` | string | `permit` or `deny`. Required with a command; not allowed on a session test. |
-| `tests.[].reason` | string | The reason code a denial must carry, from the closed decision-reason vocabulary. |
+| `tests.[].reason` | string | Optional, with a command. The reason code the decision must carry for the test to pass, on a permit or a deny: for example `no_grants_matched` or `permit_dominates`. A code that is not on the reason codes page is refused at load. Not allowed on a session test. |
 | `tests.[].level` | string | Session test: the privilege level the subject must be minted a token at. |
 | `tests.[].max_privilege` | string | Session test: the ceiling the token must carry, a level or `none`. |
 | `tests.[].priv_lvl` | string | Session test: the `priv-lvl` number (0 to 15) the reply must carry, or `none`. |
