@@ -20,6 +20,21 @@ func init() {
 	)
 }
 
+// release.yml's goreleaser and publish jobs also hold contents: write, so RELEASING.md must scope the claim.
+func TestReleasingScopesTheDeployJobsWrite(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(repoRoot, "RELEASING.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if strings.Contains(s, "is the only\n   workflow job with `contents: write`") || !strings.Contains(s, "Outside `release.yml`, the `deploy`") {
+		t.Error("RELEASING.md must say the deploy job is the only job with contents: write outside release.yml")
+	}
+	if !strings.Contains(s, "Only final\n   tags that are on `main` count") {
+		t.Error("RELEASING.md does not say only final tags on main count")
+	}
+}
+
 func TestTheSiteIsVersionedByMike(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(repoRoot, "mkdocs.yml"))
 	if err != nil {
