@@ -27,6 +27,7 @@ func TestTheSiteIsVersionedByMike(t *testing.T) {
 	}
 	var cfg struct {
 		SiteURL string `yaml:"site_url"`
+		Plugins []any  `yaml:"plugins"`
 		Extra   struct {
 			Version struct {
 				Provider string `yaml:"provider"`
@@ -40,10 +41,34 @@ func TestTheSiteIsVersionedByMike(t *testing.T) {
 	if cfg.Extra.Version.Provider != "mike" || !cfg.Extra.Version.Alias {
 		t.Errorf("extra.version is %+v, want provider mike and alias true (the dropdown shows latest)", cfg.Extra.Version)
 	}
-	// the absolute URLs mkdocs and docgen build (canonical links, the sitemap, llms.txt) name latest
-	// whichever version is being built, so they never point at a copy that is about to be replaced
-	if want := "https://blanketfish.github.io/port49/latest/"; cfg.SiteURL != want {
-		t.Errorf("site_url is %q, want %q", cfg.SiteURL, want)
+	// mike appends the version to site_url, so site_url is the bare root; the mike plugin's
+	// canonical_version makes every version's canonical link name latest, so search engines index one copy
+	if want := "https://blanketfish.github.io/port49/"; cfg.SiteURL != want {
+		t.Errorf("site_url is %q, want %q (mike appends the version)", cfg.SiteURL, want)
+	}
+	var search, mike bool
+	for _, p := range cfg.Plugins {
+		switch v := p.(type) {
+		case string:
+			search = search || v == "search"
+		case map[string]any:
+			if opts, ok := v["mike"].(map[string]any); ok {
+				mike = true
+				if opts["canonical_version"] != "latest" {
+					t.Errorf("the mike plugin's canonical_version is %v, want latest", opts["canonical_version"])
+				}
+				// Material draws its own selector; mike's would add a second one
+				if opts["version_selector"] != false {
+					t.Errorf("the mike plugin's version_selector is %v, want false (Material's dropdown is the selector)", opts["version_selector"])
+				}
+			}
+		}
+	}
+	if !mike {
+		t.Error("mkdocs.yml has no mike plugin")
+	}
+	if !search {
+		t.Error("listing plugins dropped the default search plugin")
 	}
 }
 

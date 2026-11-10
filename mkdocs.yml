@@ -1,14 +1,23 @@
 site_name: port49
-# The versions are published side by side (mike): /dev/, /<major>.<minor>/ and the alias /latest/. Every
-# build says /latest/ here, so canonical links, the sitemap and llms.txt (internal/docgen) name the
-# release that readers should land on, not the copy being built.
-site_url: https://blanketfish.github.io/port49/latest/
+# The versions are published side by side (mike): /dev/, /<major>.<minor>/ and the alias /latest/. mike
+# appends the version it builds to site_url, so this is the bare root. internal/docgen adds latest/ to
+# the absolute URLs it writes (llms.txt).
+site_url: https://blanketfish.github.io/port49/
 repo_url: https://github.com/blanketfish/port49
 docs_dir: docs/site
 # The evidence tables are included into the device pages; they are not pages of their own.
 exclude_docs: |
   _snippets/
 strict: true
+
+# Listing a plugin replaces the default list, so search stays named. Every version's canonical link names
+# /latest/, so a search engine indexes one copy of a page, not one per release; Material draws the
+# version dropdown (extra.version below), so mike's own selector is off.
+plugins:
+  - search
+  - mike:
+      canonical_version: latest
+      version_selector: false
 
 theme:
   name: material
