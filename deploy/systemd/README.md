@@ -9,13 +9,12 @@ process on etcd:
 | `port49d.service` | `port49d` | TACACS+ on 49 (and, if you turn it on, TACACS+ over TLS on 300) |
 | `port49-broker.service` | `port49-broker` | the login broker on 8443, the issuing CA, the directory |
 
-The two users are separate on purpose: no process holds both etcd identities (plan 7e, ruling
-1). The package creates them with `sysusers.d`; `tmpfiles.d` makes the directories, `/etc/port49` and its
+The two users are separate on purpose: no process holds both etcd identities. The package creates them with `sysusers.d`; `tmpfiles.d` makes the directories, `/etc/port49` and its
 `keys`, `secrets`, `etcd` and `broker` subdirectories among them.
 
 ## The four things every shape needs
 
-1. **The device's source address reaches port49d unrewritten** (design §13). On a host this is
+1. **The device's source address reaches port49d unrewritten**. On a host this is
    the default; a NAT or a proxy in front of port 49 breaks it, because the inventory matches a
    device by the address port49d sees.
 2. **On etcd, two processes.** port49d and port49-broker run apart, as the two units do. The

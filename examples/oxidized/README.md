@@ -91,7 +91,7 @@ The anchor is the CA that issues the workload certificates (on step-ca, its inte
   request whose chain shows it.
 - **Its status.** `certificate_status` must cover it: name the CA's CRL in `crls`. An https CRL
   endpoint under a private root needs that root in the broker's trust store (`SSL_CERT_FILE`,
-  [L48](https://blanketfish.github.io/port49/reference/lab-register/#l48)), or sync the CRL to a `file:` source; the deployment shapes are plan 12's. With no source,
+  [L48](https://blanketfish.github.io/port49/reference/lab-register/#l48)), or sync the CRL to a `file:` source. With no source,
   every certificate is refused, and `port49 workload` exits 77, not 75. Turning status checking
   off for everyone is not the fix.
 - **step-ca's CRL names a distribution point.** Its issuing distribution point names the CRL's

@@ -183,7 +183,7 @@ offline, and when you are, take the file from the broker's administrator, not fr
 
 !!! warning "Unmeasured"
     On macOS, `port49` accepts a PKCS#11 module that the `admin` group can write, and no other group,
-    because Homebrew's prefix is group-writable by `admin` (decision 45 ruling 3). That ruling's
+    because Homebrew's prefix is group-writable by `admin`. That exception's
     evidence is a CI run in which Homebrew's `libykcs11.dylib` was refused without the rule, and its
     hardware claims were measured on Linux. No register entry covers a YubiKey on a Mac, so whether
     a Homebrew Mac loads the module and signs in end to end is unknown.

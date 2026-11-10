@@ -167,5 +167,5 @@ window at once; the mark also stands for a service account re-created under that
 ## 8. What is not measured
 
 - Managed clusters (EKS, GKE, AKS): [L70](https://blanketfish.github.io/port49/reference/lab-register/#l70), open.
-- A CronJob run in a cluster against a broker outside it is plan 12's deployment test.
+- A CronJob run in a cluster against a broker outside it: not measured.
 - Changing a real cluster's `--service-account-issuer` (section 2): not measured.
