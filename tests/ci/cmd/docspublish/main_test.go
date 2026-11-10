@@ -167,6 +167,46 @@ func TestOnlyTheHighestPatchOfALineDeploys(t *testing.T) {
 	}
 }
 
+// A final tag that is not on main (a stray, a deleted release branch's) is not a release of the site:
+// it must not take latest from the real releases, outrank a patch, or stop main's latest.
+func TestOnlyTagsOnMainCount(t *testing.T) {
+	// stray tags v9.9.9 and v0.1.5 sit on a side branch off main
+	stray := func(t *testing.T, d string) {
+		git(t, d, "checkout", "-q", "-b", "side")
+		tagged(t, d, "v9.9.9", "v0.1.5")
+		git(t, d, "checkout", "-q", "main")
+	}
+	for _, c := range []struct {
+		name  string
+		setup func(t *testing.T, d string)
+		ref   string
+		want  result
+	}{
+		{"main with only a stray tag still takes latest", func(t *testing.T, d string) { stray(t, d) },
+			"refs/heads/main", result{true, wantMain, "dev", "latest"}},
+		{"main with a real release does not", func(t *testing.T, d string) { stray(t, d); tagged(t, d, "v0.1.0") },
+			"refs/heads/main", result{true, wantMain, "dev", ""}},
+		{"a real release takes latest from a higher stray", func(t *testing.T, d string) { stray(t, d); tagged(t, d, "v0.1.0") },
+			"refs/tags/v0.1.0", result{true, "This site describes port49 v0.1.0.", "0.1", "latest"}},
+		{"a higher stray patch does not stop its line", func(t *testing.T, d string) { stray(t, d); tagged(t, d, "v0.1.0") },
+			"refs/tags/v0.1.0", result{true, "This site describes port49 v0.1.0.", "0.1", "latest"}},
+		{"the stray itself publishes nothing", func(t *testing.T, d string) { stray(t, d); tagged(t, d, "v0.1.0") },
+			"refs/tags/v9.9.9", result{false, wantMain, "", ""}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := repo(t)
+			c.setup(t, d)
+			got, err := decide(d, c.ref, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Errorf("decide(%q) = %+v, want %+v", c.ref, got, c.want)
+			}
+		})
+	}
+}
+
 func TestTheOutputIsFourOutputLines(t *testing.T) {
 	if got, want := format(result{true, "b", "0.1", "latest"}), "publish=true\nbanner=b\nversion=0.1\naliases=latest\n"; got != want {
 		t.Errorf("format = %q, want %q", got, want)

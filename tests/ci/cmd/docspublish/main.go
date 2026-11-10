@@ -10,6 +10,8 @@
 //   - a final release tag vX.Y.Z that is an ancestor of main publishes "X.Y", but only if it is the
 //     highest patch of its X.Y line: a lower tag pushed late, or a re-run of an old one, must not
 //     overwrite newer docs. It takes "latest" only if it is also the highest final tag overall.
+//   - only final tags that are ancestors of main count, in every rule above: a stray tag on another
+//     branch neither takes "latest" nor outranks a real release.
 //   - every other ref, a pull request included, builds only and carries the main banner, so the
 //     banner is never empty.
 package main
@@ -47,7 +49,24 @@ func decide(dir, ref, mainRef string) (result, error) {
 		out, err := cmd.Output()
 		return string(out), err
 	}
-	// finalTags is every final release tag of the repository.
+	// onMain is whether the commit of ref is an ancestor of mainRef.
+	onMain := func(ref string) (bool, error) {
+		cmd := exec.Command("git", "merge-base", "--is-ancestor", ref, mainRef)
+		cmd.Dir = dir
+		switch err := cmd.Run().(type) {
+		case nil:
+			return true, nil
+		case *exec.ExitError:
+			if err.ExitCode() == 1 {
+				return false, nil
+			}
+			return false, fmt.Errorf("git merge-base: %w", err)
+		default:
+			return false, fmt.Errorf("git merge-base: %w", err)
+		}
+	}
+	// finalTags is every final release tag that is an ancestor of mainRef: a stray tag on another
+	// branch is not a release of the site, so it cannot take latest or outrank a real release.
 	finalTags := func() ([]string, error) {
 		out, err := git("tag", "-l", "v*")
 		if err != nil {
@@ -55,7 +74,14 @@ func decide(dir, ref, mainRef string) (result, error) {
 		}
 		var tags []string
 		for _, tag := range strings.Fields(out) {
-			if releaseTag.MatchString(tag) {
+			if !releaseTag.MatchString(tag) {
+				continue
+			}
+			ok, err := onMain("refs/tags/" + tag)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				tags = append(tags, tag)
 			}
 		}
@@ -92,23 +118,18 @@ func decide(dir, ref, mainRef string) (result, error) {
 			}
 			latest = false
 		}
-		cmd := exec.Command("git", "merge-base", "--is-ancestor", ref, mainRef)
-		cmd.Dir = dir
-		switch err := cmd.Run().(type) {
-		case nil:
-			r := result{Publish: true, Banner: "This site describes port49 " + tag + ".", Version: line(tag)}
-			if latest {
-				r.Aliases = "latest"
-			}
-			return r, nil
-		case *exec.ExitError:
-			if err.ExitCode() == 1 { // not an ancestor
-				return noPublish, nil
-			}
-			return result{}, fmt.Errorf("git merge-base: %w", err)
-		default:
-			return result{}, fmt.Errorf("git merge-base: %w", err)
+		ok, err := onMain(ref)
+		if err != nil {
+			return result{}, err
 		}
+		if !ok {
+			return noPublish, nil
+		}
+		r := result{Publish: true, Banner: "This site describes port49 " + tag + ".", Version: line(tag)}
+		if latest {
+			r.Aliases = "latest"
+		}
+		return r, nil
 	}
 	return noPublish, nil
 }
