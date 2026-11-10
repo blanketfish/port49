@@ -1122,6 +1122,9 @@ func (p *Policy) buildRoles(f file) error {
 		if r.Name == "" {
 			return fmt.Errorf("roles[%d]: name is required", i)
 		}
+		if slices.Contains(platform.ReservedRoleNames, r.Name) {
+			return fmt.Errorf("role %q: the name is reserved for port49's own rules; rename the role", r.Name)
+		}
 		if _, dup := p.roles[r.Name]; dup {
 			return fmt.Errorf("role %q is declared twice", r.Name)
 		}

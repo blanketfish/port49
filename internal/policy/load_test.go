@@ -253,6 +253,28 @@ func TestLoadRefusesByName(t *testing.T) {
 	}
 }
 
+// The names port49's projected denies carry are refused as role names (spec
+// §6, decision 58): the projection tells its denies from a policy's by name.
+// The match is exact, so a near name loads.
+func TestLoadRefusesReservedRoleNames(t *testing.T) {
+	for _, name := range []string{"baseline", "reach_deny", "rpc_entry"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte("roles:\n  - {name: "+name+", deny: [reload]}\n"+subjOK), env())
+			want := `role "` + name + `": the name is reserved for port49's own rules; rename the role`
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Parse = %v, want an error containing %q", err, want)
+			}
+		})
+	}
+	for _, name := range []string{"baseline_ops", "Baseline", "reach_deny2"} {
+		t.Run("accepts "+name, func(t *testing.T) {
+			if _, err := Parse([]byte("roles:\n  - {name: "+name+", deny: [reload]}\n"+subjOK), env()); err != nil {
+				t.Fatalf("Parse = %v, want the role to load", err)
+			}
+		})
+	}
+}
+
 // Spec §2's own example loads: a subject no grant names mints nothing, so it
 // needs neither a username nor a token_ttl.
 func TestSpecSection2ExamplesLoad(t *testing.T) {
