@@ -63,7 +63,7 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
       authorization over per-request TLS; denied commands refused locally ([L80](https://blanketfish.github.io/port49/reference/lab-register/#l80))".
 
     **Single-connect offered over TLS.** port49 offers single-connect over TLS to some platforms
-    (`platform.TLSServerSingleConnect`, decision 50 ruling 20: today `cisco_nxos`). For those:
+    (`platform.TLSServerSingleConnect`; today `cisco_nxos`). For those:
 
     - run.json's `tls_server_single_connect_offered` is true.
     - The run waits until no connection is open before and at `tls_token_login`'s capture

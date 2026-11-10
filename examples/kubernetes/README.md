@@ -15,7 +15,7 @@ the policy through the policy loader, and checks they agree (audience, namespace
 
 ## 1. What it is
 
-The pod's projected service account token is the workload's identity (design §7). No CA, no
+The pod's projected service account token is the workload's identity. No CA, no
 secret at rest: the kubelet writes and rotates the token, the broker verifies its signature
 against the cluster's published keys.
 
@@ -25,14 +25,17 @@ against the cluster's published keys.
   port49 refuses one issuer twice. This is the main onboarding cost for a self-managed fleet.
 
     The safe sequence when changing an issuer is below. It is not measured: it is reasoned from
-    decision 49 rulings 3 and 4, and the two-verifier config is unit-tested. No
+    decision 49 of the
+    [policy engine spec](https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md)
+    (rulings 3 and 4), and the two-verifier config is unit-tested. No
     [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) cell changed a real
     cluster's issuer; cell (d) rotated a signing key under one issuer.
 
     1. Add the new issuer as the *first* `--service-account-issuer` flag, and keep the old one as a
        second. The API server signs with the first and accepts both.
-    2. In port49, list both issuers as two `k8s` verifiers on the same `jwks` (decision 49 ruling 4's
-       migration case).
+    2. In port49, list both issuers as two `k8s` verifiers on the same `jwks`:
+       two verifiers with one `jwks` and different issuers are how one cluster's issuer
+       migration is written.
     3. Roll the pods.
     4. After the longest `expirationSeconds` in use has passed, remove the old flag and the old
        verifier.
@@ -92,7 +95,7 @@ against the cluster's published keys.
 
 One verifier per cluster, each with its own `cluster` name.
 
-**Several clusters may list one namespace** (decision 49 ruling 4). The same CronJob deployed to
+**Several clusters may list one namespace.** The same CronJob deployed to
 every region is then one identity, `system:serviceaccount:netops:oxidized`, and one policy subject,
 with no per-cluster namespace or overlay.
 
@@ -156,7 +159,7 @@ port49 revoke --principal system:serviceaccount:netops:oxidized
 ```
 
 Deleting the service account alone is not immediate. The broker does not call the cluster's
-TokenReview (decision 49 ruling 11): doing so would put every cluster's API server on the mint
+TokenReview: doing so would put every cluster's API server on the mint
 path, and needs a broker credential on each cluster. A token already in hand mints until its
 `exp` or `iat` plus `max_token_age`, at most 2h. [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (e) measured that TokenReview answers
 unauthenticated after the pod and then the service account are deleted and port49 still mints, and

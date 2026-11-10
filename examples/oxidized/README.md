@@ -143,7 +143,7 @@ prints the SPIFFE ID, the subject and the grants.
 Always `--out`, as the wrapper does: cron mails a job's stdout, tokens included. The wrapper gives
 `--out` a fresh file each run, so a run that could not write it leaves the last `router.db` alone.
 Size `PORT49_TTL` to the whole sweep, since the wrapper queues every node at once. A fleet larger
-than one sweep's TTL mints in waves (design §17).
+than one sweep's TTL mints in waves.
 
 The wrapper never prints a token. If you edit it, do not add `set -x` or an `echo` of one.
 
