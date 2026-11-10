@@ -848,7 +848,7 @@ port49_redemption_restore_unjudged == 1
 
 **Severity:** ticket. **For:** none.
 
-port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook
+port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow the restore runbook, Restoring etcd from a snapshot
 
 ```promql
 (port49_store_restore_detected_timestamp_seconds > 0) and (time() - port49_store_restore_detected_timestamp_seconds < 86400)

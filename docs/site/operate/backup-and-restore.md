@@ -108,7 +108,7 @@ one when:
   store had writes in the backup window, which is usual on a busy store and not on an idle one;
 - port49d's spool directory is new or was lost. It has no `restore.json` and takes the restored witness as
   its first record. It logs
-  `port49d: store: no restore record at <path>: a restore made before this port49d's first read of the store cannot be told; after a restore, delete the unspent tokens before this port49d reaches the store (design §13 step 3)`.
+  `port49d: store: no restore record at <path>: a restore made before this port49d's first read of the store cannot be told; after a restore, delete the unspent tokens before this port49d reaches the store (step 3 of Restoring etcd from a snapshot)`.
 
 Either way a restored token is redeemed a second time with no line saying so. **The delete is required
 in both cases.** A broker with no `witness.json` (an empty or new `broker.state_dir`) purges once at its
@@ -122,7 +122,7 @@ as a restore: every token in the store is refused `token_spent` once.
 
 | You see | It means | You do |
 |---|---|---|
-| port49d's stderr: `port49d: store: the session store was restored from a snapshot: meta/witness is …` and the tail `Revocations and marks made after the snapshot are lost: follow the restore runbook (design §13)` | port49d found the restore and set its floor. The line names the floor revision. After a restore without `--bump-revision` it also names the band (below). | Follow the runbook from the revocations step if you have not. The line is a report, not a recovery. |
+| port49d's stderr: `port49d: store: the session store was restored from a snapshot: meta/witness is …` and the tail `Revocations and marks made after the snapshot are lost: follow the restore runbook, Restoring etcd from a snapshot` | port49d found the restore and set its floor. The line names the floor revision. After a restore without `--bump-revision` it also names the band (below). | Follow the runbook from the revocations step if you have not. The line is a report, not a recovery. |
 | `port49_store_restore_detected_timestamp_seconds` above 0, and the alert [port49_store_restore_detected](../reference/alerts.md#port49_store_restore_detected) (ticket, for a day after) | Same event, as a metric. | The same. |
 | A user's login fails and `port49_redemption_restored_refused_total` rises | Their token is from before the restore. | They mint a new token (`port49 token`). Nothing else. |
 | A broker's stderr: `port49-broker: runner: <why>; every unspent token is purged and must be minted again (port49 token): N purged; M once-only records (sign-in challenges, proofs, nonces) deleted` | The runner purged. `<why>` is `the store's meta/witness is … below the … this replica saw: the store was restored from a snapshot`, or `no witness record in broker.state_dir; …`. | Nothing. Every user mints again. |
@@ -146,7 +146,7 @@ a read at 347 was refused as compacted.
 **Without `--bump-revision`** (a Velero restore cannot use it) the restored store climbs through the
 revisions the old timeline already used. port49d then also refuses, for **5 minutes after its read**,
 every token minted at a revision up to the old high mark, `token_spent`. The log line names the time:
-`a token minted until <time> (5 minutes after this read) at a revision up to <N> is refused until <time>; restore with --bump-revision (design §13) to end that`.
+`a token minted until <time> (5 minutes after this read) at a revision up to <N> is refused until <time>; restore with --bump-revision (step 2 of Restoring etcd from a snapshot) to end that`.
 Users see a failed login, and so does every retry until the window ends. A token minted inside the window
 keeps its mint time, so it stays refused until the band ends, 20 minutes after the read, and pasting the
 same token again keeps failing. Tell users to mint a new token after the window. Break-glass is unaffected.
