@@ -15,7 +15,7 @@ const (
 	labRegisterDocPath = "reference/lab-register.md"
 	// LabRegisterSiteURL is the page on the published site. A file that is also read on GitHub (a README the
 	// site includes) links it by this URL, because a relative link works on only one of the two.
-	LabRegisterSiteURL = "https://blanketfish.github.io/port49/reference/lab-register/"
+	LabRegisterSiteURL = "https://blanketfish.github.io/port49/latest/reference/lab-register/"
 )
 
 // RegisterLinkFrom is the relative link target of the lab register page from page, a path relative to

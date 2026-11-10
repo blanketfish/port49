@@ -40,7 +40,7 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
     A claim is measured only when a note for **this** firmware measured it (decision 52, ruling 4).
 
     On Junos the command cells are `not_applicable`
-    ([L18](https://blanketfish.github.io/port49/reference/lab-register/#l18): `tests/lab/results/L18-juniper_vjunos-router.md`).
+    ([L18](https://blanketfish.github.io/port49/latest/reference/lab-register/#l18): `tests/lab/results/L18-juniper_vjunos-router.md`).
     So `genprofile` records the engine gap `command_authorization_not_sent`; that is expected, not a
     failure.
 
@@ -50,17 +50,17 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
     per-request cell pass.
 
     Where per-request TLS sends port49 no command authorization (NX-OS 10.6(2)F,
-    [L73](https://blanketfish.github.io/port49/reference/lab-register/#l73) cell a):
+    [L73](https://blanketfish.github.io/port49/latest/reference/lab-register/#l73) cell a):
 
     - `genprofile` records the device fact `tls_per_request_no_command_authorization`.
     - The mock plays that login with no command step.
     - The list's "command authorization over TLS" column reads "no" or "single-connection only".
     - The `tls_denied_command` cell then types the denied command alone over per-request TLS and
-      writes `tests/lab/results/L80-<lp>.md` (spec §15 [L80](https://blanketfish.github.io/port49/reference/lab-register/#l80)).
+      writes `tests/lab/results/L80-<lp>.md` (spec §15 [L80](https://blanketfish.github.io/port49/latest/reference/lab-register/#l80)).
       Its verdict is `observed`, never `pass`. `genprofile` records its outcome as the device fact
       `tls_per_request_denied_command_runs` or `..._refused`, citing that note.
-    - The list's TLS column then reads "no: over per-request TLS, a command port49 denies runs ([L80](https://blanketfish.github.io/port49/reference/lab-register/#l80))" or "no command
-      authorization over per-request TLS; denied commands refused locally ([L80](https://blanketfish.github.io/port49/reference/lab-register/#l80))".
+    - The list's TLS column then reads "no: over per-request TLS, a command port49 denies runs ([L80](https://blanketfish.github.io/port49/latest/reference/lab-register/#l80))" or "no command
+      authorization over per-request TLS; denied commands refused locally ([L80](https://blanketfish.github.io/port49/latest/reference/lab-register/#l80))".
 
     **Single-connect offered over TLS.** port49 offers single-connect over TLS to some platforms
     (`platform.TLSServerSingleConnect`; today `cisco_nxos`). For those:

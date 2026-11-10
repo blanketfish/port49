@@ -1,5 +1,8 @@
 site_name: port49
-site_url: https://blanketfish.github.io/port49/
+# The versions are published side by side (mike): /dev/, /<major>.<minor>/ and the alias /latest/. Every
+# build says /latest/ here, so canonical links, the sitemap and llms.txt (internal/docgen) name the
+# release that readers should land on, not the copy being built.
+site_url: https://blanketfish.github.io/port49/latest/
 repo_url: https://github.com/blanketfish/port49
 docs_dir: docs/site
 # The evidence tables are included into the device pages; they are not pages of their own.
@@ -32,6 +35,11 @@ theme:
     - search.highlight
 
 extra:
+  # Material's version dropdown reads versions.json, which `mike deploy` writes on the gh-pages branch
+  # (.github/workflows/docs.yml); `alias: true` lists latest beside the release it points at.
+  version:
+    provider: mike
+    alias: true
   # A tag build sets PORT49_DOCS_BANNER (plan 13, Task 2); main builds say they are not a release.
   banner: !ENV [PORT49_DOCS_BANNER, "This site describes port49 as it is on main, not a release."]
 

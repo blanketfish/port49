@@ -54,7 +54,7 @@ every token redeemed since, redeemable again while it has not expired. The backu
 `<accounting.spool_path>.restore.json` is newer than the etcd copy, which is usual on a store with writes in the backup window and
 not so on an idle one, and a broker tells it on the same terms (its `witness.json` is then newer than the
 restored witness), and purges once more and says so at its first takeover: the token delete (step 3 of
-[Restoring etcd from a snapshot](https://blanketfish.github.io/port49/operate/backup-and-restore/#restoring-etcd-from-a-snapshot)) is
+[Restoring etcd from a snapshot](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/#restoring-etcd-from-a-snapshot)) is
 required, and it must land before port49d or a broker reaches the restored store. A Velero restore cannot
 use `--bump-revision`, so when port49d does tell the restore it also arms the 5-minute band: see "What
 you see after step 9" below. So the restore is made in this order, with nothing reaching the store until
@@ -69,7 +69,7 @@ one (`port49-restore-1`, then `port49-restore-2`).
 **Do not restore `port49` with its StatefulSets at 0 replicas** (a resource modifier setting
 `/spec/replicas` to 0, as the `restore-scale-zero.yaml` of earlier versions of this page did). Velero's
 file-system restore copies a volume through the pod that mounts it, and at 0 replicas there is none:
-measured on kind in [L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) cell (c), run 42053716808, the restore stayed `InProgress` past 8 minutes with
+measured on kind in [L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) cell (c), run 42053716808, the restore stayed `InProgress` past 8 minutes with
 every pod volume restore at `New` and its pod absent. It does not finish. If you started one, see
 "Recovering from a restore at 0 replicas" below.
 
@@ -82,7 +82,7 @@ the length you expect the restore to take, and remove the silence after step 11.
 `port49_store_restore_detected` (ticket) afterwards; step 9 says why.
 
 **Then, if a GitOps controller manages the release, suspend it for both namespaces.** These follow Argo
-CD's and Flux's documented commands and are not measured in port49's lab ([L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) runs no GitOps controller).
+CD's and Flux's documented commands and are not measured in port49's lab ([L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) runs no GitOps controller).
 Argo CD with
 auto-sync or self-heal, or Flux, puts back what this order takes away: it re-creates the
 HorizontalPodAutoscaler that step 4 leaves out and reverts step 6's scale to 0, so brokers and port49d
@@ -162,7 +162,7 @@ kubectl delete namespace port49 port49-etcd
    added while the pods run would have a claim with no backup, and step 5 would find a pod with no line.
    Step 11 brings it back. Its pods start, so the node agent can restore their volumes, and with etcd down they
    cannot reach the store. The lab cannot hold its etcd down apart from the release (one namespace), so
-   [L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) (d) runs this command with its etcd up.
+   [L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) (d) runs this command with its etcd up.
 
     <!-- l89:restore:begin -->
     ```sh
@@ -262,7 +262,7 @@ With the chart's `autoscaling.enabled`, the HPA is not restored (step 4) until s
 A restore made with the StatefulSets at 0 replicas waits for pods that never start, and Velero restores
 one at a time, so it holds up every restore after it. No broker or port49d ran, so nothing reached the
 store. Restart Velero, delete that restore (`<restore>` here is its name), then start over from the first
-command above with a new `<restore>`. Measured on kind in [L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) cell (d), run 42058930263, on (c)'s hung
+command above with a new `<restore>`. Measured on kind in [L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) cell (d), run 42058930263, on (c)'s hung
 restore: after these commands the restore was gone and no restore was `New` or `InProgress`.
 
 <!-- l89:recover:begin -->
@@ -277,9 +277,9 @@ kubectl -n velero wait --for=delete restore/<restore> --timeout=5m
 Prefer restoring etcd from the `etcdctl snapshot` CronJob (`backup-cronjob.yaml`) with `--bump-revision`,
 as Restoring etcd from a snapshot gives it, and use Velero for the other volumes. A file-system copy of a live etcd member is
 crash-consistent at best, and the three members are copied at different moments; whether a busy member's
-database survives that is unmeasured. [L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) measured one restore on an idle cluster.
+database survives that is unmeasured. [L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) measured one restore on an idle cluster.
 
 The data-directory init containers refuse a volume whose files are not owned by uid 65532 (see the
-chart README), so what a restore does to ownership, group and mode matters. [L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) (a) measured it on kind:
+chart README), so what a restore does to ownership, group and mode matters. [L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) (a) measured it on kind:
 owner, group and mode of `state/`, `issuing-ca.key` and the spool directory were unchanged, and both
 StatefulSets became ready with no fence refusal.
