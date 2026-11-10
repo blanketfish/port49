@@ -94,6 +94,7 @@ port49 hwkey setup
   slot's key only with a certificate in it, so it prints both lines, certificate first. Run the
   `keys generate` line only if the slot holds no key. No line names a serial, PIN, PUK or management
   key.
+
 - **Which token and which module.** The module is found by `--module`, then the `module-path` of a key
   already in your config, then a probe of the system paths (not on macOS: pass `--module`). With more
   than one token present it lists them by number, model and masked label, exits 2, and wants

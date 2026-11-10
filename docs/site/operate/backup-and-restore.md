@@ -47,6 +47,7 @@ management and your secrets manager. Two cautions:
     the encryption Secret in its bucket, so the bucket is as sensitive as the key.
     [Key rotation](../admin/key-rotation.md#backups-and-exports-need-every-key-that-sealed-their-records) has the
     rule and what a missing key costs.
+
 - **Back up `broker.state_dir` with the broker's host, not from a different moment.** A broker whose
   `state_dir` survived the restore is the one that puts back the revocations the store lost, so the runbook
   starts it first.

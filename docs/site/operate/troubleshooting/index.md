@@ -95,6 +95,7 @@ get around the outage; the devices already fall to local.
     5.5 seconds at the defaults) or is stopped. The device pages say what each other platform does:
     [IOS XE](../../admin/devices/cisco-ios-xe.md), [IOS XR](../../admin/devices/cisco-ios-xr.md),
     [Junos](../../admin/devices/juniper-junos.md).
+
 - **A device that failed over keeps answering locally for a while.** After its servers failed, the device
   itself answers for a window and sends port49 nothing: a token login is refused during it, and
   break-glass works. Measured (cells f2 and f3 for IOS XE, cells a and f for XR, of the closed
