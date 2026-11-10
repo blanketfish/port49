@@ -121,6 +121,9 @@ func LLMsTxt(mkdocsYAML []byte, docs string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// site_url is the bare root: mike publishes each version under it. The links name latest, so
+	// they stay valid across releases and never point at a copy a release will replace.
+	siteURL = strings.TrimSuffix(siteURL, "/") + "/latest/"
 	_, summary, err := pageMeta(docs, "index.md")
 	if err != nil {
 		return "", err

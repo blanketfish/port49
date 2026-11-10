@@ -108,9 +108,11 @@ var releaseJobPerms = map[string]map[string]string{
 
 // jobPermsOK is whether p is what job id of workflow name may hold.
 func jobPermsOK(name, id string, p any) bool {
-	if name == "docs.yml" && id == "deploy" {
+	if name == "docs.yml" && id == "push-pages" {
+		// the one job that pushes the gh-pages branch, with the job's GITHUB_TOKEN: its one write, and no
+		// token for Pages. The docs toolchain runs in deploy, which holds contents: read like any other job.
 		m, ok := p.(map[string]any)
-		return ok && len(m) == 2 && m["pages"] == "write" && m["id-token"] == "write"
+		return ok && len(m) == 1 && m["contents"] == "write"
 	}
 	if name != "release.yml" {
 		return readOnly(p)

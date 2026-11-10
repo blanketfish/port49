@@ -13,7 +13,7 @@ host. Three files fit together:
   Oxidized to back each node up now.
 - `config` is Oxidized's configuration. It reads `router.db`, and its own interval is set a week
   out so that its schedule tries as few nodes as possible with an expired token. A try with a
-  spent token cost one authentication, refused `token_spent`, on each of the five platforms ([L49](https://blanketfish.github.io/port49/reference/lab-register/#l49),
+  spent token cost one authentication, refused `token_spent`, on each of the five platforms ([L49](https://blanketfish.github.io/port49/latest/reference/lab-register/#l49),
   phase B); how often Oxidized's own schedule still tries is not measured.
 - `policy.yaml` is the port49 policy: a `config_backup` role that confines the Oxidized host to
   `show` commands where port49 authorizes commands (see §5a).
@@ -32,7 +32,7 @@ The wrapper's environment is documented at the top of the script. `OXIDIZED_NODE
 device names, one a line. `PORT49_SCOPE` names a policy scope in its place: the wrapper then asks
 port49 for every device the scope selects that this host holds a grant on, page by page, and
 reads no nodes file (policy engine spec §13 decision 42). A scope that selects nothing for this
-host, and a scope name that does not exist, both exit 77 with one message. [L49](https://blanketfish.github.io/port49/reference/lab-register/#l49) ran with a nodes
+host, and a scope name that does not exist, both exit 77 with one message. [L49](https://blanketfish.github.io/port49/latest/reference/lab-register/#l49) ran with a nodes
 file; a sweep was not part of it.
 
 ## 2. Enrollment, once
@@ -40,7 +40,7 @@ file; a sweep was not part of it.
 Get a certificate whose one URI SAN is the host's SPIFFE ID (for example
 `spiffe://corp.example.com/host/oxidized-01`) from your workload CA. step-ca 0.30.2 is one such
 CA: a certificate requested with `--san spiffe://…` carries that ID as its one URI SAN, and a
-renewal keeps the ID and the key ([L48](https://blanketfish.github.io/port49/reference/lab-register/#l48), cells 1 and 2). Any CA that puts one URI SAN on a client
+renewal keeps the ID and the key ([L48](https://blanketfish.github.io/port49/latest/reference/lab-register/#l48), cells 1 and 2). Any CA that puts one URI SAN on a client
 certificate works. Its key is readable by the Oxidized user alone. On step-ca, issue it under
 `step-ca-workload.tpl` (§3 and §5).
 
@@ -49,7 +49,7 @@ certificate works. Its key is readable by the Oxidized user alone. On step-ca, i
 Whoever can get the workload CA to issue a certificate naming a SPIFFE ID *is* that workload to
 port49. `spiffe_trust_domains` does not stop one workload impersonating another within a domain.
 Restrict each provisioner to the host's own ID. On step-ca 0.30.2 a name policy cannot do it
-([L48](https://blanketfish.github.io/port49/reference/lab-register/#l48), cell 6):
+([L48](https://blanketfish.github.io/port49/latest/reference/lab-register/#l48), cell 6):
 
 - an x509 `allow` on a URI in the provisioner's `options` was ignored: another trust domain's ID
   was issued as asked;
@@ -60,16 +60,16 @@ What does pin it is a provisioner x509 template with the ID fixed in `uris` in p
 requested `sans`. It does not refuse another request: it issues the pinned ID instead. So give
 each host its own provisioner, whose copy of `step-ca-workload.tpl` replaces the `sans` line with
 `"uris": ["spiffe://corp.example.com/host/oxidized-01"]`, and keep the provisioner's credential
-the host's alone. [L48](https://blanketfish.github.io/port49/reference/lab-register/#l48) measured the fixed `uris` in a template without the CRL distribution point;
+the host's alone. [L48](https://blanketfish.github.io/port49/latest/reference/lab-register/#l48) measured the fixed `uris` in a template without the CRL distribution point;
 the two in one template are not measured.
 
 ## 4. Renewal
 
 Renewal is your CA's renewer's job (step's `step ca renew --daemon`, or its systemd timer;
-`step ca renew --daemon` renewed a 15m certificate at 0.66 of its lifetime, [L48](https://blanketfish.github.io/port49/reference/lab-register/#l48) cell 3). port49
+`step ca renew --daemon` renewed a 15m certificate at 0.66 of its lifetime, [L48](https://blanketfish.github.io/port49/latest/reference/lab-register/#l48) cell 3). port49
 needs nothing at a renewal. With the CA down, once under a quarter of the lifetime is left the
 broker logs "its renewal is late" and `port49 workload` warns (first seen at 0.79 of it, polling
-every 30s), and minting stops at expiry with exit 77 ([L48](https://blanketfish.github.io/port49/reference/lab-register/#l48) cell 4). A late one shows in cron mail
+every 30s), and minting stops at expiry with exit 77 ([L48](https://blanketfish.github.io/port49/latest/reference/lab-register/#l48) cell 4). A late one shows in cron mail
 and in `port49_workload_certificates_renewal_late_total`, which each broker replica counts once
 per certificate a day. Alert on its increase.
 
@@ -84,14 +84,14 @@ broker:
         spiffe_trust_domains: [corp.example.com]
 ```
 
-The anchor is the CA that issues the workload certificates (on step-ca, its intermediate, [L48](https://blanketfish.github.io/port49/reference/lab-register/#l48)).
+The anchor is the CA that issues the workload certificates (on step-ca, its intermediate, [L48](https://blanketfish.github.io/port49/latest/reference/lab-register/#l48)).
 
 - **Its hierarchy.** The workload anchor and the human anchor must be in unrelated hierarchies.
   The start refuses one that signs the other directly. One further down is refused at every
   request whose chain shows it.
 - **Its status.** `certificate_status` must cover it: name the CA's CRL in `crls`. An https CRL
   endpoint under a private root needs that root in the broker's trust store (`SSL_CERT_FILE`,
-  [L48](https://blanketfish.github.io/port49/reference/lab-register/#l48)), or sync the CRL to a `file:` source. With no source,
+  [L48](https://blanketfish.github.io/port49/latest/reference/lab-register/#l48)), or sync the CRL to a `file:` source. With no source,
   every certificate is refused, and `port49 workload` exits 77, not 75. Turning status checking
   off for everyone is not the fix.
 - **step-ca's CRL names a distribution point.** Its issuing distribution point names the CRL's
@@ -103,7 +103,7 @@ The anchor is the CA that issues the workload certificates (on step-ca, its inte
   name it lacks. Issue workload certificates under `step-ca-workload.tpl`, with its
   `crlDistributionPoints` set to the name `step crl inspect` shows. Measured: a default leaf was
   refused; a templated one minted, and was refused `credential_revoked` 1m after
-  `step ca revoke` ([L48](https://blanketfish.github.io/port49/reference/lab-register/#l48) cell 5).
+  `step ca revoke` ([L48](https://blanketfish.github.io/port49/latest/reference/lab-register/#l48) cell 5).
 
 ## 5a. What `port49 policy test` says about this snippet
 
@@ -113,18 +113,18 @@ true.
 - **`fallback_exposure` on `arista_eos` and `cisco_nxos`.** `config_backup` is at `admin`, which
   those platforms render as `network-admin`. port49's rules confine the session to the permits in
   `policy.yaml`. But if port49 stops answering while a session is open, and the device's command
-  method list falls back to `local`, the device authorizes that session by its role alone. [L22](https://blanketfish.github.io/port49/reference/lab-register/#l22)
+  method list falls back to `local`, the device authorizes that session by its role alone. [L22](https://blanketfish.github.io/port49/latest/reference/lab-register/#l22)
   measured that such a session could change the configuration on vEOS and the N9Kv
   (`tests/lab/results/L22-arista_eos.md`, `L22-cisco_nxos.md`). `admin` is the level spec §2
   gives a backup account so `show running-config` is reachable. Whether a lower level serves
-  each Oxidized model is unmeasured: [L49](https://blanketfish.github.io/port49/reference/lab-register/#l49) ran at `admin`. Until it is, the exposure belongs to
+  each Oxidized model is unmeasured: [L49](https://blanketfish.github.io/port49/latest/reference/lab-register/#l49) ran at `admin`. Until it is, the exposure belongs to
   whoever holds a session opened with this run's tokens. Keep `router.db` and the workload key the Oxidized
   user's alone, and keep `PORT49_TTL` to one sweep.
 - **`unenforced_rules` on `juniper_junos`.** A policy that pins no `platform_set` renders with
   set 1.0.0. Under 1.0.0, Junos neither asks port49 about a command nor receives the role's rules
   in its session reply, so on Junos the permits above decide nothing: the session gets what the
   device's own login class gives the port49 username. Set 1.1.0 renders them into the session
-  reply (spec §8), but the permits here name no Junos command. [L49](https://blanketfish.github.io/port49/reference/lab-register/#l49) measured it on vJunos-router
+  reply (spec §8), but the permits here name no Junos command. [L49](https://blanketfish.github.io/port49/latest/reference/lab-register/#l49) measured it on vJunos-router
   23.4R2-S2.1 and vSRX: a full backup under set 1.0.0 sent port49 no command at all, so the
   device's login class for `svc-oxidized` is what limits a Junos backup. Which permits a Junos
   backup would need under set 1.1.0 is not measured.
@@ -150,14 +150,14 @@ The wrapper never prints a token. If you edit it, do not add `set -x` or an `ech
 ## 7a. Host keys
 
 Oxidized runs with `secure: true` and never `secure: false`. It has no accept-new of its own, and
-the one setting it reads, `secure`, is a boolean (lab [L90](https://blanketfish.github.io/port49/reference/lab-register/#l90), vEOS 4.31.2F, Oxidized 0.37.0): with
+the one setting it reads, `secure`, is a boolean (lab [L90](https://blanketfish.github.io/port49/latest/reference/lab-register/#l90), vEOS 4.31.2F, Oxidized 0.37.0): with
 `secure: true` and no `known_hosts` entry it raises `Net::SSH::HostKeyUnknown` and sends no token; with
 a changed key, `HostKeyMismatch` and no token; any other value of `secure`, `accept_new` included,
 turns verification off, so a changed key is accepted. An entry OpenSSH's accept-new wrote, hashed or
 not, is read and the backup runs.
 
 So the wrapper saves a key for each node absent from `known_hosts` (`~/.ssh/known_hosts` of the user
-Oxidized runs as; `OXIDIZED_KNOWN_HOSTS` moves it), once, with the line [L90](https://blanketfish.github.io/port49/reference/lab-register/#l90) measured:
+Oxidized runs as; `OXIDIZED_KNOWN_HOSTS` moves it), once, with the line [L90](https://blanketfish.github.io/port49/latest/reference/lab-register/#l90) measured:
 `ssh -F /dev/null -o UserKnownHostsFile=<known_hosts> -o StrictHostKeyChecking=accept-new -o
 BatchMode=yes -o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o
 IdentitiesOnly=yes -o ConnectTimeout=15 -- <address> exit`. The key is saved at key exchange, before
@@ -182,7 +182,7 @@ it listed and leaves it alone. Only IP literals are visited.
   their TTL. A node that stays unreachable
   makes every window mint the whole fleet twice, which doubles the broker's mint load and audit records
   for that window: fix or remove the node. A node that first appears in the second mint is visited too.
-- **Concurrency is unmeasured.** [L90](https://blanketfish.github.io/port49/reference/lab-register/#l90) swept one device; up to 32 visits append to `known_hosts` at once,
+- **Concurrency is unmeasured.** [L90](https://blanketfish.github.io/port49/latest/reference/lab-register/#l90) swept one device; up to 32 visits append to `known_hosts` at once,
   which OpenSSH does with one small append each. A lost line fails closed: the node is named and tried
   again at the next window.
 - **Needs** `ssh`, `ssh-keygen` and `timeout` on the wrapper's host. A missing one is named and the run
@@ -249,15 +249,15 @@ it listed and leaves it alone. Only IP literals are visited.
 The `config` sets `auth_methods` with `keyboard-interactive` for the `eos` model alone
 (`models: eos: vars`). Arista EOS offers only `publickey` and `keyboard-interactive` over SSH, and
 Oxidized's default list does not include the second, so without this line Oxidized never sends the
-token to an EOS device ([L49](https://blanketfish.github.io/port49/reference/lab-register/#l49), `L49-oxidized-arista_eos.md`). Do not change the EOS side to suit
-it. It is not global: on NX-OS and IOS-XE, which also offer `password`, an [L49](https://blanketfish.github.io/port49/reference/lab-register/#l49) run with it global
+token to an EOS device ([L49](https://blanketfish.github.io/port49/latest/reference/lab-register/#l49), `L49-oxidized-arista_eos.md`). Do not change the EOS side to suit
+it. It is not global: on NX-OS and IOS-XE, which also offer `password`, an [L49](https://blanketfish.github.io/port49/latest/reference/lab-register/#l49) run with it global
 (at 0a6d546, superseded and not kept as a note) measured a stale token costing two
 authentications (both denied as spent) instead of one, so those models keep Oxidized's default.
 After a refused token net-ssh's `keyboard-interactive` asks a tty for a second password; under a
-daemon or cron Oxidized logs `Errno::ENOTTY` for it (measured in the [L49](https://blanketfish.github.io/port49/reference/lab-register/#l49) lab, which has no tty).
+daemon or cron Oxidized logs `Errno::ENOTTY` for it (measured in the [L49](https://blanketfish.github.io/port49/latest/reference/lab-register/#l49) lab, which has no tty).
 Run from a terminal in the foreground, it may stop at a password prompt instead; not measured.
 
-## 9. What [L49](https://blanketfish.github.io/port49/reference/lab-register/#l49) measured, and what it did not
+## 9. What [L49](https://blanketfish.github.io/port49/latest/reference/lab-register/#l49) measured, and what it did not
 
 Measured on all five platforms (`tests/lab/results/L49-oxidized-<platform>.md`):
 

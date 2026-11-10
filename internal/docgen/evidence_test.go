@@ -227,7 +227,7 @@ func TestLLMsTxtFollowsTheNav(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const base = "https://blanketfish.github.io/port49/"
+	const base = "https://blanketfish.github.io/port49/latest/"
 	lines := strings.Split(got, "\n")
 	if lines[0] != "# port49" || !strings.HasPrefix(lines[2], "> ") {
 		t.Fatalf("the head is %q", lines[:3])

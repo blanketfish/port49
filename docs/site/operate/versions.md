@@ -16,6 +16,21 @@ port49 uses [Semantic Versioning](https://semver.org/).
 Release tags look like `v0.1.0`. A tag carries no pre-release suffix, unless the suffix maps to a valid
 Python (PEP 440) version, because the Python package is released from the same tag.
 
+## Which version of these docs you are reading
+
+The site keeps one copy of the docs per release line, so a page matches the port49 you run:
+
+| Address | What it is |
+|---|---|
+| `/latest/` | The newest release. The site root redirects here, and a link to `/latest/<page>` stays valid across releases. Before the first release, it is the same copy as `dev`. |
+| `/0.1/`, `/0.2/`, ... | The docs of one release line, rebuilt from the highest patch release of that line (`v0.1.2` replaces `v0.1.1`). |
+| `/dev/` | `main`, ahead of any release. It describes behavior no release has yet. |
+
+The version selector in the page header lists these, and keeps you on the same page when you switch, if
+that page exists in the other version. The banner at the top of the page says which one you are reading:
+"This site describes port49 v0.1.2." for a release, or that the site describes main, not a release.
+If your binary says `port49d 0.1.0` (see below), read `/0.1/`.
+
 ## One version across every artifact
 
 A release has one version, and every artifact carries it:

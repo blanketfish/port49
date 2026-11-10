@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page not found</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 36rem; margin: 4rem auto; padding: 0 1rem; }
+</style>
+</head>
+<body>
+<h1>Page not found</h1>
+<p>This page is not in these docs. The current docs are at <a href="/port49/latest/">/port49/latest/</a>.</p>
+<script>
+// docs.yml copies this file to the root of the gh-pages branch as 404.html. A link written before the
+// site was versioned, /port49/<page>, lands here and goes to /port49/latest/<page>. A path that starts
+// with a version or alias in versions.json (dev, latest, X.Y) is a real 404 inside that version and stays.
+(function () {
+  var base = "/port49/", path = location.pathname;
+  if (path.indexOf(base) !== 0) return;
+  var rest = path.slice(base.length), first = rest.split("/")[0];
+  function go() { location.replace(base + "latest/" + rest + location.search + location.hash); }
+  fetch(base + "versions.json").then(function (r) { return r.json(); }).then(function (list) {
+    var names = {};
+    list.forEach(function (v) {
+      names[v.version] = true;
+      (v.aliases || []).forEach(function (a) { names[a] = true; });
+    });
+    if (!names[first]) go();
+  }, function () {
+    // versions.json unreachable: the names the site gives its versions are all this shape
+    if (!/^(dev|latest|[0-9]+\.[0-9]+)$/.test(first)) go();
+  });
+})();
+</script>
+</body>
+</html>

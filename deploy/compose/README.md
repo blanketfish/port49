@@ -85,7 +85,7 @@ edits with a plain `up -d`.
 Docker API access is root-equivalent, so guard it as you would the host: `docker run` with a volume
 reads every file in it.
 
-Compose's own `secrets:` is measured (lab [L84](https://blanketfish.github.io/port49/reference/lab-register/#l84), `tests/lab/results/L84-systemd-docker.md`) and is **not used
+Compose's own `secrets:` is measured (lab [L84](https://blanketfish.github.io/port49/latest/reference/lab-register/#l84), `tests/lab/results/L84-systemd-docker.md`) and is **not used
 for device keys**. A file-backed secret starts port49d only if the host file is `root:65532` mode 0440:
 Compose bind-mounts it as it is and does not apply the long syntax's `uid`, `gid` or `mode`, and the file
 fence refuses `0444` (the short syntax's documented mode) and a file the operator owns. And adding a second
@@ -136,7 +136,7 @@ crash-loops until you restore the file in the `port49d-keys` volume or take the 
   `deploy/systemd/README.md`, "Where the secrets live", with the destination changed). Edit `config/` for your policy and CRL or OCSP
   (the example sets `certificate_status.disabled`, which a deployment must not).
 - List devices in `inventory.yaml` by the address port49d sees. A published port
-  may change that address; what it does is policy engine spec §15 [L39](https://blanketfish.github.io/port49/reference/lab-register/#l39) (a). Measured: kept for an off-host device
+  may change that address; what it does is policy engine spec §15 [L39](https://blanketfish.github.io/port49/latest/reference/lab-register/#l39) (a). Measured: kept for an off-host device
   (modelled; `tests/lab/results/L39-docker-proxy-on-arista_eos.md` and `-off-`), masqueraded to
   the compose gateway for a device on another Docker network on the same host. A connection
   docker-proxy itself relays is unmeasured.
@@ -172,9 +172,9 @@ key does:
   `external` (`tls_cert_file`, `tls_key_file`) or `simple` (`bind_dn` and `password_secret_ref`, the
   weakest: the password is named by `file:/path`, read when the directory opens, never printed; use a
   file in `broker-etc`, not `env:NAME`, which would show in `docker inspect`).
-  Samba AD (lab [L43](https://blanketfish.github.io/port49/reference/lab-register/#l43)): `external` is refused with LDAP result 1, which port49 counts as a server fault (every
+  Samba AD (lab [L43](https://blanketfish.github.io/port49/latest/reference/lab-register/#l43)): `external` is refused with LDAP result 1, which port49 counts as a server fault (every
   breaker opens, `port49_directory_server_up` drops to 0), so use `simple` or `gssapi`; `gssapi` is refused
-  under `ldap server require strong auth = yes` and accepted under `allow_sasl_over_tls`. Windows Server AD: [L44](https://blanketfish.github.io/port49/reference/lab-register/#l44).
+  under `ldap server require strong auth = yes` and accepted under `allow_sasl_over_tls`. Windows Server AD: [L44](https://blanketfish.github.io/port49/latest/reference/lab-register/#l44).
 - `base_dn`, `groups_base_dn`, `principal_attribute`, `username_attribute`: where a person
   and their groups are found, and which attributes name them. Only directory administrators
   may write the two attributes: two entries holding one value are both refused.
@@ -372,4 +372,4 @@ port49d's accounting spool directory needs the same, under 10 ms (port49's alert
 ## Backups
 
 Each etcd data volume and `broker-state` (the runbook is
-[Backup and restore](https://blanketfish.github.io/port49/operate/backup-and-restore/)).
+[Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/)).

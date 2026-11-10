@@ -1,4 +1,7 @@
 site_name: port49
+# The versions are published side by side (mike): /dev/, /<major>.<minor>/ and the alias /latest/. mike
+# appends the version it builds to site_url, so this is the bare root. internal/docgen adds latest/ to
+# the absolute URLs it writes (llms.txt).
 site_url: https://blanketfish.github.io/port49/
 repo_url: https://github.com/blanketfish/port49
 docs_dir: docs/site
@@ -6,6 +9,17 @@ docs_dir: docs/site
 exclude_docs: |
   _snippets/
 strict: true
+
+# Listing a plugin replaces the default list, so search stays named. Every version's canonical link names
+# /latest/, so a search engine indexes one copy of a page, not one per release; Material draws the
+# version dropdown (extra.version below), so mike's own selector is off.
+plugins:
+  - search
+  - mike:
+      canonical_version: latest
+      # latest is a real copy of the release it names, not a symlink, so it is served the same on any host
+      alias_type: copy
+      version_selector: false
 
 theme:
   name: material
@@ -32,6 +46,11 @@ theme:
     - search.highlight
 
 extra:
+  # Material's version dropdown reads versions.json, which `mike deploy` writes on the gh-pages branch
+  # (.github/workflows/docs.yml); `alias: true` lists latest beside the release it points at.
+  version:
+    provider: mike
+    alias: true
   # A tag build sets PORT49_DOCS_BANNER (plan 13, Task 2); main builds say they are not a release.
   banner: !ENV [PORT49_DOCS_BANNER, "This site describes port49 as it is on main, not a release."]
 

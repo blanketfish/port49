@@ -4,3 +4,6 @@
 # Python 3.13, the docs job's.
 mkdocs==1.6.1
 mkdocs-material==9.8.0
+# Versioned site: `mike deploy` keeps one built copy per version on the gh-pages branch and writes the
+# versions.json Material's version dropdown reads.
+mike==2.2.0
