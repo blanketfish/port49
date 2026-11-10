@@ -1273,6 +1273,30 @@ func (r *redacting) command(c policy.Change) string {
 		vector[i] = a
 	}
 	red, _ := platform.RedactRule(r.rules, vector)
+	// The old line redacted the whole command as prose, which reads words
+	// the argument-level pass does not (`(password`, a positional `from:`
+	// across the placeholder's three words). Run that pass over the same
+	// text, and hide an element either pass hid; a hit on the placeholder's
+	// own span is port49's text, never a secret.
+	var text strings.Builder
+	spans := make([][2]int, len(vector))
+	for i, a := range vector {
+		if i > 0 {
+			text.WriteByte(' ')
+		}
+		spans[i][0] = text.Len()
+		if c.Vector[i] == engine.OtherArgument {
+			text.WriteString(policy.OtherArgumentText)
+		} else {
+			text.WriteString(policy.DisplayArg(a))
+		}
+		spans[i][1] = text.Len()
+	}
+	for i, h := range platform.RedactProseElements(r.rules, text.String(), spans) {
+		if h && c.Vector[i] != engine.OtherArgument {
+			red[i] = platform.Redacted
+		}
+	}
 	var parts, run []string
 	flush := func() {
 		if len(run) > 0 {

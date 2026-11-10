@@ -703,6 +703,70 @@ func RedactProse(patterns []Redaction, text string) string {
 	return b.String()
 }
 
+// RedactProseElements reports, for each span of text (byte offsets, one per
+// element a caller joined into text), whether RedactProse would hide a word
+// that overlaps it: the same two passes, whitespace words and then proseWord
+// words, with each hidden word mapped back to the text it came from. A
+// caller that prints the elements one by one hides every element RedactProse
+// would have hidden had it read the whole text.
+func RedactProseElements(patterns []Redaction, text string, spans [][2]int) []bool {
+	hidden := make([]bool, len(spans))
+	mark := func(from, to int) {
+		for i, sp := range spans {
+			if from < sp[1] && sp[0] < to {
+				hidden[i] = true
+			}
+		}
+	}
+	fields := regexp.MustCompile(`\S+`).FindAllStringIndex(text, -1)
+	words := make([]string, len(fields))
+	for i, f := range fields {
+		words[i] = text[f[0]:f[1]]
+	}
+	out, _ := RedactRule(patterns, words)
+	// joined is the text as the second pass reads it; at[i] is where field i
+	// begins in it, and an unchanged field keeps its offsets.
+	var joined strings.Builder
+	at := make([]int, len(fields))
+	for i, w := range out {
+		if i > 0 {
+			joined.WriteByte(' ')
+		}
+		at[i] = joined.Len()
+		joined.WriteString(w)
+		if w != words[i] {
+			mark(fields[i][0], fields[i][1])
+		}
+	}
+	t := joined.String()
+	var found [][]int
+	for _, sp := range proseWord.FindAllStringIndex(t, -1) {
+		if t[sp[0]] != '\\' {
+			found = append(found, sp)
+		}
+	}
+	pw := make([]string, len(found))
+	for i, sp := range found {
+		pw[i] = t[sp[0]:sp[1]]
+	}
+	out2, _ := RedactRule(patterns, pw)
+	for i, sp := range found {
+		if out2[i] == pw[i] {
+			continue
+		}
+		j := 0
+		for j+1 < len(fields) && at[j+1] <= sp[0] {
+			j++
+		}
+		if out[j] != words[j] {
+			continue
+		}
+		start := fields[j][0] + sp[0] - at[j]
+		mark(start, start+sp[1]-sp[0])
+	}
+	return hidden
+}
+
 // HiddenValues are the values RedactRule hides in a rule's words: each word
 // it changed, less what it kept of the word, so `key=X` gives `X`. A writer
 // that knows them can redact a value wherever a line prints it, not only in

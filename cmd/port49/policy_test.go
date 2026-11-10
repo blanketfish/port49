@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -2129,11 +2130,12 @@ func TestPolicyDiffPrintsThePlaceholderOutsideTheQuotes(t *testing.T) {
 func TestDiffCommandKeepsRedactionAcrossThePlaceholder(t *testing.T) {
 	r := &redacting{rules: []platform.Redaction{{Match: []string{"**"}, After: "client-secret"}}}
 	const other = "<any other argument>"
+	sec := randomHex(t)
 	for name, c := range map[string]struct {
 		vector []string
 		want   string
 	}{
-		"keyword, placeholder, value": {[]string{"show", "client-secret", engine.OtherArgument, "hunter2"},
+		"keyword, placeholder, value": {[]string{"show", "client-secret", engine.OtherArgument, sec},
 			`"show client-secret" ` + other + ` "` + platform.Redacted + `"`},
 		"abbreviation then placeholder": {[]string{"show", "cli", engine.OtherArgument}, `"show cli" ` + other},
 		"only the placeholder":          {[]string{engine.OtherArgument}, other},
@@ -2143,12 +2145,82 @@ func TestDiffCommandKeepsRedactionAcrossThePlaceholder(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ch := policy.Change{Vector: c.vector, Shown: c.vector, Command: "unused"}
 			got := r.command(ch)
+			if strings.Contains(got, sec) {
+				t.Fatal("the hidden argument is printed")
+			}
 			if got != c.want {
 				t.Fatalf("got %s, want %s", got, c.want)
 			}
-			if strings.Contains(got, "hunter2") {
-				t.Fatal("the hidden argument is printed")
+		})
+	}
+}
+
+// randomHex is a value no fixture or rule contains, so a test can look for it
+// in output without the value being known to the code under test.
+func randomHex(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(b)
+}
+
+// policy diff hides what the whole-command redaction hid, though the
+// placeholder splits the command in two (issue 20, review 1): a keyword the
+// prose pass reads through punctuation, a positional `from:` that counted the
+// placeholder's three words, and an `after:` keyword the placeholder's words
+// abbreviate. The line never carries the value, in stdout or stderr.
+func TestPolicyDiffHidesWhatTheWholeCommandHid(t *testing.T) {
+	for name, c := range map[string]struct {
+		prefix, deny string
+	}{
+		"punctuated keyword": {"", `show (password * %s`},
+		"snmp community":     {"", `snmp-server community! * %s`},
+		"positional from":    {"platforms: {juniper_junos: {redact: [{match: [set, '**'], from: 3}]}}\n", `set * %s`},
+		"keyword abbreviated by a placeholder word": {
+			"platforms: {juniper_junos: {redact: [{match: ['**'], after: anycast-key}]}}\n", `show * %s`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sec := randomHex(t)
+			dir := t.TempDir()
+			inv := filepath.Join(dir, "inventory.yaml")
+			if err := os.WriteFile(inv, []byte("devices:\n  - {name: jx-01, platform: juniper_junos, addresses: [10.0.0.2]}\n"+
+				"key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: k}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			write := func(file, deny string) string {
+				path := filepath.Join(dir, file)
+				body := c.prefix + "platform_set: 1.3.0\nscopes: [{name: all_devices, match: {}}]\n" +
+					"roles: [{name: r, privilege: readonly, permit: [\"show **\", \"set **\", \"snmp-server **\"]" + deny + "}]\n" +
+					"subjects: [{name: noc, identity: \"user:noc@example.com\", username: noc, token_ttl: 60s}]\n" +
+					"grants: [{subject: noc, scope: all_devices, roles: [r]}]\n"
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			}
+			var out, errb bytes.Buffer
+			run([]string{"policy", "diff", "--old", write("old.yaml", ""),
+				"--new", write("new.yaml", `, deny: ["`+fmt.Sprintf(c.deny, sec)+`"]`), "--inventory", inv}, &out, &errb)
+			// The lines that quote a probed command; the rule echo in a refusal
+			// message is a separate path with its own tests.
+			if lines := grepLines(out.String()+errb.String(), "narrows:"); strings.Contains(lines, sec) {
+				t.Fatalf("the diff prints the hidden value; the command lines:\n%s", strings.ReplaceAll(lines, sec, "<VALUE>"))
+			}
+			if !strings.Contains(out.String(), "narrows:") {
+				t.Fatalf("no narrows line, so the case probes nothing:\n%s%s", out.String(), errb.String())
 			}
 		})
 	}
+}
+
+func grepLines(s, prefix string) string {
+	var b strings.Builder
+	for _, l := range strings.Split(s, "\n") {
+		if strings.HasPrefix(l, prefix) {
+			b.WriteString(l + "\n")
+		}
+	}
+	return b.String()
 }
