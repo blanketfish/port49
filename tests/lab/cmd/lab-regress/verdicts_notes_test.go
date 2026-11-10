@@ -12,7 +12,21 @@ import (
 // rerun moves.
 var durationDigits = regexp.MustCompile(`\b(\d+)(\.\d+)?(ms|s|m|h)\b`)
 
-func jitterDurations(s string) string { return durationDigits.ReplaceAllString(s, "7$3") }
+// A table row's first cell is its key, and a duration there ("attempt 1 (hung 1s)") is a setting of the
+// harness, not a measurement, so only the other cells move.
+func jitterDurations(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		if strings.HasPrefix(ln, "|") {
+			if j := strings.Index(ln[1:], "|"); j >= 0 {
+				lines[i] = ln[:j+2] + durationDigits.ReplaceAllString(ln[j+2:], "7$3")
+			}
+			continue
+		}
+		lines[i] = durationDigits.ReplaceAllString(ln, "7$3")
+	}
+	return strings.Join(lines, "\n")
+}
 
 // TestEveryManifestNoteParsesItsVerdictsAndIgnoresDurations loads every note the manifest lists. A note whose
 // entry does not say `verdicts: none` must parse at least one verdict row (a shape the parser misses must fail

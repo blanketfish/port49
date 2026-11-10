@@ -39,6 +39,11 @@ var (
 	// first.
 	readOffBool = regexp.MustCompile(`\b(true|false)\b`)
 	readOffLead = regexp.MustCompile(`^(not reached|refused|ran|reached|accepted)\b`)
+	// The observation columns, read only when a table has no verdict column.
+	weakColumn = regexp.MustCompile(`^(observed|reply|inert)$`)
+	// An RFC 3339 timestamp, and a run of 12 or more hex characters (a container id, a digest).
+	timeRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`)
+	hexRe  = regexp.MustCompile(`\b[0-9a-f]{12,}\b`)
 	// A Go duration, "1m12.9s", "320ms", "1h2m": the numbers a rerun moves.
 	durationRe = regexp.MustCompile(`\b\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s)(?:\d+(?:\.\d+)?(?:h|ms|µs|us|ns|m|s))*\b`)
 )
@@ -79,7 +84,24 @@ func isSeparator(cells []string) bool {
 // verdictText is a verdict cell with the bold marks off and its durations normalised: the harness writes
 // how long a step took into the cell ("refused in 2.09s"), and a rerun moves that.
 func verdictText(cell string) string {
-	return durationRe.ReplaceAllString(strings.Trim(cell, "* "), "<d>")
+	s := strings.Trim(cell, "* ")
+	s = timeRe.ReplaceAllString(s, "<t>")
+	s = durationRe.ReplaceAllString(s, "<d>")
+	return hexRe.ReplaceAllString(s, "<hex>")
+}
+
+// leadingPhrase is an observation cell's verdict: what it says before its detail. Backticks are dropped,
+// timestamps, durations and long hex ids normalised, and the text cut at the first ';', ':', '/', '(', ',' or
+// " in <d>". "printed its output in 100ms: 'Arista'" is "printed its output"; the detail varies per run.
+func leadingPhrase(cell string) string {
+	s := verdictText(strings.NewReplacer("`", "", "*", "").Replace(cell))
+	if i := strings.IndexAny(s, ";:/(,"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.Index(s, " in <d>"); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 // verdictRows lists the verdict rows of a note in order. A key that repeats gets a "#2", "#3" suffix.
@@ -120,7 +142,9 @@ func verdictRows(note string) []verdictRow {
 				add(heading+"\x00claim\x00"+m[1], labelFor(heading, m[1]), m[2])
 			} else if strings.HasPrefix(strings.ToLower(heading), "read off") && strings.HasPrefix(ln, "- ") {
 				claim, rest := readOffClaim(strings.TrimPrefix(ln, "- "))
-				add(heading+"\x00readoff\x00"+claim, labelFor(heading, claim), readOffVerdict(rest))
+				if v := readOffVerdict(rest); v != "" { // a bullet that states no verdict is prose
+					add(heading+"\x00readoff\x00"+claim, labelFor(heading, claim), v)
+				}
 			}
 			continue
 		}
@@ -130,6 +154,14 @@ func verdictRows(note string) []verdictRow {
 			for i, c := range cells {
 				if verdictColumn.MatchString(strings.ToLower(c)) && col < 0 {
 					col = i
+				}
+			}
+			if col < 0 {
+				// No verdict column: the observation columns, compared by their leading phrase.
+				for i, c := range cells {
+					if weakColumn.MatchString(strings.ToLower(c)) && col < 0 {
+						col = i
+					}
 				}
 			}
 			if col < 0 && strings.HasPrefix(strings.ToLower(heading), "verdict") {
@@ -142,9 +174,13 @@ func verdictRows(note string) []verdictRow {
 		}
 		verdict := ""
 		if col == allColumns {
-			verdict = verdictText(strings.Join(cells[1:], " | "))
+			var parts []string
+			for _, c := range cells[1:] {
+				parts = append(parts, leadingPhrase(c))
+			}
+			verdict = strings.Join(parts, " | ")
 		} else {
-			verdict = verdictText(cells[col])
+			verdict = leadingPhrase(cells[col])
 		}
 		add(heading+"\x00"+header+"\x00"+cells[0], labelFor(heading, cells[0]), verdict)
 	}

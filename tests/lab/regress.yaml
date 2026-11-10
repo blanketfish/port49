@@ -106,7 +106,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L12-bits}
     notes: [tests/lab/results/L12-bits-juniper_vjunos-router.md, tests/lab/results/L12-bits-juniper_vsrx.md]
   - id: L24
-    verdicts: none
     measured_minutes: 7.5
     run: '^TestL24JunosIdleTimeout$'
     platforms: vjunos,vsrx
@@ -171,7 +170,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L26c-scripts}
     notes: [tests/lab/results/L26c-scripts-juniper_vjunos-router.md, tests/lab/results/L26c-scripts-juniper_vsrx.md]
   - id: L26c-junoscript
-    verdicts: none
     measured_minutes: 6.9
     run: '^TestL26cJunoscriptDeny$'
     platforms: vjunos,vsrx
@@ -194,8 +192,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L68}
     notes: [tests/lab/results/L68-juniper_vjunos-router.md, tests/lab/results/L68-juniper_vsrx.md]
   - id: L22
-    no_verdict_notes: [tests/lab/results/L22-arista_eos.md, tests/lab/results/L22-cisco_nxos.md, tests/lab/results/L22-cisco_iosxe.md,
-                       tests/lab/results/L22-carried-arista_eos.md, tests/lab/results/L22-carried-cisco_nxos.md]
     measured_minutes: 44.3
     run: '^(TestAdapterReplies|TestAdapterCarried)$'
     platforms: eos,nxos,iosxe
@@ -203,7 +199,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: "L22,L22-carried"}
     notes: [tests/lab/results/L22-arista_eos.md, tests/lab/results/L22-cisco_nxos.md, tests/lab/results/L22-cisco_iosxe.md, tests/lab/results/L22-carried-arista_eos.md, tests/lab/results/L22-carried-cisco_nxos.md, tests/lab/results/L22-carried-cisco_iosxe.md]
   - id: L23
-    verdicts: none
     measured_minutes: 13.5
     run: '^TestL23InertBesideReadonly$'
     platforms: eos,nxos
@@ -239,14 +234,12 @@ entries:
     env: {PORT49_LAB_REMEASURE: L34}
     notes: [tests/lab/results/L34-arista_eos.md, tests/lab/results/L34-juniper_vjunos-router.md, tests/lab/results/L34-juniper_vsrx.md, tests/lab/results/L34-cisco_nxos.md, tests/lab/results/L34-cisco_iosxe.md]
   - id: L35
-    verdicts: none
     run: '^TestStoreOutageEndToEnd$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
     rows: [L35]
     env: {PORT49_LAB_REMEASURE: L35}
     notes: [tests/lab/results/L35-arista_eos.md, tests/lab/results/L35-juniper_vjunos-router.md, tests/lab/results/L35-juniper_vsrx.md, tests/lab/results/L35-cisco_nxos.md, tests/lab/results/L35-cisco_iosxe.md]
   - id: L35-restore
-    verdicts: none
     measured_minutes: 14.0
     run: '^TestStoreSnapshotRestore$'
     platforms: eos,nxos,iosxe
@@ -254,7 +247,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L35-restore}
     notes: [tests/lab/results/L35-restore-arista_eos.md, tests/lab/results/L35-restore-cisco_nxos.md, tests/lab/results/L35-restore-cisco_iosxe.md]
   - id: L36
-    verdicts: none
     measured_minutes: 67.3
     run: '^TestJunosReauthorizationAfterRestart$'
     platforms: vjunos,vsrx
@@ -262,7 +254,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L36}
     notes: [tests/lab/results/L36-juniper_vjunos-router.md, tests/lab/results/L36-juniper_vsrx.md]
   - id: L37
-    verdicts: none
     run: '^TestSplitEndToEnd$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
     rows: [L37]
@@ -277,7 +268,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L38}
     notes: [tests/lab/results/L38-cisco_iosxe.md]
   - id: L41
-    verdicts: none
     measured_minutes: 17.9
     run: '^TestL41GoDarkMidSession$'
     platforms: eos,vjunos,vsrx,nxos,iosxe
@@ -445,7 +435,6 @@ entries:
     timeout_minutes: 75
     notes: [tests/lab/results/L48-step_ca.md]
   - id: L55
-    verdicts: none
     measured_minutes: 0.6
     run: '^TestL55PublicClient$'
     rows: [L55]
@@ -453,7 +442,6 @@ entries:
     timeout_minutes: 30
     notes: [tests/lab/results/L55-keycloak.md]
   - id: L56
-    verdicts: none
     measured_minutes: 4.1
     run: '^TestL56IssuedEndToEnd$'
     platforms: eos
@@ -462,7 +450,6 @@ entries:
     timeout_minutes: 60
     notes: [tests/lab/results/L56-arista_eos.md]
   - id: L61
-    verdicts: none
     measured_minutes: 1.7
     run: '^TestL61KeycloakAMR$'
     rows: [L61]
@@ -470,7 +457,6 @@ entries:
     timeout_minutes: 30
     notes: [tests/lab/results/L61-keycloak.md]
   - id: L67
-    verdicts: none
     measured_minutes: 6.9
     run: '^TestL67$'
     platforms: eos

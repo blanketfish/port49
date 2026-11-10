@@ -14,8 +14,8 @@ const readOffNote = "## Observation\n\n### Read off the table\n\n" +
 
 func TestReadOffBulletsAreVerdictRows(t *testing.T) {
 	rows := verdictRows(readOffNote)
-	if len(rows) != 5 {
-		t.Fatalf("want 5 rows (4 claims and a bare bullet), got %d: %v", len(rows), rows)
+	if len(rows) != 4 {
+		t.Fatalf("want 4 rows (the bullet with no verdict word is prose), got %d: %v", len(rows), rows)
 	}
 	flips := []struct{ from, to string }{
 		{"pipe tail: true:", "pipe tail: false:"},
