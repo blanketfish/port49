@@ -1,10 +1,11 @@
 # Failure matrix
 
-Design §12 as an operator reads it: what the device does, what you see, what you do, and the evidence
+Each way port49 can fail, as an operator reads it: what the device does, what you see, what you do, and the evidence
 that says so. Every row names a subtest of `tests/compose/failmatrix_test.go`
 (`TestFailureMatrix/<row>`, run by `make failure-matrix` and the `failmatrix` CI job), an existing test,
-or a closed lab row. `TestEveryMatrixRowHasEvidence` fails when a row of design §12 is missing here or has
-no evidence.
+or a closed lab row. `TestEveryMatrixRowHasEvidence` fails when a row of the
+[design's failure table](https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-21-port49-design.md)
+is missing here or has no evidence.
 
 ## At 3am
 

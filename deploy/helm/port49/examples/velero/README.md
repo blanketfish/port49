@@ -13,7 +13,7 @@ the namespaces' Secrets as it reads them, unencrypted: the TACACS+ keys, the sto
 etcd CA and client identities, and the TLS key. Read access to the bucket is enough to take them. The
 repository key protects the volumes and nothing else. Protect the bucket like the CA key.
 
-## Requirements (decision 55 ruling 10)
+## Requirements
 
 1. The repository key is yours, from a Secret, created BEFORE Velero is installed and before the first
    backup. Velero's default repository password is a well-known static value, and Velero writes that
@@ -46,14 +46,15 @@ digest you reviewed, or mirror the plugin by tag into a registry you control.
 
 ## Restore
 
-**A Velero restore that includes `port49-etcd` is a store restore** under design §13 (Deployment
-requirements, "A restore rolls the marks back too"). It loses every revocation and lift made since the
+**A Velero restore that includes `port49-etcd` is a store restore**, and a store restore
+rolls the revocation marks back too. It loses every revocation and lift made since the
 backup, so a revoked principal or certificate is admitted again until it is re-issued, and it brings back
 every token redeemed since, redeemable again while it has not expired. The backup also restores port49d's
 `<accounting.spool_path>.restore.json` and the brokers' `witness.json` with the store (two port49d with spools in one directory each keep their own record). port49d can then tell the restore only if
 `<accounting.spool_path>.restore.json` is newer than the etcd copy, which is usual on a store with writes in the backup window and
 not so on an idle one, and a broker tells it on the same terms (its `witness.json` is then newer than the
-restored witness), and purges once more and says so at its first takeover: the token delete (design §13 step 3) is
+restored witness), and purges once more and says so at its first takeover: the token delete (step 3 of
+[Restoring etcd from a snapshot](https://blanketfish.github.io/port49/operate/backup-and-restore/#restoring-etcd-from-a-snapshot)) is
 required, and it must land before port49d or a broker reaches the restored store. A Velero restore cannot
 use `--bump-revision`, so when port49d does tell the restore it also arms the 5-minute band: see "What
 you see after step 9" below. So the restore is made in this order, with nothing reaching the store until
@@ -126,7 +127,7 @@ kubectl delete namespace port49 port49-etcd
     ```
     <!-- l89:etcdrestore:end -->
 
-2. The token delete (design §13 step 3), from a one-shot pod holding etcd's root client certificate (the
+2. The token delete (step 3 of Restoring etcd from a snapshot), from a one-shot pod holding etcd's root client certificate (the
    Secret `port49-etcd-root`, as `etcd-init-job.yaml` uses it). Edit `PREFIX` in the file if your prefix is
    not `/port49/`.
 
@@ -199,8 +200,8 @@ kubectl delete namespace port49 port49-etcd
 
 7. Bring etcd back: `kubectl -n port49-etcd scale statefulset/etcd --replicas=3`, and wait for it as
    step 1 does.
-8. Then, with no broker and no port49d running, re-issue the revocations made since the backup (design §13
-   step 4). The script leaves the brokers at the 0 it finds. Run it from the repository root.
+8. Then, with no broker and no port49d running, re-issue the revocations made since the backup (step 4
+   of Restoring etcd from a snapshot). The script leaves the brokers at the 0 it finds. Run it from the repository root.
 
     <!-- l89:revoke:begin -->
     ```sh
@@ -231,7 +232,7 @@ kubectl delete namespace port49 port49-etcd
     is served. No restored token is accepted at any point. Break-glass is unaffected. The band itself lasts 20 minutes,
     but only tokens minted in its first 5 are refused.
 
-10. Lift again what was lifted since (design §13 step 6).
+10. Lift again what was lifted since (step 6 of Restoring etcd from a snapshot).
 11. Bring back what step 4 left out, and resume what you suspended first. With a GitOps controller,
     resuming it does both (unmeasured, as above). Under Argo CD, put back the `automated` object you
     noted, exactly, children first, then any parent and the Application that syncs an ApplicationSet:
@@ -274,7 +275,7 @@ kubectl -n velero wait --for=delete restore/<restore> --timeout=5m
 <!-- l89:recover:end -->
 
 Prefer restoring etcd from the `etcdctl snapshot` CronJob (`backup-cronjob.yaml`) with `--bump-revision`,
-as design §13 gives it, and use Velero for the other volumes. A file-system copy of a live etcd member is
+as Restoring etcd from a snapshot gives it, and use Velero for the other volumes. A file-system copy of a live etcd member is
 crash-consistent at best, and the three members are copied at different moments; whether a busy member's
 database survives that is unmeasured. [L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) measured one restore on an idle cluster.
 
