@@ -47,9 +47,10 @@ holds what it read. So:
    key set a device is admitted under, by which rule, and which version to provision. It never prints the secret.
 5. Watch the old version empty out (below), then remove it.
 
-Never edit a key file in place, and never point an existing version at another reference. port49d refuses
-a policy that gives a version a different `secret_ref` than the one it has held since it started. If a held
-file is rewritten anyway, or can no longer be read, port49d keeps the bytes it holds, says
+**Never edit a key file in place, and never point an existing version at another reference.** port49d refuses
+a policy that gives a version a different `secret_ref` than the one it has held since it started.
+
+If a held file is rewritten anyway, or can no longer be read, port49d keeps the bytes it holds, says
 `keys.<name> version N: <path> has changed since port49d read it` (or, for an unreadable file,
 `... can no longer be read (...); port49d keeps the secret it read, but a restart will refuse to start until
 the file is back or the policy no longer names the version`), and sets
@@ -63,19 +64,25 @@ Put the new bytes in a new file under a new version number.
 Adding the policy line before the file exists does not take effect, and does no harm to a running port49d:
 the policy already serving stays in force, and the refusal is tried again every 30 seconds until the file
 reads or the policy file changes. On Kubernetes this is the normal case for up to a couple of minutes after
-you add a key to a Secret (the kubelet took 1m34s in the [L82](../reference/lab-register.md#l82) run). A SIGHUP tries at once. After a restart the same mistake is a refused start, so a pod
-crash-loops until the file is restored or the policy line is taken out.
+you add a key to a Secret (the kubelet took 1m34s in the [L82](../reference/lab-register.md#l82) run). A SIGHUP
+tries at once.
+
+After a restart the same mistake is a refused start, so a pod crash-loops until the file is restored or the
+policy line is taken out.
 
 To remove a key, take the policy line out first, then the file.
 
 ### Phasing out the old version
 
 `retire_after` is the last day (UTC) an `accept` version admits a device. From midnight after it, the
-version admits none: the device's next packet on it is a struck failure and the connection is reset at
-once, so its next connections meet the strike backoff (`held_refused`). A policy edit that removes a
-version or moves it to `retired` resets connections on it at their next packet with no strike. An `accept` version
-with no `retire_after` is reported by `port49 policy test` as an indefinitely accepted version, which is
-what rotation exists to prevent.
+version admits none. The device's next packet on it is a struck failure and the connection is reset at
+once, so its next connections meet the strike backoff (`held_refused`).
+
+A policy edit that removes a version or moves it to `retired` resets connections on it at their next packet,
+with no strike.
+
+An `accept` version with no `retire_after` is reported by `port49 policy test` as an indefinitely accepted
+version, which is what rotation exists to prevent.
 
 To see who is still on the old version, run `port49 keys status` against the port49d log and the policy:
 
@@ -108,13 +115,16 @@ refused at load. Pick another name for the set.
 
 ## The `encryption:` key
 
-port49 seals tokens, receipts, contexts, directory memberships and pins, and second-factor records at rest under `encryption.current`.
-`encryption.previous` is an optional second key that records can still be opened with, which is what makes
-rotation possible. The ids label every sealed record, so the new key needs a **new id**. port49 refuses a
-`previous` whose id equals `current`'s, but it cannot see a new secret put under an old id: records
-sealed earlier then fail to open, with no warning at the start. Always give a new key a new id. Both keys are 32 bytes; their fields are in the
-[reference](../reference/config/port49d.md#encryption). Every region holds the same set, and the key
-is the same value in port49d and in the broker.
+port49 seals tokens, receipts, contexts, directory memberships and pins, and second-factor records at rest under
+`encryption.current`. `encryption.previous` is an optional second key that records can still be opened with, which
+is what makes rotation possible.
+
+**Always give a new key a new id.** The ids label every sealed record. port49 refuses a `previous` whose id equals
+`current`'s, but it cannot see a new secret put under an old id: records sealed earlier then fail to open, with no
+warning at the start.
+
+Both keys are 32 bytes; their fields are in the [reference](../reference/config/port49d.md#encryption). Every
+region holds the same set, and the key is the same value in port49d and in the broker.
 
 Rotation is three steps. **Finish each step in every region, on every port49d and every port49-broker,
 before you begin the next.** Each step is a configuration change and a restart.
@@ -133,85 +143,134 @@ the swap can happen one process at a time. Step 3 is the only step that makes re
 comes last. Run step 3 on one process early and that process opens nothing a not-yet-swapped neighbour
 still seals under the old key.
 
-Do not run step 3 until the records sealed under the old key are gone or re-sealed:
+### Before step 3: what must be gone or re-sealed
 
-- With directory password sign-in, second-factor records and the enrollment mark are re-sealed by the
-  broker's scheduled directory pass (every `refresh_interval`). Wait for a pass to complete after step 2.
-  If the broker says `the re-seal could not open N second factors; encryption.previous cannot be retired
-  while they are sealed under it`, do not run step 3.
-- Tokens, receipts and contexts are short-lived, and the scheduled pass above does not re-seal them. Wait
-  after step 2 finished everywhere for the **largest** of: `session.max_session_age_default` plus
-  `session.grace_window` (port49d.yaml; 12 hours plus 10 minutes by default, and a policy role can only
-  lower it), `receipt_max_age` (2 hours by default), `session.staleness_ceiling` (4 hours by default, the
-  age of the snapshots a stopped process is read from), 20 minutes (a token lives at most 15, and the
-  idempotency records that carry minted tokens are kept under 20), and the **directory membership lease**,
-  (24 hours: `broker.directory.grace` is capped at 24 hours, and the lease is the larger of the two). Every verify reads a principal's membership record before it
-  rewrites it, so a record sealed under the old key keeps failing, for that principal, until its lease runs
-  out; this holds on a single shared store as well as on a split. Tokens are also purged at every start on etcd. Records still under the old key after step 3 do not open: a token is dropped
-  from the candidates and counted in `port49_crypt_open_failures_total{record="token"}`, a session's context is
-  denied `store_unavailable`, and a second factor is never treated as "not enrolled". For that second factor an
-  operator runs `port49 directory reset-second-factor`.
-- **Directory pins** (on a directory store of its own: a split, or more than one region) are re-sealed
-  by the same scheduled pass. A pin has no expiry, so it never ages out. Instead, the runner lists every
-  pin with the key it is sealed under, in pages of 500, and opens only the pins not under `current`. It
-  writes each one still sealed under `previous` again under `current`, by a compare on the revision it
-  read. A pin that a `port49 directory forget`, a re-pin or another region's runner changed in between
-  is left as that writer wrote it, and the next pass reads it again. **After step 2 has finished
-  everywhere, wait for a pass that ended after the last step-2 restart**
-  (`port49_directory_pins_reseal_last_complete_timestamp_seconds` later than that restart) **with
-  `port49_directory_pins_sealed_previous` at 0.** Read both on the replica that holds the keyspace
-  (`port49_store_keyspace_held` 1). A replica that handed the keyspace over keeps the values of its
-  last pass until it restarts. Any region's holder will do, because they all read the one directory
-  store. The gauges are absent until a runner completes its first pass after it starts. They are also
-  absent on a single shared store, where a membership record has a lease (the 24 hours above) and there
-  is no pin to re-seal. A pass that moves pins says `directory store: the re-seal sealed N pins under
-  the current key; M are left under encryption.previous`. If the directory store stops answering or
-  refuses the broker's identity, the pass says
-  `directory store: the re-seal of pins stopped: <error>; the next pass starts again` and changes no
-  gauge. A cancel (shutdown, or the keyspace handed over) stops the pass silently and changes no gauge
-  either. A write that fails any other way does not stop the pass: that pin is counted in
+Do not run step 3 until the records sealed under the old key are gone or re-sealed. Each kind of record has
+its own wait.
+
+#### Second factors
+
+With directory password sign-in, second-factor records and the enrollment mark are re-sealed by the
+broker's scheduled directory pass (every `refresh_interval`). Wait for a pass to complete after step 2.
+If the broker says `the re-seal could not open N second factors; encryption.previous cannot be retired
+while they are sealed under it`, do not run step 3.
+
+#### Tokens, receipts and contexts
+
+These are short-lived, and the scheduled pass above does not re-seal them. After step 2 has finished
+everywhere, wait for the **largest** of:
+
+- `session.max_session_age_default` plus `session.grace_window` (port49d.yaml; 12 hours plus 10 minutes by
+  default, and a policy role can only lower it);
+- `receipt_max_age` (2 hours by default);
+- `session.staleness_ceiling` (4 hours by default, the age of the snapshots a stopped process is read from);
+- 20 minutes (a token lives at most 15, and the idempotency records that carry minted tokens are kept under 20);
+- the **directory membership lease** (24 hours: `broker.directory.grace` is capped at 24 hours, and the lease is
+  the larger of the two).
+
+The lease is on the list because every verify reads a principal's membership record before it rewrites it. A
+record sealed under the old key therefore keeps failing, for that principal, until its lease runs out. This
+holds on a single shared store as well as on a split. Tokens are also purged at every start on etcd.
+
+Records still under the old key after step 3 do not open:
+
+- a token is dropped from the candidates and counted in `port49_crypt_open_failures_total{record="token"}`;
+- a session's context is denied `store_unavailable`;
+- a second factor is never treated as "not enrolled". For that second factor an operator runs
+  `port49 directory reset-second-factor`.
+
+#### Directory pins
+
+**Directory pins** (on a directory store of its own: a split, or more than one region) are re-sealed by the
+same scheduled pass. A pin has no expiry, so it never ages out.
+
+**What to wait for.** After step 2 has finished everywhere, wait for a pass that ended after the last step-2
+restart (`port49_directory_pins_reseal_last_complete_timestamp_seconds` later than that restart) **with
+`port49_directory_pins_sealed_previous` at 0.**
+
+- Read both on the replica that holds the keyspace (`port49_store_keyspace_held` 1). A replica that handed the
+  keyspace over keeps the values of its last pass until it restarts. Any region's holder will do, because they
+  all read the one directory store.
+- The gauges are absent until a runner completes its first pass after it starts. They are also absent on a
+  single shared store, where a membership record has a lease (the 24 hours above) and there is no pin to
+  re-seal.
+
+**How the pass works.** The runner lists every pin with the key it is sealed under, in pages of 500, and opens
+only the pins not under `current`. It writes each one still sealed under `previous` again under `current`, by a
+compare on the revision it read. A pin that a `port49 directory forget`, a re-pin or another region's runner
+changed in between is left as that writer wrote it, and the next pass reads it again. Each pin is one
+compare-and-swap, so nothing is left half-written.
+
+The pass has a budget of half `refresh_interval`, so it never holds off the stamping refresh. A large fleet can
+take several intervals to finish its first pass.
+
+**What it says.**
+
+- A pass that moves pins says `directory store: the re-seal sealed N pins under
+  the current key; M are left under encryption.previous`.
+- If the directory store stops answering or refuses the broker's identity, the pass says
+  `directory store: the re-seal of pins stopped: <error>; the next pass starts again` and changes no gauge.
+- A cancel (shutdown, or the keyspace handed over) stops the pass silently and changes no gauge either.
+- A write that fails any other way does not stop the pass. That pin is counted in
   `port49_directory_pins_sealed_previous`, it is named once an hour as
-  `directory store: <principal>'s pin could not be written under the current key (...)`, and the pass
-  goes on with the pins after it. Each pin is one compare-and-swap, so nothing is left half-written.
-  The pass has a budget of half `refresh_interval`, so it never holds off the stamping refresh. A pass
-  that runs out of it says
+  `directory store: <principal>'s pin could not be written under the current key (...)`, and the pass goes on
+  with the pins after it.
+- A pass that runs out of its budget says
   `directory store: the re-seal of pins ran out of its <budget> budget after sealing N pins (M did not open); the next pass goes on from there`
-  once an hour and changes no gauge. A large fleet can take several intervals to finish its first pass.
-  While step 2 is rolling out, expect `the re-seal sealed N pins` lines in every region, because
-  regions on different `current` keys move pins back and forth; finish step 2 promptly.
-- **A pin that opens under neither key** is counted in `port49_directory_pins_unopenable` (alert
-  [port49_directory_pins_unopenable](../reference/alerts.md#port49_directory_pins_unopenable), on the
-  keyspace holder). It means a key was retired while it still sealed pins. Reading the pin fails with an
-  unknown-key error (`ErrUnknownKey`). Each pass opens it again, so
-  `port49_crypt_open_failures_total{record="membership"}` rises at least once per pass for each such pin, and more with traffic, because bind, mint and
-  refresh open it too. Bind,
-  mint and refresh fail for that principal. From the code (not measured), sessions already open are
-  denied `context_stale` once `session.staleness_ceiling` has passed. The pass never deletes or
-  rewrites such a pin. It says `directory store: <principal>'s pin does not open (...)` once an hour,
-  for at most 20 principals a pass (the first 20 in sorted order); the count's line says how many more
-  are not named. When the cause is an unknown key, the line says to put the retired key back as
-  `previous` and restart; for any other open error it says the record does not match its seal and to run
-  `port49 directory forget <principal>`, because the record was changed outside port49 and no key
-  helps. Putting the retired key back as `previous` and restarting deletes nothing, and the next pass
-  re-seals the pin. If that key is gone, `port49 directory forget <principal>` frees the principal, and the person's next sign-in
-  pins them again. Any admin with `forget_principals` whose own pin opens can run it, and every pin that
-  opens is on `current` after a pass. Confirm that the person who signs in is the same person, as on
-  [Stores](../operate/stores.md). There is no offline forget on `port49-broker`.
-- **Rotating again.** There is one `previous` slot, so a rotation's step 1 drops whatever key
-  `previous` held. Begin a rotation only after the last one's step 3. The waits above gate that step,
-  so every pin is then under `current`. Only pins have a gauge. A second factor is under `current` once
-  a pass has completed without the `could not open N second factors` line and without
-  `sign-in: the re-seal of second factors stopped`.
-- **Backups and exports need every key that sealed their records.** An etcd snapshot and a Velero backup
-  are the raw stores, and each record in them keeps the key that was current when that record was written.
-  An enrollment export (`port49-broker export-enrollments`) keeps each record's seal too, and seals only
-  its envelope under the key current at export time. So a backup taken between steps 2 and 3 needs both
-  keys, and any backup needs every key that was current while its records were written.
-  `port49 directory import` refuses a file sealed under a key the broker does not hold and tells you to set
-  that key as `previous`. Keep every old key file, offline, as long as any backup that holds its records is
-  kept; restoring without it loses the second factors and pins sealed under it, and each enrolled person must
-  then run `port49 directory reset-second-factor`. Velero also stores the encryption Secret in the bucket, so
-  a Velero restore brings back the key its backup was taken with, and that bucket must be guarded like the key.
+  once an hour and changes no gauge.
+
+While step 2 is rolling out, expect `the re-seal sealed N pins` lines in every region, because regions on
+different `current` keys move pins back and forth; finish step 2 promptly.
+
+#### A pin that opens under neither key
+
+**A pin that opens under neither key** is counted in `port49_directory_pins_unopenable` (alert
+[port49_directory_pins_unopenable](../reference/alerts.md#port49_directory_pins_unopenable), on the keyspace
+holder). It means a key was retired while it still sealed pins. Reading the pin fails with an unknown-key error
+(`ErrUnknownKey`).
+
+**What it breaks.** Bind, mint and refresh fail for that principal. From the code (not measured), sessions
+already open are denied `context_stale` once `session.staleness_ceiling` has passed. Each pass opens the pin
+again, so `port49_crypt_open_failures_total{record="membership"}` rises at least once per pass for each such pin,
+and more with traffic, because bind, mint and refresh open it too.
+
+**What the pass says.** The pass never deletes or rewrites such a pin. It says
+`directory store: <principal>'s pin does not open (...)` once an hour, for at most 20 principals a pass
+(the first 20 in sorted order); the count's line says how many more are not named.
+
+- When the cause is an unknown key, the line says to put the retired key back as `previous` and restart.
+- For any other open error, it says the record does not match its seal and to run
+  `port49 directory forget <principal>`, because the record was changed outside port49 and no key helps.
+
+**How to recover.** Putting the retired key back as `previous` and restarting deletes nothing, and the next pass
+re-seals the pin. If that key is gone, `port49 directory forget <principal>` frees the principal, and the
+person's next sign-in pins them again. Any admin with `forget_principals` whose own pin opens can run it, and
+every pin that opens is on `current` after a pass. Confirm that the person who signs in is the same person, as
+on [Stores](../operate/stores.md). There is no offline forget on `port49-broker`.
+
+### Rotating again
+
+There is one `previous` slot, so a rotation's step 1 drops whatever key `previous` held. Begin a rotation only
+after the last one's step 3. The waits above gate that step, so every pin is then under `current`. Only pins
+have a gauge. A second factor is under `current` once a pass has completed without the
+`could not open N second factors` line and without `sign-in: the re-seal of second factors stopped`.
+
+### Backups and exports need every key that sealed their records
+
+An etcd snapshot and a Velero backup are the raw stores, and each record in them keeps the key that was current
+when that record was written. An enrollment export (`port49-broker export-enrollments`) keeps each record's seal
+too, and seals only its envelope under the key current at export time. So a backup taken between steps 2 and 3
+needs both keys, and any backup needs every key that was current while its records were written.
+
+`port49 directory import` refuses a file sealed under a key the broker does not hold and tells you to set that
+key as `previous`.
+
+**Keep every old key file, offline, as long as any backup that holds its records is kept.** Restoring without it
+loses the second factors and pins sealed under it, and each enrolled person must then run
+`port49 directory reset-second-factor`. Velero also stores the encryption Secret in the bucket, so a Velero
+restore brings back the key its backup was taken with, and that bucket must be guarded like the key.
+
+### A process that starts without the key
 
 If a process starts without a key the store was last written under, what you see depends on the store:
 

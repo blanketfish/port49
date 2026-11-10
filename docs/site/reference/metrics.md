@@ -7,7 +7,7 @@ description: "Every metric port49 exports, with its type, labels and meaning."
 
 # Metrics
 
-Every metric port49d and port49-broker export on `/metrics`, with its type, labels and help text, read from the registered collectors. Sections group the series by the second word of the name. No metric carries a device's identity as a label. The last column links the shipped [alerts](alerts.md) whose expression uses the series.
+Every metric port49d and port49-broker export on `/metrics`, with its type, labels and help text. The list is read from the registered collectors. Each section holds the series whose names share a second word, such as `accounting` in `port49_accounting_spool_depth`. No metric carries a device's identity as a label. The last column links each shipped [alert](alerts.md) whose expression uses the series.
 
 ## accounting
 
@@ -150,7 +150,7 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 | `port49_directory_refresh_last_complete_timestamp_seconds` | gauge |  | The Unix time of the last scheduled refresh that verified every principal; 0 before one has, absent where no scheduled refresh runs. | [port49_directory_refresh_stale](alerts.md#port49_directory_refresh_stale), [port49_directory_refresh_half_ceiling](alerts.md#port49_directory_refresh_half_ceiling) |
 | `port49_directory_selected` | gauge | `server` | 1 for the directory server queries are sent to (sticky selection). |  |
 | `port49_directory_server_up` | gauge | `server` | 1 while the directory server's breaker is closed. | [port49_directory_server_down](alerts.md#port49_directory_server_down) |
-| `port49_directory_site_crossings_total` | counter |  | Selections that crossed sites: consistency events, membership read there may lag replication (design §10). |  |
+| `port49_directory_site_crossings_total` | counter |  | Selections that crossed sites: consistency events, membership read at the other site may lag directory replication. |  |
 | `port49_directory_walks_truncated_total` | counter |  | Nested-group walks that ended at max_depth or the node bound with groups unconfirmed; those groups are not granted. |  |
 
 ## inventory

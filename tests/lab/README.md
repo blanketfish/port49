@@ -941,8 +941,8 @@ only two stray pcaps were dropped.
 
 The first run passed 58 of 66 entries. Of the 8 that failed, all are resolved:
 
-- **[L35](https://blanketfish.github.io/port49/reference/lab-register/#l35), [L37](https://blanketfish.github.io/port49/reference/lab-register/#l37)**: the test expected plan 7e's circuit-open line; port49d now goes dark on decision 37's
-  health checks (about 5 s). The verdict was fixed and both passed on the rerun.
+- **[L35](https://blanketfish.github.io/port49/reference/lab-register/#l35), [L37](https://blanketfish.github.io/port49/reference/lab-register/#l37)**: the test expected an older release's circuit-open line; port49d now goes dark on its
+  store health checks (about 5 s). The verdict was fixed and both passed on the rerun.
 - **[L66](https://blanketfish.github.io/port49/reference/lab-register/#l66) (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29, and [L66](https://blanketfish.github.io/port49/reference/lab-register/#l66)
   passed on the rerun.
 - **[L29](https://blanketfish.github.io/port49/reference/lab-register/#l29)-reload on vjunos**: no connection open across the change was reset in the refused/rekeyed

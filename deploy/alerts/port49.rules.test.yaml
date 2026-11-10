@@ -370,7 +370,7 @@ tests:
         exp_alerts:
           - exp_labels: {instance: "a", severity: "ticket"}
             exp_annotations:
-              summary: "port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook"
+              summary: "port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow the restore runbook, Restoring etcd from a snapshot"
               runbook_url: "https://blanketfish.github.io/port49/reference/alerts/#port49_store_restore_detected"
   - interval: 1m
     input_series:

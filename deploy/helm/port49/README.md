@@ -197,7 +197,7 @@ finds the new store within 30 seconds; until then its sign-ins answer `enrollmen
 | Pod `CrashLoopBackOff` | `kubectl logs --previous <pod>` | The config or a Secret is wrong; the log names the field or reference, never its value. |
 | Pod `ContainerCreating` for minutes | `kubectl describe pod <pod>` (the Events) | A named Secret or ConfigMap is missing: a kubelet event, never a port49 line. |
 | Pod `Pending` | `kubectl describe pod <pod>` | A named PVC is missing or unbound, or nothing can be scheduled. |
-| port49d refuses to start naming etcd and a version | `kubectl logs --previous <pod>` | A member is below the floor (spec decision 54 ruling 13); upgrade etcd. Every member is listed and checked. |
+| port49d refuses to start naming etcd and a version | `kubectl logs --previous <pod>` | A member is below the floor; upgrade etcd. Every member is listed and checked. |
 | Not Ready, running | `curl :9049/readyz` through a port-forward | A store is unreachable; the body says which. |
 | Admin call 503 | broker log | No attestation roots configured. |
 | Brokers disagree on the CA, or one refuses to start on it | the broker's "issuing ca" log line; `copy-issuer.sh` output | Copy from a broker that holds the CA the store records, onto one that holds none (a lost volume): `copy-issuer.sh <ns> <release> --from <ordinal> --to <ordinal>`. It never overwrites a CA: onto a broker that holds a different one, including one "behind a promotion" after a rotation, it refuses and names both, and the files are copied by hand with a debug pod on that broker's PVC (the docs' "When it will not start"). Never `init-issuer` again, and not `forget-issuer`. |
@@ -319,8 +319,9 @@ PVC a restrictive access mode. Restore enrollments with `port49 directory import
 ### Velero (file-system backup of the volumes)
 
 `examples/velero/` is a Velero `Schedule` with the steps around it. **A Velero restore that includes
-`port49-etcd` is a store restore under design §13**: it loses the revocations and lifts made since the backup
-and brings back redeemed tokens, so follow that runbook (delete `v1/t/` and `meta/judged`/`meta/judged_bundle`
+`port49-etcd` is a store restore**: it loses the revocations and lifts made since the backup
+and brings back redeemed tokens, so follow the restore runbook,
+[Restoring etcd from a snapshot](https://blanketfish.github.io/port49/operate/backup-and-restore/#restoring-etcd-from-a-snapshot) (delete `v1/t/` and `meta/judged`/`meta/judged_bundle`
 before the members serve clients, re-issue revocations with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`), lift again). Prefer
 restoring etcd from the `etcdctl snapshot` CronJob with `--bump-revision`; a file-system copy of a live member
 is crash-consistent at best and unmeasured under load ([L89](https://blanketfish.github.io/port49/reference/lab-register/#l89) measured one restore on an idle cluster). Measured on kind (Velero 1.18.4 with

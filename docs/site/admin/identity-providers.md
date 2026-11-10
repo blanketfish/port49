@@ -6,10 +6,14 @@ description: Connecting an OIDC provider, a directory or a directory password to
 # Identity providers
 
 A person reaches a device with a **certificate** the broker issues them. This page covers the three things that can
-stand behind that issuance: an OIDC provider (Keycloak, Entra ID, Okta and the like), a directory (LDAP, Active
-Directory or Samba AD) that supplies groups and, if you have no provider, passwords, and a client certificate you
-already have. The concepts are on [Identities](../concepts/identities.md) and
-[Trust domains](../concepts/trust-domains.md); what a person types is on [Logging in](../operate/login.md).
+stand behind that issuance:
+
+- an OIDC provider (Keycloak, Entra ID, Okta and the like);
+- a directory (LDAP, Active Directory or Samba AD), which supplies groups and, if you have no provider, passwords;
+- a client certificate you already have.
+
+The concepts are on [Identities](../concepts/identities.md) and [Trust domains](../concepts/trust-domains.md); what
+a person types is on [Signing in](../operate/login.md).
 
 ## OIDC issuance
 
@@ -29,9 +33,10 @@ broker:
       certificate_lifetime: 12h
 ```
 
-`issuance: {}` turns it on with the defaults. `certificate_lifetime` is 12h by default and may be 1h to 24h. The
-broker's issuing CA is made once, on one broker, with `port49-broker init-issuer`, which writes `issuing-ca.pem` and
-`issuing-ca.key` into `broker.state_dir`; copying it to the other brokers and rotating it is on
+`issuance: {}` turns it on with the defaults. `certificate_lifetime` is 12h by default and may be 1h to 24h.
+
+The broker's issuing CA is made once, on one broker, with `port49-broker init-issuer`. It writes `issuing-ca.pem` and
+`issuing-ca.key` into `broker.state_dir`. Copying it to the other brokers and rotating it are covered on
 [Key rotation](key-rotation.md#the-issuing-ca) and [Install](../operate/install/index.md).
 
 The config **refuses** a human `oidc` verifier with no `issuance`, unless an x509 humans verifier with
@@ -48,9 +53,12 @@ The person's ID token is accepted in exactly two places:
 
 Anywhere else, presenting it is refused **401 `trust_domain_unresolved`**, with a message saying that a person's ID
 token is not accepted there, and `/v1/refresh` refuses it too. A stolen ID token therefore cannot be replayed at the
-broker to act as the person. Even at `POST /v1/certificate` it is bound to the request: the token's nonce must name
-the public key of the certificate request, and the request must be signed by that key, so a thief without the signer's
-private key gets `sign_in_not_bound`. A sign-in is also exchanged once; a second exchange gets `sign_in_spent`.
+broker to act as the person.
+
+Even at `POST /v1/certificate`, the token is bound to the request. The token's nonce must name the public key of the
+certificate request, and the request must be signed by that key. A thief without the signer's private key gets
+`sign_in_not_bound`. A sign-in is also exchanged once; a second exchange gets `sign_in_spent`.
+
 (`max_token_age` is 2h by default; `clock_skew` is 1m.)
 
 ### What a provider may name
@@ -60,15 +68,18 @@ private key gets `sign_in_not_bound`. A sign-in is also exchanged once; a second
 - `principal_domains` is required, and bounds who this provider may name. A provider can only ever speak for the
   domains you list.
 - The provider's signing keys are fetched from its discovery document, cached in `broker.state_dir`
-  (`oidc-<hash>.json`) and refreshed every `jwks_refresh_interval` (1h). If the provider is unreachable, tokens signed
-  by the held keys keep verifying until `jwks_max_age` (24h by default, up to 720h); then every token from it is
-  refused `identity_provider_unavailable`. **At 3am**, with the provider down, certificate logins and live device
-  sessions are unaffected; if you must accept the held keys longer, raise `broker.identity.jwks_max_age` and restart.
-  The broker says each state once, for example:
+  (`oidc-<hash>.json`) and refreshed every `jwks_refresh_interval` (1h).
 
-  ```text
-  identity: <issuer>: no key refreshed within broker.identity.jwks_max_age (<jwks_max_age>; the last at <time>); every token from it is refused identity_provider_unavailable until a fetch succeeds; certificate logins and live device sessions are unaffected; to accept the held keys meanwhile, raise broker.identity.jwks_max_age (up to 720h) and restart <process>
-  ```
+    If the provider is unreachable, tokens signed by the held keys keep verifying until `jwks_max_age` (24h by
+    default, up to 720h). After that, every token from it is refused `identity_provider_unavailable`.
+
+    **At 3am**, with the provider down, certificate logins and live device sessions are unaffected. If you must
+    accept the held keys longer, raise `broker.identity.jwks_max_age` and restart. The broker says each state once,
+    for example:
+
+    ```text
+    identity: <issuer>: no key refreshed within broker.identity.jwks_max_age (<jwks_max_age>; the last at <time>); every token from it is refused identity_provider_unavailable until a fetch succeeds; certificate logins and live device sessions are unaffected; to accept the held keys meanwhile, raise broker.identity.jwks_max_age (up to 720h) and restart <process>
+    ```
 
 - `HTTPS_PROXY` and `NO_PROXY` are honoured for the provider's requests, and the start line says how each issuer is
   fetched.
@@ -129,10 +140,15 @@ end <principal>'s contexts with `port49 revoke --principal <principal>` (api: re
 
 A token that carries `sid` and `sub` can get either form: Form 1 when the logout wrote its record, Form 2 when it
 wrote nothing. Form 2 is printed once per principal the decision log's mint records name for that `sub`. Lifting
-early lets the person's held token mint again. On an issuing broker the line adds a shorter path: revoke each
-certificate issued to the principal with `port49 revoke --cert-issuer <DN> --cert-serial <HEX>` (the DN and serial
-from each broker's issue records), and lift the mark after `max_token_age` plus twice `clock_skew` instead. The
-shorter path holds only if every broker's issue records can be read: if any cannot, wait out the first time.
+early lets the person's held token mint again.
+
+On an issuing broker the line adds a shorter path:
+
+1. Revoke each certificate issued to the principal with `port49 revoke --cert-issuer <DN> --cert-serial <HEX>`
+   (the DN and serial come from each broker's issue records).
+2. Lift the mark after `max_token_age` plus twice `clock_skew`, instead of after the printed time.
+
+The shorter path holds only if every broker's issue records can be read. If any cannot, wait out the first time.
 
 For a token that names only a `sid`, the line first offers `port49 revoke --sid <sid> --sid-issuer <issuer>` (needs
 `revoke_others` and a press of your security key). It ends that one session, as a logout by `sid` does, and leaves
@@ -194,11 +210,18 @@ should hold it.
 
 ## Directory-password sign-in
 
-For a site with no provider and no PKI. A person signs in with their directory password and a time-based
+This is for a site with no provider and no PKI. A person signs in with their directory password and a time-based
 code from an authenticator app, over `POST /v1/sign-in` and `POST /v1/sign-in/confirm`, and the broker issues the
-same certificate. The order is deliberate: the code is checked first and its step consumed, then **one bind as the
-person's own entry**, then the certificate. A spray therefore never reaches the directory for someone with a code,
-and port49 cannot lock an account. Service accounts and workload entries are refused.
+same certificate.
+
+The order is deliberate:
+
+1. The code is checked first, and its step consumed.
+2. Then comes **one bind as the person's own entry**.
+3. Then the certificate is issued.
+
+A password spray therefore never reaches the directory for someone with a code, and port49 cannot lock an account.
+Service accounts and workload entries are refused.
 
 The broker refuses a `directory_password` verifier whose `principal_domains` overlap an `oidc` verifier's: a password
 beside a provider that enforces stronger sign-in is a downgrade an attacker would pick.
@@ -223,12 +246,14 @@ they never set up. Every enrollment is an `enroll` record you can alert on. Keep
 `open_until` when a rollout ends.
 
 The enrollments live in a sealed file in `broker.state_dir` (or in etcd). Create it once with
-`port49-broker init-enrollments`; the broker never creates it, because a store that went missing must not reopen
-enrollment for everyone. A missing or unreadable one refuses password sign-in with **503 `enrollment_store_lost`**,
-and every other path keeps serving. Restore it from backup with `port49 directory import`, or run
-`reset-second-factor --all`. `port49-broker export-enrollments` writes a copy ([backup and
-restore](../operate/backup-and-restore.md)). Operator commands: `port49 directory forget`, `unlock` and
-`reset-second-factor`, through your agent.
+`port49-broker init-enrollments`. The broker never creates it, because a store that went missing must not reopen
+enrollment for everyone.
+
+A missing or unreadable one refuses password sign-in with **503 `enrollment_store_lost`**, and every other path
+keeps serving. Restore it from backup with `port49 directory import`, or run `reset-second-factor --all`.
+`port49-broker export-enrollments` writes a copy ([backup and restore](../operate/backup-and-restore.md)).
+
+The operator commands are `port49 directory forget`, `unlock` and `reset-second-factor`, run through your agent.
 
 Limits are 5 failures per person and 50 per source in 15 minutes (`rate_limits`); over them the answer is
 `429 sign_in_throttled`, and `port49 directory unlock <principal>` clears one person's count at 3am.

@@ -15,11 +15,16 @@ A device login touches three stored records. Each exists to answer one question.
 
 ## Two credentials, two lifetimes
 
-The person's **session** is the held connection described in [Concepts](index.md): hours long, held by the
-agent, never sent to a device. The **device token** is minted from it automatically, lasts between 30 and
-900 seconds, and is used once. A single long-lived credential pasted into devices would be a password
-with an expiry date, and a session with no per-device token would need a certificate interaction for
-every device. Two credentials avoid both.
+A login uses two credentials:
+
+- The person's **session** is the held connection described in [Concepts](index.md). It lasts hours, is
+  held by the agent, and is never sent to a device.
+- The **device token** is minted from the session automatically. It lasts between 30 and 900 seconds and is
+  used once.
+
+Why two? A single long-lived credential pasted into devices would be a password with an expiry date. A
+session with no per-device token would need a certificate interaction for every device. Two credentials
+avoid both.
 
 ## The token
 
@@ -37,9 +42,10 @@ deleting a token ends it at once.
   set holds only unspent, unexpired tokens, usually one. A cap on the set (`candidate_cap_reached`)
   refuses a *mint*, never a redemption, so a runaway client is told to stop while every token it
   already holds still works.
-- **Short TTL, per subject.** `token_ttl` is a subject's setting in policy ([policy reference](../reference/config/policy.md)), not a global: an interactive login needs about a
-  minute, a batch job walking thousands of devices needs a window matching its run. A longer TTL widens
-  replay only for an *unspent* token, but it also keeps that many recoverable secrets in the store for
+- **Short TTL, per subject.** `token_ttl` is a subject's setting in policy
+  ([policy reference](../reference/config/policy.md)), not a global. An interactive login needs about a
+  minute; a batch job walking thousands of devices needs a window matching its run. A longer TTL widens
+  replay only for an *unspent* token. But it also keeps that many recoverable secrets in the store for
   that long, so size it to the sweep.
 - **Encrypted at rest.** CHAP makes port49d recompute a digest from the plaintext token, so the store
   must hold it recoverably. Tokens and contexts are therefore sealed with a key held by the broker and
@@ -84,9 +90,9 @@ On NX-OS, NAPALM's `nxos` driver made 23 for ten tasks, all in one context ([the
 a token brought back by a store restore. The device simply prompts again. See
 [Reason codes](../reference/reason-codes.md) for each meaning.
 
-Because the receipt key no longer includes the line, a spent token replays on that device over any
-transport until the window ends. `receipt_idle_ttl` and `receipt_max_age` are therefore the bound on a
-leaked *spent* token. Keep them as short as your automation allows.
+The receipt key does not include the line (the device's `port`), so a spent token replays on that device
+over any transport until the window ends. `receipt_idle_ttl` and `receipt_max_age` are therefore the bound
+on a leaked *spent* token. Keep them as short as your automation allows.
 
 ## The login context
 

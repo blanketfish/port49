@@ -94,6 +94,7 @@ port49 hwkey setup
   slot's key only with a certificate in it, so it prints both lines, certificate first. Run the
   `keys generate` line only if the slot holds no key. No line names a serial, PIN, PUK or management
   key.
+
 - **Which token and which module.** The module is found by `--module`, then the `module-path` of a key
   already in your config, then a probe of the system paths (not on macOS: pass `--module`). With more
   than one token present it lists them by number, model and masked label, exits 2, and wants
@@ -182,7 +183,7 @@ offline, and when you are, take the file from the broker's administrator, not fr
 
 !!! warning "Unmeasured"
     On macOS, `port49` accepts a PKCS#11 module that the `admin` group can write, and no other group,
-    because Homebrew's prefix is group-writable by `admin` (decision 45 ruling 3). That ruling's
+    because Homebrew's prefix is group-writable by `admin`. That exception's
     evidence is a CI run in which Homebrew's `libykcs11.dylib` was refused without the rule, and its
     hardware claims were measured on Linux. No register entry covers a YubiKey on a Mac, so whether
     a Homebrew Mac loads the module and signs in end to end is unknown.

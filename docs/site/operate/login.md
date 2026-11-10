@@ -13,9 +13,11 @@ commands do, and what they return to a script. The pieces they talk to are on
 ## `port49 login`
 
 `port49 login` proves who the person is to the broker and starts the agent that keeps the result. It
-takes one of three methods, each the same command with a different flag. The method can instead be
-set once in the person's config file with `method:`, and every flag overrides its key; the keys are
-in the [client configuration reference](../reference/config/client.md).
+takes one of three methods, each the same command with a different flag.
+
+Instead of a flag, the person can set the method once in their config file with `method:`. A flag
+always overrides its config key. The keys are in the
+[client configuration reference](../reference/config/client.md).
 
 ```sh
 # A client certificate and key the person already holds
@@ -29,9 +31,11 @@ port49 login --oidc
 port49 login --directory
 ```
 
-What a successful login prints is `port49: logged in to <broker>; the session ends at <time>`, with
-the agent's process id and the path of its log. A second `port49 login` while the agent runs
-refreshes it instead of starting another one, and says `already logged in to <broker>; refreshing`.
+A successful login prints `port49: logged in to <broker>; the session ends at <time>`, with the
+agent's process id and the path of its log.
+
+A second `port49 login` while the agent runs refreshes that agent instead of starting another one. It
+says `already logged in to <broker>; refreshing`.
 
 - **`--oidc` and `--directory` hold the certificate the broker issues.** They sign in again only when
   that certificate has under a quarter of its life left, or when you pass `--sign-in`.
@@ -47,20 +51,29 @@ refreshes it instead of starting another one, and says `already logged in to <br
 
 ```sh
 port49 token core-sw01            # prints the login token, and nothing else, on stdout
-port49 token --ttl 5m core-sw01   # ask for a shorter life; the broker clamps it to your policy
+port49 token --ttl 30s core-sw01  # shorten the token's life below your token_ttl; never lengthens it
 port49 token --json core-sw01     # the broker's whole answer as one JSON object
 ```
 
+**A token's life is set by policy, not by you.** Each subject's `token_ttl` (`30s` to `900s`, on the
+[policy reference](../reference/config/policy.md)) is how long its token stays usable before its one
+login. `--ttl` can only ask for less: a value above `token_ttl` gets `token_ttl`. How long the session on
+the device then lasts is the role's [`max_session_age`](../admin/roles-and-grants.md#max_session_age), a
+separate setting ([The token](../concepts/tokens-receipts-contexts.md#the-token)).
+
+Flags come before the device name.
+
 The token is the one secret that port49 ever writes to standard output. Give it to the device where
-the device asks for a password. It is single use, and short-lived by design: see
-[Tokens, receipts and contexts](../concepts/tokens-receipts-contexts.md). Flags come before the
-device name.
+the device asks for a password. It is single use and short-lived by design: see
+[Tokens, receipts and contexts](../concepts/tokens-receipts-contexts.md).
 
-If the broker's store is not ready, `port49 token` retries by itself for up to 30 seconds, waiting
-the broker's own hint between tries, and then fails with the last answer. It retries nothing else.
+**A store that is not ready is retried; nothing else is.** If the broker's store is not ready,
+`port49 token` tries again by itself for up to 30 seconds, waiting the broker's own hint between
+tries. After that it fails with the last answer.
 
-A device whose policy requires a second factor makes `port49 token` ask for it first: a touch on the
-person's security key, or a sign-in at the identity provider. It prints which, and what to do.
+**A second factor comes first.** When a device's policy requires one, `port49 token` asks for it
+before the mint: a touch on the person's security key, or a sign-in at the identity provider. It
+prints which one, and what to do.
 
 ### `--json`
 
@@ -79,17 +92,19 @@ On success it is the broker's answer for that device. These are its keys:
 | `expires_at` | when the token stops being redeemable |
 | `session_expires_at` | when a login made with it stops being authorized; absent when the roles say never |
 
-The object holds the tokens, so treat it as the secret it is: do not log it. The `--enable` flag
-mints an enable token beside the login token; without `--json` only the login token is printed.
+The object holds the tokens, so treat it as a secret: do not log it.
+
+The `--enable` flag mints an enable token beside the login token. Without `--json`, only the login
+token is printed.
 
 On a failure the command exits 1 and the object has `device` and one of these shapes:
 
-- **A refusal by policy.** `verdict` is `deny` and `reason` is a code from
-  [Reason codes](../reference/reason-codes.md), the same closed vocabulary the decision log uses, with
-  `detail` as words. Nothing here is a code the table does not list.
-- **A failure of the client or the broker.** `error` is one of the codes below and `detail` says more.
-  These are the command's own and are never reason codes. For a device the broker could not decide,
-  `error` is the broker's code for it instead.
+- **A refusal by policy.** `verdict` is `deny`, and `detail` says why in words. `reason` is a code
+  from [Reason codes](../reference/reason-codes.md), the same closed vocabulary the decision log uses.
+  It is never a code that table does not list.
+- **A failure of the client or the broker.** `error` is one of the codes below, and `detail` says
+  more. These codes belong to the command and are never reason codes. The one exception is a device
+  the broker could not decide: then `error` is the broker's code for it.
 - **A requirement to prove.** `error` is `per_login_mfa_required` and `per_login_mfa` lists `accept`
   (the methods that satisfy it), `reuse_for_seconds`, and where the reuse comes from. A challenge is
   never printed.
@@ -111,8 +126,8 @@ On a failure the command exits 1 and the object has `device` and one of these sh
 | `no_token` | the broker said permit and gave no token; tell the broker's operator |
 | `agent_error` | any other fault of the agent or the broker; the `detail` has the words |
 
-A token near the end of the session's ceiling also prints a warning on standard error, never on
-standard output, so `--json` stays one object.
+A token near the end of the session's ceiling also prints a warning. The warning goes to standard
+error, never to standard output, so `--json` stays one object.
 
 ## `port49 ssh`
 
@@ -123,26 +138,40 @@ status.
 ```sh
 port49 ssh core-sw01                       # a shell
 port49 ssh core-sw01 -- show version       # one command
-port49 ssh --port 2222 --ttl 5m core-sw01
+port49 ssh --port 2222 --ttl 30s core-sw01   # --ttl shortens the token's life; never lengthens it
 ```
 
-It takes `--ttl`, `--port`, `--ssh PATH` for another OpenSSH, `--ssh-config FILE` for another
-`ssh_config`, and `-v`. The device name may hold only letters, digits, `.`, `_` and `-`; for any
-other, use `port49 token` and your own `ssh`.
+Its flags:
 
-What it passes to ssh is fixed so that a login costs one attempt: no public-key offers, one password
-prompt, no connection sharing, no agent forwarding. The token goes only to the prompt of the device
-it was minted for. A prompt from anything else on the way, such as a jump host that asks for its own
-password, is not answered with it. If the device asks for the password a second time, `port49 ssh`
-ends the connection so that no second or empty password is sent.
+- `--ttl`, shorter than your `token_ttl` only, as for `port49 token`
+- `--port`
+- `--ssh PATH`, for another OpenSSH
+- `--ssh-config FILE`, for another `ssh_config`
+- `-v`
+
+The device name may hold only letters, digits, `.`, `_` and `-`. For any other name, use
+`port49 token` and your own `ssh`.
+
+**A login costs one attempt.** The options `port49 ssh` passes to ssh are fixed: no public-key
+offers, one password prompt, no connection sharing, no agent forwarding.
+
+**The token goes only to the device it was minted for.** A prompt from anything else on the way, such
+as a jump host that asks for its own password, is not answered with it. If the device asks for the
+password a second time, `port49 ssh` ends the connection, so no second or empty password is sent.
 
 ### Host keys
 
 OpenSSH owns the device's host key. port49 does not pin one, keep a list, or add a trust step of its
-own. `port49 ssh` runs ssh with `StrictHostKeyChecking=accept-new`: a device met for the first time is
-accepted and filed in your `known_hosts`, and a device whose key has changed is refused. If your own
-`ssh_config` says `StrictHostKeyChecking yes`, that stands, and the key must already be in
-`known_hosts`. The keys are filed under the device's name, lowercased, unless your `ssh_config` sets a
+own.
+
+`port49 ssh` runs ssh with `StrictHostKeyChecking=accept-new`:
+
+- A device met for the first time is accepted and filed in your `known_hosts`.
+- A device whose key has changed is refused.
+- If your own `ssh_config` says `StrictHostKeyChecking yes`, that stands, and the key must already be
+  in `known_hosts`.
+
+The keys are filed under the device's name, lowercased, unless your `ssh_config` sets a
 `HostKeyAlias`.
 
 Two consequences an operator should know:
@@ -157,14 +186,17 @@ Two consequences an operator should know:
 
 ### Telling port49's refusals from ssh's
 
-A remote command can exit 1, and so can `port49 ssh`. The two are told apart by the line `port49 ssh:`
-on standard error: when port49 itself refuses, it says so under that prefix and sent nothing to the
-device. ssh's own messages have no such prefix. When ssh exits 255 after the device was sent the token,
-`port49 ssh:` adds a line saying so, with `port49 explain --device <device>` as the next step.
+A remote command can exit 1, and so can `port49 ssh`. Look for a line that starts `port49 ssh:` on
+standard error to tell them apart.
+
+- **port49 refused.** It says so under the `port49 ssh:` prefix, and it sent nothing to the device.
+- **ssh or the device failed.** ssh's own messages have no such prefix. When ssh exits 255 after the
+  device was sent the token, `port49 ssh:` adds a line saying so, with
+  `port49 explain --device <device>` as the next step.
 
 ## Exit codes
 
-Read from the commands themselves.
+These codes are taken from the commands' code.
 
 | Command | Code | Meaning |
 |---|---|---|
@@ -183,13 +215,17 @@ Read from the commands themselves.
 | `port49 hwkey` | 1 | action needed: a check failed, no token is inserted, the session key is not on a token, or setup would change a key and was not allowed to |
 | `port49 hwkey` | 2 | an error: a bad flag, no attestation roots, an unreachable or untrusted broker, a config file that is refused or cannot be written, no module found or one refused, several tokens with no `--token`, or the build has no hardware-key support |
 
-Also, `port49 token` and `port49 refresh` exit 0 when they worked, 1 when they did not, and 2 for a
-usage error. Under `--json`, `port49 token` writes its failure object before it exits 1.
+`port49 token` and `port49 refresh` exit 0 when they worked, 1 when they did not, and 2 for a usage
+error. Under `--json`, `port49 token` writes its failure object before it exits 1.
 
-**One refused config file, three commands.** A config file that others can write is refused. `port49
-login` reads it first and exits 2. `port49 ssh` and `port49 token` read it only when a device asks for
-an `idp_mfa` sign-in, and there the refusal ends the mint with exit 1. A script that tells the two
-apart by the code alone will be wrong.
+**One refused config file gives different codes.** A config file that others can write is refused,
+but not at the same moment by every command:
 
-A command run by `cron` or a script should check the code and not the text: the words are meant for a
-person and may change.
+- `port49 login` reads it first and exits 2.
+- `port49 ssh` and `port49 token` read it only when a device asks for an `idp_mfa` sign-in. There the
+  refusal ends the mint with exit 1.
+
+A script that reads the cause from the exit code alone will get this case wrong.
+
+**A script should check the code, not the text.** A command run by `cron` or a script reads the exit
+code. The words are meant for a person and may change.

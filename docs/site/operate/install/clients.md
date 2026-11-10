@@ -19,12 +19,15 @@ both.
 | Client | the `port49` package and archive, for Linux and macOS (amd64 and arm64) | PKCS#11 keys (a YubiKey or a smartcard), the TPM (Linux) and file keys |
 | Static | the `port49-server` package and archive, and the container image | the TPM (Linux) and file keys only |
 
-Run `port49 login` from the client build if your key lives on a YubiKey or a smartcard. The client build
-loads the system's PKCS#11 library at run time, so it needs the system's dynamic loader, which every desktop
-Linux and macOS has. The static build has no such loader dependency, which suits a server or a
-container. It will not use a `pkcs11:` key: a key store set to `pkcs11` is refused, and `auto` passes
-over the key and says so. Nothing else about it changes. See [Hardware keys](../hardware-keys.md) for
-setting a key up.
+**If your key lives on a YubiKey or a smartcard, run `port49 login` from the client build.** The client
+build loads the system's PKCS#11 library at run time, so it needs the system's dynamic loader, which every
+desktop Linux and macOS has.
+
+The static build has no such loader dependency, which suits a server or a container. It will not use a
+`pkcs11:` key: a key store set to `pkcs11` is refused, and `auto` passes over the key and says so. Nothing
+else about it changes.
+
+See [Hardware keys](../hardware-keys.md) for setting a key up.
 
 Check which one you have, and its version:
 

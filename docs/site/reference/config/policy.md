@@ -7,17 +7,18 @@ description: "Every key of the policy file: platform set, platforms, privilege l
 
 # Policy file reference
 
-The policy file says who may do what on which devices. It is one YAML document; an unknown key, a
-second document (a `---` separator) or a key this build does not read is refused, and the error
-names the key or the line. `port49 policy test` loads it the way `port49d` does and runs its
-`tests:`.
+The policy file says who may do what on which devices. `port49 policy test` loads it the way
+`port49d` does and runs its `tests:`.
+
+It is one YAML document. An unknown key, a second document (a `---` separator) or a key this build
+does not read is refused, and the error names the key or the line.
 
 Paths below use `[]` for an item of a list and `<name>` for a key you choose. Every table row is a
 leaf; a key whose value is a block is documented by the keys under it. Durations need a unit, for
 example `60s`.
 
-Rules are written as words, `*` for one word, `**` for any number and `/regex/` or `@class` for a
-term; see the policy guide for the grammar. Rules are never quoted in an error: a refusal names the
+Rules are written as words: `*` for one word, `**` for any number, and `/regex/` or `@class` for a
+term. See the policy guide for the grammar. Rules are never quoted in an error: a refusal names the
 list and the position.
 
 ## Top-level keys
@@ -145,7 +146,7 @@ list and the position.
 | `tests.[].device` | string | The inventory device the test runs against. Required. |
 | `tests.[].command` | string | The command to authorize. A test without a command is a session test. |
 | `tests.[].expect` | string | `permit` or `deny`. Required with a command; not allowed on a session test. |
-| `tests.[].reason` | string | The reason code a denial must carry, from the closed decision-reason vocabulary. |
+| `tests.[].reason` | string | Optional, with a command. The reason code the decision must carry for the test to pass, on a permit or a deny: for example `no_grants_matched` or `permit_dominates`. A code that is not on the reason codes page is refused at load. Not allowed on a session test. |
 | `tests.[].level` | string | Session test: the privilege level the subject must be minted a token at. |
 | `tests.[].max_privilege` | string | Session test: the ceiling the token must carry, a level or `none`. |
 | `tests.[].priv_lvl` | string | Session test: the `priv-lvl` number (0 to 15) the reply must carry, or `none`. |

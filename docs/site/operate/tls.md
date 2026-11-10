@@ -76,16 +76,20 @@ the [`tls_outcome` table](../reference/decision-log.md#tls_outcome).
 
 ## The server certificate's names
 
+**Do not count on the device to check the names: the server certificate must come from a CA the device
+trusts for nothing else.** A certificate from a CA your devices also trust for web sites is a certificate
+anyone who can get one issued can use against them.
+
 A device configured with a DNS name or an address may or may not check that port49's certificate carries
-it. In the lab, IOS XE 17.18.02 accepted a server certificate that named only a DNS name, and one that
-named another address, though it was configured by address
-([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md)).
-EOS and XRd 26.1.1 refused the one naming another address
-([EOS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md),
-[XRd](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)), and EOS
-refused the DNS-only one too. So do not count on the device to check the names: the server certificate must come from
-a CA the device trusts for nothing else. A certificate from a CA your devices also trust for web sites is
-a certificate anyone who can get one issued can use against them.
+it. In the lab:
+
+- IOS XE 17.18.02 accepted a server certificate that named only a DNS name, and one that named another
+  address, though it was configured by address
+  ([the lab note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_iosxe.md)).
+- EOS and XRd 26.1.1 refused the one naming another address
+  ([EOS](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md),
+  [XRd](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)), and EOS
+  refused the DNS-only one too.
 
 If you want a wildcard in the server certificate, confine it to a subdomain only TACACS+ servers use
 (RFC 9887 section 5.1.6).

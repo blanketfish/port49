@@ -467,7 +467,7 @@ func (r *runner) restoreMarks(ctx context.Context) error {
 		// only if a broker whose marks.json survived runs first (design §13
 		// step 5).
 		fmt.Fprintln(stderr, "port49-broker: runner: broker.state_dir had no marks.json at this start; "+
-			"a revocation a store restore lost is put back only if this copy saw it (design §13 step 5)")
+			"a revocation a store restore lost is put back only if this copy saw it (step 5 of Restoring etcd from a snapshot)")
 		if len(put) == 0 {
 			return nil
 		}

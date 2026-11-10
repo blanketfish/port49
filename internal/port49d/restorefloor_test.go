@@ -311,7 +311,7 @@ func TestTheDropLineSaysWhatIsRefusedAndTheRunbook(t *testing.T) {
 	f.read(1000, 1010)
 	f.read(480, 500)
 	line := f.out.String()
-	for _, want := range []string{"token_spent", "a token minted after this read is served, except within the band", "design §13", "--bump-revision",
+	for _, want := range []string{"token_spent", "a token minted after this read is served, except within the band", "follow the restore runbook, Restoring etcd from a snapshot", "--bump-revision",
 		f.bandUntil.UTC().Format(time.RFC3339),
 		"a token minted until " + f.bandFrom.Add(restoreSkew).UTC().Format(time.RFC3339) + " (5 minutes after this read)",
 		"tokens minted since the restore and before this read are refused once too"} {

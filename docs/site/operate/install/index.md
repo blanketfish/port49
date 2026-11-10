@@ -23,9 +23,11 @@ not on the server.
 Each shape page states these four again, in its own terms.
 
 1. **The device's source address reaches `port49d` unrewritten.** `port49d` admits a device by the
-   address it sees. A NAT or a proxy in front of port 49 breaks that. On a host this is the default. In
-   a container, follow the network notes on the [container page](container.md). In Kubernetes a `LoadBalancer` Service needs
-   `externalTrafficPolicy: Local` (the chart's default); the [Helm page](helm.md) has the measurement.
+   address it sees, so a NAT or a proxy in front of port 49 breaks admission.
+    - On a host, this is the default.
+    - In a container, follow the network notes on the [container page](container.md).
+    - In Kubernetes, a `LoadBalancer` Service needs `externalTrafficPolicy: Local` (the chart's default);
+      the [Helm page](helm.md) has the measurement.
 2. **etcd, with two processes.** `port49d` and `port49-broker` run apart, each with its own etcd
    identity. The memory store is one process and is for a trial only.
 3. **`broker.state_dir` survives a restart.** It holds the revocation marks, the witness and the issuing
@@ -35,7 +37,7 @@ Each shape page states these four again, in its own terms.
    says which. A slow disk pushes port49's store calls past their timeout in bursts, and the
    `etcd_disk_slow` alert fires after ten minutes of it.
 
-## Install the binaries 0755
+## Install the binaries with mode 0755
 
 Install `port49` with mode `0755`, owned by root, with no setgid bit and no file capabilities. The
 packages and the image already do. If you copy the binary by hand, do the same.
@@ -68,8 +70,9 @@ unit must never initialize.
 ### The memory-store trial: `port49d init-revocations`
 
 `broker.revocations_file` is used only by a single-process trial, where `port49d` holds its broker in
-process on the memory store. There, `port49d` never creates the revocations file itself: a missing file,
+process on the memory store. There, `port49d` never creates the revocations file itself. A missing file,
 or one that does not load, refuses every start, so that a lost file cannot silently forget a revoke.
+
 Run this once, before the first start:
 
 ```sh

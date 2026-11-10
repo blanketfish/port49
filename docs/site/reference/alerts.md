@@ -7,41 +7,53 @@ description: "Every shipped alert rule: its severity, its expression and why its
 
 # Alerts
 
-`port49.rules.yaml` holds one Prometheus alerting rule for each alarm the design and the roadmap
-state. Load it into Prometheus (`rule_files:`), or set `prometheusRule.enabled: true` on the Helm
-chart, which renders the same file as a Prometheus Operator `PrometheusRule`
-(`deploy/helm/port49/files/port49.rules.yaml` is a byte copy, because Helm cannot read outside the
-chart; `tests/alerts` fails if the two differ). `make alerts-check` runs `promtool check rules` and
-`promtool test rules` on it, and `go test ./tests/alerts/` checks that every metric an expression
-names is one port49 registers.
+`port49.rules.yaml` holds one Prometheus alerting rule for each alarm port49 defines. Load it in
+one of two ways:
 
-Two severities. `page` is a fault that is refusing devices or losing records now. `ticket` is one
-that costs nothing yet, or that a person fixes in working hours. Route on the `severity` label.
+- into Prometheus, with `rule_files:`
+- through the Helm chart, with `prometheusRule.enabled: true`. The chart renders the same file as a
+  Prometheus Operator `PrometheusRule`. `deploy/helm/port49/files/port49.rules.yaml` is a byte copy,
+  because Helm cannot read outside the chart, and `tests/alerts` fails if the two differ.
 
-**The job names are the rules' parameter.** The two target rules read Prometheus's own `up` series for
-`job="port49d"` and `job="port49-broker"`. The chart's PodMonitors (rendered with
-`prometheusRule.enabled`) set those names; if you scrape another way, give the jobs those names or
-edit the rules. Without them `port49_target_absent` and `port49_broker_target_absent` fire, which is the
-point of them. The absent rules are fleet-wide: `absent()` stays quiet while any scrape of that job exists,
-so use one Prometheus per port49 fleet, or add a namespace matcher to the two expressions.
+`make alerts-check` runs `promtool check rules` and `promtool test rules` on it. `go test
+./tests/alerts/` checks that every metric an expression names is one port49 registers.
 
-No expression names a device, and none groups by one: the series carry no device identity (design
-§15), and the decision log answers "which devices". The labels used are bounded: `instance`,
+There are two severities; route on the `severity` label.
+
+- `page`: a fault that is refusing devices or losing records now.
+- `ticket`: one that costs nothing yet, or that a person fixes in working hours.
+
+**The job names are the rules' parameter.** Three rules read Prometheus's own `up` series for
+`job="port49d"` and `job="port49-broker"`: `port49_target_down`, `port49_target_absent` and
+`port49_broker_target_absent`. The chart's PodMonitors (rendered with `prometheusRule.enabled`) set
+those names. If you scrape another way, give the jobs those names or edit the rules. Without them,
+`port49_target_absent` and `port49_broker_target_absent` fire, which is the point of them.
+
+The absent rules are fleet-wide: `absent()` stays quiet while any scrape of that job exists. So use
+one Prometheus per port49 fleet, or add a namespace matcher to the two expressions.
+
+No expression names a device, and none groups by one. The series carry no device identity, and the
+decision log answers "which devices". The labels used are bounded: `instance`,
 `key_ref`, `version`, `server`, `issuer`, `outcome`, `feed`, `pool`, `component`.
 
 Each alert below carries a `runbook_url` annotation that points at its section here. The metrics each rule reads are in the [metrics reference](metrics.md). An alert that has just fired: start at the [3am index](../operate/troubleshooting/index.md#an-alert-fired), which gives a short do and don't for each family of alerts.
 
 ## Thresholds and defaults
 
-Each rule is a statement from the design or the roadmap and the rule that answers it. The thresholds
-that follow a default (`close_after` 5, `broker.refresh_interval` 5m, `jwks_max_age` 24h,
-`expiry_warning_fraction` 0.33, `staleness_ceiling` 4h) are those defaults: edit the rule if you set another.
-The `hold_ttl` rules are the exception: they use multiples of the 15s `hold_ttl` default that hold at any
-allowed setting (10s to 1m), so they need no edit.
-**Edit in the safe direction.** A setting lowered below the default can silence its alarm: with
-`close_after: 3` the page on `port49_store_health_failures >= 5` never fires, and with
-`jwks_max_age: 6h` the 12h keys rule fires after tokens are already refused. Recompute each such
-threshold when you change the setting it follows.
+Each row pairs what an alert covers with the rule that answers it.
+
+**A threshold that follows a setting assumes that setting's default.** The defaults are `close_after`
+5, `broker.refresh_interval` 5m, `jwks_max_age` 24h, `expiry_warning_fraction` 0.33 and
+`staleness_ceiling` 4h. Edit the rule if you set another. The `hold_ttl` rules are the exception: they
+use multiples of the 15s `hold_ttl` default that hold at any allowed setting (10s to 1m), so they need
+no edit.
+
+**Edit in the safe direction.** A setting lowered below the default can silence its alarm:
+
+- With `close_after: 3`, the page on `port49_store_health_failures >= 5` never fires.
+- With `jwks_max_age: 6h`, the 12h keys rule fires after tokens are already refused.
+
+Recompute each such threshold when you change the setting it follows.
 
 ## Notes
 
@@ -114,7 +126,7 @@ A port49d or broker target is not answering its scrape: up is 0 for it.
 up{job=~"port49d|port49-broker"} == 0
 ```
 
-**Source:** pre-beta review, deploy I2: a port49d or broker that is down raises no alarm of its own, because every other rule reads series it no longer exports
+**Source:** A port49d or broker that is down raises no alarm of its own, because every other rule reads series it no longer exports
 
 **Why this threshold:** `up == 0` for a scrape target of either job; two minutes outlasts a restart's missed scrapes.
 
@@ -128,7 +140,7 @@ Prometheus has no up series for port49d: no port49d target exists at all, so eve
 absent(up{job="port49d"})
 ```
 
-**Source:** pre-beta review, deploy I2: a target Prometheus is not scraping at all has no `up` series, so `== 0` never matches
+**Source:** A port49d target Prometheus is not scraping at all has no `up` series, so `== 0` never matches
 
 **Why this threshold:** `absent()` of port49d's `up`. Prometheus's pod discovery keeps a target only while its pod exists, so a StatefulSet with every pod Pending or deleted leaves no series for `== 0` to match, and every device has lost port49: a page. Five minutes outlasts a rollout. A mislabelled scrape config shows here too.
 
@@ -142,7 +154,7 @@ Prometheus has no up series for the broker: no broker target exists at all, so n
 absent(up{job="port49-broker"})
 ```
 
-**Source:** pre-beta review, deploy I2: the same for the broker
+**Source:** The same for the broker: no `up` series for `port49-broker` at all
 
 **Why this threshold:** `absent()` of the broker's `up`: no token can be minted, but held tokens still log in. On the memory-store trial, which runs no separate broker, the broker rule fires; drop it there or silence it.
 
@@ -156,7 +168,7 @@ port49d reset TACACS+ connections at accept because the global connection cap wa
 increase(port49_connections_shed_total{reason="global_cap"}[5m]) > 0
 ```
 
-**Source:** roadmap, plan 12a hand-off: "an alarm on `port49_connections_shed_total{reason="global_cap"}` increasing"
+**Source:** Connections reset at accept because the global connection cap is full: `port49_connections_shed_total{reason="global_cap"}` increasing
 
 **Why this threshold:** Any shed connection is a device refused, so any increase pages; five minutes smooths one scrape.
 
@@ -170,7 +182,7 @@ A port49d is holding more than 80% of limits.max_connections open; raise the cap
 sum by (instance) (port49_connections{state="open"}) / on(instance) port49_connections_max > 0.8
 ```
 
-**Source:** roadmap, plan 12a hand-off: "a warning on `port49_connections` near the cap"
+**Source:** A warning before shedding starts: `port49_connections` near the cap
 
 **Why this threshold:** Ten minutes at 80% is a trend, not a burst; the page above covers the cap itself.
 
@@ -184,7 +196,7 @@ A key version's secret file changed or cannot be read; the held secret stays in 
 port49_key_secret_files_changed > 0
 ```
 
-**Source:** roadmap, plan 12b hand-off: "an alarm on `port49_key_secret_files_changed > 0` for 10m"
+**Source:** A key version's secret file that changed or cannot be read: `port49_key_secret_files_changed > 0` for 10m
 
 **Why this threshold:** A rotated file is expected for minutes while the rollout restarts; ten minutes is a forgotten restart.
 
@@ -198,7 +210,7 @@ A broker is configured to issue certificates and has no usable issuing CA, so ev
 port49_issuing_ca_not_after_timestamp_seconds == 0 and on(instance) port49_issuing_ca_configured == 1
 ```
 
-**Source:** roadmap, plan 12b hand-off; metric help: "an alarm on `port49_issuing_ca_not_after_timestamp_seconds == 0` while `broker.identity.issuance` is configured"
+**Source:** A broker set to issue certificates that has no usable issuing CA: `port49_issuing_ca_not_after_timestamp_seconds == 0` while `broker.identity.issuance` is configured
 
 **Why this threshold:** A broker started without its CA says so and keeps serving; five minutes outlasts a rollout and nothing else clears it.
 
@@ -212,7 +224,7 @@ The issuing CA expires within 90 days; make its successor and distribute the new
 (port49_issuing_ca_not_after_timestamp_seconds - time() < 90 * 86400) and on(instance) (port49_issuing_ca_not_after_timestamp_seconds > 0) and on(instance) port49_issuing_ca_configured == 1
 ```
 
-**Source:** roadmap, plan 12b hand-off; metric help: "within 90 days"
+**Source:** The issuing CA expires within 90 days
 
 **Why this threshold:** Ninety days is a CA rollover's lead time; a CA already at 0 is the page above, not this ticket.
 
@@ -226,7 +238,7 @@ A key version with devices still on it passes its retire_after within 7 days; mo
 (port49_key_version_devices > 0) and on(key_ref, version) (port49_key_retirement_seconds < 7 * 86400)
 ```
 
-**Source:** spec §13 key rotation: "Alarm severity escalates as `retire_after` approaches while devices still present the"
+**Source:** A key version that devices still present nears its `retire_after`: the first step of an alarm whose severity rises as the date approaches
 
 **Why this threshold:** A week is a change window; the series carry no device identity, the log names the devices.
 
@@ -240,7 +252,7 @@ A key version with devices still on it passes its retire_after within a day, or 
 (port49_key_version_devices > 0) and on(key_ref, version) (port49_key_retirement_seconds < 86400)
 ```
 
-**Source:** spec §13 key rotation: "Alarm severity escalates as `retire_after` approaches while devices still present the"
+**Source:** The same key version within a day of its `retire_after`, or past it: the alarm's last step
 
 **Why this threshold:** A day is the last working shift; a version past retire_after with devices on it is refusing them now.
 
@@ -254,7 +266,7 @@ An admin call was refused its hardware-key touch proof: a stolen token or a brok
 increase(port49_admin_touch_total{outcome="refused"}[10m]) > 0
 ```
 
-**Source:** roadmap, plan 12b hand-off: "an alert on `port49_admin_touch_total{outcome="refused"}`"
+**Source:** An admin call refused its hardware-key touch proof: `port49_admin_touch_total{outcome="refused"}`
 
 **Why this threshold:** Someone holds an admin credential without the touch; no benign cause repeats.
 
@@ -268,7 +280,7 @@ The policy in force has compositions answered fail-closed: those users are denie
 port49_policy_fail_closed_compositions > 0
 ```
 
-**Source:** roadmap, plan 11b hand-off: "Alarm on `port49_policy_fail_closed_compositions` > 0"
+**Source:** A policy in force that answers some compositions fail-closed: `port49_policy_fail_closed_compositions` > 0
 
 **Why this threshold:** A standing condition of the policy, not an incident; a ticket the author sees.
 
@@ -282,7 +294,7 @@ The policy file on disk was refused or will not settle; an older policy is servi
 port49_policy_file_refused == 1
 ```
 
-**Source:** roadmap, plan 3/6 reload: "`port49_policy_reloads_total{outcome}` ... alarmed"
+**Source:** A policy file on disk that is refused or will not settle: `port49_policy_file_refused == 1`
 
 **Why this threshold:** An edit in progress is refused for seconds; five minutes is a file that stayed wrong.
 
@@ -296,7 +308,7 @@ A policy change has not yet reached every live login context.
 port49_policy_refresh_pending == 1
 ```
 
-**Source:** roadmap, plan 7 settle pass: "1 from a policy swap or grant expiry until its settle pass"
+**Source:** A policy swap or grant expiry that has not yet reached every live login context: 1 from the change until its settle pass
 
 **Why this threshold:** A pass takes seconds; two minutes is a stuck settle pass.
 
@@ -310,7 +322,7 @@ A broker or port49d serves a policy bundle other than the runner's; its tokens o
 port49_policy_bundle_matches_runner == 0
 ```
 
-**Source:** design §15: "`port49_policy_bundle_matches_runner` 0 on a broker for longer than twice `broker.policy_watch_interval`"
+**Source:** A broker serving a policy bundle other than the runner's: `port49_policy_bundle_matches_runner` 0 for longer than twice `broker.policy_watch_interval`
 
 **Why this threshold:** Five minutes outlasts twice the watch interval and the settle delay at their defaults; raise it if the intervals are raised.
 
@@ -324,7 +336,7 @@ A broker mints nothing: its mint gate has been closed for over a minute; the sto
 port49_broker_mint_gate_closed == 1
 ```
 
-**Source:** design §15: "`port49_broker_mint_gate_closed` at 1 for a minute"
+**Source:** A broker that mints nothing: `port49_broker_mint_gate_closed` at 1 for a minute
 
 **Why this threshold:** The gate is closed from a start until a takeover is seen, so a minute is where a restart ends and a fault begins; a ticket, since other replicas keep minting.
 
@@ -338,7 +350,7 @@ Admitted devices are served by the generic adapter: their platform has no adapte
 port49_devices_generic_platform > 0
 ```
 
-**Source:** spec, Events (l.2527): "`port49_devices_generic_platform` is its alarm, naming no device"
+**Source:** Admitted devices served by the generic adapter: `port49_devices_generic_platform`, naming no device
 
 **Why this threshold:** A standing condition of the inventory, not an incident; the start line names the platforms and counts.
 
@@ -352,7 +364,7 @@ A policy refresh could not carry a login context onto the policy in force: a con
 increase(port49_context_refreshes_total{outcome="failed"}[10m]) > 0
 ```
 
-**Source:** spec, Policy reload (l.875): "it is counted `failed` in `port49_context_refreshes_total`, which is its alarm"
+**Source:** A login context a policy refresh could not carry onto the policy in force: counted `failed` in `port49_context_refreshes_total`
 
 **Why this threshold:** Each failure is one context left on an older policy or revoked.
 
@@ -366,7 +378,7 @@ A run of per-login MFA proofs did not verify: someone is trying another token or
 increase(port49_per_login_mfa_total{outcome="refused"}[10m]) > 2
 ```
 
-**Source:** spec, Reason codes (l.2721): "`per_login_mfa_refused` MUST be alertable on its own: a run of them is someone trying another token or another person's sign-in"
+**Source:** A run of per-login MFA proofs that did not verify: `per_login_mfa_refused`, alerted on its own, because a run of them is someone trying another token or another person's sign-in
 
 **Why this threshold:** More than two in ten minutes is a run; a mistyped touch is one.
 
@@ -380,7 +392,7 @@ This process cannot read the directory store: revocations and password sign-ins 
 port49_store_directory_reachable == 0
 ```
 
-**Source:** roadmap, plan 11a hand-off: "`port49_store_directory_reachable == 0` for 1m"
+**Source:** A process that cannot read the directory store: `port49_store_directory_reachable == 0` for 1m
 
 **Why this threshold:** A cut region keeps logging devices in on stale marks, so one minute is a real partition.
 
@@ -394,7 +406,7 @@ This process last confirmed its copy of the directory store over a minute ago, w
 (time() - port49_store_directory_confirmed_timestamp_seconds > 60) and on(instance) port49_store_directory_confirmed_timestamp_seconds > 0
 ```
 
-**Source:** roadmap, plan 11a hand-off: "`time() - port49_store_directory_confirmed_timestamp_seconds > 60`"
+**Source:** A process whose copy of the directory store is unconfirmed for over a minute: `time() - port49_store_directory_confirmed_timestamp_seconds > 60`
 
 **Why this threshold:** The series exists only under etcd, at 0 until the first confirmation, so a 0 is skipped here: port49_store_directory_unreachable and port49_store_feed_down cover a process that never confirmed.
 
@@ -408,7 +420,7 @@ Back-channel logouts were accepted while the directory store did not answer and 
 port49_store_logouts_pending > 0
 ```
 
-**Source:** roadmap, plan 11a hand-off: "`port49_store_logouts_pending > 0` for 5m"
+**Source:** Back-channel logouts accepted but not yet in the directory store: `port49_store_logouts_pending > 0` for 5m
 
 **Why this threshold:** A cut region holds logouts the others have not seen; five minutes is longer than a blip.
 
@@ -422,7 +434,7 @@ The marks feed is down: revocation marks written elsewhere do not reach this pro
 port49_store_feed_up{feed="marks"} == 0
 ```
 
-**Source:** roadmap, plan 11a hand-off; design §15: "`port49_store_feed_up{feed="marks"} == 0`; `port49_store_feed_up{feed}` 0 for longer than `hold_ttl`"
+**Source:** The marks feed down, so revocation marks written elsewhere do not arrive: `port49_store_feed_up{feed="marks"} == 0`
 
 **Why this threshold:** Revocation rides this feed; a minute is four times the 15s `hold_ttl` default and the longest `hold_ttl` allows (10s to 1m), so at any setting the feed has been down for a full hold.
 
@@ -436,7 +448,7 @@ A store feed other than marks is down (contexts, or a split broker's pins or log
 port49_store_feed_up{feed!="marks"} == 0
 ```
 
-**Source:** design §15: "`port49_store_feed_up{feed}` 0 for longer than `hold_ttl`"
+**Source:** A store feed other than marks down: `port49_store_feed_up{feed}` 0 for longer than `hold_ttl`
 
 **Why this threshold:** A minute is four times the 15s `hold_ttl` default and the longest `hold_ttl` allows (10s to 1m). Every feed but marks, which pages, so a feed added later is covered.
 
@@ -450,7 +462,7 @@ Both legs of the {{ $labels.feed }} feed's watch are on one etcd member: port49 
 port49_store_feed_legs_colocated == 1
 ```
 
-**Source:** design §15: "`port49_store_feed_legs_colocated` at 1 for 10m"
+**Source:** Both legs of a feed's watch on one etcd member: `port49_store_feed_legs_colocated` at 1 for 10m
 
 **Why this threshold:** Both legs of a feed's watch on one member is no redundancy against that member going dark; the move apart is tried from 2 s doubling to 30 s, so ten minutes is a cluster where no other member is reachable for this feed. A client with one etcd endpoint never moves a leg and holds the gauge at 0 (colocation is not a fault there); port49d logs once at start that the feeds share one member.
 
@@ -464,7 +476,7 @@ A store pool's circuit is open: its calls fail at once until a probe succeeds.
 port49_store_circuit_open == 1
 ```
 
-**Source:** design §15: "a circuit open"
+**Source:** A store pool's circuit open, so its calls fail at once
 
 **Why this threshold:** The rule fires for every `{component, pool}` series, and what an open circuit costs depends on which. On port49d (`component="daemon"`), a `token` or `context` pool open for `hold_ttl` (the 15s `hold_ttl` default) closes the listeners, so a minute is four times that and this ticket follows the close; it does not warn before it. A `bulk` pool never closes them: logins and commands are unaffected and the scans (the refresh, a revocation by principal, a start's purge) fail until a probe succeeds. On port49-broker (`component="broker"`) no circuit closes anything, because its guards never stop; mints, refreshes and revocations through the open pool fail. The component `broker_enrollments` refuses password sign-in and second-factor enrollment through its open pool, and closes nothing.
 
@@ -478,7 +490,7 @@ Live login contexts were found missing from the index: an index record was delet
 increase(port49_contexts_reindexed_total[10m]) > 0
 ```
 
-**Source:** design §15: "any increase of `port49_contexts_reindexed_total`"
+**Source:** Live login contexts found missing from the index: any increase of `port49_contexts_reindexed_total`
 
 **Why this threshold:** No benign path deletes an index record.
 
@@ -492,7 +504,7 @@ A login context could not be re-indexed or judged; one sealed under a key port49
 increase(port49_contexts_reindex_failures_total[10m]) > 0
 ```
 
-**Source:** design §15: "any increase of `port49_contexts_reindex_failures_total`"
+**Source:** A login context that could not be re-indexed or judged: any increase of `port49_contexts_reindex_failures_total`
 
 **Why this threshold:** Each failure leaves a context for the next pass; a mis-set key repeats it.
 
@@ -506,7 +518,7 @@ etcd's roles are refusing port49's store calls; port49d answers store_unavailabl
 increase(port49_store_calls_total{outcome="refused"}[10m]) > 0
 ```
 
-**Source:** design §15: "any increase of `port49_store_calls_total{outcome="refused"}`"
+**Source:** etcd's roles refusing port49's store calls: any increase of `port49_store_calls_total{outcome="refused"}`
 
 **Why this threshold:** A refused call is a role or credential fault that retries cannot fix.
 
@@ -520,7 +532,7 @@ No port49-broker replica holds the store keyspace: no runner is judging bundles,
 (sum(port49_store_keyspace_held) == 0) or (count(last_over_time(port49_store_keyspace_held[1d])) unless count(port49_store_keyspace_held))
 ```
 
-**Source:** design §15: "the sum of `port49_store_keyspace_held` over port49-broker's replicas 0 for twice `hold_ttl`"
+**Source:** No broker replica holding the store keyspace: the sum of `port49_store_keyspace_held` over port49-broker's replicas 0 for twice `hold_ttl`
 
 **Why this threshold:** Two minutes is eight times the 15s `hold_ttl` default, and exactly twice the longest `hold_ttl` allows (1m), so it holds at any setting. The series exists only on a process that runs a keyspace runner, so the memory backend, with none, raises nothing. The second arm covers every broker gone (a crashed fleet exports no 0): series seen in the last day and none now, so it fires for a day after the brokers vanish, then stops.
 
@@ -534,7 +546,7 @@ A component's etcd client certificate expires within 30 days.
 port49_store_client_cert_expiry_timestamp_seconds - time() < 30 * 86400
 ```
 
-**Source:** design §15: "a store client certificate within 30 days of expiry"
+**Source:** A store client certificate within 30 days of expiry
 
 **Why this threshold:** Thirty days is the stated lead time.
 
@@ -548,7 +560,7 @@ port49d started on a store last written under a current key its encryption windo
 port49_crypt_store_key_unknown == 1
 ```
 
-**Source:** design §15: "`port49_crypt_store_key_unknown` at 1"
+**Source:** port49d started on a store written under a key its encryption window does not hold: `port49_crypt_store_key_unknown` at 1
 
 **Why this threshold:** Records written under the missing key cannot open; fix the key and start again.
 
@@ -562,7 +574,7 @@ A stored token would not decrypt: a rotation may have retired a key while tokens
 increase(port49_crypt_open_failures_total{record="token"}[10m]) > 0
 ```
 
-**Source:** design §15: "any increase of `port49_crypt_open_failures_total{record="token"}`"
+**Source:** A stored token that would not decrypt: any increase of `port49_crypt_open_failures_total{record="token"}`
 
 **Why this threshold:** The counter is the only witness; the token is dropped from its candidates with no error.
 
@@ -576,7 +588,7 @@ A directory pin opens under neither encryption key: its principal cannot bind, m
 port49_directory_pins_unopenable > 0 and on(instance) port49_store_keyspace_held == 1
 ```
 
-**Source:** design §15: "`port49_directory_pins_unopenable` above 0 on the replica holding the keyspace"
+**Source:** A directory pin that opens under neither encryption key: `port49_directory_pins_unopenable` above 0 on the replica holding the keyspace
 
 **Why this threshold:** One principal is locked out until the key that sealed the pin is back as `encryption.previous` or the pin is forgotten; the pass never deletes it. Gated on `port49_store_keyspace_held == 1`, since a replica that handed over keeps its last value.
 
@@ -590,7 +602,7 @@ A feed's watch was compacted and rescanned the store; the feed lagged.
 increase(port49_store_feed_rescans_total[10m]) > 0
 ```
 
-**Source:** design §15: "any increase of `port49_store_feed_rescans_total`"
+**Source:** A feed whose watch was compacted and rescanned the store: any increase of `port49_store_feed_rescans_total`
 
 **Why this threshold:** A rescan means a watch fell behind compaction; repeated, the feed is too slow.
 
@@ -604,7 +616,7 @@ The runner's ledger record is behind: a context put back at one would be taken a
 port49_ledger_pending > 0
 ```
 
-**Source:** design §15: "`port49_ledger_pending` above 0 for a minute"
+**Source:** The runner's ledger record behind: `port49_ledger_pending` above 0 for a minute
 
 **Why this threshold:** A write takes a round trip; a minute is a record that cannot be written.
 
@@ -618,7 +630,7 @@ The runner's ledger keeper runs with its context feed down; the record does not 
 port49_ledger_behind == 1
 ```
 
-**Source:** design §15: "`port49_ledger_behind` at 1"
+**Source:** The runner's ledger keeper running with its context feed down: `port49_ledger_behind` at 1
 
 **Why this threshold:** One minute rides out a feed reconnect.
 
@@ -632,7 +644,7 @@ port49d closed its TACACS+ listeners: its store health checks failed close_after
 port49_store_health_failures >= 5
 ```
 
-**Source:** design §15: "`port49_store_health_failures >= <close_after>`"
+**Source:** port49d closing its TACACS+ listeners after its store health checks fail: `port49_store_health_failures >= <close_after>`
 
 **Why this threshold:** 5 is close_after at its default; set it to yours. The gauge is held through the outage, so the page stays up and resolves when the listeners reopen. Not above 0: a defragmenting member fails an occasional check. close_after x interval is shorter than any scrape, so nothing warns first.
 
@@ -646,7 +658,7 @@ port49d's store health checks are failing often, short of closing the listeners.
 increase(port49_store_health_checks_total{outcome="fail"}[10m]) > 60
 ```
 
-**Source:** design §15: "`increase(port49_store_health_checks_total{outcome="fail"}[10m])` above a threshold the operator picks"
+**Source:** Store health checks failing often, short of closing the listeners: `increase(port49_store_health_checks_total{outcome="fail"}[10m])` above a threshold the operator picks
 
 **Why this threshold:** At the default 1s interval 60 is a tenth of the checks in ten minutes; a defragmenting member measured 4 to 7 of 18. Set your own.
 
@@ -660,7 +672,7 @@ A replica is answering commands from login contexts the store did not confirm; r
 increase(port49_context_cache_lookups_total{outcome="stale"}[5m]) > 0
 ```
 
-**Source:** design §15: "any increase of `port49_context_cache_lookups_total{outcome="stale"}`"
+**Source:** Commands answered from login contexts the store did not confirm: any increase of `port49_context_cache_lookups_total{outcome="stale"}`
 
 **Why this threshold:** Every stale read is a command authorized on unconfirmed state.
 
@@ -674,7 +686,7 @@ RFC 9887 listener handshakes are failing; the outcome label says why.
 sum by (outcome) (rate(port49_tls_handshakes_total{outcome!~"ok|resumed"}[5m])) > 0
 ```
 
-**Source:** roadmap, plan 11 TLS alarms: "`rate(port49_tls_handshakes_total{outcome!~"ok\|resumed"}[5m])` by outcome"
+**Source:** TLS listener handshakes failing, by outcome: `rate(port49_tls_handshakes_total{outcome!~"ok\|resumed"}[5m])`
 
 **Why this threshold:** Scanners cause the odd failure; five minutes of them is a device or a certificate.
 
@@ -688,7 +700,7 @@ A device certificate is past two thirds of its own lifetime: its renewal is late
 port49_tls_device_certificate_lifetime_left_ratio < 0.33
 ```
 
-**Source:** roadmap, plan 11 TLS alarms: "`port49_tls_device_certificate_lifetime_left_ratio < 0.33`"
+**Source:** A device certificate whose renewal is late: `port49_tls_device_certificate_lifetime_left_ratio < 0.33`
 
 **Why this threshold:** 0.33 is the default expiry_warning_fraction; a ratio holds for any lifetime, a fixed number of days would fire forever on short-lived certificates.
 
@@ -702,7 +714,7 @@ The RFC 9887 listener's certificate is past two thirds of its own lifetime: its 
 port49_tls_server_certificate_lifetime_left_ratio < 0.33
 ```
 
-**Source:** roadmap, plan 11 TLS alarms: "`port49_tls_server_certificate_lifetime_left_ratio < 0.33`"
+**Source:** The TLS listener's certificate, its renewal late: `port49_tls_server_certificate_lifetime_left_ratio < 0.33`
 
 **Why this threshold:** As for the device certificates.
 
@@ -716,7 +728,7 @@ The RFC 9887 listener's certificate has expired; TLS devices cannot connect.
 port49_tls_server_certificate_lifetime_left_ratio < 0
 ```
 
-**Source:** roadmap, plan 11 TLS alarms: "`port49_tls_server_certificate_lifetime_left_ratio < 0` pages (expired)"
+**Source:** The TLS listener's certificate expired: `port49_tls_server_certificate_lifetime_left_ratio < 0` pages
 
 **Why this threshold:** Below 0 is expired.
 
@@ -730,7 +742,7 @@ The TLS listener could not establish a certificate's revocation status; with on_
 increase(port49_cert_status_unavailable_total{component="tls_listener"}[10m]) > 0
 ```
 
-**Source:** roadmap, plan 11 TLS alarms: "`increase(port49_cert_status_unavailable_total{component="tls_listener"}[10m]) > 0` while TLS devices are admitted"
+**Source:** The TLS listener unable to establish a certificate's revocation status: `increase(port49_cert_status_unavailable_total{component="tls_listener"}[10m]) > 0` while TLS devices are admitted
 
 **Why this threshold:** The series carries only the component; with no TLS devices admitted it does not move.
 
@@ -744,7 +756,7 @@ A CRL the TLS listener relies on passes its next update within an hour, or has.
 time() - port49_crl_next_update_timestamp_seconds{component="tls_listener"} > -3600
 ```
 
-**Source:** roadmap, plan 11 TLS alarms: "`time() - port49_crl_next_update_timestamp_seconds{component="tls_listener"} > -3600`"
+**Source:** A CRL the TLS listener relies on within an hour of its next update, or past it: `time() - port49_crl_next_update_timestamp_seconds{component="tls_listener"} > -3600`
 
 **Why this threshold:** An hour is time to fix a failed fetch before the list stops serving.
 
@@ -758,7 +770,7 @@ A sync changed a device's transport, which may be a downgrade from tls to tcp; p
 increase(port49_inventory_changes_total{kind="transport_changed"}[1h]) > 0
 ```
 
-**Source:** roadmap, plan 11 TLS alarms: "`increase(port49_inventory_changes_total{kind="transport_changed"}[1h]) > 0`"
+**Source:** A sync that changed a device's transport: `increase(port49_inventory_changes_total{kind="transport_changed"}[1h]) > 0`
 
 **Why this threshold:** A downgrade is silent otherwise.
 
@@ -772,7 +784,7 @@ An OIDC issuer's keys were never fetched since this process started, or last fet
 time() - port49_oidc_keys_last_success_timestamp_seconds > 12 * 3600
 ```
 
-**Source:** roadmap, plan 9a, a provider outage: "`time() - port49_oidc_keys_last_success_timestamp_seconds > jwks_max_age / 2 or absent(...)`, with a `for:` of a few minutes"
+**Source:** An OIDC provider outage that keeps its keys from being fetched: `time() - port49_oidc_keys_last_success_timestamp_seconds > jwks_max_age / 2 or absent(...)`, with a `for:` of a few minutes
 
 **Why this threshold:** Half of jwks_max_age (24h by default): one more failed cycle and every token for that issuer is refused. Set it to yours. Not `or absent()`: the series exists only for configured issuers, so on a deployment with no OIDC it would fire forever.
 
@@ -786,7 +798,7 @@ OIDC back-channel logouts were not fully applied (store_error or partial); sessi
 increase(port49_oidc_logouts_total{outcome=~"store_error|partial"}[10m]) > 0
 ```
 
-**Source:** roadmap, plan 9a hand-off to plan 12: "logouts `store_error\|partial`"
+**Source:** OIDC back-channel logouts not fully applied: logouts `store_error\|partial`
 
 **Why this threshold:** Each is a logout the store did not take whole.
 
@@ -800,7 +812,7 @@ Bearer tokens are refused because their issuer's keys are unavailable.
 increase(port49_oidc_tokens_total{outcome="unavailable"}[10m]) > 0
 ```
 
-**Source:** roadmap, plan 9a hand-off to plan 12: "tokens `unavailable`"
+**Source:** Bearer tokens refused because their issuer's keys are unavailable: tokens `unavailable`
 
 **Why this threshold:** The identity provider is unreachable and the held keys have expired.
 
@@ -814,7 +826,7 @@ Workload certificates are being presented with under a quarter of their validity
 sum(increase(port49_workload_certificates_renewal_late_total[1h])) > 0
 ```
 
-**Source:** roadmap, plan 9 hand-off to plan 12: "`increase(port49_workload_certificates_renewal_late_total[1h]) > 0` (summed over replicas)"
+**Source:** Workload certificates presented with their renewal late: `increase(port49_workload_certificates_renewal_late_total[1h]) > 0`, summed over replicas
 
 **Why this threshold:** Each replica counts a certificate once per 24h, so any increase of the sum is a late renewer.
 
@@ -828,7 +840,7 @@ port49d cannot read meta/witness, so it cannot tell whether its store was restor
 port49_redemption_restore_unjudged == 1
 ```
 
-**Source:** design §15: "`port49_redemption_restore_unjudged` at 1 on a port49d"
+**Source:** A port49d that cannot tell whether its store was restored: `port49_redemption_restore_unjudged` at 1
 
 **Why this threshold:** The one refusal state the restore floor keeps: port49d cannot read `meta/witness`, so it refuses every token login with an `ERROR`, which IOS XE and Junos under `tacplus` alone treat as final. A failed read clears in seconds; two minutes is a store or a role that stayed wrong.
 
@@ -836,15 +848,15 @@ port49_redemption_restore_unjudged == 1
 
 **Severity:** ticket. **For:** none.
 
-port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook
+port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow the restore runbook, Restoring etcd from a snapshot
 
 ```promql
 (port49_store_restore_detected_timestamp_seconds > 0) and (time() - port49_store_restore_detected_timestamp_seconds < 86400)
 ```
 
-**Source:** design §15: "`port49_store_restore_detected_timestamp_seconds` above 0"
+**Source:** A session store restored from a snapshot: `port49_store_restore_detected_timestamp_seconds` above 0
 
-**Why this threshold:** Fires for a day after port49d finds its store restored (the gauge holds the time); the restore runbook (design §13) is the work, and revocations made after the snapshot are lost until it is followed. The 0 of a port49d that never found one is skipped.
+**Why this threshold:** Fires for a day after port49d finds its store restored (the gauge holds the time); the restore runbook on the backup and restore page is the work, and revocations made after the snapshot are lost until it is followed. The 0 of a port49d that never found one is skipped.
 
 ### port49_directory_refresh_stale {#port49_directory_refresh_stale}
 
@@ -856,7 +868,7 @@ No scheduled directory refresh has verified every principal for over three refre
 (time() - max(last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 300) and on() (time() - max(last_over_time(process_start_time_seconds[1d]) and on(instance) last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 3 * 300)
 ```
 
-**Source:** roadmap, plan 8 directory: "`time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`"
+**Source:** No scheduled directory refresh completed for three intervals: `time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`
 
 **Why this threshold:** 300 is broker.refresh_interval at its default (5m); set 3x yours. The freshest refresh anywhere, so a runner that lost the hold does not alarm on its old value; and only once the newest process with the series is also that old, so a restart does not, but a restart in the middle of an outage does (the gauge reads 0 until a pass completes). 15 minutes covers a failover: the new runner's series sits at 0 until its first pass completes. last_over_time keeps the rule firing for a day after every broker is gone.
 
@@ -870,7 +882,7 @@ No directory refresh has verified every principal for half of session.staleness_
 (time() - max(last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 2 * 3600) and on() (time() - max(last_over_time(process_start_time_seconds[1d]) and on(instance) last_over_time(port49_directory_refresh_last_complete_timestamp_seconds[1d])) > 2 * 3600)
 ```
 
-**Source:** spec, Reason codes (l.2715): "Alert at half the ceiling, `time() - port49_directory_refresh_last_complete_timestamp_seconds > session.staleness_ceiling / 2`"
+**Source:** No directory refresh completed for half the staleness ceiling: `time() - port49_directory_refresh_last_complete_timestamp_seconds > session.staleness_ceiling / 2`
 
 **Why this threshold:** 7200 is half the default ceiling; set half yours. Same shape and 15m `for:` as port49_directory_refresh_stale. A page: at the ceiling sessions are denied.
 
@@ -884,7 +896,7 @@ A directory lookup matched more than one principal and was refused identity_ambi
 increase(port49_directory_lookups_total{outcome="ambiguous"}[10m]) > 0
 ```
 
-**Source:** roadmap, plan 8 directory: "`port49_directory_lookups_total{outcome="ambiguous"}` increasing"
+**Source:** Directory lookups that match more than one principal: `port49_directory_lookups_total{outcome="ambiguous"}` increasing
 
 **Why this threshold:** Each is a user refused; the directory holds two entries for one name.
 
@@ -898,7 +910,7 @@ A directory server's breaker is open; queries go to another server, or fail if t
 port49_directory_server_up == 0
 ```
 
-**Source:** roadmap, plan 8 directory: "`port49_directory_server_up == 0` for a while"
+**Source:** A directory server down: `port49_directory_server_up == 0` for a while
 
 **Why this threshold:** Ten minutes: one server down is a degraded pool, not an outage.
 
@@ -912,7 +924,7 @@ Group names match no one because two groups under groups_base_dn share them.
 port49_directory_group_names_ambiguous > 0
 ```
 
-**Source:** roadmap, plan 8 directory: "`port49_directory_group_names_ambiguous > 0`"
+**Source:** Group names that two directory groups share: `port49_directory_group_names_ambiguous > 0`
 
 **Why this threshold:** A gauge over the last hour; the grants naming those groups are not given.
 
@@ -926,7 +938,7 @@ The broker's password enrollment store is lost, not initialised, or was never re
 port49_directory_enrollment_store_ok == 0 or (port49_directory_password_configured == 1 unless on(instance) port49_directory_enrollment_store_ok)
 ```
 
-**Source:** spec §13 decision 47 D7; metric help: "`port49_directory_enrollment_store_ok == 0 or absent()`"
+**Source:** The broker's password enrollment store lost or never reached: `port49_directory_enrollment_store_ok == 0 or absent()`
 
 **Why this threshold:** The gauge is absent until the store first answers, and a broker that has never reached it is the case to catch. `port49_directory_password_configured` is 1 only on a broker with the verifier, so a broker without one never matches the absent arm.
 
@@ -940,7 +952,7 @@ Directory-password sign-ins are being throttled: failed attempts passed failures
 increase(port49_sign_ins_total{outcome="throttled"}[10m]) > 0
 ```
 
-**Source:** metric help; spec §13 decision 47 D5: "alert on a rise of `throttled`"
+**Source:** Password sign-ins being throttled: a rise of `throttled`
 
 **Why this threshold:** A throttle needs failures_per_* failed attempts: a guessing run, or one user's stale password on a script.
 
@@ -954,7 +966,7 @@ A password sign-in was refused because the enrollment store is lost.
 increase(port49_sign_ins_total{outcome="enrollment_store_lost"}[10m]) > 0
 ```
 
-**Source:** metric help; spec §13 decision 47 D7: "alert on ... any `enrollment_store_lost`"
+**Source:** Password sign-ins refused because the enrollment store is lost: any `enrollment_store_lost`
 
 **Why this threshold:** Any one is an operator or user refused; the gauge alert above covers a store that is lost with no sign-in in flight.
 
@@ -968,7 +980,7 @@ The accounting spool discarded records; the stage label says where.
 increase(port49_accounting_spool_drops_total[10m]) > 0
 ```
 
-**Source:** design §15: "an accounting spool dropping records"
+**Source:** An accounting spool dropping records
 
 **Why this threshold:** Accounting records are an audit trail; no drop is acceptable.
 
@@ -982,7 +994,7 @@ port49d's accounting spool disk cannot keep up; every accounting record waits on
 histogram_quantile(0.99, rate(port49_accounting_spool_sync_seconds_bucket[5m])) > 0.010
 ```
 
-**Source:** the project's chosen threshold, not quoted from a note: p99 of `port49_accounting_spool_sync_seconds` over 10 ms for 10m
+**Source:** An accounting spool disk too slow, by port49's own threshold: p99 of `port49_accounting_spool_sync_seconds` over 10 ms for 10m
 
 **Why this threshold:** Every accounting ack waits on the spool's fsync; with the session etcd and the spool on a CT1000P3PSSD8 drive, account p99 was 152 ms at 170/s (tests/lab/results/load-beehive.md, cell c, `step_1_account_p99_ms`); with both in RAM the spool's capacity was 1291/s (tests/lab/results/load-beehive-ram.md, cell c), and on a GCE pd-ssd (operator-declared) 2905/s with account p99 3.67 ms at 170/s (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md, cell c).
 
@@ -996,7 +1008,7 @@ The decision log sink refused writes; decisions are not being recorded.
 increase(port49_decision_log_write_failures_total[10m]) > 0
 ```
 
-**Source:** design §9 decision log: "complete, never sampled"
+**Source:** Decision log writes refused: the log must be complete, never sampled
 
 **Why this threshold:** The log is the audit trail; a refused write counts per attempt.
 
@@ -1010,7 +1022,7 @@ Accounting records arrived for a session port49 never saw begin: a local fallbac
 increase(port49_accounting_attributions_total{attribution="foreign"}[10m]) > 0
 ```
 
-**Source:** spec, Annotating login context (l.3218; l.2308): "`foreign` is the series to alert on ... It is not rate-limited: a burst of `foreign` is itself the signal"
+**Source:** Accounting for sessions port49 never saw begin: the `foreign` series, not rate-limited, because a burst of `foreign` is itself the signal
 
 **Why this threshold:** Any foreign record is the detection the spec names for a local login the policy did not see; it pages.
 
@@ -1024,7 +1036,7 @@ The last inventory sync failed: a source, the policy file or the state directory
 port49_inventory_sync_failing == 1
 ```
 
-**Source:** spec §13 inventory service: "retain the previous one and alarm"
+**Source:** An inventory sync that failed: the service retains the previous bundle and alarms
 
 **Why this threshold:** Syncs repeat; ten minutes is several failed ones.
 
@@ -1038,7 +1050,7 @@ The last inventory sync was refused and an older bundle is published.
 port49_inventory_sync_refused == 1
 ```
 
-**Source:** spec §13 inventory service: "last good snapshot, and alarm (`port49_inventory_sync_refused`)"
+**Source:** An inventory sync that was refused: the service keeps the last good snapshot and alarms
 
 **Why this threshold:** A refused sync is a bad source document; five minutes is not a race with its fix.
 
@@ -1052,7 +1064,7 @@ port49d was given an inventory document it refused; the bundle in force keeps se
 port49_inventory_bundle_refused == 1
 ```
 
-**Source:** spec §13 inventory service: "the fleet refuses, retains the last good snapshot, and alarms"
+**Source:** An inventory document port49d refused: the fleet keeps the last good snapshot and alarms
 
 **Why this threshold:** The old bundle serves, so a ticket; five minutes outlasts a rollout.
 
@@ -1066,7 +1078,7 @@ The inventory mirror's copy differs from the bundle published.
 port49_inventory_mirror_behind == 1
 ```
 
-**Source:** spec §13 inventory service: "mirror behind"
+**Source:** The inventory mirror behind the published bundle
 
 **Why this threshold:** A write is quick; ten minutes behind is a mirror that fails.
 
@@ -1080,7 +1092,7 @@ The inventory document in force could not be written to inventory.service.state_
 port49_inventory_persist_failed == 1
 ```
 
-**Source:** spec §13 inventory service: "persist failed"
+**Source:** The inventory document in force not written to the state directory
 
 **Why this threshold:** The state directory is full or unwritable.
 
@@ -1094,7 +1106,7 @@ The inventory snapshot in force was last confirmed over a day ago, or there is n
 port49_inventory_snapshot_age_seconds > 86400 or port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds
 ```
 
-**Source:** spec, How a daemon refreshes its snapshot (l.5846, 5932): "Staleness is a metric and an alarm — `port49_inventory_snapshot_age_seconds` — never a fail-closed"
+**Source:** A stale inventory snapshot: `port49_inventory_snapshot_age_seconds` raises an alarm, never a fail-closed
 
 **Why this threshold:** 86400 is a day; set your sync cadence times a few. The NaN arm (no snapshot yet) is the spec's own expression. Not gated: a process that never watches the inventory reads 0, and one that waits for its first snapshot reads NaN from before its listener opens, which is the case the NaN arm is for.
 
@@ -1108,7 +1120,7 @@ The inventory service built the bundle in force against a policy other than port
 port49_inventory_policy_mismatch == 1
 ```
 
-**Source:** spec §13 (l.7426): "a hash mismatch is said and alarmed (`port49_inventory_policy_mismatch`)"
+**Source:** An inventory bundle built against a policy other than port49d's: the hash mismatch is logged and alarmed
 
 **Why this threshold:** Five minutes outlasts a policy rollout reaching both.
 
@@ -1122,7 +1134,7 @@ A source-of-truth edit moved privilege: a device changed key or platform, was ad
 increase(port49_inventory_changes_total{kind=~"key_ref_changed|platform_changed|admission_changed|address_added|scope_joined|scope_left|device_added"}[1h]) > 0
 ```
 
-**Source:** spec, Events (l.2494): "`port49_inventory_changes_total{kind}` is its alarm"
+**Source:** Source-of-truth edits that move privilege: `port49_inventory_changes_total{kind}`
 
 **Why this threshold:** Every kind but transport_changed, which has its own alert. A device_added during onboarding raises it too: expected, and it is the only place a new capture target shows.
 
@@ -1136,7 +1148,7 @@ An etcd member has no leader; a dark member costs up to 12 s, a lost quorum stop
 etcd_server_has_leader == 0
 ```
 
-**Source:** roadmap, plan 12c etcd rules: "`etcd_server_has_leader == 0` (page)"
+**Source:** An etcd member with no leader: `etcd_server_has_leader == 0`
 
 **Why this threshold:** A minute rides out an election.
 
@@ -1150,7 +1162,7 @@ An etcd member's database is over 80% of its quota; at the quota etcd refuses wr
 etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes > 0.8
 ```
 
-**Source:** roadmap, plan 12c etcd rules: "`etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes > 0.8` (ticket)"
+**Source:** An etcd database nearly at its quota: `etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes > 0.8`
 
 **Why this threshold:** Defragment or compact before the quota: ten minutes is not a spike.
 
@@ -1164,7 +1176,7 @@ etcd's disk cannot keep up; port49 store calls will time out in bursts. Move etc
 histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])) > 0.010 or histogram_quantile(0.99, rate(etcd_disk_backend_commit_duration_seconds_bucket[5m])) > 0.025
 ```
 
-**Source:** the project's chosen threshold, not quoted from a note: p99 of `etcd_disk_wal_fsync_duration_seconds` over 10 ms, or of `etcd_disk_backend_commit_duration_seconds` over 25 ms
+**Source:** An etcd disk too slow, by port49's own threshold: p99 of `etcd_disk_wal_fsync_duration_seconds` over 10 ms, or of `etcd_disk_backend_commit_duration_seconds` over 25 ms
 
 **Why this threshold:** etcd's own guidance is a WAL fsync p99 under 10 ms; a drive that stalls can push store calls past the 500 ms call timeout in bursts: on a CT1000P3PSSD8 drive the session etcd logged 7974 to 9244 slow applies in cells d and e (tests/lab/results/load-beehive.md), against 1 and 0 in RAM (tests/lab/results/load-beehive-ram.md) and at most 74 on a GCE pd-ssd (operator-declared; a 44, c 74, d 1, e 0) with a WAL fsync mean of 0.72 to 0.86 ms (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md). Ten minutes over a 5m rate is a drive, not a compaction.
 
@@ -1178,6 +1190,6 @@ etcd changed leader more than 3 times in an hour: a flapping network or a slow d
 increase(etcd_server_leader_changes_seen_total[1h]) > 3
 ```
 
-**Source:** roadmap, plan 12c etcd rules: "`increase(etcd_server_leader_changes_seen_total[1h]) > 3` (ticket)"
+**Source:** etcd changing leader too often: `increase(etcd_server_leader_changes_seen_total[1h]) > 3`
 
 **Why this threshold:** Occasional changes are rollouts; four in an hour is a fault.

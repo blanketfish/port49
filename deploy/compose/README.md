@@ -46,7 +46,7 @@ Inputs, each an environment variable with a default: `PORT49_COMPOSE_LOCAL` (`./
 ## The files
 
 `setup` runs as root at every `up` and copies each component's files into a volume of its own,
-so no volume holds both etcd identities (plan 7e, Ruling 1):
+so no volume holds both etcd identities:
 
 | Volume | Holds | Mounted in |
 |---|---|---|
@@ -135,7 +135,7 @@ crash-loops until you restore the file in the `port49d-keys` volume or take the 
   you type into the device; a sealing key is 32 random bytes, made once (the recipe in
   `deploy/systemd/README.md`, "Where the secrets live", with the destination changed). Edit `config/` for your policy and CRL or OCSP
   (the example sets `certificate_status.disabled`, which a deployment must not).
-- List devices in `inventory.yaml` by the address port49d sees (design §13). A published port
+- List devices in `inventory.yaml` by the address port49d sees. A published port
   may change that address; what it does is policy engine spec §15 [L39](https://blanketfish.github.io/port49/reference/lab-register/#l39) (a). Measured: kept for an off-host device
   (modelled; `tests/lab/results/L39-docker-proxy-on-arista_eos.md` and `-off-`), masqueraded to
   the compose gateway for a device on another Docker network on the same host. A connection
@@ -343,9 +343,12 @@ store and the id. Two store blocks reaching one etcd cluster at one prefix are r
 ## When it will not start
 
 <!-- --8<-- [start:will_not_start] -->
-`docker compose logs port49d` (or `port49-broker`) holds the line. `restart: unless-stopped` has no
-limit: a start that fails is tried again, with a restart delay that grows to a minute, until you fix the cause or `docker
-compose stop` it, so `docker compose ps` shows a restarting container and the log repeats the line.
+`docker compose logs port49d` (or `port49-broker`) holds the line.
+
+`restart: unless-stopped` has no limit. A start that fails is tried again, with a restart delay that
+grows to a minute, until you fix the cause or `docker compose stop` it. So `docker compose ps` shows a
+restarting container, and the log repeats the line.
+
 A port49d whose etcd is down at boot comes back on its own when etcd does.
 
 | Refusal | The line | Where | Fix |
@@ -368,4 +371,5 @@ port49d's accounting spool directory needs the same, under 10 ms (port49's alert
 
 ## Backups
 
-Each etcd data volume and `broker-state` (design §13's runbook).
+Each etcd data volume and `broker-state` (the runbook is
+[Backup and restore](https://blanketfish.github.io/port49/operate/backup-and-restore/)).

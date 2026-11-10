@@ -15,7 +15,7 @@ the policy through the policy loader, and checks they agree (audience, namespace
 
 ## 1. What it is
 
-The pod's projected service account token is the workload's identity (design §7). No CA, no
+The pod's projected service account token is the workload's identity. No CA, no
 secret at rest: the kubelet writes and rotates the token, the broker verifies its signature
 against the cluster's published keys.
 
@@ -23,43 +23,61 @@ against the cluster's published keys.
 
 - **Set `--service-account-issuer` per cluster.** kubeadm's default is the same everywhere, and
   port49 refuses one issuer twice. This is the main onboarding cost for a self-managed fleet.
-  The safe sequence when changing an issuer (not measured: it is reasoned from decision 49
-  rulings 3 and 4, and the two-verifier config is unit-tested; no [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) cell changed a real
-  cluster's issuer, and (d) rotated a signing key under one issuer):
-  1. Add the new issuer as the *first* `--service-account-issuer` flag, keeping the old one as a
-     second (the API server signs with the first and accepts both).
-  2. In port49 list both issuers as two `k8s` verifiers on the same `jwks` (decision 49 ruling 4's
-     migration case).
-  3. Roll the pods.
-  4. After the longest `expirationSeconds` in use has passed, remove the old flag and the old
-     verifier.
-- **Apply `issuer-discovery.yaml`** (measured on kind, [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (c); managed clusters are unmeasured,
-  [L70](https://blanketfish.github.io/port49/reference/lab-register/#l70)). Know what it exposes: the binding is to `system:unauthenticated`, so anyone who can
-  reach the API server's address can read the issuer discovery document and the JWKS without
-  authenticating. They are public keys only, no secret, and the binding grants no other
-  anonymous access. Where that reach is too wide, use a narrower route instead of the binding:
-  the API server's structured authentication configuration (1.32+) with `anonymous.conditions`
-  limited to the two discovery paths (below; exact form not measured: [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (c) measured the binding alone), or publish a
-  mirror of the keys and point `jwks` at it (no binding at all; see the `jwks` item). Issuer
-  discovery needs `--anonymous-auth` on (not measured; kind's default had it on); a CIS-hardened cluster turns it off. On
-  1.32+ use the structured authentication configuration (`AuthenticationConfiguration`'s
-  `anonymous.conditions`) to allow anonymous requests to `/.well-known/openid-configuration` and
-  `/openid/v1/jwks` alone.
+
+    The safe sequence when changing an issuer is below. It is not measured: it is reasoned from
+    decision 49 of the
+    [policy engine spec](https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md)
+    (rulings 3 and 4), and the two-verifier config is unit-tested. No
+    [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) cell changed a real
+    cluster's issuer; cell (d) rotated a signing key under one issuer.
+
+    1. Add the new issuer as the *first* `--service-account-issuer` flag, and keep the old one as a
+       second. The API server signs with the first and accepts both.
+    2. In port49, list both issuers as two `k8s` verifiers on the same `jwks`:
+       two verifiers with one `jwks` and different issuers are how one cluster's issuer
+       migration is written.
+    3. Roll the pods.
+    4. After the longest `expirationSeconds` in use has passed, remove the old flag and the old
+       verifier.
+
+- **Apply `issuer-discovery.yaml`.** Measured on kind
+  ([L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (c)); managed clusters
+  are unmeasured ([L70](https://blanketfish.github.io/port49/reference/lab-register/#l70)).
+
+    Know what it exposes. The binding is to `system:unauthenticated`, so anyone who can reach the
+    API server's address can read the issuer discovery document and the JWKS without
+    authenticating. They are public keys only, no secret, and the binding grants no other anonymous
+    access.
+
+    Where that reach is too wide, use a narrower route instead of the binding:
+
+    - The API server's structured authentication configuration (1.32+), with
+      `AuthenticationConfiguration`'s `anonymous.conditions` limited to the two discovery paths,
+      `/.well-known/openid-configuration` and `/openid/v1/jwks`. The exact form is not measured:
+      [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (c) measured the
+      binding alone.
+    - Publish a mirror of the keys and point `jwks` at it, with no binding at all (see the `jwks`
+      item).
+
+    Issuer discovery needs `--anonymous-auth` on (not measured; kind's default had it on). A
+    CIS-hardened cluster turns it off.
+
 - **`jwks` is the API server's own address, not the issuer's host.** Discovery's `jwks_uri`
-  names the issuer's host, which nothing outside the cluster may resolve; that is why decision 49
+  names the issuer's host, which nothing outside the cluster may resolve. That is why decision 49
   ruling 2 reads `jwks` directly:
 
-  ```sh
-  echo "$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')/openid/v1/jwks"
-  ```
+    ```sh
+    echo "$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')/openid/v1/jwks"
+    ```
 
-  It may be any https mirror of the keys (a bucket, a reverse proxy) for a cluster whose API
-  server the broker must not reach.
+    It may be any https mirror of the keys (a bucket, a reverse proxy) for a cluster whose API
+    server the broker must not reach.
+
 - **The cluster CA for `ca_file`:**
 
-  ```sh
-  kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d
-  ```
+    ```sh
+    kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d
+    ```
 
 ## 3. The broker
 
@@ -75,15 +93,20 @@ against the cluster's published keys.
 | `audience` | what the pods' token volume asks for (`port49` here) |
 | `namespaces` | the namespaces whose service accounts this cluster may name |
 
-One verifier per cluster, each with its own `cluster` name. Several clusters may list one
-namespace (decision 49 ruling 4): the same CronJob deployed to every region is one identity,
-`system:serviceaccount:netops:oxidized`, and one policy subject, with no per-cluster namespace or
-overlay. Each record's `auth.k8s.cluster` says which region minted, and the start's line
-`identity: k8s namespaces: netops: eu_west, us_east` says which clusters vouch for each
-namespace: check it after adding a cluster. Where a namespace means different tenants in
-different clusters, list different namespaces per verifier. The overlap is allowed because a
-compromised cluster already holds a genuine token for its own copy of the workload, so refusing
-the overlap would buy nothing.
+One verifier per cluster, each with its own `cluster` name.
+
+**Several clusters may list one namespace.** The same CronJob deployed to
+every region is then one identity, `system:serviceaccount:netops:oxidized`, and one policy subject,
+with no per-cluster namespace or overlay.
+
+- Each record's `auth.k8s.cluster` says which region minted.
+- The start's line `identity: k8s namespaces: netops: eu_west, us_east` says which clusters vouch for
+  each namespace. Check it after adding a cluster.
+- Where a namespace means different tenants in different clusters, list different namespaces per
+  verifier.
+
+The overlap is allowed because a compromised cluster already holds a genuine token for its own copy
+of the workload. Refusing the overlap would buy nothing.
 
 ## 4. The workload
 
@@ -136,7 +159,7 @@ port49 revoke --principal system:serviceaccount:netops:oxidized
 ```
 
 Deleting the service account alone is not immediate. The broker does not call the cluster's
-TokenReview (decision 49 ruling 11): doing so would put every cluster's API server on the mint
+TokenReview: doing so would put every cluster's API server on the mint
 path, and needs a broker credential on each cluster. A token already in hand mints until its
 `exp` or `iat` plus `max_token_age`, at most 2h. [L69](https://blanketfish.github.io/port49/reference/lab-register/#l69) (e) measured that TokenReview answers
 unauthenticated after the pod and then the service account are deleted and port49 still mints, and
@@ -147,5 +170,5 @@ window at once; the mark also stands for a service account re-created under that
 ## 8. What is not measured
 
 - Managed clusters (EKS, GKE, AKS): [L70](https://blanketfish.github.io/port49/reference/lab-register/#l70), open.
-- A CronJob run in a cluster against a broker outside it is plan 12's deployment test.
+- A CronJob run in a cluster against a broker outside it: not measured.
 - Changing a real cluster's `--service-account-issuer` (section 2): not measured.

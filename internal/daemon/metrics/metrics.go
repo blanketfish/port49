@@ -919,7 +919,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		DirectorySelected: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_selected",
 			Help: "1 for the directory server queries are sent to (sticky selection)."}, []string{"server"}),
 		DirectorySiteCrossings: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_directory_site_crossings_total",
-			Help: "Selections that crossed sites: consistency events, membership read there may lag replication (design §10)."}),
+			Help: "Selections that crossed sites: consistency events, membership read at the other site may lag directory replication."}),
 		DirectoryWalksTruncated: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_directory_walks_truncated_total",
 			Help: "Nested-group walks that ended at max_depth or the node bound with groups unconfirmed; those groups are not granted."}),
 		DirectoryLookups: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_lookups_total",

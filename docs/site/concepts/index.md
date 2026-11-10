@@ -11,15 +11,21 @@ receives a short-lived token where it would receive a password.
 
 ## One login, end to end
 
-Five parts take part. The **person** (or a workload) wants a shell on a device. **`port49 login`**
-and the **agent** it starts run on the person's own host. The **broker** is port49's HTTPS service:
-it checks who the person is and hands out tokens. **port49d** is the TACACS+ server the device talks
-to. The **device** is unmodified.
+Five parts take part in a login:
+
+- The **person** (or a workload) wants a shell on a device.
+- **`port49 login`** and the **agent** it starts run on the person's own host.
+- The **broker** is port49's HTTPS service. It checks who the person is and hands out tokens.
+- **port49d** is the TACACS+ server the device talks to.
+- The **device** is unmodified.
+
+A login goes through seven steps:
 
 1. The person runs `port49 login`. It proves their identity to the broker in one of three ways (see
    [Identities](identities.md)): a client certificate, an OIDC sign-in, or a directory password with
-   an authenticator code. The agent keeps the resulting mutual-TLS connection to the broker open. This
-   is the session. It lasts a working day, and the secret that proves it is never sent again.
+   an authenticator code. The agent keeps the resulting mutual-TLS connection to the broker open.
+   This held connection is the **session**. It lasts a working day, and the secret that proves it is
+   never sent again.
 2. The person, or a tool acting for them, asks for access to a device, for example with
    `port49 token`. The request travels over the agent's held connection. No second sign-in happens.
 3. The broker decides. It resolves the person's groups from the directory at that moment (a group
@@ -42,12 +48,12 @@ Two things follow from this shape.
   or for a short while.
 - **The broker is needed to start work and to keep a context fresh, but not at every command.**
   port49d answers from the store, so a session in progress survives a broker outage for a while. The
-  broker re-verifies live principals on a schedule; if it stays unreachable past
+  broker re-verifies live principals on a schedule. If it stays unreachable past
   `session.staleness_ceiling`, port49d denies `context_stale` until it recovers. The key is in the
   [port49d configuration reference](../reference/config/port49d.md).
 
-When something goes wrong, the question is always which step refused. Every refusal carries a reason
-code in the decision log: see [Reason codes](../reference/reason-codes.md) and
+When something goes wrong, the question is always: which step refused? Every refusal carries a reason
+code in the decision log; see [Reason codes](../reference/reason-codes.md) and
 [Decision log](../reference/decision-log.md).
 
 ## In this section

@@ -33,11 +33,15 @@ right the call is refused before any key press, and the refusal is logged. Your 
 | your own sessions | `port49 revoke --mine` | no |
 
 On a terminal, `--principal` asks `revoke <principal> everywhere? ... [y/N]` first. `--yes` skips the question, and
-a script with no terminal is not asked. The answer begins with a `target:` line naming the policy subject the
-principal belongs to. If it says `no subject in the policy in force names it`, check the spelling: the mark is
-written anyway, so a typo of a real colleague's address is a revocation of nobody. The broker spells a certificate's
-principal `user:<lower-case email>`, a workload's is its SPIFFE ID verbatim, and a service account's is
-`system:serviceaccount:<namespace>:<name>`.
+a script with no terminal is not asked.
+
+The answer begins with a `target:` line naming the policy subject the principal belongs to. If it says
+`no subject in the policy in force names it`, check the spelling. The mark is written anyway, so a typo of a real
+colleague's address is a revocation of nobody. The broker spells principals this way:
+
+- a certificate's principal: `user:<lower-case email>`;
+- a workload's: its SPIFFE ID, verbatim;
+- a service account's: `system:serviceaccount:<namespace>:<name>`.
 
 `port49 revoke --list` shows what is in force, each with its origin (`api <who>` for an operator,
 `crl <name>` or `ocsp <responder>` for a CA's revocation). A `--mine`, `--device` or `--sid` revocation leaves no
@@ -65,20 +69,24 @@ The file must hold one certificate, PEM or DER. One that holds a private key, mo
 would revoke the CA's serial and say it did) or more than 1 MiB is refused. The command never prints a key or a
 block.
 
-The by-hand form is `--cert-issuer DN --cert-serial HEX`, both required, and it is the one to avoid. The broker
-compares the issuer as Go prints it (RFC 2253, `CN=Example Issuing CA,O=Example`), so a differently spelled issuer
-matches nothing, and the report says so (`nothing was found under this certificate; ... use --cert FILE`). The
-serial is **hexadecimal**: colons, a `0x` and leading zeros are dropped and a leading `-` is kept. A serial of
-digits alone is read as hex, though `openssl` prints a small serial in decimal first (`4096 (0x1000)`). The
-report warns when that may have happened: revoke again with `--cert FILE`, then lift the wrong one. `--cert`
-sends the serial as explicit hex and cannot make that mistake. Use `--cert-serial` only when you have no file,
-for instance a serial copied from your CA's issuance log.
+The by-hand form is `--cert-issuer DN --cert-serial HEX`, both required, and it is the one to avoid. Use
+`--cert-serial` only when you have no file, for instance a serial copied from your CA's issuance log. Two things
+go wrong with it:
+
+- **The issuer must be spelled as Go prints it** (RFC 2253, `CN=Example Issuing CA,O=Example`). A differently
+  spelled issuer matches nothing, and the report says so (`nothing was found under this certificate; ... use --cert FILE`).
+- **The serial is hexadecimal.** Colons, a `0x` and leading zeros are dropped and a leading `-` is kept. A serial
+  of digits alone is read as hex, though `openssl` prints a small serial in decimal first (`4096 (0x1000)`). The
+  report warns when that may have happened: revoke again with `--cert FILE`, then lift the wrong one.
+
+`--cert` sends the serial as explicit hex and cannot make that mistake.
 
 A certificate revocation closes that certificate's held connections, deletes unspent tokens and marks its live
-contexts. It leaves the principal's **other** certificates working, except that unspent tokens are deleted by
-`(device, username)`, so they lose theirs on those devices and can mint again. A workload renews its certificate
-under a new serial the mark does not name, so for a workload revoke the principal too, and revoke the
-certificate at your CA so it cannot renew.
+contexts. It leaves the principal's **other** certificates working, with one exception: unspent tokens are
+deleted by `(device, username)`, so the other certificates lose theirs on those devices and can mint again.
+
+A workload renews its certificate under a new serial the mark does not name. For a workload, revoke the
+principal too, and revoke the certificate at your CA so it cannot renew.
 
 ### A stolen laptop
 
@@ -163,11 +171,14 @@ once the disk is fixed, and see [Revocations file failed](../operate/troubleshoo
 
 ## Checking your CA's revocation lists
 
-A revocation made at your CA reaches port49 only if the broker is told where to look. `certificate_status` is
-**required** wherever a client certificate verifier is configured, in the broker block and in the `tls_listener`
-block for devices on RFC 9887 TLS; leaving it out refuses the config, so skipping the check is always a choice you
-wrote down. The device side is on [TLS](../operate/tls.md#revocation). The broker side, which covers the
-certificates people and workloads sign in with, looks like this:
+A revocation made at your CA reaches port49 only if the broker is told where to look.
+
+`certificate_status` is **required** wherever a client certificate verifier is configured: in the broker block,
+and in the `tls_listener` block for devices on RFC 9887 TLS. Leaving it out refuses the config, so skipping the
+check is always a choice you wrote down.
+
+The device side is on [TLS](../operate/tls.md#revocation). The broker side, which covers the certificates people
+and workloads sign in with, looks like this:
 
 ```yaml
 broker:

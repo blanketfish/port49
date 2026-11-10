@@ -158,7 +158,7 @@ func (f *restoreFloor) attach(path, prefix string) {
 	case body == nil:
 		fmt.Fprintf(f.out, "port49d: store: no restore record at %s: a restore made before this port49d's first read "+
 			"of the store cannot be told; after a restore, delete the unspent tokens before this port49d reaches the store "+
-			"(design §13 step 3)\n", path)
+			"(step 3 of Restoring etcd from a snapshot)\n", path)
 	case rec.Prefix != prefix:
 		fmt.Fprintf(f.out, "port49d: store: %s is another prefix's (%s), not %s's; no restore record\n", path,
 			printsafe.Line(rec.Prefix, 256), prefix)
@@ -346,10 +346,10 @@ func (f *restoreFloor) drop(s floorSnap, r etcdstore.RestoreRead) {
 		"before this read are refused once too.", witnessWords(r.Witness), r.Header, from, f.floor)
 	if f.band != 0 {
 		fmt.Fprintf(f.out, " The restore kept the revision counter, so a token minted until %s (5 minutes after this "+
-			"read) at a revision up to %d is refused until %s; restore with --bump-revision (design §13) to end that.",
+			"read) at a revision up to %d is refused until %s; restore with --bump-revision (step 2 of Restoring etcd from a snapshot) to end that.",
 			f.bandFrom.Add(restoreSkew).UTC().Format(time.RFC3339), f.band, f.bandUntil.UTC().Format(time.RFC3339))
 	}
-	fmt.Fprintln(f.out, " Revocations and marks made after the snapshot are lost: follow the restore runbook (design §13)")
+	fmt.Fprintln(f.out, " Revocations and marks made after the snapshot are lost: follow the restore runbook, Restoring etcd from a snapshot")
 }
 
 func witnessWords(rev uint64) string {

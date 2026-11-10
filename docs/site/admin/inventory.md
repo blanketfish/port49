@@ -8,8 +8,14 @@ description: Telling port49 which devices exist, from a file or from an inventor
 port49 admits a TACACS+ connection by its **source address**. The inventory says which devices exist, what
 platform each is, which addresses it connects from and what attributes policy scopes can match. A device that is
 not in it gets no answer at all (`device_unknown`), so the inventory is as much an access control as the policy
-is. This page covers the two ways to supply it, what the service's connectors do, and the three mechanisms that
-protect you from a bad source: the removal bound, quarantine, and the refusal to serve an empty list.
+is.
+
+This page covers:
+
+- the two ways to supply the inventory;
+- what the inventory service's connectors do;
+- the three mechanisms that protect you from a bad source: the removal bound, quarantine, and the refusal to
+  serve an empty list.
 
 The policy is a separate file ([Policy](policy.md)); the keys a device is admitted under are in the policy's
 `key_groups:` ([Key rotation](key-rotation.md#device-keys)).
@@ -47,19 +53,23 @@ you.
 attribute the device does not have is decided by the scope's `on_missing:` ([Policy](policy.md)), which is why a
 connector's `map` is worth checking before the first sync.
 
-port49d watches the file on the policy watch ticker (`broker.policy_watch_interval`, or `policy.watch_interval` on a port49d with no `broker:` block; 5s by default) and re-reads it at
-SIGHUP. A change loads once two reads in a row agree, so an edit takes effect within two intervals: write the file
+port49d watches the file on the policy watch ticker and re-reads it at SIGHUP. The ticker is
+`broker.policy_watch_interval`, or `policy.watch_interval` on a port49d with no `broker:` block; 5s by default.
+
+A change loads once two reads in a row agree, so an edit takes effect within two intervals. Write the file
 atomically (to a new name, then rename), so a half-written file is never read. A file that does not load, or is
 refused by the removal bound below, leaves the previous inventory serving and sets `port49_inventory_file_refused`.
+
 The inventory service is different: it re-reads its own configuration only at a restart, and a SIGHUP to it starts a
 sync.
 
 ## The inventory service
 
 `port49-inventory` reads one or more sources, checks the result against the policy, and publishes a bundle signed
-with an Ed25519 key. port49d polls it (`inventory.service.poll_interval`, 30 seconds by default), verifies every
+with an Ed25519 key. port49d polls it (`inventory.service.poll_interval`, 30 seconds by default). It verifies every
 bundle against `inventory.service.verify_key_files`, and applies one only when it is newer than the one in force.
-The service speaks mutual TLS: `readers` may fetch the bundle, `syncers` may also start a sync
+
+The service speaks mutual TLS. `readers` may fetch the bundle; `syncers` may also start a sync
 (`port49 inventory sync`). Their names are exact: `user:<email>` in lower case, or a certificate's URI SAN such as
 `spiffe://...`. `*` is not a wildcard.
 
@@ -75,7 +85,7 @@ A source is synced:
 release sends a refused delivery again at its defaults
 ([NetBox](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-netbox.md),
 [Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-nautobot.md)). The scheduled sync is the
-backstop: a newly racked device is un-admittable for up to one `interval` when a webhook is lost, and a webhook that
+backstop. When a webhook is lost, a newly racked device cannot be admitted for up to one `interval`. A webhook that
 arrives while the service is shutting down triggers nothing (the startup sync covers it).
 
 ### A NetBox source
@@ -117,14 +127,14 @@ kind is a refusal at start, never a half-started service. The key list is in the
 
 What the connector does that a hand-written file would not:
 
-- **It reads the release first** (`/api/status/`) and picks a mapping profile for it. The accepted releases are
-  **NetBox 3.7, NetBox 4.x, Nautobot 1.6, and Nautobot 2.x and 3.x**; the lab measured NetBox 3.7 and 4.7 and
-  Nautobot 1.6, 2.4 and 3.2, and another minor of an accepted major is read with that profile and noted as
-  unmeasured. **A release outside that list refuses every
-  sync** until the source sets `profile:`, with
-  `<product> <version> is a release no lab run measured (spec §15 L27, L30: <measured list>); set profile to read it with a measured release's fields, at your own risk`.
-  The last good bundle keeps serving meanwhile, but new devices are not admitted until you act. After a NetBox
-  or Nautobot major upgrade, check that the next sync succeeds. The notes
+- **It reads the release first** (`/api/status/`) and picks a mapping profile for it.
+    - The accepted releases are **NetBox 3.7, NetBox 4.x, Nautobot 1.6, and Nautobot 2.x and 3.x**.
+    - The lab measured NetBox 3.7 and 4.7 and Nautobot 1.6, 2.4 and 3.2. Another minor of an accepted major is
+      read with that profile and noted as unmeasured.
+    - **A release outside that list refuses every sync** until the source sets `profile:`, with
+      `<product> <version> is a release no lab run measured (spec §15 L27, L30: <measured list>); set profile to read it with a measured release's fields, at your own risk`.
+      The last good bundle keeps serving meanwhile, but new devices are not admitted until you act.
+    - After a NetBox or Nautobot major upgrade, check that the next sync succeeds. The notes
   ([NetBox](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-netbox.md),
   [Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md))
   record what each release was measured to do.
@@ -152,8 +162,8 @@ What the connector does that a hand-written file would not:
 
 ### Behind an egress proxy
 
-The service honours `HTTPS_PROXY` and `NO_PROXY` for each NetBox and Nautobot source (the plan 6c note that it dials
-directly "until plan 12" no longer holds). At start it says, per source, how it will fetch:
+The service honours `HTTPS_PROXY` and `NO_PROXY` for each NetBox and Nautobot source. At start it says, per source,
+how it will fetch:
 
 ```text
 port49-inventory: source netbox_prod is fetched directly (no HTTPS_PROXY)
@@ -161,11 +171,16 @@ port49-inventory: source netbox_prod is fetched through the proxy <scheme>://<ho
 ```
 
 The second form is the shape the line takes with a proxy set. It names the proxy's scheme and host and whether it
-carries credentials, never the credentials. Two faults are worth knowing: an `HTTPS_PROXY` that does not parse as
-a proxy URL (percent-encode `#`, `/`, `?` and `%` in its password) fails every sync of that source until it is fixed,
-and a proxy that answers 407 fails the sync with `the egress proxy refused HTTPS_PROXY's credentials; the token was
-not sent`. The source's API token is never sent to a proxy that refused. Set the variable on the service's unit or
-container; a Compose broker's note says the same for identity providers
+carries credentials, never the credentials.
+
+Two faults are worth knowing:
+
+- An `HTTPS_PROXY` that does not parse as a proxy URL fails every sync of that source until it is fixed.
+  Percent-encode `#`, `/`, `?` and `%` in its password.
+- A proxy that answers 407 fails the sync with `the egress proxy refused HTTPS_PROXY's credentials; the token was
+  not sent`. The source's API token is never sent to a proxy that refused.
+
+Set the variable on the service's unit or container. A Compose broker's note says the same for identity providers
 ([the compose README](https://github.com/blanketfish/port49/blob/main/deploy/compose/README.md)).
 
 ### Pointing port49d at the service
@@ -194,9 +209,15 @@ refused or its snapshot is stale.
 
 A partly available source of truth, a mistyped filter or a NetBox that returns a short page would otherwise
 silently deauthorize the fleet. So every sync, and every inventory reload in port49d, is **refused** when it takes
-more than `max_removed_percent` of the devices in force out of service. Out of service means a device that was
-removed, one that stays but is newly refused admission, and one that stays but lost every address it had. The
-default is **10**, on the service (`safety.max_removed_percent`, or a source's own `safety:`) and in port49d
+more than `max_removed_percent` of the devices in force out of service.
+
+A device is out of service when it:
+
+- was removed;
+- stays, but is newly refused admission;
+- stays, but lost every address it had.
+
+The default is **10**, on the service (`safety.max_removed_percent`, or a source's own `safety:`) and in port49d
 (`inventory.max_removed_percent`). `0` refuses every removal and `100` turns the bound off.
 
 A refused change keeps the last good snapshot serving and raises an alarm
@@ -244,11 +265,16 @@ source failure does not. Do a deliberate removal in daytime, with the source's o
 
 ## Quarantine
 
-Some checks are joint over the policy and the inventory: a privilege level a platform cannot number, a session reply
-above the grant's ceiling, a role landing above the ceiling, `enable: auto` on a platform whose enable exchange
-carries no principal. A device racked tomorrow with a new platform can fail them against a policy that was valid
-today. Refusing the whole bundle would block every inventory change fleet-wide, so port49 **quarantines the
-device**: it is published with `admission: quarantined` and the reason, and the rest of the fleet moves.
+Some checks need both the policy and the inventory:
+
+- a privilege level a platform cannot number;
+- a session reply above the grant's ceiling;
+- a role landing above the ceiling;
+- `enable: auto` on a platform whose enable exchange carries no principal.
+
+A device racked tomorrow with a new platform can fail them against a policy that was valid today. Refusing the
+whole bundle would block every inventory change fleet-wide. Instead port49 **quarantines the device**: it is
+published with `admission: quarantined` and the reason, and the rest of the fleet moves on.
 
 What the operator sees:
 

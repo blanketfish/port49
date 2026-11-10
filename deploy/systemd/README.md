@@ -9,13 +9,12 @@ process on etcd:
 | `port49d.service` | `port49d` | TACACS+ on 49 (and, if you turn it on, TACACS+ over TLS on 300) |
 | `port49-broker.service` | `port49-broker` | the login broker on 8443, the issuing CA, the directory |
 
-The two users are separate on purpose: no process holds both etcd identities (plan 7e, ruling
-1). The package creates them with `sysusers.d`; `tmpfiles.d` makes the directories, `/etc/port49` and its
+The two users are separate on purpose: no process holds both etcd identities. The package creates them with `sysusers.d`; `tmpfiles.d` makes the directories, `/etc/port49` and its
 `keys`, `secrets`, `etcd` and `broker` subdirectories among them.
 
 ## The four things every shape needs
 
-1. **The device's source address reaches port49d unrewritten** (design §13). On a host this is
+1. **The device's source address reaches port49d unrewritten**. On a host this is
    the default; a NAT or a proxy in front of port 49 breaks it, because the inventory matches a
    device by the address port49d sees.
 2. **On etcd, two processes.** port49d and port49-broker run apart, as the two units do. The
@@ -185,25 +184,26 @@ For that, the broker needs three things.
 - **Attestation roots**, so it can check your key: Yubico's PIV roots, in a PEM file, named from an
   `identity:` block (which replaces `client_ca_file`):
 
-  ```yaml
-  broker:
-    identity:
-      humans:
-        - {type: x509, trust_anchor_file: /etc/port49/broker/client-ca.pem}
-      per_login_mfa:
-        hardware_key_touch: {attestation_roots_file: /etc/port49/broker/attestation-roots.pem}
-  ```
+    ```yaml
+    broker:
+      identity:
+        humans:
+          - {type: x509, trust_anchor_file: /etc/port49/broker/client-ca.pem}
+        per_login_mfa:
+          hardware_key_touch: {attestation_roots_file: /etc/port49/broker/attestation-roots.pem}
+    ```
 
 - **The right**, in the policy, on subjects that name people by `identity:`:
 
-  ```yaml
-  subjects:
-    - {name: oncall_a, identity: ["user:a@example.com"], api: [revoke_others, lift_revocations]}
-    - {name: oncall_b, identity: ["user:b@example.com"], api: [revoke_others, lift_revocations]}
-  ```
+    ```yaml
+    subjects:
+      - {name: oncall_a, identity: ["user:a@example.com"], api: [revoke_others, lift_revocations]}
+      - {name: oncall_b, identity: ["user:b@example.com"], api: [revoke_others, lift_revocations]}
+    ```
 
-  Name at least two on-call admins by `identity:`, even if a `group:` subject also holds the
-  right: a group's rights resolve through the directory, which may be down when you need them.
+    Name at least two on-call admins by `identity:`, even if a `group:` subject also holds the
+    right: a group's rights resolve through the directory, which may be down when you need them.
+
 - **A session key on the security key**, from `port49 login` (`key: pkcs11:...`).
 
 **Break-glass.** With every broker stopped, on a broker host, as the broker's user:
@@ -373,10 +373,11 @@ refused too.
 ## When it will not start
 
 <!-- --8<-- [start:will_not_start] -->
-`journalctl -u port49d -b` (or `-u port49-broker`) holds the line. The units set no start limit, so
-a start that fails is tried again every ten seconds, and a port49d whose etcd is down at boot
-comes back on its own when etcd does; journald rate-limits a repeated line. Fix the cause and the next
-try starts.
+`journalctl -u port49d -b` (or `-u port49-broker`) holds the line. Fix the cause and the next try
+starts.
+
+The units set no start limit, so a start that fails is tried again every ten seconds. A port49d whose
+etcd is down at boot comes back on its own when etcd does. journald rate-limits a repeated line.
 
 | Refusal | The line | Where | Fix |
 |---|---|---|---|
