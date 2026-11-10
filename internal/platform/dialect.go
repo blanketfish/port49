@@ -221,6 +221,10 @@ const RPCEntryRole = "rpc_entry"
 // 48).
 const ReachDenyRole = "reach_deny"
 
+// ReservedRoleNames are the role names the projection's own denies carry, so
+// a policy role may not take one (spec §13, decision 58).
+var ReservedRoleNames = []string{BaselineBit, RPCEntryRole, ReachDenyRole}
+
 // projectionOwned is every attribute a projection's platform reads as a
 // login class's template, bits or command or configuration regex, numbered
 // variants included (`allow-commands2`, `user-permissions1`), in any case:
