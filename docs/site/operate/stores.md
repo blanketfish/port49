@@ -242,7 +242,7 @@ that fail, and then says nothing more until a pass forwards them.
 The retry lines come from the other regions, the ones following a logout made elsewhere. If such a region
 cannot finish reaching the logout in its own session store, its `a logout made elsewhere (...) reached`
 line carries `not every step finished (...)`. The logout is then tried again after a wait that doubles from 1
-second to at most 64 seconds, and the logged-out person's mints and refreshes are refused while the logout is retried.
+second to at most 64 seconds, and the logged-out person's mints and refreshes are refused meanwhile.
 
 **Look for the first line of the run, not the latest.** The first failure's line carries the `port49 revoke`
 remedy for ending the person's live sessions at once. The lines after it read
