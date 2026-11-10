@@ -1,0 +1,6 @@
+/* Wider page than Material's 61rem default: config and evidence tables need the room. In rem, so it
+   scales with Material's larger root size on big screens (72rem is 1440px at the usual 20px). It sets
+   the width only, so the light and dark schemes stay the theme's own (tests/ci/docs_theme_test.go). */
+.md-grid {
+  max-width: 72rem;
+}
