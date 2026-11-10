@@ -39,6 +39,28 @@ func TestARenumberedPoolAccountIsTheSameRow(t *testing.T) {
 	}
 }
 
+// l55Note is L55's step 2 in the shape tests/lab/l55_test.go writes it.
+const l55Note = "| step | outcome |\n|---|---|\n" +
+	"| 2. control: the realm's own redirect, and http://evil.example/callback | `the realm's own redirect accepted; http://evil.example/callback refused` |\n" +
+	"| 2. registration http://127.0.0.1:18749/callback | `registered port 18749 accepted; ephemeral port 45087 refused` |\n"
+
+// A swap of two parts' outcomes flags: each part names its subject, so sorting the parts and normalising the
+// ports away leave the subjects to tell them apart.
+func TestASwapOfL55sOutcomesFlags(t *testing.T) {
+	for _, s := range [][2]string{
+		{"redirect accepted; http://evil.example/callback refused", "redirect refused; http://evil.example/callback accepted"},
+		{"18749 accepted; ephemeral port 45087 refused", "18749 refused; ephemeral port 45087 accepted"},
+	} {
+		if !flips(t, l55Note, s[0], s[1]) {
+			t.Errorf("%q -> %q must flag", s[0], s[1])
+		}
+	}
+	// the next run's ephemeral port is another one, and is not a change
+	if got := verdictChanges(l55Note, strings.Replace(l55Note, "port 45087", "port 51213", 1)); len(got) != 0 {
+		t.Errorf("a new ephemeral port is not a verdict change: %v", got)
+	}
+}
+
 // L73's harness marks a connection whose SYN came before the login as the readiness probe's: not part of the
 // measured window, and present or not depending on timing.
 func TestTheReadinessProbesConnectionIsNotMeasured(t *testing.T) {

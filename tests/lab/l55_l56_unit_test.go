@@ -33,6 +33,28 @@ func TestL56LoginFromReadsTheBrokersTime(t *testing.T) {
 	}
 }
 
+// lab-regress sorts a verdict cell's ';' parts and normalises ports away, so each part must name its subject
+// in words, and the column must be a verdict column (lab-regress compares an `observed` column by its verdict
+// words alone, which a swap leaves the same). Then `accepted; refused` -> `refused; accepted` reads as a change.
+func TestL55CellsNameEachPartsSubject(t *testing.T) {
+	if !strings.HasPrefix(l55Header, "| step | outcome |") {
+		t.Errorf("L55's column is a verdict column, `outcome`: %q", l55Header)
+	}
+	if got := l55ControlCell(true, false); got != "the realm's own redirect accepted; http://evil.example/callback refused" {
+		t.Errorf("control: %q", got)
+	}
+	got := l55RegistrationCell(18749, 45087, true, false)
+	if got != "registered port 18749 accepted; ephemeral port 45087 refused" {
+		t.Errorf("registration: %q", got)
+	}
+	digits := strings.NewReplacer("0", "", "1", "", "2", "", "3", "", "4", "", "5", "", "6", "", "7", "", "8", "", "9", "")
+	for _, c := range []string{l55ControlCell(true, true), l55RegistrationCell(18749, 45087, true, true)} {
+		if p := strings.Split(digits.Replace(c), "; "); len(p) != 2 || p[0] == p[1] {
+			t.Errorf("%q: its parts read the same once the port numbers are gone", c)
+		}
+	}
+}
+
 func TestL55AcceptedIsTheLoginForm(t *testing.T) {
 	form := []byte(`<form id="kc-form-login" class="x" action="https://k/login-actions/authenticate?x=1" method="post">`)
 	if !l55Accepted(200, form) || l55Accepted(400, []byte("Invalid parameter: redirect_uri")) || l55Accepted(200, []byte("<html/>")) {
