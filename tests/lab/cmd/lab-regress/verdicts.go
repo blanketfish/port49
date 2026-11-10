@@ -85,8 +85,12 @@ var (
 var poolAccount = regexp.MustCompile(`\b([A-Za-z]+)\d+\b`)
 
 // The L73 harness's mark on a connection opened before the login (tests/lab/l73_tlswire.go, l73Describe): the
-// readiness probe's, outside the measured window, captured or not depending on timing. It is the harness's own
-// fixed phrase, so it is matched as one: no general rule tells it from a measured connection.
+// readiness probe's, outside the measured window, captured or not depending on timing. It is a named exception
+// because no general rule exists: in the note the probe's connection reads like any measured one (same host,
+// same answers), and only the harness, which compared its SYN time with the login's, knows it came first. The
+// general rules that would hide it, dropping a narrative cell's parentheticals or the word "opened", would also
+// drop verdict words that measured cells hold ("the device opened no connection", "(the second attempt
+// refused)").
 const readinessProbe = " (opened before the login: the readiness probe's connection)"
 
 func splitRow(ln string) []string {
@@ -147,18 +151,18 @@ func norm(cell string) string {
 }
 
 // verdictWords are the words a narrative cell's verdict is read from: a closed vocabulary, matched as whole
-// words, case-insensitive. Besides the words below it holds every reason code of internal/decision/reasons.go,
+// words, case-insensitive; a multi-word entry ("logged in", "timed out", "not reached") as a whole phrase. Besides the words below it holds every reason code of internal/decision/reasons.go,
 // loaded from the code (identity_ambiguous, store_unavailable, credential_revoked, ...), and an LDAP "Result
 // Code <n>" kept whole with its number. The directory and store packages export no clean list of snake_case
 // sentinel names, so reasons.go is the only code-loaded source.
 var verdictWords = func() *regexp.Regexp {
-	alts := []string{`result\s+code\s+\d+`, `not\s+reached`, `not\s+observed`}
+	alts := []string{`result\s+code\s+\d+`, `not\s+reached`, `not\s+observed`, `logged\s+in`, `timed\s+out`}
 	for _, r := range decision.Reasons() {
 		alts = append(alts, regexp.QuoteMeta(string(r)))
 	}
 	alts = append(alts, "pass", "fail", "invalid", "timeout", "refused", "accepted", "rejected", "ran", "reached",
 		"opened", "observed", "denied", "permitted", "allowed", "failed", "succeeded", "yes", "no", "true", "false",
-		"stripped", "expanded", "closed", "reset")
+		"stripped", "expanded", "closed", "reset", "deny", "permit")
 	return regexp.MustCompile(`(?i)\b(?:` + strings.Join(alts, "|") + `)\b`)
 }()
 

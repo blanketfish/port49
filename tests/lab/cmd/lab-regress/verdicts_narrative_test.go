@@ -69,6 +69,23 @@ func TestDeterminerNoAndPossessivesAreNotVerdictWords(t *testing.T) {
 	}
 }
 
+// deny, permit, "logged in" and "timed out" are verdict words; a multi-word one matches as a whole phrase.
+func TestDenyPermitLoggedInTimedOutAreVerdictWords(t *testing.T) {
+	note := "| step | observed |\n|---|---|\n| 1 | the session logged in, show version printed |\n"
+	if !flips(t, note, "logged in", "timed out") {
+		t.Error(`"logged in" -> "timed out" must flag`)
+	}
+	rec := "| step | observed |\n|---|---|\n| 2 | record [permit x] |\n"
+	if !flips(t, rec, "[permit x]", "[deny x]") {
+		t.Error("permit -> deny must flag")
+	}
+	for in, want := range map[string]string{"logged into the box": "{}", "Logged  In": "{logged in}", "timed outright": "{}"} {
+		if got := verdictTokens(in); got != want {
+			t.Errorf("verdictTokens(%q) = %s, want %s: a phrase matches whole", in, got, want)
+		}
+	}
+}
+
 // Every reason code of internal/decision/reasons.go is a verdict word: swapping one for another flags.
 func TestEveryReasonCodeIsAVerdictWord(t *testing.T) {
 	rs := decision.Reasons()
