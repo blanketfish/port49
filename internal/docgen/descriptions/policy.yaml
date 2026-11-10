@@ -69,7 +69,7 @@ defaults.per_login_mfa.applies_to_machines: &mfa_machines "Set `true` to require
 "scopes.[].per_login_mfa.reuse_for": *mfa_reuse
 "scopes.[].per_login_mfa.applies_to_machines": *mfa_machines
 
-"roles.[].name": "The role's name. Required and unique."
+"roles.[].name": "The role's name. Required and unique. `baseline`, `reach_deny` and `rpc_entry` are port49's own and refused."
 "roles.[].privilege": "The privilege level the role grants. Must be a declared level."
 "roles.[].reason": "Free text recorded with the role, for review: why it exists."
 "roles.[].permit": "Command rules the role permits, as words. `**` is any number of words; `/regex/` and `@class` are terms."

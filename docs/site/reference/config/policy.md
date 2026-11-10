@@ -101,7 +101,7 @@ list and the position.
 
 | Key | Type | Description |
 |---|---|---|
-| `roles.[].name` | string | The role's name. Required and unique. |
+| `roles.[].name` | string | The role's name. Required and unique. `baseline`, `reach_deny` and `rpc_entry` are port49's own and refused. |
 | `roles.[].privilege` | string | The privilege level the role grants. Must be a declared level. |
 | `roles.[].reason` | string | Free text recorded with the role, for review: why it exists. |
 | `roles.[].permit` | list of string | Command rules the role permits, as words. `**` is any number of words; `/regex/` and `@class` are terms. |

@@ -33,6 +33,8 @@ roles:
 - `privilege` names a level from `privilege_levels:`. `readonly`, `operator` and `admin` always exist and keep
   that order. You may add levels with a `parent:`: the level a platform renders the new one as where it has no
   rendering of its own.
+- `baseline`, `reach_deny` and `rpc_entry` are port49's own rule names, so a role may not be called any of them. A
+  policy that does is refused at load; rename the role.
 - A role's `permit` and `deny` lists follow the rules on [Policy](policy.md#writing-a-rule).
 - `attributes:` adds attribute strings to the reply, per platform or under `all`. A grant may add its own.
 
