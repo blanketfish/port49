@@ -47,9 +47,15 @@ refreshes it instead of starting another one, and says `already logged in to <br
 
 ```sh
 port49 token core-sw01            # prints the login token, and nothing else, on stdout
-port49 token --ttl 5m core-sw01   # ask for a shorter life; the broker clamps it to your policy
+port49 token --ttl 30s core-sw01  # shorten the token's life below your token_ttl; never lengthens it
 port49 token --json core-sw01     # the broker's whole answer as one JSON object
 ```
+
+**A token's life is set by policy, not by you.** Each subject's `token_ttl` (`30s` to `900s`, on the
+[policy reference](../reference/config/policy.md)) is how long its token stays usable before its one
+login. `--ttl` can only ask for less: a value above `token_ttl` gets `token_ttl`. How long the session on
+the device then lasts is the role's [`max_session_age`](../admin/roles-and-grants.md#max_session_age), a
+separate setting ([The token](../concepts/tokens-receipts-contexts.md#the-token)).
 
 The token is the one secret that port49 ever writes to standard output. Give it to the device where
 the device asks for a password. It is single use, and short-lived by design: see
@@ -123,10 +129,10 @@ status.
 ```sh
 port49 ssh core-sw01                       # a shell
 port49 ssh core-sw01 -- show version       # one command
-port49 ssh --port 2222 --ttl 5m core-sw01
+port49 ssh --port 2222 --ttl 30s core-sw01   # --ttl shortens the token's life; never lengthens it
 ```
 
-It takes `--ttl`, `--port`, `--ssh PATH` for another OpenSSH, `--ssh-config FILE` for another
+It takes `--ttl` (shorter than your `token_ttl` only, as for `port49 token`), `--port`, `--ssh PATH` for another OpenSSH, `--ssh-config FILE` for another
 `ssh_config`, and `-v`. The device name may hold only letters, digits, `.`, `_` and `-`; for any
 other, use `port49 token` and your own `ssh`.
 
