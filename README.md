@@ -11,7 +11,9 @@ TACACS+ password — no changes to the devices.
   or through your identity provider. The device needs no software or firmware change, only standard
   TACACS+ configuration.
 - **Policy as reviewed code.** Authorization is a file in your repository, and `port49 policy diff`
-  fails a change that widens access until a test or a written acknowledgment accounts for it.
+  fails a change that widens access until a
+  [test](https://blanketfish.github.io/port49/admin/policy/#writing-tests) or a written acknowledgment
+  accounts for it.
 - **Built for a bad day.** Failure and break-glass behavior is measured in the lab, platform by
   platform, and each [device page](https://blanketfish.github.io/port49/admin/devices/) says what
   was measured and what is still open.
