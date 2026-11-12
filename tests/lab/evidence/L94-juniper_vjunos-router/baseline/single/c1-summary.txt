@@ -1,0 +1,95 @@
+L94, arm baseline, cell c1, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version | no-more" took=1.50s denied=false err=false at=08:34:11.794
+  s1 "show version | no-more" took=1.50s denied=false err=false at=08:34:11.903
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:13.297
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:13.406
+  s0 "show version | no-more" took=0.25s denied=false err=false at=08:34:13.547
+  s1 "show version | no-more" took=0.25s denied=false err=false at=08:34:13.657
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:13.798
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:13.908
+  s0 "show version | no-more" took=0.25s denied=false err=false at=08:34:14.048
+  s1 "show version | no-more" took=0.25s denied=false err=false at=08:34:14.158
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:14.298
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:14.409
+  s0 "show version | no-more" took=0.25s denied=false err=false at=08:34:14.549
+  s1 "show version | no-more" took=0.25s denied=false err=false at=08:34:14.660
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:14.800
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:14.911
+  s0 "show version | no-more" took=0.75s denied=false err=false at=08:34:15.050
+  s1 "show version | no-more" took=0.75s denied=false err=false at=08:34:15.161
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:15.802
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:15.913
+  s0 "show version | no-more" took=0.25s denied=false err=false at=08:34:16.052
+  s1 "show version | no-more" took=0.25s denied=false err=false at=08:34:16.164
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:16.303
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:16.415
+  s0 "show version | no-more" took=0.25s denied=false err=false at=08:34:16.554
+  s1 "show version | no-more" took=0.25s denied=false err=false at=08:34:16.666
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:16.805
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:16.917
+  s0 "show version | no-more" took=0.25s denied=false err=false at=08:34:17.056
+  s1 "show version | no-more" took=0.25s denied=false err=false at=08:34:17.168
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:17.307
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:17.419
+  s0 "show version | no-more" took=0.25s denied=false err=false at=08:34:17.558
+  s1 "show version | no-more" took=0.25s denied=false err=false at=08:34:17.669
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:17.809
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:17.920
+  s0 "show version | no-more" took=0.25s denied=false err=false at=08:34:18.060
+  s1 "show version | no-more" took=0.25s denied=false err=false at=08:34:18.171
+  s0 "show system users"      took=0.25s denied=true err=false at=08:34:18.311
+  s1 "show system users"      took=0.25s denied=true err=false at=08:34:18.422
+debug: 383 device log lines, kept 164, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 08:34:14.576174 authd_config_read: old seq 0 and new one 55
+port49 read (authorize_command ts less typed):
+tls connections: 3, most open at once: 1
+  conn port=53598 syn=08:34:11.528 hold=0.01s end=server-fin
+  conn port=53612 syn=08:34:11.632 hold=0.01s end=server-fin
+  conn port=53622 syn=08:34:13.370 hold=open end=open
+<LONG> delta: 0
+port49 records:
+  08:34:11.534 redeem permit
+  08:34:11.535 authorize_session permit
+  08:34:11.639 redeem permit
+  08:34:11.640 authorize_session permit
+  08:34:13.381 account
+  08:34:13.382 account
+  08:34:13.383 account
+  08:34:13.384 account
+  08:34:13.384 account
+  08:34:13.385 account
+  08:34:13.385 account
+  08:34:13.386 account
+  08:34:13.387 account
+  08:34:13.387 account
+  08:34:13.388 account
+  08:34:13.388 account
+  08:34:13.389 account
+  08:34:18.415 account
+  08:34:18.416 account
+  08:34:18.418 account
+  08:34:18.419 account
+  08:34:18.419 account
+  08:34:18.420 account
+  08:34:18.422 account
+  08:34:18.422 account
+  08:34:18.424 account
+  08:34:18.426 account
+  08:34:18.427 account
+  08:34:18.428 account
+  08:34:18.429 account
+  08:34:18.429 account
+  08:34:18.430 account
+  08:34:18.430 account
+  08:34:18.431 account
+  08:34:18.431 account
+  08:34:23.452 account
+  08:34:23.453 account
+  08:34:28.480 account
+  08:34:28.481 account
+  08:34:28.481 account
+  08:34:28.482 account
+  08:34:28.483 account
+  08:34:28.485 account
+
