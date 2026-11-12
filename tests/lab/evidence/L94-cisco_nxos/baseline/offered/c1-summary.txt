@@ -1,0 +1,97 @@
+L94, arm baseline, cell c1, mode offered, nxos106 (Nexus 9300v 10.6(2)F) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:32.830
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:33.582
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:33.832
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:34.584
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:34.835
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:35.587
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:35.838
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:36.590
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:36.840
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:37.592
+  s1 "show version"           took=5.76s denied=false err=false at=03:38:32.824
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:38.588
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:38.839
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:39.591
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:39.841
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:40.594
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:40.845
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:41.597
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:41.848
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:42.600
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:42.850
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:43.602
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:43.853
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:44.605
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:44.855
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:45.607
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:45.858
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:46.610
+  s1 "show version"           took=0.75s denied=false err=false at=03:38:46.861
+  s1 "show users"             took=0.25s denied=true err=false at=03:38:47.613
+  s0 "show version"           took=10.77s denied=false err=false at=03:38:37.843
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:48.618
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:48.868
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:49.619
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:49.870
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:50.621
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:50.872
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:51.624
+  s0 "show version"           took=0.75s denied=false err=false at=03:38:51.875
+  s0 "show users"             took=0.25s denied=true err=false at=03:38:52.625
+debug counts: ssl_read_failed=0 mark_server_dead=0 fallbacks=0 request_authen=2 request_author=42 request_acct=5 window_unmeasured=0
+tls connections: 1, most open at once: 1
+  conn port=45316 syn=03:38:27.405 hold=open end=open
+<LONG> delta: 0
+port49 records:
+  03:38:32.413 redeem permit
+  03:38:32.429 redeem permit
+  03:38:32.453 authorize_session permit
+  03:38:32.476 authorize_session permit
+  03:38:32.674 account
+  03:38:32.689 account
+  03:38:32.846 authorize_command permit "show version"
+  03:38:32.863 authorize_command permit "show version"
+  03:38:33.603 authorize_command deny "show users"
+  03:38:33.852 authorize_command permit "show version"
+  03:38:34.604 authorize_command deny "show users"
+  03:38:34.855 authorize_command permit "show version"
+  03:38:35.606 authorize_command deny "show users"
+  03:38:35.858 authorize_command permit "show version"
+  03:38:36.609 authorize_command deny "show users"
+  03:38:36.862 authorize_command permit "show version"
+  03:38:37.615 authorize_command deny "show users"
+  03:38:37.863 authorize_command permit "show version"
+  03:38:38.608 authorize_command deny "show users"
+  03:38:38.860 authorize_command permit "show version"
+  03:38:39.612 authorize_command deny "show users"
+  03:38:39.863 authorize_command permit "show version"
+  03:38:40.615 authorize_command deny "show users"
+  03:38:40.867 authorize_command permit "show version"
+  03:38:41.619 authorize_command deny "show users"
+  03:38:41.871 authorize_command permit "show version"
+  03:38:42.619 authorize_command deny "show users"
+  03:38:42.872 authorize_command permit "show version"
+  03:38:43.623 authorize_command deny "show users"
+  03:38:43.873 authorize_command permit "show version"
+  03:38:44.624 authorize_command deny "show users"
+  03:38:44.877 authorize_command permit "show version"
+  03:38:45.626 authorize_command deny "show users"
+  03:38:45.881 authorize_command permit "show version"
+  03:38:46.629 authorize_command deny "show users"
+  03:38:46.880 authorize_command permit "show version"
+  03:38:47.633 authorize_command deny "show users"
+  03:38:47.884 account
+  03:38:47.900 account
+  03:38:48.638 authorize_command deny "show users"
+  03:38:48.888 authorize_command permit "show version"
+  03:38:49.638 authorize_command deny "show users"
+  03:38:49.890 authorize_command permit "show version"
+  03:38:50.641 authorize_command deny "show users"
+  03:38:50.893 authorize_command permit "show version"
+  03:38:51.643 authorize_command deny "show users"
+  03:38:51.895 authorize_command permit "show version"
+  03:38:52.644 authorize_command deny "show users"
+  03:38:52.897 account
+
