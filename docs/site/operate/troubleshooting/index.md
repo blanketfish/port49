@@ -314,6 +314,16 @@ names. For example, after a restore left `/var/lib/port49/enrollments.json` owne
 path by its last 32 bytes, so a deeper path starts with `…`. The file is `enrollments.json` in
 `broker.state_dir`, or beside `broker.revocations_file` when `broker.state_dir` is unset. See [backup and restore](../backup-and-restore.md).
 
+A directory server that stops answering without closing its connection (a firewall or NAT that dropped its
+state, a VIP whose server was replaced) costs one query its `broker.directory.query_timeout`: when nothing at
+all was read on the connection by then, the broker closes it and the next query dials a new one. A brief burst
+of slow mints with `port49_directory_server_up` still 1 is that; `port49_directory_queries_total{outcome="fault"}`
+counts each one. The health check dials a connection of its own and does not clear faults that queries counted;
+only a query that answers does. A server that keeps timing out therefore opens its breaker after
+`circuit_breaker.failure_threshold` faults in a row, even at a site with few sign-ins. Each such query dials and
+binds a new connection (a successful bind, which counts nothing toward the service account's lockout), so a server
+in this state costs a bind and a full `query_timeout` per query until its breaker opens.
+
 **Don't:** run `init-enrollments` to fix a lost store on an install that had enrolled people: it makes an
 empty store, and everyone enrolls again. Restore the export instead. Don't use the escapes in the alert (`session.staleness_ceiling: 0s`, or stopping port49d) as a
 routine fix; each gives up a bound.
