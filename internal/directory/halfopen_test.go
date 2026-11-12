@@ -182,7 +182,7 @@ func dc01Label(w *world) string { return w.r.Cfg.Servers[0].Label() }
 // at a quiet site (one query per health interval): each query dials, binds,
 // waits, and drops the silent connection, and the check between them must not
 // clear what the query earned. The breaker opens at failure_threshold, so the
-// bind per query stops (each is a bind toward the service account's lockout).
+// bind per query stops (each is a bind and a query_timeout).
 func TestSilentSearchesAtAQuietSiteOpenTheBreaker(t *testing.T) {
 	cfg := poolCfg("us-west", west1)
 	cfg.QueryTimeout = 50 * time.Millisecond
