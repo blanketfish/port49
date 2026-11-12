@@ -266,6 +266,9 @@ type Agent struct {
 	batchMax atomic.Int64
 	// senders counts the batches being sent, so a test can wait for them.
 	senders sync.WaitGroup
+	// wireTakes counts the times a mint took the wire, so a test can tell a
+	// waiting caller from a spinning one.
+	wireTakes atomic.Int64
 	// touching is set while an admin call waits on the touch key: one at a
 	// time (AdminPrompt).
 	touching atomic.Bool
@@ -568,7 +571,7 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	}
 	limit := mintDeadline
 	c := &mintCall{device: device, enable: enable, ttl: ttl, challenge: challenge, ctx: ctx, limit: limit,
-		done: make(chan mintAnswer, 1)}
+		done: make(chan mintAnswer, 1), wake: make(chan struct{}, 1)}
 	a.mintMu.Lock()
 	a.mintQ = append(a.mintQ, c)
 	a.mintMu.Unlock()
@@ -578,7 +581,16 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	defer queued.Stop()
 	wireC := queued.C
 	for {
+		// A call claimed into a batch has no business with the wire: its
+		// batch's sender takes it, and a claimed caller that kept asking
+		// would spin whenever the wire is free (a batch asleep on an
+		// idempotency_in_progress answer). Only a queued call competes.
+		var wireSend chan struct{}
+		if !a.claimed(c) {
+			wireSend = a.wire
+		}
 		select {
+		case <-c.wake: // claimed, or put back in the queue: look again
 		case ans := <-c.done:
 			return ans.item, ans.err
 		case <-ctx.Done():
@@ -593,7 +605,8 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 				// Never claimed into a batch: nothing of it was sent.
 				return api.MintItem{}, a.wireBusyError("minted", "port49 token")
 			}
-		case a.wire <- struct{}{}:
+		case wireSend <- struct{}{}:
+			a.wireTakes.Add(1)
 			// This caller holds the wire: it sends the queue's head batch,
 			// which may or may not hold its own mint, and goes back to
 			// waiting for its answer.
@@ -620,6 +633,22 @@ type mintCall struct {
 	limit     time.Duration   // mintDeadline when the call was made
 	done      chan mintAnswer // buffered: the sender never waits for a caller that left
 	batch     *mintBatch      // set, under mintMu, when claimed
+	wake      chan struct{}   // told, without waiting, when batch is set or cleared
+}
+
+// claimed reports whether c is in a batch being sent.
+func (a *Agent) claimed(c *mintCall) bool {
+	a.mintMu.Lock()
+	defer a.mintMu.Unlock()
+	return c.batch != nil
+}
+
+// nudge tells c's caller its claim changed.
+func (c *mintCall) nudge() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
 }
 
 // mintAnswer is one caller's result.
@@ -699,6 +728,7 @@ func (a *Agent) claimBatch() *mintBatch {
 	a.mintQ = rest
 	for _, c := range b.calls {
 		c.batch = b
+		c.nudge()
 	}
 	return b
 }
@@ -779,6 +809,7 @@ func (a *Agent) runBatch(b *mintBatch) {
 				return
 			}
 			held = true
+			a.wireTakes.Add(1)
 		}
 		b.at(phasePost)
 		if resp, err = a.post(ctx, body, key); err != nil {
