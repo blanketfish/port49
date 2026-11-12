@@ -40,9 +40,12 @@ Each shape page states the first four again, in its own terms.
    clock plus the TTL, read against `port49d`'s clock, and a subject's `token_ttl` may be 30 seconds. A
    broker 30 seconds behind a `port49d` mints tokens that are dead on arrival: every login with one fails
    `token_not_found`, the same as a typo, and nothing else points at the clock. A broker that runs ahead
-   lengthens every token by the skew, and `port49d` says so (`clock: a token was minted ... ahead of this
+   lengthens every token by the skew, until its lease reclaims it (at most `lease_grace`, 5 minutes, plus
+   a minute past `token_ttl`), and `port49d` says so (`clock: a token was minted ... ahead of this
    host's clock`, `port49_token_minted_ahead_total`, the `port49_token_clock_skew` ticket). A session
-   ceiling and a context's staleness are broker-clock times too, so skew moves them by the skew. In
+   ceiling follows the identity provider's `auth_time`, capped at the broker's clock, so skew moves it
+   by the skew; a broker behind makes a context look staler (`context_stale` sooner), while one ahead
+   cannot push a refresh time into the future. In
    Kubernetes this is the nodes' clocks; in a container, the host's. Alert on the hosts' own NTP sync,
    because port49 cannot see a broker that is behind: with node_exporter, `node_timex_sync_status == 0`
    and `abs(node_timex_offset_seconds) > 1`.
