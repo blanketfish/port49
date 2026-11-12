@@ -326,9 +326,27 @@ func TestL94DuplicatesAreFound(t *testing.T) {
 	if got := l94Dup(evs, typed); len(got) != 0 {
 		t.Errorf("no duplicate: %v", got)
 	}
-	evs = append(evs, l94Event{Event: "authorize_command", Vector: "show version"}, l94Event{Event: "account", Flags: "stop", TaskID: "7"})
+	evs = append(evs, l94Event{Event: "authorize_command", Vector: "show version"}, l94Event{TS: evs[3].TS.Add(2 * time.Second), Event: "account", Flags: "stop", TaskID: "7"})
 	if got := l94Dup(evs, typed); len(got) != 2 {
 		t.Errorf("a retransmitted authorization and accounting record: %v", got)
+	}
+}
+
+// Round 5, on the committed NX-OS evidence (both arms): NX-OS sends two
+// accounting STOPs per session 15-19ms apart. A repeat counts only from 1s
+// after the first.
+func TestL94AccountingRepeatsCountFromOneSecond(t *testing.T) {
+	stop := func(clock string) l94Event {
+		return l94Event{TS: l94At(t, clock), Event: "account", Flags: "stop", TaskID: "172.100.100.1@pts/4"}
+	}
+	if got := l94Dup([]l94Event{stop("04:48:11.253"), stop("04:48:11.269")}, nil); len(got) != 0 {
+		t.Errorf("NX-OS's pair 16ms apart: %v", got)
+	}
+	if got := l94Dup([]l94Event{stop("04:48:11.253"), stop("04:48:11.269"), stop("04:48:12.300")}, nil); len(got) != 1 || !strings.Contains(got[0], "recorded 2 times") {
+		t.Errorf("a repeat 1.05s after the first: %v", got)
+	}
+	if got := l94Dup([]l94Event{stop("04:48:12.253"), stop("04:48:11.253")}, nil); len(got) != 1 {
+		t.Errorf("a repeat 1s apart, out of record order: %v", got)
 	}
 }
 
@@ -453,9 +471,13 @@ func TestL94StopsAreTheMergeCriteria(t *testing.T) {
 		t.Fatalf("a clean c1 stops: %v", got)
 	}
 	cases := map[string]func(*l94Grade){
-		"lost or run unasked":   func(g *l94Grade) { g.Typed[0].Asked = false },
-		"ran":                   func(g *l94Grade) { g.Typed[1].Denied = false },
-		"retransmitted":         func(g *l94Grade) { g.Events = append(g.Events, g.Events[0]) },
+		"lost or run unasked": func(g *l94Grade) { g.Typed[0].Asked = false },
+		"ran":                 func(g *l94Grade) { g.Typed[1].Denied = false },
+		"retransmitted": func(g *l94Grade) {
+			e := g.Events[0]
+			e.TS = e.TS.Add(2 * time.Second)
+			g.Events = append(g.Events, e)
+		},
 		"must hold exactly one": func(g *l94Grade) { g.Conns = 2 },
 		"open at once":          func(g *l94Grade) { g.MostOpen = 2 },
 		"second_connection":     func(g *l94Grade) { g.Second = 1 },

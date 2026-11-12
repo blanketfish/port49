@@ -56,6 +56,9 @@ const (
 	// as an authorize_command's is (Handle's start: author.go:245); the
 	// baseline's B is read when A's delay runs out, +l94Delay.
 	l94Inside = l94Delay - 250*time.Millisecond
+	// l94AcctRepeat is how long after an accounting record's first copy a
+	// repeat of its flags/task_id counts as a retransmission (l94Dup).
+	l94AcctRepeat = time.Second
 	// l94FastB is how long, at most, a B command may take on the fixed arm in
 	// c2 (and the expectation in c3).
 	l94FastB = time.Second
@@ -440,21 +443,34 @@ func l94Match(typed []l80Typed, evs []l94Event) []*l94Event {
 
 // l94Dup is a duplicate or retransmitted request: an authorize_command for a
 // command more often than it was typed, or an account record whose flags and
-// task_id repeat.
+// task_id repeat l94AcctRepeat or more after the first. NX-OS sends two
+// STOPs per session 15-19ms apart, in both arms (1c1d105c, 4481bbd8): that
+// pair is the device's, not a retransmission.
 func l94Dup(evs []l94Event, typed []l80Typed) []string {
 	typedN := map[string]int{}
 	for _, x := range typed {
 		typedN[x.Command]++
 	}
 	asked := map[string]int{}
+	first := map[string]time.Time{}
+	for _, e := range evs {
+		if k := e.Flags + "/" + e.TaskID; e.Event == "account" && e.TaskID != "" {
+			if f, ok := first[k]; !ok || e.TS.Before(f) {
+				first[k] = e.TS
+			}
+		}
+	}
 	acct := map[string]int{}
+	for k := range first {
+		acct[k] = 1
+	}
 	for _, e := range evs {
 		switch e.Event {
 		case "authorize_command":
 			asked[e.Vector]++
 		case "account":
-			if e.TaskID != "" {
-				acct[e.Flags+"/"+e.TaskID]++
+			if k := e.Flags + "/" + e.TaskID; e.TaskID != "" && e.TS.Sub(first[k]) >= l94AcctRepeat {
+				acct[k]++
 			}
 		}
 	}
