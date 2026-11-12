@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -146,8 +147,9 @@ func tlsConfig(cfg Config, s Server, cr *Credentials) (*tls.Config, error) {
 // ever sent in clear: an ldap:// server without start_tls is refused before
 // it is dialled. Every search on the connection runs through SearchAsync
 // under its query's deadline (ldapClient), and is bounded by query_timeout
-// on the wire as well (SetTimeout). Nothing closes the connection on one
-// query's timeout.
+// on the wire as well (SetTimeout). One query's timeout leaves the connection
+// alone, unless nothing at all was read on it since the request: then the
+// connection is half-open and the pool closes it (unresponsiveError).
 func NewDialer(cfg Config, cr *Credentials) (Dialer, error) {
 	return func(ctx context.Context, s Server) (Client, error) {
 		conn, err := dialTLS(ctx, cfg, s, cr)
@@ -162,7 +164,7 @@ func NewDialer(cfg Config, cr *Credentials) (Dialer, error) {
 			conn.Close()
 			return nil, err
 		}
-		return ldapClient{c: conn}, nil
+		return ldapClient{c: conn, seen: new(atomic.Uint64)}, nil
 	}, nil
 }
 
@@ -212,7 +214,29 @@ func dialTLS(ctx context.Context, cfg Config, s Server, cr *Credentials) (*ldap.
 // (go-ldap search.go:625-630), so ctx's error is returned in its place.
 // Paging follows SearchWithPaging (search.go:503): a paging control, the
 // cookie from each page's done result, until it comes back empty.
-type ldapClient struct{ c searchConn }
+//
+// seen counts the responses read on the connection by every search, so a
+// search that timed out can tell a connection that went silent (nothing read
+// on it since the request) from one that is only slow for this query (other
+// searches are still being answered). nil counts nothing, and a search then
+// judges by its own responses alone.
+type ldapClient struct {
+	c    searchConn
+	seen *atomic.Uint64
+}
+
+func (l ldapClient) read() uint64 {
+	if l.seen == nil {
+		return 0
+	}
+	return l.seen.Load()
+}
+
+func (l ldapClient) noteRead() {
+	if l.seen != nil {
+		l.seen.Add(1)
+	}
+}
 
 // searchConn is the *ldap.Conn a search needs, so a test can close the
 // connection between two pages deterministically.
@@ -244,11 +268,13 @@ func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, 
 		if l.c.IsClosing() {
 			return out, ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection closed"))
 		}
+		before := l.read()
 		r := l.c.SearchAsync(ctx, req, 0)
 		var controls []ldap.Control
 		got := false // a healthy page delivers at least its entries or its done control's paging
 		for r.Next() {
 			got = true
+			l.noteRead()
 			if e := r.Entry(); e != nil {
 				out.Entries = append(out.Entries, e)
 			}
@@ -257,6 +283,15 @@ func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, 
 			}
 		}
 		if err := ctx.Err(); err != nil {
+			// A deadline with nothing read on the connection since the
+			// request (this search's and every other's) is a connection
+			// that went silent without closing: a firewall or NAT that
+			// dropped its state. Keepalive does not fire with a request
+			// unacknowledged, and TCP retransmission takes ~15 minutes
+			// to error the socket, so the pool closes it (audit F1-3).
+			if errors.Is(err, context.DeadlineExceeded) && !got && l.read() == before {
+				return out, unresponsiveError{err}
+			}
 			return out, err
 		}
 		if err := r.Err(); err != nil {
