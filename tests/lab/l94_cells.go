@@ -567,6 +567,43 @@ type l94Baseline struct {
 	// HasSuspect is whether its evidence recorded one.
 	Suspect    int
 	HasSuspect bool
+	// Conns is the TLS connections the baseline's capture saw in the cell
+	// (its <cell>.tls.json); HasConns is whether that file was there.
+	Conns    int
+	HasConns bool
+}
+
+// l94Findings are the cell's fixed-arm lines that are measured device
+// behavior, not a stop: a device that opens a connection per login in the
+// baseline arm too (l94ConnGrade).
+func l94Findings(g l94Grade) []string {
+	if g.Arm != "fixed" {
+		return nil
+	}
+	if _, f := l94ConnGrade(g); f != "" {
+		return []string{f}
+	}
+	return nil
+}
+
+// l94ConnGrade is the cell's connection count as a stop or a finding (c5's
+// restart reconnects by design and is graded on neither). The cell must hold
+// one connection, unless the baseline cell held more than one too: vJunos
+// opens one per login in both arms (L94 evidence, vJunos 26). Then only more
+// connections than the baseline's stop, since that is port49 forcing a
+// reconnect; how many were open at once is overlap timing and is not
+// compared.
+func l94ConnGrade(g l94Grade) (stop, finding string) {
+	if g.Cell == "c5" || (g.Conns == 1 && g.MostOpen <= 1) {
+		return "", ""
+	}
+	if b := g.Baseline; b != nil && b.HasConns && b.Conns > 1 {
+		if g.Conns > b.Conns {
+			return fmt.Sprintf("%s: %d TLS connection(s), the baseline arm's %d: port49 forced a reconnect", g.Cell, g.Conns, b.Conns), ""
+		}
+		return "", fmt.Sprintf("%s: device opens a connection per login (baseline %d, fixed %d)", g.Cell, b.Conns, g.Conns)
+	}
+	return fmt.Sprintf("%s: %d TLS connection(s), %d open at once: the cell must hold exactly one", g.Cell, g.Conns, g.MostOpen), ""
 }
 
 // l94Stops are the cell's stop conditions (the review's merge criteria), on
@@ -629,8 +666,8 @@ func l94Stops(g l94Grade) []string {
 		out = append(out, l94SessionAccounting(g.Cell, g.Events, 2)...)
 	}
 	out = append(out, prefixAll(g.Cell+": ", l94Dup(g.Events, g.Typed))...)
-	if g.Cell != "c5" && (g.Conns != 1 || g.MostOpen > 1) {
-		out = append(out, fmt.Sprintf("%s: %d TLS connection(s), %d open at once: the cell must hold exactly one", g.Cell, g.Conns, g.MostOpen))
+	if s, _ := l94ConnGrade(g); s != "" {
+		out = append(out, s)
 	}
 	if g.Second > 0 {
 		out = append(out, fmt.Sprintf("%s: single_connect_second_connection +%v", g.Cell, g.Second))

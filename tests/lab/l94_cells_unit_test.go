@@ -605,6 +605,70 @@ func TestL94CommandsAreGradedOnArrivalNotPrompt(t *testing.T) {
 	}
 }
 
+// vJunos opens a TLS connection per login in both arms (L94 evidence,
+// vJunos 26: c1 3 and 3, c2 5 and 5, c3 9 and 9, baseline and fixed). Where
+// the baseline cell held more than one, the count is a finding unless the
+// fixed arm opened more (port49 forced a reconnect); how many were open at
+// once is overlap timing and is not compared. NX-OS's baseline held one, so
+// a second connection there still stops.
+func TestL94ConnectionCountIsGradedAgainstTheBaseline(t *testing.T) {
+	grade := func(g l94Grade) (stops, finds []string) {
+		for _, s := range l94Stops(g) {
+			if strings.Contains(s, "TLS connection") {
+				stops = append(stops, s)
+			}
+		}
+		return stops, l94Findings(g)
+	}
+	p, _ := l94PlatformFor("vjunos26")
+	j := l94Grade{Arm: "fixed", Cell: "c3", Platform: "juniper_junos", P: p, Conns: 9, MostOpen: 5,
+		Baseline: &l94Baseline{Conns: 9, HasConns: true}}
+	if s, f := grade(j); len(s) != 0 || !slices.Equal(f, []string{"c3: device opens a connection per login (baseline 9, fixed 9)"}) {
+		t.Errorf("vJunos 9 and 9: stops %q findings %q", s, f)
+	}
+	j.Conns = 7
+	if s, f := grade(j); len(s) != 0 || len(f) != 1 {
+		t.Errorf("vJunos 7 against 9: stops %q findings %q", s, f)
+	}
+	j.Conns = 10
+	if s, f := grade(j); len(f) != 0 || len(s) != 1 || !strings.Contains(s[0], "c3: 10 TLS connection(s), the baseline arm's 9: port49 forced a reconnect") {
+		t.Errorf("vJunos 10 against 9: stops %q findings %q", s, f)
+	}
+	j.Conns, j.Baseline = 9, &l94Baseline{HasSuspect: true}
+	if s, f := grade(j); len(f) != 0 || len(s) != 1 || !strings.Contains(s[0], "must hold exactly one") {
+		t.Errorf("no baseline connection count: stops %q findings %q", s, f)
+	}
+	j.Baseline = &l94Baseline{Conns: 9, HasConns: true}
+	j.Arm = "baseline"
+	if s, f := grade(j); len(s) != 0 || len(f) != 0 {
+		t.Errorf("the baseline arm: stops %q findings %q", s, f)
+	}
+	n := l94Clean()
+	n.Conns, n.Baseline = 2, &l94Baseline{Conns: 1, HasConns: true}
+	if s, f := grade(n); len(f) != 0 || len(s) != 1 || !strings.Contains(s[0], "c1: 2 TLS connection(s), 1 open at once: the cell must hold exactly one") {
+		t.Errorf("NX-OS 2 against 1: stops %q findings %q", s, f)
+	}
+}
+
+// The baseline's connection count is the length of its committed
+// <cell>.tls.json, the capture's connection list.
+func TestL94ReadBaselineCountsItsConnections(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{"c3-typed.json": "[]", "c3-a.json": "[]",
+		"c3.tls.json":   `[{"server":"172.100.100.1:300","device_port":1},{"server":"172.100.100.1:300","device_port":2}]`,
+		"c1-typed.json": "[]", "c1-a.json": "[]"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b := l94ReadBaseline(t, dir, "c3"); b == nil || b.Conns != 2 || !b.HasConns {
+		t.Errorf("c3: %+v", b)
+	}
+	if b := l94ReadBaseline(t, dir, "c1"); b == nil || b.HasConns {
+		t.Errorf("c1, no tls.json: %+v", b)
+	}
+}
+
 // The merge criteria, one at a time, on the fixed arm; the baseline stops on nothing.
 func TestL94StopsAreTheMergeCriteria(t *testing.T) {
 	if got := l94Stops(l94Clean()); len(got) != 0 {

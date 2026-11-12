@@ -685,6 +685,11 @@ func TestL94(t *testing.T) {
 			for _, s := range cellStops {
 				sum.WriteString("STOP: " + s + "\n")
 			}
+			cellFindings := l94Findings(g)
+			for _, f := range cellFindings {
+				sum.WriteString("FINDING: " + f + "\n")
+			}
+			findings = append(findings, prefixAll(mode+" ", cellFindings)...)
 			tj, _ := json.Marshal(typed)
 			aj, _ := json.Marshal(outcomes)
 			write(out, map[string]string{
@@ -729,6 +734,14 @@ func l94ReadBaseline(t *testing.T, dir, cell string) *l94Baseline {
 	}
 	for _, x := range typed {
 		b.MaxTook = max(b.MaxTook, x.Took)
+	}
+	// The connection count, from the capture's committed connection list.
+	if cb, err := os.ReadFile(filepath.Join(dir, cell+".tls.json")); err == nil {
+		var conns []json.RawMessage
+		if json.Unmarshal(cb, &conns) != nil {
+			t.Fatalf("INVALID: %s.tls.json under %s does not parse", cell, dir)
+		}
+		b.Conns, b.HasConns = len(conns), true
 	}
 	// The suspect count, where the baseline recorded one by the same pattern.
 	if sb, err := os.ReadFile(filepath.Join(dir, cell+"-suspect.json")); err == nil {
