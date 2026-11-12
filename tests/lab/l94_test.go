@@ -531,7 +531,7 @@ func TestL94(t *testing.T) {
 
 			// Debug on, the cell, port49d stopped, the collection.
 			var kept string
-			deadOrSSL := 0
+			deadOrSSL, suspect := 0, false
 			if p.Family == "nxos" {
 				filter := deviceDebugFilter{Platform: "nxos", Secrets: secrets}
 				e.cli(func(c *cliConn) error {
@@ -597,9 +597,20 @@ func TestL94(t *testing.T) {
 				if capErr != nil {
 					fmt.Fprintf(&sum, "debug capture error: %v\n", capErr)
 				}
-				n := l94Suspect(kept)
-				fmt.Fprintf(&sum, "debug: %d device log lines, kept %d, suspect %d (l94SuspectMarks: read the kept lines)\n", rawLines, ddArmLineCount(deviceDebugKept(kept)), n)
-				deadOrSSL = n
+				lines := l94SuspectLines(kept)
+				fmt.Fprintf(&sum, "debug: %d device log lines, kept %d, suspect %d (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)\n",
+					rawLines, ddArmLineCount(deviceDebugKept(kept)), len(lines))
+				// The matched lines are the kept (filtered) debug's own, gated
+				// once more before they go into the summary.
+				if bad := qualGate(map[string][]byte{"suspect": []byte(strings.Join(lines, "\n"))}, secrets()); len(bad) > 0 {
+					sum.WriteString("suspect lines withheld: the leak gate refused them\n")
+				} else {
+					for _, ln := range lines {
+						sum.WriteString("  suspect: " + ln + "\n")
+					}
+				}
+				deadOrSSL = len(lines)
+				suspect = true
 			}
 			if cell == "c5" {
 				// A restart closes the connection under the device: TLS errors
@@ -640,12 +651,14 @@ func TestL94(t *testing.T) {
 				fmt.Fprintf(&sum, "B token login during A's FAILs: took=%.2fs logged_in=%v auth_failed=%v err=%q inside_delay=%v\n",
 					bLogin.Took, bLogin.LoggedIn, bLogin.AuthFailed, bLogin.Err, l94LoginInsideDelay(evs))
 			}
-			if cell == "c2" || cell == "c3" {
+			g.Suspect = suspect
+			if arm == "fixed" {
 				g.Baseline = l94ReadBaseline(t, filepath.Join(evRoot, "baseline", mode), cell)
-				if arm == "fixed" && g.Baseline == nil {
-					sum.WriteString("baseline: no baseline evidence for this cell; the fixed arm is graded on its own and on L13's timeout\n")
+				if g.Baseline == nil {
+					sum.WriteString("baseline: no baseline evidence for this cell and mode; the fixed arm is graded on its own and on L13's timeout\n")
 				}
 			}
+			suspectJSON, _ := json.Marshal(map[string]any{"suspect": deadOrSSL, "pattern": suspect})
 			cellStops := l94Stops(g)
 			for _, s := range cellStops {
 				sum.WriteString("STOP: " + s + "\n")
@@ -653,11 +666,12 @@ func TestL94(t *testing.T) {
 			tj, _ := json.Marshal(typed)
 			aj, _ := json.Marshal(outcomes)
 			write(out, map[string]string{
-				cell + "-summary.txt": l80Filter(sum.String()),
-				cell + "-debug.txt":   kept,
-				cell + ".tls.json":    string(e.evidence[name+".tls.json"]),
-				cell + "-typed.json":  string(tj),
-				cell + "-a.json":      string(aj),
+				cell + "-summary.txt":  l80Filter(sum.String()),
+				cell + "-debug.txt":    kept,
+				cell + ".tls.json":     string(e.evidence[name+".tls.json"]),
+				cell + "-typed.json":   string(tj),
+				cell + "-a.json":       string(aj),
+				cell + "-suspect.json": string(suspectJSON),
 			})
 			if p.Blocks {
 				stops = append(stops, prefixAll(mode+" ", cellStops)...)
@@ -693,6 +707,17 @@ func l94ReadBaseline(t *testing.T, dir, cell string) *l94Baseline {
 	}
 	for _, x := range typed {
 		b.MaxTook = max(b.MaxTook, x.Took)
+	}
+	// The suspect count, where the baseline recorded one by the same pattern.
+	if sb, err := os.ReadFile(filepath.Join(dir, cell+"-suspect.json")); err == nil {
+		var s struct {
+			Suspect int  `json:"suspect"`
+			Pattern bool `json:"pattern"`
+		}
+		if json.Unmarshal(sb, &s) != nil {
+			t.Fatalf("INVALID: %s-suspect.json under %s does not parse", cell, dir)
+		}
+		b.Suspect, b.HasSuspect = s.Suspect, s.Pattern
 	}
 	return &b
 }

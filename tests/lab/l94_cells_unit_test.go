@@ -533,4 +533,35 @@ func TestL94SuspectLinesAreCounted(t *testing.T) {
 	if got := l94Suspect(kept); got != 3 {
 		t.Errorf("suspect lines %d, want 3", got)
 	}
+	if got := l94SuspectLines(kept); len(got) != 3 || got[1] != "Nov 12 tls: SSL read error" {
+		t.Errorf("suspect lines %q", got)
+	}
+}
+
+// The broad suspect pattern (not NX-OS's measured markers) stops the fixed
+// arm only past the baseline arm's count for the same cell and mode; with no
+// baseline count there is nothing to compare, which stops too.
+func TestL94SuspectLinesStopOnlyPastTheBaseline(t *testing.T) {
+	p, _ := l94PlatformFor("ceos436")
+	g := l94Grade{Arm: "fixed", Cell: "c1", Platform: "arista_eos", P: p, Conns: 1, MostOpen: 1, Events: l94SessionAcct(),
+		Typed:     []l80Typed{{Command: "show version", Asked: true}},
+		DeadOrSSL: 2, Suspect: true, Baseline: &l94Baseline{Suspect: 2, HasSuspect: true}}
+	g.Events = append(g.Events, l94Event{Event: "authorize_command", Vector: "show version"})
+	if got := l94Stops(g); len(got) != 0 {
+		t.Errorf("as many suspect lines as the baseline: %v", got)
+	}
+	g.DeadOrSSL = 3
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "3 suspect device debug line(s), the baseline arm's 2") {
+		t.Errorf("past the baseline: %q", got)
+	}
+	g.Baseline = nil
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "no baseline count") {
+		t.Errorf("no baseline: %q", got)
+	}
+	// NX-OS's markers are measured strings: any is a stop, baseline or not.
+	n := l94Clean()
+	n.DeadOrSSL, n.Baseline = 1, &l94Baseline{Suspect: 5, HasSuspect: true}
+	if got := strings.Join(l94Stops(n), "\n"); !strings.Contains(got, "read the kept debug") {
+		t.Errorf("an NX-OS marker: %q", got)
+	}
 }

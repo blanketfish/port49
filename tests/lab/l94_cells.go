@@ -385,14 +385,18 @@ func l94Dup(evs []l94Event, typed []l80Typed) []string {
 var l94SuspectMarks = regexp.MustCompile(`(?i)\bdead\b|unreachable|timed? ?out|ssl.{0,20}(fail|error)|fall(ing)? ?(back|through)|session.?id|sequence|\bseq\b|out of order|unexpected`)
 
 // l94Suspect counts kept's suspect lines.
-func l94Suspect(kept string) int {
-	n := 0
+func l94Suspect(kept string) int { return len(l94SuspectLines(kept)) }
+
+// l94SuspectLines are kept's suspect lines, for the summary (the caller
+// passes them through qualGate before they are written).
+func l94SuspectLines(kept string) []string {
+	var out []string
 	for _, ln := range strings.Split(kept, "\n") {
 		if l94SuspectMarks.MatchString(ln) {
-			n++
+			out = append(out, ln)
 		}
 	}
-	return n
+	return out
 }
 
 // l94Grade is what a cell's harness hands the grader.
@@ -407,8 +411,10 @@ type l94Grade struct {
 	MostOpen int
 	Second   float64 // single_connect_second_connection delta
 	// DeadOrSSL is NX-OS's ssl_read_failed + mark_server_dead (+ fallbacks)
-	// in the cell's window, or l94Suspect's count elsewhere.
+	// in the cell's window, or l94Suspect's count elsewhere (Suspect true):
+	// that broad pattern stops only past the baseline arm's count.
 	DeadOrSSL int
+	Suspect   bool
 	Outcomes  []l94Outcome // c2/c3/c5: A's logins
 	// BLogin is c2's and c3's B token login during A's FAILs, on a platform
 	// whose device asks port49 about no command (l94Commanded false).
@@ -424,6 +430,10 @@ type l94Grade struct {
 type l94Baseline struct {
 	MaxTook  float64
 	Outcomes []l94Outcome
+	// Suspect is the baseline's l94Suspect count for the cell and mode;
+	// HasSuspect is whether its evidence recorded one.
+	Suspect    int
+	HasSuspect bool
 }
 
 // l94Stops are the cell's stop conditions (the review's merge criteria), on
@@ -473,8 +483,14 @@ func l94Stops(g l94Grade) []string {
 	if g.Second > 0 {
 		out = append(out, fmt.Sprintf("%s: single_connect_second_connection +%v", g.Cell, g.Second))
 	}
-	if g.DeadOrSSL > 0 {
+	switch {
+	case g.DeadOrSSL == 0:
+	case !g.Suspect:
 		out = append(out, fmt.Sprintf("%s: %d device debug line(s) naming a dead server, a TLS read error, a fall-through or a session/sequence complaint: read the kept debug", g.Cell, g.DeadOrSSL))
+	case g.Baseline == nil || !g.Baseline.HasSuspect:
+		out = append(out, fmt.Sprintf("%s: %d suspect device debug line(s) and no baseline count for this cell and mode to compare: run the baseline arm first", g.Cell, g.DeadOrSSL))
+	case g.DeadOrSSL > g.Baseline.Suspect:
+		out = append(out, fmt.Sprintf("%s: %d suspect device debug line(s), the baseline arm's %d: read the lines in the summary", g.Cell, g.DeadOrSSL, g.Baseline.Suspect))
 	}
 	for i, o := range g.Outcomes {
 		if o.LoggedIn {
