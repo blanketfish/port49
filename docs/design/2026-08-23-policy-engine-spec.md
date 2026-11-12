@@ -2529,7 +2529,7 @@ device already in inventory becoming admitted, `device_added` with `"to": "admit
 addresses are new capture targets, and `address_moved` with `"address"`, `"from"` (the device
 that held it) and `"to"` (the device that holds it now) for an address that left one device and
 landed on another, or on a new name, in the same swap (decision 61; the same swap still writes the
-`address_added` of the device that gained it). Its `device` block names the device. It is what makes a
+`address_added` of the device that gained it, or the `device_added` of a new name). Its `device` block names the device. It is what makes a
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
 `port49_inventory_changes_total{kind}` is its alarm.
 
@@ -12012,9 +12012,11 @@ B. Ruling: detection only. (1) `address_moved` is a security kind of `inventory_
 swap, an address held by one device in the old inventory is held by a different name in the new one
 (a device already in inventory, or a new name). The record's `device` is the device that holds it
 now, and `change` carries `address`, `from` (the old holder) and `to`. No token, key or secret.
-(2) The same swap still writes `address_added` for the device that gained the address
-(`address_removed` is not a record), so `port49_inventory_privilege_changes` and every dashboard
-on `address_added` stay true; the move adds a record and a count, it replaces none.
+(2) The same swap still writes `address_added` for the device that gained the address, or
+`device_added` where the holder is a new name (no ticket if that device is refused or quarantined,
+since that `device_added` is not a security change); `address_removed` is not a record. So
+`port49_inventory_privilege_changes` and every dashboard on `address_added` stay true; the move
+adds a record and a count, it replaces none.
 (3) `port49_inventory_changes_total{kind="address_moved"}` counts it. (4) The page alert
 `port49_inventory_address_moved` fires on any increase over 15m. Onboarding (a new device on a
 fresh address) and an address added to a device nobody held write no `address_moved`, so the page
