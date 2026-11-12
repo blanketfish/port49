@@ -129,6 +129,18 @@ tests:
             exp_annotations:
               summary: "A connection came from a source address that is not in the inventory; a device whose source address changed (an unpinned source-interface, an uplink failover, a renumbered loopback, the wrong VRF) looks exactly like this. The unvalidated record's unvalidated.source names the address."
               runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_unadmitted_source"
+  # The first unadmitted source of a process: the series exists at 0 and the first event takes it to 1.
+  - interval: 1m
+    input_series:
+      - {series: "port49_unvalidated_packets_total{instance=\"a\",diagnosis=\"unadmitted_source\"}", values: "0 0 0 1+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_unadmitted_source
+        exp_alerts:
+          - exp_labels: {instance: "a", diagnosis: "unadmitted_source", severity: "ticket"}
+            exp_annotations:
+              summary: "A connection came from a source address that is not in the inventory; a device whose source address changed (an unpinned source-interface, an uplink failover, a renumbered loopback, the wrong VRF) looks exactly like this. The unvalidated record's unvalidated.source names the address."
+              runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_unadmitted_source"
   # Other diagnoses, and a count that stopped rising, do not fire it.
   - interval: 1m
     input_series:
@@ -1619,6 +1631,19 @@ tests:
   - interval: 1m
     input_series:
       - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"address_moved\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_address_moved
+        exp_alerts:
+          - exp_labels: {instance: "a", kind: "address_moved", severity: "page"}
+            exp_annotations:
+              summary: "An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen."
+              runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_inventory_address_moved"
+  # The first move of a process: the series exists at 0 (internal/daemon/metrics creates it at start) and
+  # the first event takes it to 1. It must page; a series first seen at 1 would read as no increase.
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"address_moved\"}", values: "0 0 0 1+0x30"}
     alert_rule_test:
       - eval_time: 10m
         alertname: port49_inventory_address_moved
