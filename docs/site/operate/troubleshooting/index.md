@@ -377,7 +377,8 @@ left one device and landed on another in a single swap. Find the `inventory_chan
 attribute key group, port49d names a connection by its source address and the shared key admits the whole range,
 so the move lets the new name's grants be used from hardware that held another's. Ask who edited the source of
 truth. A real RMA or re-IP raises it too; confirm that with whoever did it. A move spread over two swaps (removed
-in one, added in the next) is not seen. For a crown-jewel device, use `transport: tls` or a name pin to a
+in one, added in the next) is not seen, and neither is one a restart applies: a restart, including a Helm
+upgrade that rolls the pods, is not a swap. For a crown-jewel device, use `transport: tls` or a name pin to a
 per-device key, which a moved address does not reach.
 
 **Don't:** restart port49d to refresh the inventory; the bundle in force keeps serving until a good one

@@ -1637,7 +1637,7 @@ tests:
         exp_alerts:
           - exp_labels: {instance: "a", kind: "address_moved", severity: "page"}
             exp_annotations:
-              summary: "An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen."
+              summary: "An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen, and neither is one applied by a restart (including a Helm upgrade that rolls the pods), which is not a swap."
               runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_inventory_address_moved"
   # The first move of a process: the series exists at 0 (internal/daemon/metrics creates it at start) and
   # the first event takes it to 1. It must page; a series first seen at 1 would read as no increase.
@@ -1650,7 +1650,7 @@ tests:
         exp_alerts:
           - exp_labels: {instance: "a", kind: "address_moved", severity: "page"}
             exp_annotations:
-              summary: "An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen."
+              summary: "An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen, and neither is one applied by a restart (including a Helm upgrade that rolls the pods), which is not a swap."
               runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_inventory_address_moved"
   # No move (onboarding writes device_added and address_added, never address_moved), and a count that
   # stopped rising, do not page.

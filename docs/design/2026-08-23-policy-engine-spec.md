@@ -6052,7 +6052,8 @@ Mitigations, designed in rather than documented afterward:
   record of its own, and the page alert `port49_inventory_address_moved` (decision 61). On an
   RFC 8907 device whose key comes from a CIDR or attribute key group, port49d names a
   connection by its source address alone, so the move lets the new name's grants be used from
-  hardware that held another's. A move across two swaps is not seen.
+  hardware that held another's. A move across two swaps is not seen, and neither is one a restart
+  applies: a restart, including a Helm upgrade that rolls the pods, is not a swap.
 - A scope MUST be able to pin a device set explicitly instead of by attribute:
   `match: {name: [leaf-01, leaf-02]}` reads the device's inventory name, as `platform` reads
   its platform (§5.5).
@@ -12021,7 +12022,8 @@ adds a record and a count, it replaces none.
 `port49_inventory_address_moved` fires on any increase over 15m. Onboarding (a new device on a
 fresh address) and an address added to a device nobody held write no `address_moved`, so the page
 does not fire on routine growth. (5) Out of scope: a move across two swaps, removed in one and
-added in the next. (6) No mint hold or quarantine, and no binding of a token to an address: an
+added in the next, and a move a restart applies: a restart, including a Helm upgrade that rolls the
+pods, is not a swap and is not seen, since start runs no diff. (6) No mint hold or quarantine, and no binding of a token to an address: an
 edit made before the mint defeats the binding, and a hold delays a legitimate RMA. Crown-jewel
 devices should use `transport: tls` or a name pin to a per-device key.
 

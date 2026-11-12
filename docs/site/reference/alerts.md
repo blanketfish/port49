@@ -1170,7 +1170,7 @@ increase(port49_inventory_changes_total{kind=~"key_ref_changed|platform_changed|
 
 **Severity:** page. **For:** none.
 
-An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen.
+An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen, and neither is one applied by a restart (including a Helm upgrade that rolls the pods), which is not a swap.
 
 ```promql
 increase(port49_inventory_changes_total{kind="address_moved"}[15m]) > 0
@@ -1178,7 +1178,7 @@ increase(port49_inventory_changes_total{kind="address_moved"}[15m]) > 0
 
 **Source:** An address moved from one device to another in one swap: `increase(port49_inventory_changes_total{kind="address_moved"}[15m]) > 0`
 
-**Why this threshold:** On an RFC 8907 device with a shared CIDR or attribute key, the move lets the new name's grants be used from hardware that held another's. Onboarding never raises it (a new device on a fresh address is `device_added`). The same swap also raises `port49_inventory_privilege_changes` through the `address_added` it writes, so the ticket and the page agree. A move across two swaps, removed in one and added in the next, is not seen.
+**Why this threshold:** On an RFC 8907 device with a shared CIDR or attribute key, the move lets the new name's grants be used from hardware that held another's. Onboarding never raises it (a new device on a fresh address is `device_added`). The same swap also raises `port49_inventory_privilege_changes` through the `address_added` it writes, or the `device_added` for a new name (no ticket if that device is refused or quarantined, since that `device_added` is not a security change). A move across two swaps, removed in one and added in the next, is not seen; nor is a restart, including a Helm upgrade that rolls the pods onto a changed inventory, which is not a swap.
 
 ### etcd_no_leader {#etcd_no_leader}
 

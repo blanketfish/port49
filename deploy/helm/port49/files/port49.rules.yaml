@@ -517,7 +517,7 @@ groups:
         expr: "increase(port49_inventory_changes_total{kind=\"address_moved\"}[15m]) > 0"
         labels: {severity: page}
         annotations:
-          summary: "An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen."
+          summary: "An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen, and neither is one applied by a restart (including a Helm upgrade that rolls the pods), which is not a swap."
           runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_inventory_address_moved"
   - name: etcd
     rules:
