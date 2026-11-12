@@ -652,10 +652,13 @@ func TestL94C5Stops(t *testing.T) {
 // Round 5, on the committed NX-OS evidence (1c1d105c, offered c5): after
 // the restart port49 itself denied "show version" (context_missing: the
 // memory store lost the context), typed 05:06:26.718, read 26.737, and the
-// baseline does the same. A permitted command refused is a stop only where
-// port49 permitted it, in every cell.
+// baseline does the same. Round 6: that is the one exemption. A permitted
+// command refused stops in every other case: a port49 deny in c1-c4 (port49
+// wrongly denying it is the failure), a c5 deny with another reason, a
+// device refusal of a port49 permit, and, with no record, the old rule (c5
+// only inside the restart window is exempt).
 func TestL94PermittedRefusedMeansPort49PermittedIt(t *testing.T) {
-	for _, cell := range []string{"c5", "c1"} {
+	grade := func(cell string, last *l94Event) string {
 		g := l94Clean()
 		g.Cell = cell
 		g.RestartAt, g.UpAt = l94At(t, "05:06:18.953"), l94At(t, "05:06:19.208")
@@ -667,14 +670,32 @@ func TestL94PermittedRefusedMeansPort49PermittedIt(t *testing.T) {
 			{Command: "show version", Asked: true, Denied: true, At: l94At(t, "05:06:26.718")},
 		}
 		g.Events = append(l94SessionAcct(),
-			l94Event{TS: l94At(t, "05:06:16.969"), Event: "authorize_command", Verdict: "permit", Vector: "show version"},
-			l94Event{TS: l94At(t, "05:06:26.737"), Event: "authorize_command", Verdict: "deny", Reason: "context_missing", Vector: "show version"})
-		if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "permitted command was refused") {
-			t.Errorf("%s: port49 denied it: %q", cell, got)
+			l94Event{TS: l94At(t, "05:06:16.969"), Event: "authorize_command", Verdict: "permit", Vector: "show version"})
+		if last != nil {
+			e := *last
+			e.TS, e.Event, e.Vector = l94At(t, "05:06:26.737"), "authorize_command", "show version"
+			g.Events = append(g.Events, e)
 		}
-		g.Events[len(g.Events)-1].Verdict = "permit"
-		if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "a permitted command was refused") {
-			t.Errorf("%s: port49 permitted it and the device refused it: %q", cell, got)
+		return strings.Join(l94Stops(g), "\n")
+	}
+	const want = "a permitted command was refused"
+	cases := []struct {
+		name, cell string
+		last       *l94Event
+		stop       bool
+	}{
+		{"c5 context_missing deny", "c5", &l94Event{Verdict: "deny", Reason: "context_missing"}, false},
+		{"c1 port49 deny", "c1", &l94Event{Verdict: "deny", Reason: "no_permit_dominates_deny"}, true},
+		{"c1 context_missing deny", "c1", &l94Event{Verdict: "deny", Reason: "context_missing"}, true},
+		{"c5 deny, another reason", "c5", &l94Event{Verdict: "deny", Reason: "no_permit_dominates_deny"}, true},
+		{"c5 permit the device refused", "c5", &l94Event{Verdict: "permit"}, true},
+		{"c1 permit the device refused", "c1", &l94Event{Verdict: "permit"}, true},
+		{"c5 after UpAt, no record", "c5", nil, true},
+		{"c1 no record", "c1", nil, true},
+	}
+	for _, c := range cases {
+		if got := strings.Contains(grade(c.cell, c.last), want); got != c.stop {
+			t.Errorf("%s: stop=%v, want %v", c.name, got, c.stop)
 		}
 	}
 }

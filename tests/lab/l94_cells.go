@@ -579,16 +579,17 @@ func l94Stops(g l94Grade) []string {
 		if commanded && x.Command == denied && !x.Denied && !x.Err {
 			out = append(out, fmt.Sprintf("%s: session %d %q, which port49 denies, ran", g.Cell, x.Session, x.Command))
 		}
-		// A permitted command refused is one port49 permitted (its matched
-		// authorize_command) and the device refused anyway. One port49 itself
-		// denied is not: after c5's restart the memory store has lost the
-		// context (context_missing), in the baseline too. Where the device
-		// asks about no command there is no record to match: c5's commands
-		// inside the restart are refused locally by design, and one after
-		// port49d is back must run.
+		// A permitted command refused stops, whoever refused it: port49
+		// wrongly denying it is as much the failure as the device refusing a
+		// permit. One exemption where commands are asked: after c5's restart
+		// the memory store has lost the context and port49 denies it
+		// context_missing, in the baseline too. With no matched record (and
+		// wherever the device asks about no command), c5's commands inside
+		// the restart are refused locally by design, and one after port49d
+		// is back must run.
 		refused := x.Command == permitted && x.Denied
-		if commanded {
-			refused = refused && match[i] != nil && match[i].Verdict == "permit"
+		if m := match[i]; commanded && m != nil {
+			refused = refused && !(g.Cell == "c5" && m.Verdict == "deny" && m.Reason == string(decision.ContextMissing))
 		} else {
 			refused = refused && (g.Cell != "c5" || x.At.After(g.UpAt))
 		}
