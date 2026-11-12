@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // The platforms run in L94's priority order: NX-OS, then Junos (vJunos-router,
@@ -154,6 +157,70 @@ func TestL94GapsAreReadFromRecordTimes(t *testing.T) {
 	jg, ok := l94Gaps("juniper_junos", l94Events(jrecs), []string{"show version | no-more"})
 	if !ok || len(jg) != 1 || jg[0] != 1900*time.Millisecond {
 		t.Errorf("junos gaps %v ok=%v", jg, ok)
+	}
+}
+
+// A's credential is a password port49 refuses after the full delay: never a
+// minted token (a spent token replays its receipt, spec §5.1.1) and never
+// token-shaped (that is device_mismatch, not token_not_found). Fresh each call.
+func TestL94RefusedCredentialIsNeverTokenShaped(t *testing.T) {
+	seen := map[string]bool{}
+	for range 200 {
+		c := l94RefusedCredential()
+		if c == "" {
+			t.Fatal("an empty credential")
+		}
+		if _, ok := token.Parse([]byte(c)); ok {
+			t.Fatal("a refused credential parsed as a token")
+		}
+		if seen[c] {
+			t.Fatal("a refused credential repeated")
+		}
+		seen[c] = true
+	}
+}
+
+// l94ARec is a redeem record carrying credential_sha256.
+func l94ARec(ts time.Time, verdict, reason, sha string) map[string]any {
+	r := l94Rec(ts, "redeem", verdict, "")
+	r["reason"] = reason
+	r["auth"] = map[string]any{"method": "ascii", "credential_sha256": sha}
+	return r
+}
+
+// Round 4: A's login answered PERMIT receipt_replayed is not a FAIL, and the
+// cell says so by name instead of "none of B's commands reached port49".
+func TestL94AReplayedPermitIsInvalidNamingIt(t *testing.T) {
+	t0 := time.Now()
+	a := decision.CredentialHash([]byte(l94RefusedCredential()))
+	b := decision.CredentialHash([]byte(l94RefusedCredential()))
+	replayed := l94Events([]map[string]any{
+		l94ARec(t0, "permit", "receipt_replayed", a),
+		l94Rec(t0.Add(time.Second), "authorize_command", "permit", "show version"),
+	})
+	err := l94C2Verdict(replayed, []string{a}, "none", 1)
+	if err == nil || !strings.Contains(err.Error(), "INVALID") || !strings.Contains(err.Error(), "receipt_replayed") || strings.Contains(err.Error(), "none of B's") {
+		t.Errorf("replayed permit in c2: %v", err)
+	}
+	refused := l94Events([]map[string]any{l94ARec(t0.Add(2*time.Second), "deny", "token_not_found", a)})
+	if err := l94AValid("c2", refused, []string{a}, true); err != nil {
+		t.Errorf("a token_not_found deny: %v", err)
+	}
+	if err := l94C2Verdict(refused, []string{a}, "ok", 1); err != nil {
+		t.Errorf("c2 refused and ok: %v", err)
+	}
+	if err := l94AValid("c3", refused, []string{a, b}, true); err == nil || !strings.Contains(err.Error(), "no redeem") {
+		t.Errorf("a credential port49 never recorded: %v", err)
+	}
+	if err := l94AValid("c5", refused, []string{a, b}, false); err != nil {
+		t.Errorf("c5 need not record every A: %v", err)
+	}
+	other := l94Events([]map[string]any{l94ARec(t0, "deny", "device_mismatch", a)})
+	if err := l94AValid("c3", other, []string{a}, true); err == nil || !strings.Contains(err.Error(), "device_mismatch") {
+		t.Errorf("a deny with another reason: %v", err)
+	}
+	if err := l94AValid("c5", replayed, []string{a}, false); err == nil || !strings.Contains(err.Error(), "receipt_replayed") {
+		t.Errorf("c5 replayed permit: %v", err)
 	}
 }
 

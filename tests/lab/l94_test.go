@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blanketfish/port49/internal/decision"
 	"github.com/blanketfish/port49/internal/testpki"
 )
 
@@ -233,26 +234,21 @@ func TestL94(t *testing.T) {
 	if dialFor == 0 {
 		dialFor = 60 * time.Second
 	}
-	// stale is a token that has logged in once: port49 refuses it again
-	// (FAIL after the delay). Its own login is outside every cell's window.
-	stale := func() string {
-		tok := mint()
-		off := l.mark()
-		c, err := l.dial(qualUser, tok, dialFor)
-		if err != nil {
-			t.Fatalf("INVALID: the token a stale-token login reuses did not log in the first time: %v", err != nil)
-		}
-		c.Close()
-		l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool {
-			return slices.ContainsFunc(l94Events(rs), func(e l94Event) bool { return e.Event == "redeem" && e.Verdict == "permit" })
-		})
-		time.Sleep(3 * time.Second)
-		return tok
+	// refused is a credential for A that port49 refuses, token_not_found
+	// after the full delay (l94RefusedCredential), and its credential_sha256
+	// for l94AValid. It is never minted, so no receipt can replay it, and it
+	// joins minted so every file and the device debug are checked for it.
+	refused := func() (cred, sha string) {
+		cred = l94RefusedCredential()
+		mintMu.Lock()
+		minted = append(minted, cred)
+		mintMu.Unlock()
+		return cred, decision.CredentialHash([]byte(cred))
 	}
-	// failLogin is one A login with a stale token.
-	failLogin := func(tok string) l94Outcome {
+	// failLogin is one A login with a refused credential.
+	failLogin := func(cred string) l94Outcome {
 		b0 := time.Now()
-		c, err := l.dial(qualUser, tok, dialFor)
+		c, err := l.dial(qualUser, cred, dialFor)
 		if c != nil {
 			c.Close()
 		}
@@ -364,15 +360,19 @@ func TestL94(t *testing.T) {
 				if err := qualStillClean(read); err != nil {
 					t.Fatal(err)
 				}
-				// A's stale tokens are spent before the window.
-				var staleToks []string
+				// A's refused credentials, one per A login, each its own so
+				// l94AValid grades every one.
+				var aCreds, aSHAs []string
+				n := 0
 				switch cell {
 				case "c2", "c5":
-					staleToks = []string{stale()}
+					n = 1
 				case "c3":
-					for range l94C3Fails {
-						staleToks = append(staleToks, stale())
-					}
+					n = l94C3Fails
+				}
+				for range n {
+					c, h := refused()
+					aCreds, aSHAs = append(aCreds, c), append(aSHAs, h)
 				}
 				off := l.mark()
 				before := l80Events()
@@ -403,15 +403,12 @@ func TestL94(t *testing.T) {
 					timing, tries := "", 0
 					for try := 1; try <= l94C2Tries; try++ {
 						tries = try
-						if try > 1 {
-							staleToks[0] = stale()
-						}
 						off = l.mark()
 						mu.Lock()
 						typed, outcomes = nil, nil
 						mu.Unlock()
 						done := make(chan l94Outcome, 1)
-						go func() { done <- failLogin(staleToks[0]) }()
+						go func() { done <- failLogin(aCreds[0]) }()
 						time.Sleep(lead)
 						// Where no command is asked, B's token login is the
 						// request port49 must answer inside A's delay.
@@ -421,8 +418,10 @@ func TestL94(t *testing.T) {
 						add(l94Type(l, qc, 0, d))
 						outcomes = append(outcomes, <-done)
 						bLogin = waitBLogin(bDone)
+						// Any redeem for A's credential ends the wait: a permit
+						// is graded (l94C2Verdict), not waited out.
 						recs = l.waitForRecords(off, l94Delay+30*time.Second, func(rs []map[string]any) bool {
-							return len(l94Fails(l94Events(rs))) > 0
+							return slices.ContainsFunc(l94Events(rs), func(e l94Event) bool { return e.Event == "redeem" && e.Cred == aSHAs[0] })
 						})
 						var ok bool
 						gaps, ok = l94Gaps(q.run.Platform, l94Events(recs), []string{permitted, d})
@@ -433,8 +432,9 @@ func TestL94(t *testing.T) {
 						}
 						lead += 400 * time.Millisecond
 					}
-					// A c2 that never put B inside A's delay measured nothing.
-					if err := l94C2Valid(timing, tries); err != nil {
+					// A c2 whose A was not refused, or that never put B inside
+					// A's delay, measured nothing.
+					if err := l94C2Verdict(l94Events(recs), aSHAs, timing, tries); err != nil {
 						qc.Close()
 						t.Fatal(err)
 					}
@@ -445,13 +445,13 @@ func TestL94(t *testing.T) {
 				case "c3":
 					qc := openB(0)
 					var wg sync.WaitGroup
-					outs := make([]l94Outcome, len(staleToks))
-					for i, tok := range staleToks {
+					outs := make([]l94Outcome, len(aCreds))
+					for i, cred := range aCreds {
 						wg.Add(1)
-						go func(i int, tok string) {
+						go func(i int, cred string) {
 							defer wg.Done()
-							outs[i] = failLogin(tok)
-						}(i, tok)
+							outs[i] = failLogin(cred)
+						}(i, cred)
 					}
 					start := time.Now()
 					var bDone chan l94Outcome
@@ -484,7 +484,7 @@ func TestL94(t *testing.T) {
 							aw.Add(1)
 							go func() {
 								defer aw.Done()
-								o := failLogin(staleToks[0])
+								o := failLogin(aCreds[0])
 								mu.Lock()
 								outcomes = append(outcomes, o)
 								mu.Unlock()
@@ -526,6 +526,13 @@ func TestL94(t *testing.T) {
 				conns = stop()
 				if err := e.l.stopDaemon(); err != nil {
 					t.Errorf("stopping port49d after %s: %v", cell, err)
+				}
+				// c2 checked its own A in its loop. c5's restart may drop A's
+				// request before its record, so c5 needs none, only no permit.
+				if cell == "c3" || cell == "c5" {
+					if err := l94AValid(cell, l94Events(recs), aSHAs, cell == "c3"); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 
@@ -635,7 +642,7 @@ func TestL94(t *testing.T) {
 			}
 			fmt.Fprintf(&sum, "single_connect_second_connection delta: %v\n", second)
 			for i, o := range outcomes {
-				fmt.Fprintf(&sum, "stale-token login %d: took=%.2fs auth_failed=%v logged_in=%v err=%q\n", i+1, o.Took, o.AuthFailed, o.LoggedIn, o.Err)
+				fmt.Fprintf(&sum, "refused-credential login %d: took=%.2fs auth_failed=%v logged_in=%v err=%q\n", i+1, o.Took, o.AuthFailed, o.LoggedIn, o.Err)
 			}
 			if cell == "c5" {
 				fmt.Fprintf(&sum, "restart window: stop=%s up=%s\n", l80Clock(restartAt), l80Clock(upAt))

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"maps"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // L94 (spec §15 L94; §13 decision 59, provisional on it): whether a device
@@ -23,9 +26,10 @@ import (
 //
 //	c1  natural interleave: two token-logged-in CLI sessions, 20 commands each
 //	    (permitted and denied alternating), started ~100ms apart
-//	c2  forced reorder: B logged in; A logs in with a stale token (FAIL after
-//	    the 2s delay); within 200ms of A's request B types the permitted and
-//	    the denied command
+//	c2  forced reorder: B logged in; A logs in with a refused credential
+//	    (l94RefusedCredential: FAIL token_not_found after the 2s delay);
+//	    within 200ms of A's request B types the permitted and the denied
+//	    command
 //	c3  queued FAILs: A1-A3 FAIL at once while B types every 250ms for 6s
 //	c4  NX-OS only, fixed arm only: c1's loop on a port49d built with
 //	    port49_lab_acct_hold, which holds every accounting reply 1.5s so the
@@ -175,6 +179,7 @@ type l94Event struct {
 	Vector  string // authorize_command's request vector, account's record vector
 	Flags   string // account
 	TaskID  string // account
+	Cred    string // redeem: auth.credential_sha256
 }
 
 // l94Events reads recs in record order; a record with no parseable ts is
@@ -196,6 +201,9 @@ func l94Events(recs []map[string]any) []l94Event {
 		e.Reason, _ = r["reason"].(string)
 		e.Flags, _ = r["flags"].(string)
 		e.TaskID, _ = r["task_id"].(string)
+		if a, ok := r["auth"].(map[string]any); ok {
+			e.Cred, _ = a["credential_sha256"].(string)
+		}
 		switch ev {
 		case "authorize_command":
 			e.Vector = qualVector(r)
@@ -234,7 +242,8 @@ func l94BEvent(platform string, e l94Event, cmds []string) bool {
 	return e.Event == "account"
 }
 
-// l94Fails are recs' FAIL redeems, in order: the stale-token logins.
+// l94Fails are recs' FAIL redeems, in order: A's refused-credential logins
+// (l94AValid holds each of A's to deny token_not_found; B's are minted).
 func l94Fails(evs []l94Event) []l94Event {
 	var out []l94Event
 	for _, e := range evs {
@@ -294,16 +303,66 @@ func l94C2Valid(timing string, tries int) error {
 	return fmt.Errorf("INVALID: c2: timing %q", timing)
 }
 
+// l94RefusedCredential is A's password: one port49 refuses with
+// token_not_found after the full failure delay, generated fresh at runtime and
+// never printed. A minted token cannot be A's credential: a spent token
+// replays its stored decision (PERMIT receipt_replayed) for receipt_idle_ttl,
+// up to receipt_max_age (spec §5.1.1; §13 "a sliding receipt", ruled
+// 2026-09-22), so it is never a
+// FAIL. This is 26 base32 characters, not token.Len, so token.Parse refuses
+// it and the device-tag check (internal/daemon/authen/authen.go:268, which
+// would be device_mismatch) is skipped; no receipt holds its hash (receipts
+// are written only for a token that matched, authen.go:573), so GetReceipt
+// misses and no candidate matches: authen.go:462 fail(token_not_found), whose
+// delay is authen.go:1033-1054. base = max = l94Delay, so escalation adds
+// nothing.
+func l94RefusedCredential() string { return rand.Text() }
+
+// l94AValid is whether port49 refused each of A's credentials (creds are
+// their credential_sha256) as the cell needs: every redeem it recorded for
+// one is deny token_not_found, so the delay is the FAIL's. Anything else
+// (PERMIT receipt_replayed above all) means the cell has no FAIL to measure:
+// INVALID, named. recorded also requires a redeem for every credential; c5's
+// restart may drop A's request before its record, so c5 passes false.
+func l94AValid(cell string, evs []l94Event, creds []string, recorded bool) error {
+	for i, c := range creds {
+		n := 0
+		for _, e := range evs {
+			if e.Event != "redeem" || e.Cred != c {
+				continue
+			}
+			n++
+			if e.Verdict != "deny" || e.Reason != string(decision.TokenNotFound) {
+				return fmt.Errorf("INVALID: %s: A's refused credential %d was answered %s %s, not deny %s: the cell has no FAIL to measure (a credential that was never minted must never be permitted: read the record)", cell, i+1, e.Verdict, e.Reason, decision.TokenNotFound)
+			}
+		}
+		if n == 0 && recorded {
+			return fmt.Errorf("INVALID: %s: port49 recorded no redeem for A's refused credential %d", cell, i+1)
+		}
+	}
+	return nil
+}
+
+// l94C2Verdict is c2's validity: A's refusal first, so that a login port49
+// did not refuse is named as that rather than as "none" (B's commands are
+// graded against a FAIL that never came), then the timing (l94C2Valid).
+func l94C2Verdict(evs []l94Event, creds []string, timing string, tries int) error {
+	if err := l94AValid("c2", evs, creds, true); err != nil {
+		return err
+	}
+	return l94C2Valid(timing, tries)
+}
+
 // l94Outcome is one A login's outcome, as the CLI saw it.
 type l94Outcome struct {
 	Took       float64 `json:"took_s"`
 	AuthFailed bool    `json:"auth_failed"` // the device refused the login (not a timeout, not a login)
-	LoggedIn   bool    `json:"logged_in"`   // a stale token logged in: a fall-through or worse
+	LoggedIn   bool    `json:"logged_in"`   // a refused credential logged in: a fall-through or worse
 	Err        string  `json:"err,omitempty"`
 }
 
-// l94OutcomeOf classifies A's login: err nil is a login (which a stale token
-// must never get), an SSH authentication refusal is a failure delivered, and
+// l94OutcomeOf classifies A's login: err nil is a login (which a refused
+// credential must never get), an SSH authentication refusal is a failure delivered, and
 // any other error (a timeout, a reset) is not.
 func l94OutcomeOf(took time.Duration, err error) l94Outcome {
 	o := l94Outcome{Took: took.Seconds()}
@@ -494,7 +553,7 @@ func l94Stops(g l94Grade) []string {
 	}
 	for i, o := range g.Outcomes {
 		if o.LoggedIn {
-			out = append(out, fmt.Sprintf("%s: stale-token login %d logged in: a fall-through or worse", g.Cell, i+1))
+			out = append(out, fmt.Sprintf("%s: refused-credential login %d logged in: a fall-through or worse", g.Cell, i+1))
 		}
 	}
 	switch g.Cell {
@@ -510,7 +569,7 @@ func l94Stops(g l94Grade) []string {
 			}
 		}
 		if len(g.Outcomes) != 1 || !g.Outcomes[0].AuthFailed {
-			out = append(out, "c2: A's stale-token login was not refused as an authentication failure")
+			out = append(out, "c2: A's refused-credential login was not refused as an authentication failure")
 		}
 	case "c3":
 		// The bound is the lower of the platform's L13 timeout and the
