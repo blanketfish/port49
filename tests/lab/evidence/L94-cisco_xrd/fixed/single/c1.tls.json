@@ -1,0 +1,16 @@
+[
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 61767,
+    "syn_at": "2026-11-12T11:15:11.265249Z",
+    "answer": "syn-ack",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "device_fin_at": "2026-11-12T11:15:11.267676Z",
+    "incomplete": false,
+    "end": "device-fin",
+    "end_at": "2026-11-12T11:15:11.267676Z"
+  }
+]
