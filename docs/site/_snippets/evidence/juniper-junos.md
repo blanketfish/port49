@@ -103,3 +103,4 @@
 | [L88 (closed)](../../reference/lab-register.md#l88) | juniper_vjunos-router | vJunos-router 26.2R1.7 | 2026-11-04 | [L88-juniper_vjunos-router-vjunos26.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | juniper_vjunos-router | vJunos-router 23.4R2-S2.1 | 2026-11-04 | [L88-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | juniper_vsrx | vSRX3 21.4R3.15 | 2026-11-04 | [L88-juniper_vsrx.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vsrx.md) |
+| [L94 (open)](../../reference/lab-register.md#l94) | juniper_vjunos-router | vJunos-router 26.2R1.7 | 2026-11-12 | [L94-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-juniper_vjunos-router.md) |

@@ -59,6 +59,7 @@ The RFC 9887 client was measured on Nexus 9300v 10.6(2)F on 2026-10-18 ([L73-cis
 - While port49 is dark, commands in sessions that were already open ran under local authorization, so a command port49 would deny is then decided locally ([L41-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-cisco_nxos.md), cell 3).
 - An ERROR does not make break-glass a way around port49's commands: the break-glass login lands and then every command is refused `Error: AAA authorization failed` ([L4-error-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_nxos.md)). [Troubleshooting](../../operate/troubleshooting/index.md#break-glass-does-not-work) says what to do.
 - Break-glass with `single-connection` on, after port49d reset a de-admitted device's connection, was closed with the fix: on every declined path it logged in within 0.5 s of the key miss ([L31-breakglass-cisco-singleconnection.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-breakglass-cisco-singleconnection.md)).
+- Sessions on one single-connect connection, offered and with `single-connection`: NX-OS 10.6(2)F takes replies out of request order, including a command authorization answered before the accounting record it was written behind. With three failing logins on the connection, a command answered in under 1 s; before port49 answered sessions at once it waited up to 16.4 s, and the device marked port49 dead 7 times and fell back once ([L94-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_nxos.md)).
 
 ## Traps
 
@@ -76,9 +77,6 @@ The RFC 9887 client was measured on Nexus 9300v 10.6(2)F on 2026-10-18 ([L73-cis
 
 !!! warning "Unmeasured: the single-connect details and a restart"
     The per-request TLS note ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L80-cisco_nxos.md)) is reported to record more than this page confirms, and none of it is confirmed here: that before the fix the device asked about some commands only and in one run `show users` ran; that three concurrent sessions shared one connection; that a session idle for 35 s reconnected cleanly; that a port49d restart in mid-session cost nothing on etcd but, on the memory store, denied every later command until the person logged in again; and that the first TLS open on a new connection can take about 5 s. Treat each as an expectation, and prefer etcd to the memory store if a restart must not cost a fresh login.
-
-!!! warning "Unmeasured: replies to pipelined sessions out of order"
-    port49d answers the sessions on one single-connect connection at once ([Devices](index.md#single-connection-one-devices-sessions-share-a-connection)), so the reply to the command authorization NX-OS writes behind an accounting record can leave before the accounting reply. Whether NX-OS takes replies out of request order is not measured ([L94](../../reference/lab-register.md#l94), open).
 
 !!! warning "Unmeasured: NX-OS without secure tls"
     The reference sets `tacacs-server secure tls` on TLS hosts. What the device sends to the TLS port without that line is unknown: the lab did not run it, and no device debug was captured.

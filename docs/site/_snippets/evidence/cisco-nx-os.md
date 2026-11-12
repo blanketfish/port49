@@ -46,3 +46,4 @@
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_nxos | Nexus 9300v 10.6(2)F | 2026-11-04 | [L88-cisco_nxos-nxos106-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos-nxos106-tls.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_nxos | Nexus 9300v 10.6(2)F | 2026-11-04 | [L88-cisco_nxos-nxos106.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos-nxos106.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_nxos | Nexus 9300v 10.4(2)F | 2026-11-04 | [L88-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos.md) |
+| [L94 (open)](../../reference/lab-register.md#l94) | cisco_nxos | Nexus 9300v 10.6(2)F | 2026-11-12 | [L94-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_nxos.md) |

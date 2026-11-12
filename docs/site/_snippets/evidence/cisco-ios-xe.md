@@ -44,3 +44,4 @@
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_iosxe | Catalyst 8000V 17.18.02 | 2026-11-04 | [L88-cisco_iosxe-iosxe1718-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_iosxe | Catalyst 8000V 17.18.02 | 2026-11-04 | [L88-cisco_iosxe-iosxe1718.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe-iosxe1718.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_iosxe | Catalyst 8000V 17.13.01a | 2026-11-04 | [L88-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_iosxe.md) |
+| [L94 (open)](../../reference/lab-register.md#l94) | cisco_iosxe | Catalyst 8000V 17.18.02 | — | [L94-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_iosxe.md) |

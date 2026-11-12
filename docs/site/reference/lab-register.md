@@ -592,4 +592,4 @@ No results note yet.
 
 **Open.** Replies to the sessions of one single-connect connection, sent out of request order, and the latency of a command queued behind failing logins ([L13](#l13)'s timeouts with more than one packet in flight).
 
-No results note yet.
+Results notes: [L94-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-arista_ceos.md), [L94-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_iosxe.md), [L94-cisco_nxos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_nxos.md), [L94-cisco_xrd.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_xrd.md), [L94-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-juniper_vjunos-router.md)

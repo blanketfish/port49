@@ -44,14 +44,19 @@ A row says only what its golden shows port49 answering. Everything else is on th
 
 ## Single-connection: one device's sessions share a connection
 
-Every TLS reference configuration turns `single-connection` on, and port49 offers it to NX-OS over TLS whether or not the device asks. All of the device's sessions then share one connection. port49d answers them at once: a login that fails and waits out its failure delay (up to `limits.auth_failure_delay_max`, 2 s by default), or a request waiting on a slow store, holds only its own session. A command authorization from another operator on the same device is answered at once, not behind it. The packets of one session are still answered in order.
+Every TLS reference configuration turns `single-connection` on, and port49 offers it to NX-OS over TLS whether or not the device asks. The device's sessions can then share one connection (NX-OS shares it; EOS and Junos open one per login, below). port49d answers them at once: a login that fails and waits out its failure delay (up to `limits.auth_failure_delay_max`, 2 s by default), or a request waiting on a slow store, holds only its own session. A command authorization from another operator on the same device is answered at once, not behind it. The packets of one session are still answered in order.
 
 At most 16 packets on one connection are in progress at a time. A 17th waits, unread, until one of them is answered, and its reply comes that much later: the connection is not closed. There is no setting for this.
 
 If a device's packet breaks the protocol (a CONTINUE for a session it never started, more than 64 unfinished logins, a `seq_no` of 255), port49d closes the connection at once, with the record and backoff it always has. Replies still owed to the device's other sessions on that connection are not sent, so those sessions time out on the device as they would after any close.
 
-!!! warning "Unmeasured: replies out of order, and queued failures"
-    With sessions answered at once, a reply can leave before the reply to a request the device sent earlier, on another session. RFC 8907 lets a device share one connection among sessions and says nothing about the order of replies; whether each platform takes them out of order is not measured. Nor is a command's latency with several failing logins queued on one connection ([L13](../../reference/lab-register.md#l13) measured one packet at a time). Both are lab register entry [L94](../../reference/lab-register.md#l94), open.
+With sessions answered at once, a reply can leave before the reply to a request the device sent earlier, on another session. RFC 8907 lets a device share one connection among sessions and says nothing about the order of replies. What the lab measured ([L94](../../reference/lab-register.md#l94)):
+
+- **NX-OS 10.6(2)F** takes replies out of request order, offered and with `single-connection`. With three failing logins on one connection, a command answered in under 1 s; before, it waited up to 16.4 s and the device marked port49 dead.
+- **EOS 4.36.3M and vJunos-router 26.2R1.7** open a new connection for each login even with `single-connection` set, and never have two requests outstanding on one, so a failing login there never held up another session's command on either build. Their out-of-order handling is not exercised.
+
+!!! warning "Unmeasured: replies out of order on other platforms"
+    IOS-XE and IOS XR were run and not measured (no request reached port49 in the lab), and vSRX cannot be run in the harness. On those, and on any platform not listed above, whether the device takes replies out of request order is unknown ([L94](../../reference/lab-register.md#l94), open).
 
 ## Reference configurations
 
