@@ -833,9 +833,10 @@ func l94SessionAccounting(cell string, evs []l94Event, sessions int) []string {
 }
 
 // l94LostAccounting is c4's check, where the device asks
-// port49 about no command, that no session's accounting was lost: a record
-// for each typed command that ran (by flags/task_id/port/vector, as
-// l94Dup), on at least sessions ports, each with its session's START and
+// port49 about no command, that no session's accounting was lost: for each
+// typed command, as many distinct records with its vector (by
+// flags/task_id/port/vector, as l94Dup) as times it ran, on at least
+// sessions ports, each with its session's START and
 // STOP. Junos logs system processes (port non-tty) and the harness's config
 // session (port 0) in the same window, so l94SessionAccounting's flag count
 // alone cannot tell a lost vty's records. Where commands are asked, there is
@@ -844,25 +845,32 @@ func l94LostAccounting(cell, platform string, evs []l94Event, typed []l80Typed, 
 	if l94Commanded(platform) {
 		return nil
 	}
+	// Per command: a record of one command (the denied one, say) must not
+	// offset a lost record of another.
 	typedN := map[string]bool{}
-	ran := 0
+	ran := map[string]int{}
 	for _, x := range typed {
 		typedN[x.Command] = true
 		if !x.Denied && !x.Err {
-			ran++
+			ran[x.Command]++
 		}
 	}
-	recs := map[string]bool{}
+	recs := map[string]map[string]bool{} // command -> its distinct records
 	ports := map[string]bool{}
 	for _, e := range evs {
-		if e.Event == "account" && e.TaskID != "" && typedN[strings.TrimSuffix(e.Vector, " <cr>")] {
-			recs[fmt.Sprintf("%s/%s/%s/%q", e.Flags, e.TaskID, e.Port, e.Vector)] = true
+		if c := strings.TrimSuffix(e.Vector, " <cr>"); e.Event == "account" && e.TaskID != "" && typedN[c] {
+			if recs[c] == nil {
+				recs[c] = map[string]bool{}
+			}
+			recs[c][fmt.Sprintf("%s/%s/%s/%q", e.Flags, e.TaskID, e.Port, e.Vector)] = true
 			ports[e.Port] = true
 		}
 	}
 	var out []string
-	if len(recs) < ran {
-		out = append(out, fmt.Sprintf("%s: %d accounting record(s) of a typed command, %d typed command(s) ran: a session's accounting was lost", cell, len(recs), ran))
+	for _, c := range slices.Sorted(maps.Keys(ran)) {
+		if n := len(recs[c]); n < ran[c] {
+			out = append(out, fmt.Sprintf("%s: %q: %d accounting record(s), %d ran: a session's accounting was lost", cell, c, n, ran[c]))
+		}
 	}
 	if len(ports) < sessions {
 		out = append(out, fmt.Sprintf("%s: typed commands' accounting on %d port(s), want %d (one per session)", cell, len(ports), sessions))

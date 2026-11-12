@@ -643,7 +643,7 @@ func TestL94JunosC4Stops(t *testing.T) {
 	cases := map[string]func(*l94Grade){
 		"c4: the device closed 1 connection(s) first (device-rst/device-fin) while accounting replies were held": func(g *l94Grade) { g.Ends = []string{"server-fin", "device-rst", "open"} },
 		"c4: no connection was open at the cell's end: the device dropped the held accounting connection":        func(g *l94Grade) { g.Ends = []string{"server-fin", "server-fin", "server-fin"} },
-		"c4: 5 accounting record(s) of a typed command, 6 typed command(s) ran: a session's accounting was lost": drop("2", "show version | no-more <cr>"),
+		`c4: "show version | no-more": 5 accounting record(s), 6 ran: a session's accounting was lost`:           drop("2", "show version | no-more <cr>"),
 		"c4: port 2 carried typed commands, but its session has no accounting STOP":                              drop("2", "logout"),
 		"c4: port 1 carried typed commands, but its session has no accounting START":                             drop("1", "login"),
 		`c4: account flags/task_id/port/vector stop/3/1/"show version | no-more <cr>" recorded 2 times`: func(g *l94Grade) {
@@ -661,6 +661,16 @@ func TestL94JunosC4Stops(t *testing.T) {
 		if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, want) {
 			t.Errorf("%s: stops %q", want, got)
 		}
+	}
+	// Round 10b: a record of the denied command (refused on the device, so
+	// it did not run) does not offset a lost record of the permitted one:
+	// six typed-command records against six that ran, but the permitted
+	// command has five. Each command is counted on its own.
+	off := l94VJunosC4(t)
+	drop("2", "show version | no-more <cr>")(&off)
+	off.Events = append(off.Events, l94AcctRows(t, "09:46:53.300\tstop\t12\t2\tshow system users <cr>")...)
+	if got := strings.Join(l94Stops(off), "\n"); !strings.Contains(got, `c4: "show version | no-more": 5 accounting record(s), 6 ran: a session's accounting was lost`) {
+		t.Errorf("a denied command's record offsets a lost permitted one: stops %q", got)
 	}
 	// Where commands are asked (NX-OS), the session accounting stays
 	// l94SessionAccounting's, and its one connection is the held one.
