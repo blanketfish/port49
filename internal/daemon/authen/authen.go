@@ -94,6 +94,8 @@ type Handler struct {
 	// before a token is looked up, and of each token that matches. A receipt's
 	// replay is not a redemption, and is not asked.
 	floor RestoreFloor
+	// skew, when set, is told of a token minted in this clock's future.
+	skew SkewWatch
 }
 
 // New builds the authentication handler. tags are the keys the token tag may be
@@ -128,6 +130,50 @@ type RestoreFloor interface {
 // WithRestoreFloor sets the floor every token redemption asks.
 func (h *Handler) WithRestoreFloor(f RestoreFloor) *Handler {
 	h.floor = f
+	return h
+}
+
+// clockSkewSlack is how far ahead of port49d's clock a token's minted_at may
+// be before it is evidence of skew. A token is minted before it is redeemed, so
+// any positive reading is the broker's clock ahead, never latency; the slack
+// is for sub-second NTP error.
+const clockSkewSlack = time.Second
+
+// noteSkew counts, once per lookup, and tells the watch of, the furthest a
+// candidate's minted_at is ahead of this clock past clockSkewSlack. Expiry on
+// etcd is the record's, read here (design §12), so a skewed broker shifts every
+// token's life by the skew. A broker running behind cannot be seen this way:
+// its tokens are dead on arrival and the store never returns them.
+func (s *Session) noteSkew(cands []store.Token) {
+	now := s.h.now()
+	var ahead time.Duration
+	for i := range cands {
+		if cands[i].MintedAt.IsZero() {
+			continue
+		}
+		if by := cands[i].MintedAt.Sub(now); by > ahead {
+			ahead = by
+		}
+	}
+	if ahead <= clockSkewSlack {
+		return
+	}
+	s.h.metrics.TokenMintedAhead.Inc()
+	if s.h.skew != nil {
+		s.h.skew.Ahead(ahead)
+	}
+}
+
+// SkewWatch is told, once per token lookup, by how much a token's minted_at
+// is ahead of port49d's clock when that is more than clockSkewSlack.
+type SkewWatch interface {
+	Ahead(by time.Duration)
+}
+
+// WithSkewWatch sets the watch a lookup that finds a token minted in port49d's
+// future tells. The counter moves with or without one.
+func (h *Handler) WithSkewWatch(w SkewWatch) *Handler {
+	h.skew = w
 	return h
 }
 
@@ -439,6 +485,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	if err != nil {
 		return s.storeError(rec)
 	}
+	s.noteSkew(cands)
 	var winner *store.Token
 	for i := range cands {
 		if cands[i].Kind == kind && match(cands[i]) {

@@ -1385,7 +1385,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// The context cache is authorization's alone (plan 7f, Ruling 5): a
 		// login's join reads the store.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
-			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRestoreFloor(floor),
+			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRestoreFloor(floor).
+			WithSkewWatch(newSkewWatch(stderr, time.Now, procOf(cfg))),
 		// `session.staleness_ceiling` defaults to 4h (plan 7g; OR-1): the
 		// broker's scheduled refresh stamps `refreshed_at` every
 		// `broker.refresh_interval`. An explicit 0s turns the check off, which

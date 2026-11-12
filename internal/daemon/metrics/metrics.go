@@ -509,6 +509,12 @@ type Metrics struct {
 	// token_spent because the token's store revision is at or below this
 	// port49d's restore floor.
 	RedemptionRestoredRefused prometheus.Counter
+	// port49_token_minted_ahead_total: token lookups that found a token whose
+	// minted_at is more than a second ahead of this port49d's clock, so the
+	// minting broker's clock runs ahead of this host's. Expiry on etcd is the
+	// record's, read against this clock (design §12), so a skewed pair
+	// shortens or lengthens every token by the skew.
+	TokenMintedAhead prometheus.Counter
 	// port49_store_restore_detected_timestamp_seconds: the Unix time this
 	// port49d last found its session store restored, 0 if never. The process
 	// holds the time; each run's registry is set again at begin.
@@ -982,6 +988,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		RedemptionRestoredRefused: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_redemption_restored_refused_total",
 			Help: "Token redemptions refused token_spent because the token's store revision is at or below this " +
 				"port49d's restore floor: an etcd restore brought it back."}),
+		TokenMintedAhead: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_token_minted_ahead_total",
+			Help: "Token lookups that found a token whose minted_at is more than a second ahead of this port49d's " +
+				"clock: the minting broker's clock runs ahead of this host's, and every token's life shifts by the skew."}),
 		StoreRestoreDetected: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "port49_store_restore_detected_timestamp_seconds",
 			Help: "The Unix time this port49d last found its session store restored from a snapshot, 0 if never: " +
@@ -1098,7 +1107,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.DirectoryPinsSealedPrevious, m.DirectoryPinsUnopenable, m.DirectoryPinsResealLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
-		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.BrokerLogoutsQueueFull, m.RedemptionRestoreUnjudged, m.RedemptionRestoredRefused, m.StoreRestoreDetected,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.BrokerLogoutsQueueFull, m.RedemptionRestoreUnjudged, m.RedemptionRestoredRefused, m.TokenMintedAhead, m.StoreRestoreDetected,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,
