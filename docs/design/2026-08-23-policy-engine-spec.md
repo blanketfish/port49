@@ -11994,6 +11994,48 @@ role with one of those names skipped the provability check, so a Junos reply fai
 refused at load, the message naming the role and saying to rename it, from one list in
 `internal/platform`. The match is exact; `Baseline` and `baseline_ops` are other names.
 
+**59. Sessions on one single-connect connection are answered at once (Ryan 2026-11-11; the
+fallacies audit's F2-1).** port49d's read loop ran each packet's work inline: the
+authentication failure delay (to `auth_failure_delay_max`, 2s) and the store's round trips (to
+`packet_deadline`, 2s). Every RFC 9887 reference configuration turns single-connection on, and
+port49 offers it to NX-OS over TLS (decision 50 ruling 20), so every session of such a device
+queued behind one slow or failing packet; two FAILs ahead of a command authorization pass vEOS's
+5.0s reply timeout (§15 L13), and the device marks port49 dead.
+
+1. **Lanes.** On a single-connect connection, packets of different `session_id`s are dispatched
+   at once, each session in its own lane; the packets of one session are answered strictly in
+   the order they came. The read loop stays the connection's only reader, and everything before
+   dispatch (admission, the quarantine, the TLS recheck, key validation, the `seq_no` 255 rule)
+   still runs in it, packet by packet, as before. Each reply goes out in one write under the
+   connection's write lock, so replies never interleave. Replies of different sessions may leave
+   in another order than their requests came (RFC 8907 §4.3: the client tells sessions apart by
+   `session_id`). A connection that is not single-connect has one session and is served inline,
+   unchanged.
+2. **The bound is 16 packets in flight per connection** (`maxInFlight`): read and not yet
+   answered. Past it the read loop stops reading until one is answered; the device's next packet
+   waits in its socket, and its reply comes late, never a close. That is the head-of-line wait of
+   before, behind 16 packets rather than one. 16 is well above the handful of sessions an
+   operator's logins and commands put on one device at once, and keeps a connection's buffered
+   bodies at 64 KiB at most (`wire.MaxBodyLen` 4096). It is not a setting. The per-NAS connection
+   cap, `max_connections`, the cap of 64 unfinished authentication sessions per connection (a
+   START past it is a protocol error, §10) and every other limit are unchanged.
+3. **The failure delay holds its session only.** It still counts from the packet's arrival (read
+   time, not lane start) and is cancelled only by shutdown. A connection owing a reply is not
+   idle: `idle_timeout` does not close it while a lane runs.
+4. **Ending a connection.** A protocol error in a lane (an unknown CONTINUE, the live-session cap,
+   a bad sequence) ends the connection as the read loop's own do: the record, the strike, the
+   backoff, the close. A close that drops the connection (a reset, a protocol error, a panic) is
+   made at once, not after another session's delay, and no reply is written after it: over TLS
+   the connection is then the TCP beneath, and a reply would be cleartext. Packets read and not
+   yet begun are dropped, as unread bytes at a close are; a packet in its store work or delay runs
+   to its end, bounded by `packet_deadline` and `auth_failure_delay_max`, and its reply is not
+   written. Any other close (the device's, an idle close) waits for owed replies first. Every
+   lane has ended before the connection is counted closed, and a panic in a lane is recovered,
+   counted and logged as a connection's is.
+5. **Unmeasured.** No device has been run against it. Whether each platform takes replies to its
+   sessions out of request order, and the queued-behind-FAIL case under L13, are not measured;
+   the audit report lists the run.
+
 ---
 
 ## 14. Required test assertions

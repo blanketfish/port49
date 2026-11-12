@@ -77,6 +77,9 @@ The RFC 9887 client was measured on Nexus 9300v 10.6(2)F on 2026-10-18 ([L73-cis
 !!! warning "Unmeasured: the single-connect details and a restart"
     The per-request TLS note ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L80-cisco_nxos.md)) is reported to record more than this page confirms, and none of it is confirmed here: that before the fix the device asked about some commands only and in one run `show users` ran; that three concurrent sessions shared one connection; that a session idle for 35 s reconnected cleanly; that a port49d restart in mid-session cost nothing on etcd but, on the memory store, denied every later command until the person logged in again; and that the first TLS open on a new connection can take about 5 s. Treat each as an expectation, and prefer etcd to the memory store if a restart must not cost a fresh login.
 
+!!! warning "Unmeasured: replies to pipelined sessions out of order"
+    port49d answers the sessions on one single-connect connection at once ([Devices](index.md#single-connection-one-devices-sessions-share-a-connection)), so the reply to the command authorization NX-OS writes behind an accounting record can leave before the accounting reply. Whether NX-OS takes replies out of request order is not measured.
+
 !!! warning "Unmeasured: NX-OS without secure tls"
     The reference sets `tacacs-server secure tls` on TLS hosts. What the device sends to the TLS port without that line is unknown: the lab did not run it, and no device debug was captured.
 
