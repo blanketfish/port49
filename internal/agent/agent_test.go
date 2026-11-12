@@ -80,6 +80,22 @@ type fakeBroker struct {
 	inProgress int
 	revoked    bool
 
+	// delay holds every /v1/tokens answer that long; stall holds it until
+	// the agent hangs up. batches is the device list of every mint request,
+	// in arrival order, and batchKeys its Idempotency-Key. itemErrFor
+	// answers a device's item with that error code. dropAfterMint hangs up
+	// on that many mint requests after minting them, so the answer is lost.
+	// minted counts, per device, the first time each Idempotency-Key saw it:
+	// a replay under the same key mints nothing, as the broker's does.
+	delay         time.Duration
+	stall         bool
+	batches       [][]string
+	batchKeys     []string
+	itemErrFor    map[string]string
+	dropAfterMint int
+	minted        map[string]int
+	seenMint      map[string]bool
+
 	addrs           map[string][]string
 	sessions        map[string][]string // api.AgentSessionHeader as each path saw it
 	order           []string
@@ -282,8 +298,48 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, api.MintResponse{Principal: "user:alice@example.com", Results: []api.MintItem{item}})
 			return
 		}
-		writeJSON(w, 200, api.MintResponse{Principal: "user:alice@example.com", Results: []api.MintItem{{
-			Device: req.Devices[0], Verdict: "permit", Username: "alice", Login: fmt.Sprintf("login-%02d", n)}}})
+		fb.mu.Lock()
+		fb.batches = append(fb.batches, append([]string(nil), req.Devices...))
+		fb.batchKeys = append(fb.batchKeys, r.Header.Get("Idempotency-Key"))
+		if fb.minted == nil {
+			fb.minted, fb.seenMint = map[string]int{}, map[string]bool{}
+		}
+		items := make([]api.MintItem, 0, len(req.Devices))
+		for _, d := range req.Devices {
+			if code := fb.itemErrFor[d]; code != "" {
+				items = append(items, api.MintItem{Device: d, Error: code, Detail: "this device was refused"})
+				continue
+			}
+			if id := r.Header.Get("Idempotency-Key") + "/" + d; !fb.seenMint[id] {
+				fb.seenMint[id] = true
+				fb.minted[d]++
+			}
+			items = append(items, api.MintItem{Device: d, Verdict: "permit", Username: "alice",
+				Login: fmt.Sprintf("login-%02d", n), Address: "addr-" + d})
+		}
+		delay, stall := fb.delay, fb.stall
+		dropAfter := fb.dropAfterMint > 0
+		if dropAfter {
+			fb.dropAfterMint--
+		}
+		fb.mu.Unlock()
+		if stall {
+			<-r.Context().Done()
+			return
+		}
+		if delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if dropAfter {
+			c, _, _ := w.(http.Hijacker).Hijack()
+			c.Close()
+			return
+		}
+		writeJSON(w, 200, api.MintResponse{Principal: "user:alice@example.com", Results: items})
 	}
 }
 
