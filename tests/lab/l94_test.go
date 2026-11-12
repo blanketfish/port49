@@ -320,6 +320,7 @@ func TestL94(t *testing.T) {
 				pre       []l73Conn // closed before the clean point (l94SinceClean)
 				cleanAt   time.Time
 				hold      l94HoldWindow // c4's
+				stale     []string      // l94OlderThanCapture's stale flows
 				second    float64
 				upAt      time.Time
 				restartAt time.Time
@@ -584,7 +585,9 @@ func TestL94(t *testing.T) {
 				if err != nil {
 					t.Fatalf("INVALID: %v", err)
 				}
-				if err := l94OlderThanCapture(raw, e.l.p.addr, l73TLSPort, cleanAt); err != nil {
+				// A stale device socket the server reset is a finding; the
+				// cell grades on, so whatever it cost the device is graded.
+				if stale, err = l94OlderThanCapture(raw, e.l.p.addr, l73TLSPort, cleanAt); err != nil {
 					t.Fatal(err)
 				}
 				// The cell's wire evidence is the cell's connections alone, so
@@ -763,7 +766,8 @@ func TestL94(t *testing.T) {
 			for _, s := range cellStops {
 				sum.WriteString("STOP: " + s + "\n")
 			}
-			cellFindings := l94Findings(g)
+			// On either arm: a stale device socket is no grade of the fix.
+			cellFindings := append(l94Findings(g), prefixAll(cell+": ", stale)...)
 			for _, f := range cellFindings {
 				sum.WriteString("FINDING: " + f + "\n")
 			}

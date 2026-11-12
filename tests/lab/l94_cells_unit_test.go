@@ -20,6 +20,7 @@ import (
 
 	"github.com/blanketfish/port49/internal/decision"
 	"github.com/blanketfish/port49/internal/token"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 // The platforms run in L94's priority order: NX-OS, then Junos (vJunos-router,
@@ -1541,7 +1542,8 @@ func l94Splice(a, b []byte) []byte {
 // (l73Conns counts from a captured SYN), so l94SinceClean never sees it.
 // l94OlderThanCapture scans the same savefile, headers only, for a flow to
 // the server port with packets but no captured device SYN: one with a
-// packet at or after the clean point is INVALID, one wholly before is not.
+// packet at or after the clean point is INVALID, unless the server only
+// reset it (stale, a finding); one wholly before is ignored.
 func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 	clean := l94At(t, "09:46:46.000")
 	at := func(c string) time.Time { return l94At(t, c) }
@@ -1549,7 +1551,7 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 	cellConn := l73FakePcap(48328, l73TLSPort, []l73FakeSeg{
 		{true, tcpSYN, 1000, nil, at("09:46:48.152")}, {false, tcpSYN | tcpACK, 5000, nil, at("09:46:48.153")},
 		{true, tcpACK, 1001, nil, at("09:46:48.154")}})
-	if err := l94OlderThanCapture(cellConn, l73TDevice, l73TLSPort, clean); err != nil {
+	if _, err := l94OlderThanCapture(cellConn, l73TDevice, l73TLSPort, clean); err != nil {
 		t.Errorf("a captured SYN: %v", err)
 	}
 	orphan := func(port uint16, segs ...l73FakeSeg) []byte { return l73FakePcap(port, l73TLSPort, segs) }
@@ -1559,33 +1561,65 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 		"device's packet after": orphan(41000, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{true, tcpACK | tcpPSH, 7000, nil, at("09:46:46.200")}),
 		"server's packet after": orphan(41000, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{false, tcpACK, 9000, nil, at("09:46:46.000")}),
 	} {
-		err := l94OlderThanCapture(l94Splice(cellConn, o), l73TDevice, l73TLSPort, clean)
+		_, err := l94OlderThanCapture(l94Splice(cellConn, o), l73TDevice, l73TLSPort, clean)
 		if err == nil || !strings.Contains(err.Error(), "INVALID: a connection older than the capture") || !strings.Contains(err.Error(), "device port 41000") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
 	// Wholly before the clean point: ignored, as the gauge's 0 says it ended.
 	before := orphan(41002, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{true, tcpFIN | tcpACK, 7000, nil, at("09:46:45.900")})
-	if err := l94OlderThanCapture(l94Splice(cellConn, before), l73TDevice, l73TLSPort, clean); err != nil {
+	if _, err := l94OlderThanCapture(l94Splice(cellConn, before), l73TDevice, l73TLSPort, clean); err != nil {
 		t.Errorf("an old flow wholly before the clean point: %v", err)
 	}
 	// Another server port is not the cell's TLS server.
 	other := l73FakePcap(41004, 49, []l73FakeSeg{{true, tcpACK, 7000, nil, at("09:46:47.000")}})
-	if err := l94OlderThanCapture(l94Splice(cellConn, other), l73TDevice, l73TLSPort, clean); err != nil {
+	if _, err := l94OlderThanCapture(l94Splice(cellConn, other), l73TDevice, l73TLSPort, clean); err != nil {
 		t.Errorf("port 49: %v", err)
 	}
 	// A reused source port: the old flow's packets before the clean point,
 	// then a new connection's captured SYN on the same port: not an orphan.
 	reused := orphan(41006, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")},
 		l73FakeSeg{true, tcpSYN, 8000, nil, at("09:46:47.000")}, l73FakeSeg{false, tcpSYN | tcpACK, 9000, nil, at("09:46:47.001")})
-	if err := l94OlderThanCapture(reused, l73TDevice, l73TLSPort, clean); err != nil {
+	if _, err := l94OlderThanCapture(reused, l73TDevice, l73TLSPort, clean); err != nil {
 		t.Errorf("a reused port with its SYN captured: %v", err)
 	}
-	// The only packet after the clean point is the server's RST: the
-	// connection was still port49's then, so INVALID.
+	// Stale: the server's only answer after the clean point is a RST, with
+	// no data from it anywhere: port49 had no socket for the flow, and the
+	// server's kernel reset the device's write (cEOS 4.36 baseline c3,
+	// 2026-11-12: a c2 connection port49d's stop left open on the device).
+	// A finding, not INVALID; the cell grades on.
 	rst := orphan(41008, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.100")})
-	if err := l94OlderThanCapture(rst, l73TDevice, l73TLSPort, clean); err == nil || !strings.Contains(err.Error(), "device port 41008") {
-		t.Errorf("a server RST after the clean point: %v", err)
+	stale, err := l94OlderThanCapture(rst, l73TDevice, l73TLSPort, clean)
+	want := "device port 41008 wrote on a connection from before the capture at 09:46:45.500; the server reset it (no socket): the device carried a stale connection into the cell"
+	if err != nil || !slices.Equal(stale, []string{want}) {
+		t.Errorf("a server RST alone after the clean point: stale %q err %v", stale, err)
+	}
+	// cEOS's shape: the device's write after the clean point, the server's
+	// RST at once; a pure ACK of the server's before the clean point is
+	// allowed.
+	ceos := orphan(41012, l73FakeSeg{false, tcpACK, 9000, nil, at("09:46:45.600")},
+		l73FakeSeg{true, tcpACK | tcpPSH, 7000, []byte{1, 2, 3}, at("09:46:46.561")}, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.561")})
+	stale, err = l94OlderThanCapture(l94Splice(cellConn, ceos), l73TDevice, l73TLSPort, clean)
+	want = "device port 41012 wrote on a connection from before the capture at 09:46:46.561; the server reset it (no socket): the device carried a stale connection into the cell"
+	if err != nil || !slices.Equal(stale, []string{want}) {
+		t.Errorf("cEOS's stale write: stale %q err %v", stale, err)
+	}
+	// Anything else from the server is a socket port49 had: INVALID.
+	dev := l73FakeSeg{true, tcpACK | tcpPSH, 7000, []byte{1, 2, 3}, at("09:46:46.500")}
+	for name, o := range map[string][]byte{
+		"server ACK after the clean point":  orphan(41014, dev, l73FakeSeg{false, tcpACK, 9000, nil, at("09:46:46.501")}, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.600")}),
+		"server data after the clean point": orphan(41014, dev, l73FakeSeg{false, tcpACK | tcpPSH, 9000, []byte{4, 5}, at("09:46:46.501")}, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.600")}),
+		"server data before the clean point": orphan(41014, l73FakeSeg{false, tcpACK | tcpPSH, 9000, []byte{4, 5}, at("09:46:45.501")},
+			dev, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.600")}),
+		"a RST carrying data":        orphan(41014, dev, l73FakeSeg{false, tcpRST | tcpACK, 9000, []byte{4}, at("09:46:46.501")}),
+		"the device's write, no RST": orphan(41014, dev),
+		"server FIN after the clean": orphan(41014, dev, l73FakeSeg{false, tcpFIN | tcpACK, 9000, nil, at("09:46:46.501")}),
+		"server RST and then ACK":    orphan(41014, dev, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.501")}, l73FakeSeg{false, tcpACK, 9000, nil, at("09:46:46.502")}),
+	} {
+		stale, err := l94OlderThanCapture(l94Splice(cellConn, o), l73TDevice, l73TLSPort, clean)
+		if err == nil || !strings.Contains(err.Error(), "INVALID: a connection older than the capture") || !strings.Contains(err.Error(), "device port 41014") || stale != nil {
+			t.Errorf("%s: stale %q err %v", name, stale, err)
+		}
 	}
 	// Flows are keyed by device port and server, as l73Conns keys them: a
 	// captured SYN from the same device port to another server (the lab's
@@ -1594,9 +1628,32 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 	a1 := orphan(41010, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")})
 	toB := l94ReServer(t, orphan(41010, l73FakeSeg{true, tcpSYN, 8000, nil, at("09:46:46.200")}, l73FakeSeg{false, tcpSYN | tcpACK, 9000, nil, at("09:46:46.201")}), "172.100.100.2")
 	a2 := orphan(41010, l73FakeSeg{true, tcpACK | tcpPSH, 7000, nil, at("09:46:46.500")})
-	if err := l94OlderThanCapture(l94Splice(l94Splice(a1, toB), a2), l73TDevice, l73TLSPort, clean); err == nil ||
+	if _, err := l94OlderThanCapture(l94Splice(l94Splice(a1, toB), a2), l73TDevice, l73TLSPort, clean); err == nil ||
 		!strings.Contains(err.Error(), "device port 41010") || !strings.Contains(err.Error(), "172.100.100.1:300") {
 		t.Errorf("a SYN to another server on the same device port: %v", err)
+	}
+}
+
+// A RST is a minimum-size Ethernet frame: 54 bytes padded to 60. The
+// padding is not data, or every kernel reset would read as port49's.
+func TestL94TCPDataLenIgnoresEthernetPadding(t *testing.T) {
+	pkt := make([]byte, 14+20+20+6)
+	binary.BigEndian.PutUint16(pkt[12:], 0x0800)
+	pkt[14] = 0x45
+	binary.BigEndian.PutUint16(pkt[14+2:], 40)
+	pkt[14+9] = 6
+	pkt[14+20+12] = 5 << 4
+	pkt[14+20+13] = tcpRST
+	fl, ok := labpcap.FlowOf(labpcap.LinkEthernet, pkt)
+	if !ok || fl.PayloadLen != 6 {
+		t.Fatalf("flow %v %+v", ok, fl)
+	}
+	if n := l94TCPDataLen(pkt, fl); n != 0 {
+		t.Errorf("a padded RST carries %d data bytes, want 0", n)
+	}
+	binary.BigEndian.PutUint16(pkt[14+2:], 43)
+	if n := l94TCPDataLen(pkt, fl); n != 3 {
+		t.Errorf("3 data bytes read as %d", n)
 	}
 }
 

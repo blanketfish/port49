@@ -2,6 +2,7 @@ package lab
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"maps"
@@ -1230,10 +1231,19 @@ func l94SinceClean(conns []l73Conn, cleanAt time.Time) (kept, pre []l73Conn, err
 // before it (the gauge says so) and is ignored. It reads the savefile with
 // the same reader as l73Conns, headers only: addresses, ports, flags and
 // times. No payload byte is read and no body is decoded.
-func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time.Time) error {
+//
+// One such flow is stale, not INVALID: one the server only reset. Every
+// server packet at or after the clean point is a RST, at least one is, no
+// server packet in the flow carries data, and the device wrote on it. port49
+// had no socket for it; the server's kernel reset the write (cEOS 4.36
+// baseline c3, 2026-11-12: a c2 connection the device kept open across
+// port49d's stop between cells). It comes back as a finding, and the cell
+// grades on. A flow port49 accepted after the gauge's 0 carries its TLS
+// flight, so it stays INVALID.
+func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time.Time) (stale []string, err error) {
 	f, err := labpcap.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("INVALID: reading the cell's capture for connections older than it: %w", err)
+		return nil, fmt.Errorf("INVALID: reading the cell's capture for connections older than it: %w", err)
 	}
 	// A flow is keyed by (device port, server), as l73Conns keys a
 	// connection: a SYN to one server does not speak for a flow to another
@@ -1242,12 +1252,21 @@ func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time
 		port   uint16
 		server string
 	}
-	type orphan struct{ first, last time.Time }
+	type orphan struct {
+		first, last time.Time
+		// wrote is the device's last packet before the server's first RST
+		// at or after the clean point (reset); data and other are a server
+		// packet carrying data anywhere, and one not a RST at or after the
+		// clean point.
+		wrote, reset time.Time
+		data, other  bool
+	}
 	synced := map[key]bool{} // flows whose device SYN the capture holds
 	orphans := map[key]*orphan{}
 	var order []key
 	for i, r := range f.Records {
-		fl, ok := labpcap.FlowOf(f.Link, f.Bytes(r))
+		b := f.Bytes(r)
+		fl, ok := labpcap.FlowOf(f.Link, b)
 		if !ok {
 			continue
 		}
@@ -1269,18 +1288,61 @@ func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time
 			continue
 		}
 		at := f.TimeOf(i)
-		if o := orphans[k]; o == nil {
-			orphans[k] = &orphan{at, at}
+		o := orphans[k]
+		if o == nil {
+			o = &orphan{first: at}
+			orphans[k] = o
 			order = append(order, k)
-		} else {
-			o.last = at
+		}
+		o.last = at
+		switch {
+		case fromDevice:
+			if o.reset.IsZero() {
+				o.wrote = at
+			}
+		default:
+			if l94TCPDataLen(b, fl) > 0 {
+				o.data = true
+			}
+			if !at.Before(cleanAt) {
+				if fl.Flags&l94TCPRST == 0 {
+					o.other = true
+				} else if o.reset.IsZero() {
+					o.reset = at
+				}
+			}
 		}
 	}
 	for _, k := range order {
-		if o := orphans[k]; !o.last.Before(cleanAt) {
-			return fmt.Errorf("INVALID: a connection older than the capture: device port %d to %s sent or received packets from %s to %s with no SYN captured, the last at or after the cell's clean point %s; the capture did not start clean",
-				k.port, k.server, o.first.UTC().Format("15:04:05.000"), o.last.UTC().Format("15:04:05.000"), cleanAt.UTC().Format("15:04:05.000"))
+		o := orphans[k]
+		if o.last.Before(cleanAt) {
+			continue
 		}
+		if !o.reset.IsZero() && !o.data && !o.other && !o.wrote.IsZero() {
+			stale = append(stale, fmt.Sprintf("device port %d wrote on a connection from before the capture at %s; the server reset it (no socket): the device carried a stale connection into the cell",
+				k.port, o.wrote.UTC().Format("15:04:05.000")))
+			continue
+		}
+		return nil, fmt.Errorf("INVALID: a connection older than the capture: device port %d to %s sent or received packets from %s to %s with no SYN captured, the last at or after the cell's clean point %s; the capture did not start clean",
+			k.port, k.server, o.first.UTC().Format("15:04:05.000"), o.last.UTC().Format("15:04:05.000"), cleanAt.UTC().Format("15:04:05.000"))
 	}
-	return nil
+	return stale, nil
+}
+
+// l94TCPRST is the TCP header's RST flag.
+const l94TCPRST = 0x04
+
+// l94TCPDataLen is one packet's TCP data length from its headers alone: the
+// IPv4 total length less the IP and TCP headers, so an Ethernet frame's
+// padding is not data. A total length of 0 (a segmentation-offloaded
+// capture) falls back to the captured length. No payload byte is read.
+func l94TCPDataLen(b []byte, fl labpcap.Flow) int {
+	if fl.IPOff+4 > len(b) {
+		return fl.PayloadLen
+	}
+	tot := int(binary.BigEndian.Uint16(b[fl.IPOff+2 : fl.IPOff+4]))
+	if tot == 0 {
+		return fl.PayloadLen
+	}
+	return max(tot-(fl.PayloadOff-fl.IPOff), 0)
 }
