@@ -20,7 +20,8 @@ const labAcctHoldTag = "port49_lab_acct_hold"
 // hold_lab.go, is in it. The release builds pass no tag but hwkey_dlopen
 // (.goreleaser.yaml, Dockerfile), and this tag is named nowhere outside the
 // handler's own two files and their tests, the lab harness that builds C4's
-// binary, this test, and the spec and plan text that describe it.
+// binary, this test, the spec and plan text that describe it, and the lab
+// evidence that records a c4 run.
 func TestNoReleaseBuildNamesTheAccountingHoldTag(t *testing.T) {
 	ctx := build.Default
 	ctx.BuildTags = []string{"hwkey_dlopen"}
@@ -32,19 +33,6 @@ func TestNoReleaseBuildNamesTheAccountingHoldTag(t *testing.T) {
 		t.Fatalf("the release build of internal/daemon/acct has %v: want hold.go and not hold_lab.go", pkg.GoFiles)
 	}
 
-	allowed := func(rel string) bool {
-		switch {
-		case rel == "internal/daemon/acct/hold.go", rel == "internal/daemon/acct/hold_lab.go",
-			rel == "internal/daemon/acct/hold_test.go", rel == "internal/daemon/acct/hold_lab_test.go",
-			rel == "tests/ci/lab_hold_test.go":
-			return true
-		case strings.HasPrefix(rel, "tests/lab/") && strings.HasSuffix(rel, ".go"):
-			return true
-		case strings.HasPrefix(rel, "docs/") && strings.HasSuffix(rel, ".md"):
-			return true
-		}
-		return false
-	}
 	// The tracked tree is what a release builds from: untracked scratch
 	// (a worktree's notes, a local build) is no release input.
 	root := filepath.Join("..", "..")
@@ -71,12 +59,53 @@ func TestNoReleaseBuildNamesTheAccountingHoldTag(t *testing.T) {
 		}
 		if strings.Contains(string(b), labAcctHoldTag) {
 			found++
-			if !allowed(rel) {
+			if !labHoldTagAllowed(rel) {
 				t.Errorf("%s names the lab-only build tag %s: no build outside the lab may", rel, labAcctHoldTag)
 			}
 		}
 	}
 	if found < 3 {
 		t.Fatalf("the tag was found in %d files: the scan is broken", found)
+	}
+}
+
+// labHoldTagAllowed is the tracked files that may name the hold tag.
+func labHoldTagAllowed(rel string) bool {
+	switch {
+	case rel == "internal/daemon/acct/hold.go", rel == "internal/daemon/acct/hold_lab.go",
+		rel == "internal/daemon/acct/hold_test.go", rel == "internal/daemon/acct/hold_lab_test.go",
+		rel == "tests/ci/lab_hold_test.go":
+		return true
+	case strings.HasPrefix(rel, "tests/lab/") && strings.HasSuffix(rel, ".go"):
+		return true
+	case strings.HasPrefix(rel, "docs/") && strings.HasSuffix(rel, ".md"):
+		return true
+	case strings.HasPrefix(rel, "tests/lab/evidence/"):
+		// Committed lab evidence is a record of a run, never a build input:
+		// L94 c4's summary names the tags its port49d was built with.
+		return true
+	}
+	return false
+}
+
+// The allow-list is exactly the hold's own files, the lab harness, the
+// docs, and the lab's committed evidence (a c4 summary records the tags its
+// port49d was built with). Nothing else under tests/ may name the tag.
+func TestTheHoldTagAllowListIsNarrow(t *testing.T) {
+	for _, rel := range []string{
+		"internal/daemon/acct/hold_lab.go", "tests/lab/l94_test.go", "docs/design/x.md",
+		"tests/lab/evidence/L94-cisco_nxos/fixed/offered/c4-summary.txt",
+	} {
+		if !labHoldTagAllowed(rel) {
+			t.Errorf("%s may name the tag", rel)
+		}
+	}
+	for _, rel := range []string{
+		"tests/x.go", "tests/ci/x_test.go", "tests/lab/x.txt", "tests/labx/evidence/x.txt", "internal/daemon/acct/acct.go",
+		".goreleaser.yaml", "Dockerfile", "Makefile", "docs/x.yaml",
+	} {
+		if labHoldTagAllowed(rel) {
+			t.Errorf("%s may not name the tag", rel)
+		}
 	}
 }
