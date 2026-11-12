@@ -410,8 +410,11 @@ type l94Grade struct {
 	// in the cell's window, or l94Suspect's count elsewhere.
 	DeadOrSSL int
 	Outcomes  []l94Outcome // c2/c3/c5: A's logins
-	Baseline  *l94Baseline // the baseline arm's evidence, when it was run
-	Gaps      []time.Duration
+	// BLogin is c2's and c3's B token login during A's FAILs, on a platform
+	// whose device asks port49 about no command (l94Commanded false).
+	BLogin   *l94Outcome
+	Baseline *l94Baseline // the baseline arm's evidence, when it was run
+	Gaps     []time.Duration
 	// Restart is c5's window.
 	RestartAt, UpAt time.Time
 }
@@ -494,13 +497,21 @@ func l94Stops(g l94Grade) []string {
 			out = append(out, "c2: A's stale-token login was not refused as an authentication failure")
 		}
 	case "c3":
-		limit := g.P.Timeout.Seconds()
-		if g.Baseline != nil && (limit == 0 || g.Baseline.MaxTook < limit) {
-			limit = g.Baseline.MaxTook
+		// The bound is the lower of the platform's L13 timeout and the
+		// baseline arm's slowest B command plus 250ms; where commands are
+		// asked, the row's <1s on top.
+		limit, from := g.P.Timeout.Seconds(), g.P.TimeoutFrom
+		if g.Baseline != nil {
+			if b := g.Baseline.MaxTook + 0.25; limit == 0 || b < limit {
+				limit, from = b, "the baseline arm's slowest + 250ms"
+			}
 		}
 		for _, x := range g.Typed {
+			if commanded && x.Took > l94FastB.Seconds() {
+				out = append(out, fmt.Sprintf("c3: B's %q took %.2fs, over the row's %s", x.Command, x.Took, l94FastB))
+			}
 			if limit > 0 && x.Took > limit {
-				out = append(out, fmt.Sprintf("c3: B's %q took %.2fs, above %.2fs (the baseline arm's slowest, or %s)", x.Command, x.Took, limit, g.P.TimeoutFrom))
+				out = append(out, fmt.Sprintf("c3: B's %q took %.2fs, above %.2fs (%s)", x.Command, x.Took, limit, from))
 			}
 		}
 		if n := l94FailsDelivered(g.Outcomes); n != l94C3Fails {
@@ -516,10 +527,51 @@ func l94Stops(g l94Grade) []string {
 			out = append(out, "c5: no command after the restart was asked: the device did not reconnect")
 		}
 	}
+	if !commanded && (g.Cell == "c2" || g.Cell == "c3") {
+		out = append(out, l94BLoginStops(g)...)
+	}
 	if g.Baseline != nil && (g.Cell == "c2" || g.Cell == "c3") {
 		out = append(out, prefixAll(g.Cell+": ", l94Regressed(g.Baseline.Outcomes, g.Outcomes))...)
 	}
 	return out
+}
+
+// l94BLoginStops grades c2's and c3's B token login on a platform whose
+// device asks port49 about no command, so that a B request port49 must
+// answer is in the cell: it logs in, within the platform's L13 timeout, and
+// port49 recorded its permit redeem inside A's delay (after A's request was
+// read, before A's FAIL), so it neither waited behind A nor fell through to
+// a local method.
+func l94BLoginStops(g l94Grade) []string {
+	b := g.BLogin
+	if b == nil {
+		return []string{g.Cell + ": no B token login during A's FAILs"}
+	}
+	var out []string
+	if !b.LoggedIn {
+		out = append(out, fmt.Sprintf("%s: B's token login did not log in (auth_failed=%v err=%q)", g.Cell, b.AuthFailed, b.Err))
+	}
+	if g.P.Timeout > 0 && b.Took > g.P.Timeout.Seconds() {
+		out = append(out, fmt.Sprintf("%s: B's token login took %.2fs, over %s (%s)", g.Cell, b.Took, g.P.Timeout, g.P.TimeoutFrom))
+	}
+	if !l94LoginInsideDelay(g.Events) {
+		out = append(out, g.Cell+": B's token login was not answered inside A's delay: no permit redeem recorded between A's read and A's FAIL")
+	}
+	return out
+}
+
+// l94LoginInsideDelay is whether a permit redeem was recorded inside the
+// first FAIL's delay: after its read (the FAIL's ts less l94Delay) and
+// before the FAIL.
+func l94LoginInsideDelay(evs []l94Event) bool {
+	fails := l94Fails(evs)
+	if len(fails) == 0 {
+		return false
+	}
+	from, to := fails[0].TS.Add(-l94Delay), fails[0].TS
+	return slices.ContainsFunc(evs, func(e l94Event) bool {
+		return e.Event == "redeem" && e.Verdict == "permit" && e.TS.After(from) && e.TS.Before(to)
+	})
 }
 
 // l94SessionAccounting is c1's (and c4's) check that each of its sessions

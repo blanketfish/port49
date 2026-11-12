@@ -311,25 +311,83 @@ func TestL94C3Stops(t *testing.T) {
 	g.Cell = "c3"
 	g.Outcomes = []l94Outcome{{AuthFailed: true}, {AuthFailed: true}, {AuthFailed: true}}
 	g.Events = append(g.Events, l94Event{Event: "redeem", Verdict: "deny"}, l94Event{Event: "redeem", Verdict: "deny"}, l94Event{Event: "redeem", Verdict: "deny"})
-	g.Typed[0].Took, g.Typed[1].Took = 0.4, 5.5
+	g.Typed[0].Took, g.Typed[1].Took = 0.4, 0.9
 	if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "took") {
-		t.Errorf("5.5s is under NX-OS's 6s with no baseline: %q", got)
+		t.Errorf("0.9s is under the row's 1s with no baseline: %q", got)
 	}
-	g.Baseline = &l94Baseline{MaxTook: 4}
-	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "took 5.50s, above 4.00s") {
-		t.Errorf("above the baseline's slowest: %q", got)
+	// H5: the row's <1s where commands are asked.
+	g.Typed[1].Took = 1.2
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "took 1.20s, over the row's 1s") {
+		t.Errorf("over 1s: %q", got)
+	}
+	// H5: the baseline's slowest plus 250ms, not the bare slowest.
+	g.Typed[1].Took = 0.7
+	g.Baseline = &l94Baseline{MaxTook: 0.5}
+	if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "took") {
+		t.Errorf("0.7s is within the baseline's 0.5s + 250ms: %q", got)
+	}
+	g.Typed[1].Took = 0.8
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "took 0.80s, above 0.75s") {
+		t.Errorf("above the baseline's slowest + 250ms: %q", got)
 	}
 	g.Baseline = nil
-	g.Typed[1].Took = 6.5
-	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "above 6.00s") {
-		t.Errorf("above the L13 timeout: %q", got)
-	}
 	g.Typed[1].Took = 0.5
 	g.Outcomes = g.Outcomes[:2]
 	g.Events = g.Events[:len(g.Events)-2] // two of the three FAIL redeems gone
 	got := strings.Join(l94Stops(g), "\n")
 	if !strings.Contains(got, "2 of 3 FAILs") || !strings.Contains(got, "recorded 1 FAIL") {
 		t.Errorf("a FAIL lost: %q", got)
+	}
+}
+
+// H5: where the device asks port49 about no command (Junos), c2 and c3 hold a
+// B token login during A's FAILs: it must log in, within the platform's L13
+// timeout, and port49 must have answered it inside A's delay (a permit
+// redeem recorded before A's FAIL), so it was neither queued nor a fall-through.
+func TestL94JunosHoldsABLoginDuringTheFails(t *testing.T) {
+	t0 := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	p, _ := l94PlatformFor("vjunos26")
+	for _, cell := range []string{"c2", "c3"} {
+		fails := 1
+		if cell == "c3" {
+			fails = l94C3Fails
+		}
+		clean := func() l94Grade {
+			g := l94Grade{Arm: "fixed", Cell: cell, Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1,
+				Typed: []l80Typed{{Command: "show version | no-more", Took: 0.3}}, Gaps: []time.Duration{1800 * time.Millisecond},
+				BLogin: &l94Outcome{LoggedIn: true, Took: 1.1},
+				Events: []l94Event{{TS: t0.Add(-5 * time.Second), Event: "redeem", Verdict: "permit"}, // B's session
+					{TS: t0.Add(1200 * time.Millisecond), Event: "redeem", Verdict: "permit"}}} // B's login, inside the delay
+			for range fails {
+				g.Outcomes = append(g.Outcomes, l94Outcome{AuthFailed: true})
+				g.Events = append(g.Events, l94Event{TS: t0.Add(2100 * time.Millisecond), Event: "redeem", Verdict: "deny"})
+			}
+			return g
+		}
+		if got := l94Stops(clean()); len(got) != 0 {
+			t.Fatalf("%s: a clean Junos cell stops: %v", cell, got)
+		}
+		cases := map[string]func(*l94Grade){
+			"no B token login":         func(g *l94Grade) { g.BLogin = nil },
+			"B's token login did not":  func(g *l94Grade) { g.BLogin = &l94Outcome{AuthFailed: true, Took: 2.2} },
+			"B's token login took 3.4": func(g *l94Grade) { g.BLogin.Took = 3.4 },
+			"not answered inside A's":  func(g *l94Grade) { g.Events[1].TS = t0.Add(2300 * time.Millisecond) },
+		}
+		for want, mut := range cases {
+			g := clean()
+			b := *g.BLogin
+			g.BLogin = &b
+			mut(&g)
+			if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, want) {
+				t.Errorf("%s %s: stops %q", cell, want, got)
+			}
+		}
+	}
+	// Where commands are asked the B login is not part of the cell.
+	g := l94Clean()
+	g.Cell, g.Outcomes, g.Gaps = "c2", []l94Outcome{{AuthFailed: true}}, []time.Duration{1800 * time.Millisecond}
+	if got := l94Stops(g); len(got) != 0 {
+		t.Errorf("NX-OS c2 graded on a B login: %v", got)
 	}
 }
 

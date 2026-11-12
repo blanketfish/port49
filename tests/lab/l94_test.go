@@ -313,7 +313,33 @@ func TestL94(t *testing.T) {
 				second    float64
 				upAt      time.Time
 				restartAt time.Time
+				bLogin    *l94Outcome
 			)
+			// startBLogin starts c2's and c3's B token login, where the
+			// device asks port49 about no command; nil elsewhere.
+			startBLogin := func() chan l94Outcome {
+				if l94Commanded(q.run.Platform) {
+					return nil
+				}
+				ch := make(chan l94Outcome, 1)
+				tok := mint()
+				go func() {
+					b0 := time.Now()
+					c, err := l.dial(qualUser, tok, dialFor)
+					if c != nil {
+						c.Close()
+					}
+					ch <- l94OutcomeOf(time.Since(b0), err)
+				}()
+				return ch
+			}
+			waitBLogin := func(ch chan l94Outcome) *l94Outcome {
+				if ch == nil {
+					return nil
+				}
+				o := <-ch
+				return &o
+			}
 			fmt.Fprintf(&sum, "L94, arm %s, cell %s, mode %s, %s (%s) over RFC 9887, reference %s, failure delay %s\n",
 				arm, cell, mode, p.Sel, l.p.version, p.Ref, l94Delay)
 			fmt.Fprintf(&sum, "port49d: %s vcs.revision=%s vcs.modified=%v tags=%q\n", filepath.Base(run), vcs.recorded().Revision, vcs.Modified, built)
@@ -387,10 +413,14 @@ func TestL94(t *testing.T) {
 						done := make(chan l94Outcome, 1)
 						go func() { done <- failLogin(staleToks[0]) }()
 						time.Sleep(lead)
+						// Where no command is asked, B's token login is the
+						// request port49 must answer inside A's delay.
+						bDone := startBLogin()
 						_, d := l94Commands(q.run.Platform)
 						add(l94Type(l, qc, 0, permitted))
 						add(l94Type(l, qc, 0, d))
 						outcomes = append(outcomes, <-done)
+						bLogin = waitBLogin(bDone)
 						recs = l.waitForRecords(off, l94Delay+30*time.Second, func(rs []map[string]any) bool {
 							return len(l94Fails(l94Events(rs))) > 0
 						})
@@ -424,12 +454,17 @@ func TestL94(t *testing.T) {
 						}(i, tok)
 					}
 					start := time.Now()
+					var bDone chan l94Outcome
 					for next := start; time.Since(start) < l94C3For; next = next.Add(l94C3Every) {
 						time.Sleep(time.Until(next))
+						if bDone == nil && time.Since(start) >= l94C3Every {
+							bDone = startBLogin() // inside the three FAILs' delay
+						}
 						add(l94Type(l, qc, 0, permitted))
 					}
 					wg.Wait()
 					outcomes = outs
+					bLogin = waitBLogin(bDone)
 					qc.send("exit")
 					qc.Close()
 				case "c5":
@@ -600,7 +635,11 @@ func TestL94(t *testing.T) {
 			}
 			g := l94Grade{Arm: arm, Cell: cell, Platform: q.run.Platform, P: p, Typed: typed, Events: evs,
 				Conns: len(conns), MostOpen: most, Second: second, DeadOrSSL: deadOrSSL, Outcomes: outcomes,
-				Gaps: gaps, RestartAt: restartAt, UpAt: upAt}
+				Gaps: gaps, RestartAt: restartAt, UpAt: upAt, BLogin: bLogin}
+			if bLogin != nil {
+				fmt.Fprintf(&sum, "B token login during A's FAILs: took=%.2fs logged_in=%v auth_failed=%v err=%q inside_delay=%v\n",
+					bLogin.Took, bLogin.LoggedIn, bLogin.AuthFailed, bLogin.Err, l94LoginInsideDelay(evs))
+			}
 			if cell == "c2" || cell == "c3" {
 				g.Baseline = l94ReadBaseline(t, filepath.Join(evRoot, "baseline", mode), cell)
 				if arm == "fixed" && g.Baseline == nil {
