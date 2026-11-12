@@ -732,3 +732,75 @@ func TestAPlatformChangeIsASecurityChange(t *testing.T) {
 	}
 	t.Fatal("no platform_changed")
 }
+
+// moves is the address_moved changes of a swap, as "address from>to".
+func moves(rep Report) []string {
+	var out []string
+	for _, c := range rep.Changes {
+		if c.Kind == AddressMoved {
+			if !c.Security {
+				out = append(out, "NOT SECURITY")
+			}
+			out = append(out, c.Address+" "+c.From+">"+c.Device)
+		}
+	}
+	return out
+}
+
+// An address that leaves one device and lands on another in one swap is a
+// security record of its own, naming both devices (spec §10): a name now sits
+// on hardware that held another's.
+func TestAnAddressMovedBetweenDevicesIsOneSecurityChange(t *testing.T) {
+	old := mustBundle(t, dev("leaf-01", "10.0.1.1", nil), dev("leaf-02", "10.0.1.2", nil))
+	new := mustBundle(t, dev("leaf-01", "10.0.1.1 10.0.1.2", nil), dev("leaf-02", "10.0.1.9", nil))
+	got := moves(Diff(old, new, time.Now()))
+	if len(got) != 1 || got[0] != "10.0.1.2 leaf-02>leaf-01" {
+		t.Fatalf("moves = %v", got)
+	}
+}
+
+func TestTwoAddressesSwappedBetweenDevicesAreTwoMoves(t *testing.T) {
+	old := mustBundle(t, dev("leaf-01", "10.0.1.1", nil), dev("leaf-02", "10.0.1.2", nil))
+	new := mustBundle(t, dev("leaf-01", "10.0.1.2", nil), dev("leaf-02", "10.0.1.1", nil))
+	got := moves(Diff(old, new, time.Now()))
+	if len(got) != 2 {
+		t.Fatalf("moves = %v", got)
+	}
+}
+
+// A new device on a fresh address, or a device gaining an address nobody
+// held, is address_added or device_added and no move.
+func TestANewAddressIsNotAMove(t *testing.T) {
+	old := mustBundle(t, dev("leaf-01", "10.0.1.1", nil), dev("leaf-02", "10.0.1.2", nil))
+	new := mustBundle(t, dev("leaf-01", "10.0.1.1 10.0.1.7", nil), dev("leaf-02", "10.0.1.2", nil),
+		dev("leaf-03", "10.0.1.3", nil))
+	if got := moves(Diff(old, new, time.Now())); len(got) != 0 {
+		t.Fatalf("moves = %v", got)
+	}
+}
+
+// A renamed device, or a new name on a removed device's address, is the same
+// hardware under another name's grants.
+func TestAnAddressTakenByANewNameIsAMove(t *testing.T) {
+	old := mustBundle(t, dev("leaf-01", "10.0.1.1", nil))
+	new := mustBundle(t, dev("leaf-09", "10.0.1.1", nil))
+	if got := moves(Diff(old, new, time.Now())); len(got) != 1 || got[0] != "10.0.1.1 leaf-01>leaf-09" {
+		t.Fatalf("moves = %v", got)
+	}
+}
+
+// A move still writes the address_added the destination gained, and the
+// address_removed the source lost: each is true of its device.
+func TestAMoveKeepsTheAddressAddedAndRemoved(t *testing.T) {
+	old := mustBundle(t, dev("leaf-01", "10.0.1.1", nil), dev("leaf-02", "10.0.1.2", nil))
+	new := mustBundle(t, dev("leaf-01", "10.0.1.1 10.0.1.2", nil), dev("leaf-02", "10.0.1.9", nil))
+	var kinds []string
+	for _, c := range Diff(old, new, time.Now()).Changes {
+		kinds = append(kinds, c.Kind+" "+c.Device)
+	}
+	for _, want := range []string{"address_added leaf-01", "address_removed leaf-02", "address_added leaf-02"} {
+		if !slices.Contains(kinds, want) {
+			t.Errorf("missing %q in %v", want, kinds)
+		}
+	}
+}

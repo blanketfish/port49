@@ -769,3 +769,35 @@ func TestASwapForgetsWhatItNoLongerAdmits(t *testing.T) {
 		t.Fatalf("key_version_devices counts %d; leaf2 is gone", n)
 	}
 }
+
+// Spec §10: an address that leaves one device and lands on another in one
+// swap is one address_moved record naming both, counted by kind.
+func TestASwapThatMovesAnAddressBetweenDevicesIsLoggedAsAMove(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.writeInventory(t, twoDevices)
+	rig.pollTwice()
+	var buf syncBuffer
+	rig.b.Log = decision.NewJSONLines(&buf)
+	rig.r.log = rig.b.Log
+	rig.writeInventory(t, "devices:\n"+
+		"  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1, 10.0.0.2], key_ref: lab_key}\n"+
+		"  - {name: leaf2, platform: arista_eos, addresses: [10.0.0.3], key_ref: lab_key}\n")
+	rig.pollTwice()
+	got := buf.String()
+	if n := strings.Count(got, `"kind":"address_moved"`); n != 1 {
+		t.Fatalf("%d address_moved records: %s", n, got)
+	}
+	for _, want := range []string{`"address":"10.0.0.2"`, `"from":"leaf2"`, `"to":"leaf1"`, `"name":"leaf1"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	if n := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("address_moved")); n != 1 {
+		t.Fatalf("address_moved = %v", n)
+	}
+	// The gained address is still an address_added: 1 from the first swap
+	// (leaf1's 10.0.0.1), and leaf1's 10.0.0.2 and leaf2's 10.0.0.3 here.
+	if n := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("address_added")); n != 3 {
+		t.Fatalf("address_added = %v", n)
+	}
+}

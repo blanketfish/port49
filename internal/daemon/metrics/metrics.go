@@ -543,7 +543,9 @@ type Metrics struct {
 	InventorySnapshotAge prometheus.GaugeFunc
 	// port49_inventory_changes_total{kind}: security-relevant changes a bundle
 	// swap made (spec §10) — "address_added" (an address on a device already
-	// in inventory, which a mint hands to an SSH client), "scope_joined" and
+	// in inventory, which a mint hands to an SSH client), "address_moved"
+	// (an address that left one device and landed on another in one swap;
+	// decision 61), "scope_joined" and
 	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
 	// device moved onto another key), "transport_changed" (a device moved
 	// between tcp and tls), "platform_changed" (a device moved to another
