@@ -1029,16 +1029,29 @@ func l73EOSMissing(shown string, d l73DeviceTLS) []string {
 	type host struct {
 		addr string
 		line string
+		want []string
 	}
-	var typed []host
-	typed = append(typed, host{d.Server, l73EOSHost(d.Server, true, d.Port, d.SingleConnection, false)})
+	// A TLS host at port 300, the RFC 9887 default, is shown without its
+	// port: L73 on cEOS 4.36.3M typed none, and the running config reads
+	// `tacacs-server host 172.100.100.1 tls` where `show tacacs` lists
+	// 172.100.100.1/300 TLS (tests/lab/evidence/L73-arista_ceos/device-config.txt:3,21).
+	// The port is still checked there, by l73EOSGroupMissing.
+	mk := func(addr string, tls bool, port int, single bool) host {
+		line := l73EOSHost(addr, tls, port, single, false)
+		shown := port
+		if tls && port == l73TLSPort {
+			shown = 0
+		}
+		return host{addr, line, strings.Fields(l73EOSHost(addr, tls, shown, single, false))[3:]}
+	}
+	typed := []host{mk(d.Server, true, d.Port, d.SingleConnection)}
 	if d.Second != "" {
-		typed = append(typed, host{d.Second, l73EOSHost(d.Second, d.SecondTLS, d.SecondPort, false, false)})
+		typed = append(typed, mk(d.Second, d.SecondTLS, d.SecondPort, false))
 	}
 	for _, h := range typed {
 		ok := false
 		for _, f := range hosts {
-			if f[2] == h.addr && l73HasWords(f, strings.Fields(h.line)[3:]) {
+			if f[2] == h.addr && l73HasWords(f, h.want) {
 				ok = true
 			}
 		}
