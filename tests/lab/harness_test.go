@@ -433,6 +433,11 @@ func writeEvidence() error {
 // alone, and resets it when the run ends.
 var daemonBin string
 
+// daemonEnv, when set, is added to the environment of every port49d
+// startDaemonWith runs: L94's c4 names its hold's control file in it
+// (l94HoldEnv) beside daemonBin, and resets both when the run ends.
+var daemonEnv []string
+
 // port49dBin is the port49d binary startDaemonWith runs.
 func port49dBin() string {
 	if daemonBin != "" {
@@ -461,7 +466,7 @@ func initGlobal() error {
 	if _, err := os.Stat(bin); err != nil {
 		return fmt.Errorf("%s is not built; run `make build` first: %w", bin, err)
 	}
-	// Never L94 c4's held build (it delays every accounting reply 1.5s).
+	// Never L94 c4's held build (it can delay accounting replies 1.5s).
 	if err := l94StandardBin(bin); err != nil {
 		return err
 	}
@@ -1167,6 +1172,7 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 		encKey = labEncKeyDefault
 	}
 	l.daemon.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_KEY_LAB="+key, "PORT49_KEY_RUN="+key, "PORT49_LAB_ENC_KEY="+encKey)
+	l.daemon.Env = append(l.daemon.Env, daemonEnv...)
 	if err := l.daemon.Start(); err != nil {
 		return fmt.Errorf("start port49d: %w", err)
 	}

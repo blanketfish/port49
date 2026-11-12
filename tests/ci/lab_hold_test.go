@@ -12,15 +12,15 @@ import (
 )
 
 // labAcctHoldTag builds the accounting reply hold L94 cell C4 runs on
-// (internal/daemon/acct/hold_lab.go). A port49d built with it delays every
-// accounting reply 1.5s, so no release build may name it.
+// (internal/daemon/acct/hold_lab.go). A port49d built with it delays accounting
+// replies 1.5s while a control file exists, so no release build may name it.
 const labAcctHoldTag = "port49_lab_acct_hold"
 
 // The default build of the accounting handler holds nothing: hold.go, not
 // hold_lab.go, is in it. The release builds pass no tag but hwkey_dlopen
 // (.goreleaser.yaml, Dockerfile), and this tag is named nowhere outside the
-// handler's own two files, the lab harness that builds C4's binary, this
-// test, and the spec and plan text that describe it.
+// handler's own two files and their tests, the lab harness that builds C4's
+// binary, this test, and the spec and plan text that describe it.
 func TestNoReleaseBuildNamesTheAccountingHoldTag(t *testing.T) {
 	ctx := build.Default
 	ctx.BuildTags = []string{"hwkey_dlopen"}
@@ -35,7 +35,8 @@ func TestNoReleaseBuildNamesTheAccountingHoldTag(t *testing.T) {
 	allowed := func(rel string) bool {
 		switch {
 		case rel == "internal/daemon/acct/hold.go", rel == "internal/daemon/acct/hold_lab.go",
-			rel == "internal/daemon/acct/hold_test.go", rel == "tests/ci/lab_hold_test.go":
+			rel == "internal/daemon/acct/hold_test.go", rel == "internal/daemon/acct/hold_lab_test.go",
+			rel == "tests/ci/lab_hold_test.go":
 			return true
 		case strings.HasPrefix(rel, "tests/lab/") && strings.HasSuffix(rel, ".go"):
 			return true

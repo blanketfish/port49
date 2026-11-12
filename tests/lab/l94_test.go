@@ -183,9 +183,19 @@ func TestL94(t *testing.T) {
 	// c4's TLS daemons run the held build. Set here, after restoreDaemon is
 	// deferred, so the reset (deferred later, run earlier) comes first and
 	// the standing daemon is restored on bin/port49d.
+	// Its hold applies only while holdPath exists, from the cell's clean
+	// point to its end (l94CleanThenHold), so the backlog the device drains
+	// after each login is answered unheld.
+	var holdPath string
 	if run != bin {
-		daemonBin = run
-		defer func() { daemonBin = "" }()
+		holdDir, err := os.MkdirTemp("", "l94-hold-")
+		if err != nil {
+			t.Fatalf("INVALID: %v", err)
+		}
+		defer os.RemoveAll(holdDir)
+		holdPath = filepath.Join(holdDir, "hold")
+		daemonBin, daemonEnv = run, []string{l94HoldEnv + "=" + holdPath}
+		defer func() { daemonBin, daemonEnv = "", nil }()
 	}
 	daemon := l73Daemon{Intermediates: e.files["inter.pem"], DefaultIdle: true}
 	q.tlsDaemon(e, "l94", daemon)
@@ -309,6 +319,7 @@ func TestL94(t *testing.T) {
 				conns     []l73Conn
 				pre       []l73Conn // closed before the clean point (l94SinceClean)
 				cleanAt   time.Time
+				hold      l94HoldWindow // c4's
 				second    float64
 				upAt      time.Time
 				restartAt time.Time
@@ -365,8 +376,23 @@ func TestL94(t *testing.T) {
 				// it closed before the clean point.
 				q.cell(name)
 				stop := e.capture(name)
+				// c4's hold goes on at the clean point and off when body
+				// returns, on every path: deferred before it goes on, a
+				// Fatal anywhere in the cell still removes the file.
+				var holdOn func() (time.Time, error)
+				if cell == "c4" {
+					hold = l94HoldWindow{}
+					defer func() {
+						var err error
+						if hold.Held, hold.Off, err = l94HoldOff(holdPath); err != nil {
+							hold.Err = err.Error()
+						}
+					}()
+					holdOn = func() (time.Time, error) { return l94HoldOn(holdPath) }
+				}
+				wait := func() (time.Time, error) { return l94WaitClean(read, l80CleanPolls, time.Sleep, time.Now) }
 				var err error
-				if cleanAt, err = l94WaitClean(read, l80CleanPolls, time.Sleep, time.Now); err != nil {
+				if cleanAt, hold.On, err = l94CleanThenHold(wait, holdOn); err != nil {
 					stop()
 					t.Fatal(err)
 				}
@@ -696,6 +722,10 @@ func TestL94(t *testing.T) {
 			for _, cn := range pre {
 				sum.WriteString("  excluded: closed before the clean point " + l80Clock(cleanAt) + ": " + l80ConnLine(cn) + "\n")
 			}
+			if cell == "c4" {
+				fmt.Fprintf(&sum, "accounting hold: on %s, off %s, %d replies held, error %q\n",
+					l80Clock(hold.On), l80Clock(hold.Off), hold.Held, hold.Err)
+			}
 			fmt.Fprintf(&sum, "single_connect_second_connection delta: %v\n", second)
 			for i, o := range outcomes {
 				fmt.Fprintf(&sum, "refused-credential login %d: took=%.2fs auth_failed=%v logged_in=%v err=%q\n", i+1, o.Took, o.AuthFailed, o.LoggedIn, o.Err)
@@ -713,7 +743,7 @@ func TestL94(t *testing.T) {
 			}
 			g := l94Grade{Arm: arm, Cell: cell, Platform: q.run.Platform, P: p, Typed: typed, Events: evs,
 				Conns: len(conns), MostOpen: most, Ends: ends, Second: second, DeadOrSSL: deadOrSSL, Outcomes: outcomes,
-				Gaps: gaps, RestartAt: restartAt, UpAt: upAt, BLogin: bLogin, BSHA: bSHA}
+				Gaps: gaps, RestartAt: restartAt, UpAt: upAt, BLogin: bLogin, BSHA: bSHA, Hold: hold}
 			if bLogin != nil {
 				fmt.Fprintf(&sum, "B token login during A's FAILs: took=%.2fs logged_in=%v auth_failed=%v err=%q inside_delay=%v\n",
 					bLogin.Took, bLogin.LoggedIn, bLogin.AuthFailed, bLogin.Err, l94LoginInsideDelay(evs, bSHA))

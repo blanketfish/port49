@@ -72,7 +72,7 @@ func flagsName(f uint8) string {
 }
 
 func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctRequest) wire.AcctReply {
-	if labAcctHold > 0 {
+	if labAcctHold > 0 && labHoldOn() {
 		defer holdReply(ctx)
 	}
 	_, cmd, cmdArgs, raw := author.ParseArgs(req.Args)
@@ -321,7 +321,8 @@ func avOf(raw []string, key string) string {
 }
 
 // holdReply holds an accounting reply for labAcctHold, or until ctx ends.
-// Only a lab build holds anything (hold.go).
+// Only a lab build holds anything, and only while its control file exists
+// (hold.go, hold_lab.go).
 func holdReply(ctx context.Context) {
 	t := time.NewTimer(labAcctHold)
 	defer t.Stop()

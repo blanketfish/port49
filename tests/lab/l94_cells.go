@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -35,9 +36,10 @@ import (
 //	    command
 //	c3  queued FAILs: A1-A3 FAIL at once while B types every 250ms for 6s
 //	c4  NX-OS and Junos, fixed arm only: c1's loop on a port49d built with
-//	    port49_lab_acct_hold, which holds every accounting reply 1.5s so the
-//	    command authorization NX-OS writes behind an accounting record is
-//	    answered first; on Junos, both vtys' accounting bursts ride the one
+//	    port49_lab_acct_hold, which holds each accounting reply 1.5s, from
+//	    the cell's clean point on (l94CleanThenHold), so the command
+//	    authorization NX-OS writes behind an accounting record is answered
+//	    first; on Junos, both vtys' accounting bursts ride the one
 //	    connection that stays open while their replies are held
 //	c5  restart: L80's restart cell, with a session inside its FAIL delay at
 //	    the restart
@@ -52,6 +54,9 @@ const (
 	// l94HoldTag is the lab-only tag c4's port49d is built with
 	// (internal/daemon/acct/hold_lab.go; tests/ci keeps it out of releases).
 	l94HoldTag = "port49_lab_acct_hold"
+	// l94HoldEnv names the hold build's control file (hold_lab.go's
+	// labAcctHoldFileEnv); the harness sets it on c4's port49d alone.
+	l94HoldEnv = "PORT49_LAB_ACCT_HOLD_FILE"
 	// l94Delay is both failure-delay knobs (as L13's writeDelayConfig sets them).
 	l94Delay = 2 * time.Second
 	// l94Inside is c2's pass line: a B request port49 read under this after
@@ -588,6 +593,8 @@ type l94Grade struct {
 	Gaps     []time.Duration
 	// Restart is c5's window.
 	RestartAt, UpAt time.Time
+	// Hold is c4's accounting hold (l94HoldWindow).
+	Hold l94HoldWindow
 }
 
 // l94Baseline is what the fixed arm compares to: the baseline arm's evidence
@@ -700,6 +707,7 @@ func l94Stops(g l94Grade) []string {
 	if g.Cell == "c4" {
 		out = append(out, l94LostAccounting(g.Cell, g.Platform, g.Events, g.Typed, 2)...)
 		out = append(out, l94HeldStops(g)...)
+		out = append(out, l94HoldStops(g)...)
 	}
 	out = append(out, prefixAll(g.Cell+": ", l94Dup(g.Platform, g.Events, g.Typed))...)
 	if s, _ := l94ConnGrade(g); s != "" {
@@ -913,6 +921,75 @@ func l94AcctComplete(platform string, evs []l94Event, typed []l80Typed, sessions
 	return len(l94LostAccounting("", platform, evs, typed, sessions)) == 0
 }
 
+// l94HoldWindow is c4's accounting hold as the harness switched it: on from
+// On to Off, with Held replies held (the control file's count), or Err.
+type l94HoldWindow struct {
+	On, Off time.Time
+	Held    int
+	Err     string
+}
+
+// l94CleanThenHold waits for the cell's clean point, and only then switches
+// c4's hold on (on; nil in every other cell). A hold on from the daemon's
+// start held the backlog a device drains after login, one reply per 1.5s,
+// and kept its connection open past the wait (vJunos 26 c4 r2, 2026-11-12).
+func l94CleanThenHold(wait, on func() (time.Time, error)) (cleanAt, onAt time.Time, err error) {
+	if cleanAt, err = wait(); err != nil || on == nil {
+		return cleanAt, time.Time{}, err
+	}
+	onAt, err = on()
+	return cleanAt, onAt, err
+}
+
+// l94HoldOn switches c4's accounting hold on: the hold build holds a reply
+// only while path exists, and appends a line to it for each reply it holds
+// (internal/daemon/acct/hold_lab.go). It returns once the file exists.
+func l94HoldOn(path string) (time.Time, error) {
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		return time.Time{}, fmt.Errorf("INVALID: c4's accounting hold would not go on: %w", err)
+	}
+	return time.Now(), nil
+}
+
+// l94HoldOff switches the hold off: it counts the replies held, then
+// removes path. at is taken first, so a record written before it was
+// written while the file existed.
+func l94HoldOff(path string) (held int, at time.Time, err error) {
+	at = time.Now()
+	b, err := os.ReadFile(path)
+	if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) && err == nil {
+		err = rmErr
+	}
+	if err != nil {
+		return 0, at, err
+	}
+	return strings.Count(string(b), "\n"), at, nil
+}
+
+// l94HoldStops is c4's check that its hold applied: every accounting record
+// written while the hold was on had its reply held. A record past the
+// control file's count was answered without the hold, and c4 measured
+// nothing of it.
+func l94HoldStops(g l94Grade) []string {
+	h := g.Hold
+	if h.Err != "" {
+		return []string{fmt.Sprintf("%s: the accounting hold: %s", g.Cell, h.Err)}
+	}
+	if h.Off.IsZero() {
+		return []string{fmt.Sprintf("%s: the accounting hold was never measured", g.Cell)}
+	}
+	n := 0
+	for _, e := range g.Events {
+		if e.Event == "account" && !e.TS.Before(h.On) && e.TS.Before(h.Off) {
+			n++
+		}
+	}
+	if h.Held < n {
+		return []string{fmt.Sprintf("%s: %d accounting record(s) while the hold was on, %d held: a reply went out without the hold", g.Cell, n, h.Held)}
+	}
+	return nil
+}
+
 // l94HeldStops is c4's check of the connection its accounting replies are
 // held on: still open at the cell's end, and no connection closed by the
 // device first (a device that gave up on a held reply). Per-login
@@ -1066,7 +1143,7 @@ func l94TagCheck(cell, tags string) error {
 	case cell == "c4" && !has:
 		return fmt.Errorf("INVALID: c4 needs port49d built with -tags %s; it was built with %q", l94HoldTag, tags)
 	case cell != "c4" && has:
-		return fmt.Errorf("INVALID: %s ran a port49d built with the lab-only %s, which holds every accounting reply", cell, l94HoldTag)
+		return fmt.Errorf("INVALID: %s ran a port49d built with the lab-only %s, which can hold accounting replies", cell, l94HoldTag)
 	}
 	return nil
 }
@@ -1076,8 +1153,9 @@ func l94TagCheck(cell, tags string) error {
 const l94HoldBin = "bin/port49d-l94-acct-hold"
 
 // l94StandardBin is the harness's check of the binary at its standard path
-// (bin/port49d, initGlobal): one built with the hold tag holds every
-// accounting reply 1.5s, and every other test would measure that hold.
+// (bin/port49d, initGlobal): one built with the hold tag holds accounting
+// replies 1.5s while a control file exists, and no other test should run
+// a build that can.
 // A binary that cannot be read is refused too.
 func l94StandardBin(path string) error {
 	tags, err := binaryTags(path)
@@ -1085,7 +1163,7 @@ func l94StandardBin(path string) error {
 		return err
 	}
 	if slices.Contains(strings.Split(tags, ","), l94HoldTag) {
-		return fmt.Errorf("%s was built with the lab-only -tags %s, which holds every accounting reply: rebuild it (make build); "+
+		return fmt.Errorf("%s was built with the lab-only -tags %s, which can hold accounting replies: rebuild it (make build); "+
 			"L94's c4 builds its own to %s", path, l94HoldTag, l94HoldBin)
 	}
 	return nil

@@ -607,14 +607,18 @@ func l94VJunosC4(t *testing.T) l94Grade {
 				l80Typed{Session: s, Command: "show system users", Denied: true, Took: 0.25})
 		}
 	}
+	evs := l94AcctRows(t, l94VJunosC1Acct)
+	// The hold went on before the first record and off after the last, and
+	// held every reply between.
+	hold := l94HoldWindow{On: l94At(t, "09:46:48.000"), Off: l94At(t, "09:47:04.000"), Held: len(evs)}
 	return l94Grade{Arm: "fixed", Cell: "c4", Platform: "juniper_junos", P: p, Typed: typed,
-		Events: l94AcctRows(t, l94VJunosC1Acct), Conns: 3, MostOpen: 1, Ends: []string{"server-fin", "server-fin", "open"},
+		Events: evs, Conns: 3, MostOpen: 1, Ends: []string{"server-fin", "server-fin", "open"}, Hold: hold,
 		Suspect: true, DeadOrSSL: 1, Baseline: &l94Baseline{Conns: 3, HasConns: true, Suspect: 1, HasSuspect: true}}
 }
 
 // Round 10: c4 on Junos. The device opens a connection per login, so c2/c3
 // never put two requests on one connection, but its accounting rides the one
-// connection that stays open: c4 holds every accounting reply 1.5s on it.
+// connection that stays open: c4 holds each accounting reply 1.5s on it.
 // It stops if the device drops that connection, repeats a record, or loses
 // a session's accounting; a dead-server mark is l94SuspectMarks', compared to
 // the baseline arm's c1 (the same loop, unheld).
@@ -688,6 +692,97 @@ func TestL94JunosC4Stops(t *testing.T) {
 	}
 }
 
+// vJunos 26 c4 r2 (2026-11-12): the hold build held every accounting reply
+// from start, so the backlog vJunos drained after the harness's login (26
+// records, one per held reply) kept a connection open past the clean-start
+// wait. c4's hold goes on only once the clean point is reached; a wait that
+// fails never switches it on; other cells have none.
+func TestL94C4HoldsOnlyFromTheCleanPoint(t *testing.T) {
+	clean := time.Date(2026, 11, 12, 11, 23, 0, 0, time.UTC)
+	var order []string
+	wait := func() (time.Time, error) { order = append(order, "wait"); return clean, nil }
+	on := func() (time.Time, error) { order = append(order, "on"); return clean.Add(time.Millisecond), nil }
+	cleanAt, onAt, err := l94CleanThenHold(wait, on)
+	if err != nil || !cleanAt.Equal(clean) || !onAt.Equal(clean.Add(time.Millisecond)) {
+		t.Fatalf("cleanAt %v onAt %v err %v", cleanAt, onAt, err)
+	}
+	if !slices.Equal(order, []string{"wait", "on"}) {
+		t.Errorf("order %v: the hold must go on after the clean point, not before", order)
+	}
+	order = nil
+	stuck := func() (time.Time, error) {
+		order = append(order, "wait")
+		return time.Time{}, errors.New("1 connections still open")
+	}
+	if _, _, err := l94CleanThenHold(stuck, on); err == nil || !slices.Equal(order, []string{"wait"}) {
+		t.Errorf("a failed clean-start wait: err %v order %v; the hold must stay off", err, order)
+	}
+	if _, onAt, err := l94CleanThenHold(wait, nil); err != nil || !onAt.IsZero() {
+		t.Errorf("no hold: onAt %v err %v", onAt, err)
+	}
+}
+
+// The control file: l94HoldOn creates it empty; the hold build appends a
+// line per held reply; l94HoldOff counts them and removes it.
+func TestL94HoldControlFileCountsHeldReplies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hold")
+	t0 := time.Now()
+	onAt, err := l94HoldOn(path)
+	if err != nil || onAt.Before(t0) {
+		t.Fatalf("on: %v at %v", err, onAt)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("held\nheld\nheld\n")
+	f.Close()
+	held, offAt, err := l94HoldOff(path)
+	if err != nil || held != 3 || offAt.Before(onAt) {
+		t.Errorf("off: held %d at %v err %v, want 3", held, offAt, err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the control file outlived the cell: %v", err)
+	}
+	if _, _, err := l94HoldOff(path); err == nil {
+		t.Error("a control file already gone counts nothing: that is an error")
+	}
+}
+
+// c4 measures held replies: an accounting record written while the hold was
+// on, past its count of held replies, was answered without it.
+func TestL94C4StopsOnAnUnheldAccountingRecord(t *testing.T) {
+	g := l94VJunosC4(t)
+	g.Hold.Held--
+	want := fmt.Sprintf("c4: %d accounting record(s) while the hold was on, %d held: a reply went out without the hold", len(g.Events), len(g.Events)-1)
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, want) {
+		t.Errorf("one reply unheld: stops %q", got)
+	}
+	// Records before the hold went on (the device's own backlog) are not
+	// the cell's: they drained unheld.
+	g = l94VJunosC4(t)
+	g.Hold.On, g.Hold.Held = l94At(t, "09:46:53.000"), len(g.Events)-10
+	if got := l94Stops(g); len(got) != 0 {
+		t.Errorf("records before the hold went on: %q", got)
+	}
+	g = l94VJunosC4(t)
+	g.Hold.Err = "open hold: no such file or directory"
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "c4: the accounting hold: open hold: no such file or directory") {
+		t.Errorf("hold error: stops %q", got)
+	}
+	g = l94VJunosC4(t)
+	g.Hold = l94HoldWindow{}
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "c4: the accounting hold was never measured") {
+		t.Errorf("no hold: stops %q", got)
+	}
+	// c1 has no hold.
+	c1 := l94Clean()
+	c1.Hold = l94HoldWindow{}
+	if got := l94Stops(c1); len(got) != 0 {
+		t.Errorf("c1: %q", got)
+	}
+}
+
 // l94KeepPort is evs less every vty record but port's (non-tty and port 0
 // stay).
 func l94KeepPort(evs []l94Event, port string) []l94Event {
@@ -735,7 +830,10 @@ func TestL94EventsCarryTheSessionPort(t *testing.T) {
 
 func l94Clean() l94Grade {
 	p, _ := l94PlatformFor("nxos106")
-	return l94Grade{Arm: "fixed", Cell: "c1", Platform: "cisco_nxos", P: p, Conns: 1, MostOpen: 1, Ends: []string{"open"},
+	// Its records carry no time: as c4, a hold from the zero time on that
+	// held each of its four accounting replies.
+	hold := l94HoldWindow{Off: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC), Held: len(l94SessionAcct())}
+	return l94Grade{Arm: "fixed", Cell: "c1", Platform: "cisco_nxos", P: p, Conns: 1, MostOpen: 1, Ends: []string{"open"}, Hold: hold,
 		Typed:  []l80Typed{{Command: "show version", Asked: true}, {Command: "show users", Asked: true, Denied: true}},
 		Events: append(l94SessionAcct(), l94Event{Event: "authorize_command", Verdict: "permit", Vector: "show version"}, l94Event{Event: "authorize_command", Verdict: "deny", Vector: "show users"})}
 }
