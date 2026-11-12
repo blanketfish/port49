@@ -682,11 +682,18 @@ func (s *conn) write(h wire.Header, body, secret []byte) bool {
 	if s.dropped {
 		return false
 	}
+	// A write that fails drops the connection: part of this frame may be on
+	// the wire, so a later reply would be misframed, and a peer that stopped
+	// reading must cost one write timeout, not one per lane owing a reply.
 	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
+		s.dropped = true
 		return false
 	}
-	_, err := s.c.Write(append(rh.Encode(), out...))
-	return err == nil
+	if _, err := s.c.Write(append(rh.Encode(), out...)); err != nil {
+		s.dropped = true
+		return false
+	}
+	return true
 }
 
 // dispatch runs one packet through the right handler and returns the reply

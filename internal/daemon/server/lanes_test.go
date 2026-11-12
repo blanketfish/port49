@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	stdlog "log"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
@@ -32,20 +33,20 @@ const laneDelay = 1500 * time.Millisecond
 // laneDelay, with alice holding the login token p49_e2e.
 func newLaneServer(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer) *testServer {
 	t.Helper()
-	return newLaneServerWith(t, log, st, authz, laneDelay, time.Millisecond)
+	return newLaneServerWith(t, log, st, authz, laneDelay, time.Millisecond, nil)
 }
 
 // newLaneServerWith is newLaneServer with its failure delay and malformed
-// backoff given.
+// backoff given, and its listener wrapped by wrap (nil wraps nothing).
 func newLaneServerWith(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer,
-	delay, backoff time.Duration) *testServer {
+	delay, backoff time.Duration, wrap func(net.Listener) net.Listener) *testServer {
 	t.Helper()
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
 		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com",
 			ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	return newTestServerWith(t, log, st, authz, func(d *Deps) {
+	return newTestServerOn(t, log, st, authz, func(d *Deps) {
 		lim := limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
 			MalformedBackoffBase: backoff, MalformedBackoffMax: backoff, MalformedWindow: time.Minute,
 			AuthFailureDelayBase: delay, AuthFailureDelayMax: delay, AuthFailureWindow: time.Minute}, time.Now)
@@ -54,7 +55,7 @@ func newLaneServerWith(t *testing.T, log *syncBuffer, st store.Store, authz auth
 		d.Authen = authen.New(st, d.Log, lim, d.Metrics, time.Now,
 			func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) },
 			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, token.NewTagWindow(token.TagKey([]byte("server_test"))))
-	})
+	}, wrap)
 }
 
 // papStart sends one PAP login START as a new session sid on c, asking for
@@ -151,17 +152,87 @@ func TestAFailingSessionDoesNotHoldAnotherOnASingleConnection(t *testing.T) {
 // in cleartext.
 func TestNoReplyIsWrittenOnceAProtocolErrorDropsTheConnection(t *testing.T) {
 	log := &syncBuffer{}
-	ts := newLaneServerWith(t, log, memory.New(time.Now), nil, 300*time.Millisecond, time.Second)
+	ts := newLaneServerWith(t, log, memory.New(time.Now), nil, 300*time.Millisecond, time.Second, nil)
 	c := dial(t, ts.addr, []byte("k2"))
 
 	papStart(t, c, 1, "mallory", "p49_wrong") // FAIL due at 300ms, inside the 1s backoff
-	c.sid, c.seq = 2, 3                       // a CONTINUE for a session this connection never started
+	inDelay(t, ts, 1)
+	c.sid, c.seq = 2, 3 // a CONTINUE for a session this connection never started
 	c.send(t, wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("alice")}.Encode(), 0)
 
 	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	n, err := c.conn.Read(make([]byte, 1))
 	if n != 0 || err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("read %d bytes, err %v: want the connection closed with nothing written after the drop", n, err)
+	}
+}
+
+// smallSendBuffer shrinks every accepted socket's send buffer, so a peer that
+// stops reading stalls port49d's writes after a few kilobytes.
+type smallSendBuffer struct{ net.Listener }
+
+func (l smallSendBuffer) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetWriteBuffer(4096)
+	}
+	return c, err
+}
+
+// A device that stops reading (a wedged control plane) while many sessions
+// owe it replies costs one write timeout, not one per lane: the first
+// write that fails drops the connection, so the lanes behind it write
+// nothing more (a partial frame is already on the wire) and the close does
+// not wait for them. Before, each of up to maxInFlight lanes took a fresh
+// idle_timeout to fail its own write, and the per-NAS slot was held for all
+// of them.
+func TestAStalledPeerIsDroppedAfterOneWriteTimeout(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newLaneServerWith(t, log, memory.New(time.Now), nil, laneDelay, time.Millisecond,
+		func(l net.Listener) net.Listener { return smallSendBuffer{l} })
+	open := ts.metrics.Connections.WithLabelValues("open")
+	conn, err := net.Dial("tcp", ts.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	_ = conn.(*net.TCPConn).SetReadBuffer(4096)
+
+	// Authorizations with no login behind them: each is answered FAIL at
+	// once, and none is ever read.
+	body := wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII,
+		Service: wire.AuthenServiceLogin, User: []byte("nobody"), Port: []byte("vty0"),
+		Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode()
+	start := time.Now()
+	go func() {
+		for i := range 5000 {
+			h := wire.Header{MajorVersion: 0xc, Type: wire.TypeAuthor, SeqNo: 1, Flags: wire.FlagSingleConnect,
+				SessionID: uint32(1 + i), Length: uint32(len(body))}
+			if _, err := conn.Write(append(h.Encode(), wire.Obfuscate(h, []byte("k2"), body)...)); err != nil {
+				return // the server closed: the test reads that from the gauge
+			}
+		}
+	}()
+	if !waitFor(t, func() bool { return testutil.ToFloat64(open) == 1 }) {
+		t.Fatal("the connection was never counted open")
+	}
+	// The server's write deadline is the test server's 1s idle_timeout.
+	deadline := start.Add(4 * time.Second)
+	for testutil.ToFloat64(open) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("still open %v after the peer stopped reading: each lane waited out its own write timeout",
+				time.Since(start))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// inDelay waits until n sessions have entered their failure delay, so a
+// test's next packet is known to arrive while they wait in it.
+func inDelay(t *testing.T, ts *testServer, n float64) {
+	t.Helper()
+	if !waitFor(t, func() bool { return testutil.ToFloat64(ts.metrics.AuthFailures) >= n }) {
+		t.Fatalf("fewer than %v sessions entered their failure delay", n)
 	}
 }
 
@@ -294,8 +365,9 @@ func TestAProtocolErrorClosesAtOnceDespiteADelayedSession(t *testing.T) {
 	ts := newLaneServer(t, log, memory.New(time.Now), nil)
 	c := dial(t, ts.addr, []byte("k2"))
 
-	start := time.Now()
 	papStart(t, c, 1, "mallory", "p49_wrong")
+	inDelay(t, ts, 1)
+	start := time.Now()
 	c.sid, c.seq = 2, 3 // a CONTINUE for a session this connection never started
 	c.send(t, wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("alice")}.Encode(), 0)
 
