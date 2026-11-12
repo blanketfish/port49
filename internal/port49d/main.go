@@ -1386,7 +1386,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// login's join reads the store.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
 			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRestoreFloor(floor).
-			WithSkewWatch(newSkewWatch(stderr, time.Now, procOf(cfg))),
+			// Always "port49d": a broker-role process never reaches this runOnce.
+			WithSkewWatch(newSkewWatch(stderr, time.Now, "port49d")),
 		// `session.staleness_ceiling` defaults to 4h (plan 7g; OR-1): the
 		// broker's scheduled refresh stamps `refreshed_at` every
 		// `broker.refresh_interval`. An explicit 0s turns the check off, which
