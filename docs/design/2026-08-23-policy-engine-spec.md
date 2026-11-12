@@ -2525,8 +2525,11 @@ changing, `transport_changed` with `"from"` and `"to"` for a device's `transport
 `key_ref_changed` is then not also written), `platform_changed` with `"from"` and `"to"` for a
 device's `platform` changing (decision 56 ruling 6: it moves the device between platform-keyed
 scopes and rule sets, so it can lift a deny), `admission_changed` with `"to": "admitted"` for a
-device already in inventory becoming admitted, and `device_added` with `"to": "admitted"` for a device added and admitted, whose
-addresses are new capture targets. Its `device` block names the device. It is what makes a
+device already in inventory becoming admitted, `device_added` with `"to": "admitted"` for a device added and admitted, whose
+addresses are new capture targets, and `address_moved` with `"address"`, `"from"` (the device
+that held it) and `"to"` (the device that holds it now) for an address that left one device and
+landed on another, or on a new name, in the same swap (decision 61; the same swap still writes the
+`address_added` of the device that gained it). Its `device` block names the device. It is what makes a
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
 `port49_inventory_changes_total{kind}` is its alarm.
 
@@ -6045,6 +6048,11 @@ Mitigations, designed in rather than documented afterward:
   already in inventory and each device joining or leaving a scope with `security_log: true`.
   A device's `key_ref` changing, and a device becoming admitted, are recorded the same way: a
   record's pin can move a device onto a weaker or a shared key.
+- An address that leaves one device and lands on another in one swap is an `address_moved`
+  record of its own, and the page alert `port49_inventory_address_moved` (decision 61). On an
+  RFC 8907 device whose key comes from a CIDR or attribute key group, port49d names a
+  connection by its source address alone, so the move lets the new name's grants be used from
+  hardware that held another's. A move across two swaps is not seen.
 - A scope MUST be able to pin a device set explicitly instead of by attribute:
   `match: {name: [leaf-01, leaf-02]}` reads the device's inventory name, as `platform` reads
   its platform (§5.5).
@@ -11995,6 +12003,25 @@ role with one of those names skipped the provability check, so a Junos reply fai
 `unsound` and blamed a projection defect, or had its deny labelled port49's. The three names are
 refused at load, the message naming the role and saying to rename it, from one list in
 `internal/platform`. The match is exact; `Baseline` and `baseline_ops` are other names.
+
+**61. An address that moves between devices is detected, not blocked (fallacies audit S0).** On
+an RFC 8907 (`transport: tcp`) device whose key comes from a CIDR or attribute key group, port49d
+names a connection by its source address and the shared key admits the whole range, so whoever
+writes the source of truth can put device A's name on device B's address and use A's grants from
+B. Ruling: detection only. (1) `address_moved` is a security kind of `inventory_change`: in one
+swap, an address held by one device in the old inventory is held by a different name in the new one
+(a device already in inventory, or a new name). The record's `device` is the device that holds it
+now, and `change` carries `address`, `from` (the old holder) and `to`. No token, key or secret.
+(2) The same swap still writes `address_added` for the device that gained the address
+(`address_removed` is not a record), so `port49_inventory_privilege_changes` and every dashboard
+on `address_added` stay true; the move adds a record and a count, it replaces none.
+(3) `port49_inventory_changes_total{kind="address_moved"}` counts it. (4) The page alert
+`port49_inventory_address_moved` fires on any increase over 15m. Onboarding (a new device on a
+fresh address) and an address added to a device nobody held write no `address_moved`, so the page
+does not fire on routine growth. (5) Out of scope: a move across two swaps, removed in one and
+added in the next. (6) No mint hold or quarantine, and no binding of a token to an address: an
+edit made before the mint defeats the binding, and a hold delays a legitimate RMA. Crown-jewel
+devices should use `transport: tls` or a name pin to a per-device key.
 
 ---
 
