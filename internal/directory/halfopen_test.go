@@ -177,3 +177,61 @@ type closeCounter struct {
 func (c *closeCounter) Close() error { c.n.Add(1); return nil }
 
 func dc01Label(w *world) string { return w.r.Cfg.Servers[0].Label() }
+
+// A server that binds and answers the health check but hangs every search,
+// at a quiet site (one query per health interval): each query dials, binds,
+// waits, and drops the silent connection, and the check between them must not
+// clear what the query earned. The breaker opens at failure_threshold, so the
+// bind per query stops (each is a bind toward the service account's lockout).
+func TestSilentSearchesAtAQuietSiteOpenTheBreaker(t *testing.T) {
+	cfg := poolCfg("us-west", west1)
+	cfg.QueryTimeout = 50 * time.Millisecond
+	dials := 0
+	dial := func(context.Context, Server) (Client, error) {
+		dials++
+		return ldapClient{c: hangConn{}, seen: new(atomic.Uint64)}, nil
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	say := &lines{}
+	p := NewPool(cfg, dial, noCheck, newClock().Now, m, say.say)
+	for i := 0; i < 6; i++ {
+		_, _ = p.Do(context.Background(), searchFor("(x)"))
+		p.Check(context.Background())
+	}
+	if up := testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.Label())); up != 0 {
+		t.Fatalf("six silent query timeouts and the breaker is closed (%d dials): %v", dials, say.l)
+	}
+	// Three queries bind three times, and each Check before the breaker opens
+	// binds once more; none after it (the probe interval has not passed).
+	if dials > 6 {
+		t.Fatalf("%d dials; the breaker should have stopped the binds", dials)
+	}
+}
+
+// Responses read by one search on a connection are progress for every search
+// on it: a second search that times out while the first is answered is only
+// slow, and must not be read as a silent connection.
+func TestOneSearchAnsweredKeepsAnotherTimedOutSearchPlain(t *testing.T) {
+	seen := new(atomic.Uint64)
+	fast := ldapClient{c: &scriptedConn{pages: []scriptedPage{{entries: []*ldap.Entry{pageEntry("cn=a")}}}}, seen: seen}
+	slow := ldapClient{c: &sharedConn{fast: fast}, seen: seen}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := slow.SearchContext(ctx, searchReq(), 0)
+	var u unresponsiveError
+	if errors.As(err, &u) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a search timed out while another on the connection was answered: %v, want a plain deadline", err)
+	}
+}
+
+// sharedConn hangs its search, and as it starts (after the search noted what
+// the connection had read) runs fast, another search on the same connection,
+// which is answered.
+type sharedConn struct{ fast ldapClient }
+
+func (*sharedConn) IsClosing() bool { return false }
+func (*sharedConn) Close() error    { return nil }
+func (c *sharedConn) SearchAsync(ctx context.Context, _ *ldap.SearchRequest, _ int) ldap.Response {
+	go func() { _, _ = c.fast.SearchContext(context.Background(), searchReq(), 0) }()
+	return hangResponse{ctx: ctx}
+}

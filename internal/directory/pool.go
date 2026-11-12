@@ -124,6 +124,7 @@ type serverState struct {
 	gen          int       // bumped each time the pool closes or replaces conn
 	refusedSaid  time.Time // the last bind refusal said (once an hour)
 	faults       int       // consecutive
+	queryFaulted bool      // a query's fault is in faults; only a query's answer clears it, not a health check's pass
 	open         bool      // the breaker
 	openedAt     time.Time // its last probe or opening
 	healthySince time.Time // the first pass since the last fault; zero while faulting
@@ -477,7 +478,7 @@ func (p *Pool) answered(i int, outcome string) {
 	p.m.DirectoryQueries.WithLabelValues(p.srv[i].Label(), outcome).Inc()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.srv[i].faults = 0
+	p.srv[i].faults, p.srv[i].queryFaulted = 0, false
 }
 
 // broken reports whether err leaves the connection unusable: a network
@@ -509,6 +510,9 @@ func (p *Pool) fault(i, gen int, err error, silent bool) {
 		s.gen++
 	}
 	s.faults++
+	if gen >= 0 {
+		s.queryFaulted = true
+	}
 	s.healthySince = time.Time{}
 	if !s.open && s.faults >= p.cfg.FailureThreshold {
 		s.open, s.openedAt = true, p.now()
@@ -795,13 +799,13 @@ func (p *Pool) Check(ctx context.Context) {
 			continue
 		}
 		p.mu.Lock()
-		// The check exercised a connection of its own. Faults earned on the
-		// pooled connection stay unless it is gone (none, or the breaker's
-		// close just dropped it): a half-open or merely slow pooled connection
-		// that the check's fresh dial cannot see must not look healthy (audit
-		// F1-3). The query that answers clears them.
-		if s.conn == nil || s.open {
-			s.faults = 0
+		// The check exercised a connection of its own and a query that
+		// searches may not: a half-open or hung-search server passes the
+		// check and would look healthy between queries (audit F1-3). Faults
+		// a query earned stay until a query answers; the check clears only
+		// its own, and any when the breaker was open (a probe's pass closes it).
+		if !s.queryFaulted || s.open {
+			s.faults, s.queryFaulted = 0, false
 		}
 		if s.open {
 			s.open = false
