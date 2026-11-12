@@ -71,7 +71,12 @@ func TestNoReleaseBuildNamesTheAccountingHoldTag(t *testing.T) {
 
 // labHoldTagAllowed is the tracked files that may name the hold tag.
 func labHoldTagAllowed(rel string) bool {
+	evidence := strings.HasPrefix(rel, "tests/lab/evidence/")
 	switch {
+	case evidence && strings.HasSuffix(rel, ".go"):
+		// Evidence is never code: a Go file there is no record, and the
+		// tests/lab/*.go case below must not admit it.
+		return false
 	case rel == "internal/daemon/acct/hold.go", rel == "internal/daemon/acct/hold_lab.go",
 		rel == "internal/daemon/acct/hold_test.go", rel == "internal/daemon/acct/hold_lab_test.go",
 		rel == "tests/ci/lab_hold_test.go":
@@ -80,7 +85,7 @@ func labHoldTagAllowed(rel string) bool {
 		return true
 	case strings.HasPrefix(rel, "docs/") && strings.HasSuffix(rel, ".md"):
 		return true
-	case strings.HasPrefix(rel, "tests/lab/evidence/"):
+	case evidence:
 		// Committed lab evidence is a record of a run, never a build input:
 		// L94 c4's summary names the tags its port49d was built with.
 		return true
@@ -101,7 +106,7 @@ func TestTheHoldTagAllowListIsNarrow(t *testing.T) {
 		}
 	}
 	for _, rel := range []string{
-		"tests/x.go", "tests/ci/x_test.go", "tests/lab/x.txt", "tests/labx/evidence/x.txt", "internal/daemon/acct/acct.go",
+		"tests/x.go", "tests/ci/x_test.go", "tests/lab/evidence/x.go", "tests/lab/evidence/L94-x/c4.go", "tests/lab/x.txt", "tests/labx/evidence/x.txt", "internal/daemon/acct/acct.go",
 		".goreleaser.yaml", "Dockerfile", "Makefile", "docs/x.yaml",
 	} {
 		if labHoldTagAllowed(rel) {
