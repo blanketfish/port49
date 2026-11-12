@@ -49,6 +49,10 @@ interface, not the primary address. A device that connects from an address the f
 AAA configuration (`ip tacacs source-interface` or the platform's equivalent) so the address cannot change under
 you.
 
+An address written as IPv4-mapped IPv6 (`::ffff:10.1.1.1`) is read as the IPv4 address (`10.1.1.1`), since that is
+the source a connection arrives from; listing both forms on two devices is the usual one-address-on-two-devices
+refusal. A key group `cidr` written in that mapped form is refused at load: write the IPv4 prefix.
+
 `attributes:` are the free keys that policy scopes match on, such as `site` and `role`. A scope that matches on an
 attribute the device does not have is decided by the scope's `on_missing:` ([Policy](policy.md)), which is why a
 connector's `map` is worth checking before the first sync.
