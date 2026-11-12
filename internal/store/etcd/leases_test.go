@@ -281,15 +281,23 @@ func TestALeaseTTLIsTheSameWhateverTheMintingClockSays(t *testing.T) {
 		}
 		return got.Load()
 	}
+	// The bound the docs state: token_ttl + lease_grace plus two buckets (the
+	// bucket the lease ends in, and the one the grant keeps spare for later
+	// records), for every skew. A whole-minute skew is the same bucket
+	// alignment, so it asks for exactly the in-step TTL; a sub-minute one may
+	// land in the next bucket, so it is bounded, not equal.
+	lo, hi := int64((ttl + grace).Seconds()), int64((ttl + grace + 2*leaseBucket).Seconds())
 	inStep := asked(0)
-	for _, skew := range []time.Duration{-2 * time.Minute, 2 * time.Minute, time.Hour} {
-		if got := asked(skew); got != inStep {
-			t.Errorf("a clock %v off asks for a %ds lease, in step asks %ds", skew, got, inStep)
+	for _, c := range []struct {
+		skew  time.Duration
+		exact bool
+	}{{0, false}, {-2 * time.Minute, true}, {2 * time.Minute, true}, {time.Hour, true}, {17 * time.Second, false}, {-17 * time.Second, false}} {
+		got := asked(c.skew)
+		if got < lo || got > hi {
+			t.Errorf("a clock %v off asks for a %ds lease for a %v token, want %d to %d", c.skew, got, ttl, lo, hi)
 		}
-	}
-	// The bound the docs state: token_ttl + lease_grace plus up to a bucket, and the
-	// bucket the grant keeps spare for later records.
-	if max := int64((ttl + grace + 2*leaseBucket).Seconds()); inStep > max {
-		t.Errorf("a %ds lease for a %v token, want at most %ds", inStep, ttl, max)
+		if c.exact && got != inStep {
+			t.Errorf("a clock %v off asks for a %ds lease, in step asks %ds", c.skew, got, inStep)
+		}
 	}
 }
