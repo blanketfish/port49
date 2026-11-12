@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/blanketfish/port49/internal/store"
 	"github.com/blanketfish/port49/internal/store/memory"
 	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 	"github.com/blanketfish/port49/internal/token"
 )
 
@@ -261,18 +263,45 @@ func inDelay(t *testing.T, ts *testServer, n float64) {
 	}
 }
 
-// slowFirstContext delays the first GetContext only, so the first of two
-// requests is still in its store work when the second arrives.
-type slowFirstContext struct {
-	store.Store
-	once atomic.Bool
-}
-
-func (s *slowFirstContext) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
-	if s.once.CompareAndSwap(false, true) {
-		time.Sleep(300 * time.Millisecond)
+// Over TLS, a protocol error drops the connection by swapping c to the TCP
+// connection beneath, under wmu, while another session's lane is in its
+// failure delay. When that delay ends nothing is written: a reply there would
+// be cleartext under the TLS stream, which the client reads as a bad record.
+// The client sees the connection end, with no record at all.
+func TestOverTLSADroppedConnectionGetsNoCleartextReply(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) {
+		lim := limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
+			MalformedBackoffBase: time.Second, MalformedBackoffMax: time.Second, MalformedWindow: time.Minute,
+			AuthFailureDelayBase: 300 * time.Millisecond, AuthFailureDelayMax: 300 * time.Millisecond,
+			AuthFailureWindow: time.Minute}, time.Now)
+		d.Limits = lim
+		d.Authen = authen.New(memory.New(time.Now), d.Log, lim, d.Metrics, time.Now, func() string { return "ctx1" },
+			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, token.NewTagWindow(token.TagKey([]byte("server_test"))))
+	})
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	c, err := f.dialTLS(t, &cert, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return s.Store.GetContext(ctx, k)
+	c.sid, c.seq = 1, 1
+	if err := c.send(wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("mallory"), Data: []byte("p49_wrong")}.Encode(),
+		wire.FlagUnencrypted|wire.FlagSingleConnect); err != nil {
+		t.Fatal(err)
+	}
+	inDelay(t, f.ts, 1) // its FAIL is due at 300ms, inside the 1s backoff
+	c.sid, c.seq = 2, 3 // a CONTINUE for a session this connection never started
+	if err := c.send(wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("alice")}.Encode(), wire.FlagUnencrypted); err != nil {
+		t.Fatal(err)
+	}
+
+	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, err = c.conn.Read(make([]byte, 1))
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("read error %v: want the connection ended with no record after the drop", err)
+	}
+	assertProtocolErrorRecorded(t, log)
 }
 
 // login runs a passing PAP login for alice as session sid, so authorizations
@@ -291,26 +320,29 @@ func login(t *testing.T, c *client, sid uint32) {
 	}
 }
 
-// Packets of one session are answered in the order they came, even when the
-// first is slow and the second is quick: the per-session lane, not the
-// connection, is what serialises.
+// The packets of one session are answered in the order they came, each
+// against the state the one before it left: an ASCII login's START and both
+// CONTINUEs, written back to back before any reply is read. Run out of order
+// a CONTINUE would find no session, or the wrong phase; run at once, the
+// three would share the session's state, which -race reports.
 func TestPacketsOfOneSessionStayInOrder(t *testing.T) {
 	log := &syncBuffer{}
-	st := &slowFirstContext{Store: memory.New(time.Now)}
-	ts := newLaneServer(t, log, st, nil)
+	ts := newLaneServer(t, log, memory.New(time.Now), nil)
 	c := dial(t, ts.addr, []byte("k2"))
-	login(t, c, 10)
-	st.once.Store(false) // the login's own reads are done; the next GetContext is the slow one
 
-	authorize(t, c, 20, "service=shell", "cmd=")       // slow, permitted
-	authorize(t, c, 20, "service=shell", "cmd=reload") // quick, denied
-	_, body := recvWithin(t, c, 5*time.Second)
-	if r, _ := wire.DecodeAuthorResponse(body); r.Status != wire.AuthorStatusPassAdd {
-		t.Fatalf("first reply on session 20 must be the first request's PASS_ADD, got status %d", r.Status)
-	}
-	_, body = recvWithin(t, c, 5*time.Second)
-	if r, _ := wire.DecodeAuthorResponse(body); r.Status != wire.AuthorStatusFail {
-		t.Fatalf("second reply on session 20 must be the reload's FAIL, got status %d", r.Status)
+	c.sid, c.seq = 20, 1
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypeASCII,
+		Service: wire.AuthenServiceLogin, Port: []byte("vty0")}.Encode(), wire.FlagSingleConnect)
+	c.send(t, wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("alice")}.Encode(), 0)
+	c.send(t, wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("p49_e2e")}.Encode(), 0)
+
+	for i, want := range []uint8{wire.AuthenStatusGetUser, wire.AuthenStatusGetPass, wire.AuthenStatusPass} {
+		h, body := recvWithin(t, c, 5*time.Second)
+		r, err := wire.DecodeAuthenReply(body)
+		if err != nil || h.SessionID != 20 || h.SeqNo != uint8(2*i+2) || r.Status != want {
+			t.Fatalf("round %d: session %d seq %d status %d (%v); want seq %d status %d",
+				i+1, h.SessionID, h.SeqNo, r.Status, err, 2*i+2, want)
+		}
 	}
 }
 
