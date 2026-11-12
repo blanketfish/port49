@@ -227,6 +227,31 @@ func TestAStalledPeerIsDroppedAfterOneWriteTimeout(t *testing.T) {
 	}
 }
 
+// The failure delay counts from when the packet was read, not from when its
+// lane began it. Two STARTs on one session_id, back to back, are the one shape
+// in which a packet waits in its own session's lane (no device was seen to
+// send it; port49 starts the session over): the second is read at once and
+// begun when the first's FAIL is out, its delay by then already spent. Counted
+// from the lane's start it would come a whole delay later.
+func TestTheFailureDelayCountsFromTheRead(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newLaneServer(t, log, memory.New(time.Now), nil)
+	c := dial(t, ts.addr, []byte("k2"))
+
+	start := time.Now()
+	papStart(t, c, 7, "mallory", "p49_wrong")
+	papStart(t, c, 7, "mallory", "p49_wrong_again")
+	for i := range 2 {
+		_, body := recvWithin(t, c, 5*time.Second)
+		at := time.Since(start)
+		if r, _ := wire.DecodeAuthenReply(body); r.Status != wire.AuthenStatusFail ||
+			at < laneDelay-100*time.Millisecond || at > laneDelay+500*time.Millisecond {
+			t.Fatalf("FAIL %d (status %d) after %v: want both at the one %v delay counted from their read",
+				i+1, r.Status, at, laneDelay)
+		}
+	}
+}
+
 // inDelay waits until n sessions have entered their failure delay, so a
 // test's next packet is known to arrive while they wait in it.
 func inDelay(t *testing.T, ts *testServer, n float64) {

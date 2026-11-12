@@ -113,7 +113,10 @@ func (s *conn) answer(ctx context.Context, j job) {
 	select {
 	case <-s.lanes.stop:
 		// The connection is ending: a packet not yet begun is dropped, as
-		// bytes unread at a close are.
+		// bytes unread at a close are. No test pins this check: every stop
+		// that matters for the device also sets dropped, which keeps the
+		// reply off the wire (write). It saves the store work and the delay
+		// of packets nobody will see answered.
 		return
 	default:
 	}
