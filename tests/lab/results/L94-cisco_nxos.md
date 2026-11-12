@@ -5,7 +5,7 @@
 - **Image version:** Nexus 9300v 10.6(2)F (`vrnetlab/cisco_n9kv:9300v64-10.6.2.F`)
 - **Topology:** `tests/lab/topologies/nxos106.clab.yml`
 - **Transport:** TACACS+ over TLS (RFC 9887), port 300; both modes: single-connect offered by port49 (`offered`) and configured on the device (`single`)
-- **Run:** `PORT49_LAB_PLATFORMS=nxos106 go test -tags lab ./tests/lab/ -run '^TestL94$' -count=1 -v -timeout 300m`, with `PORT49_L94_ARM=baseline` (port49d before decision 59) and `PORT49_L94_ARM=fixed` for cells c1, c2, c3 and c5, then `PORT49_L94_ARM=fixed PORT49_L94_CELLS=c4`, which runs the lab-only `port49_lab_acct_hold` build
+- **Run:** `PORT49_LAB_PLATFORMS=nxos106 go test -tags lab ./tests/lab/ -run '^TestL94$' -count=1 -v -timeout 300m`, with `PORT49_L94_ARM=baseline` (port49d before decision 59) and `PORT49_L94_ARM=fixed` for cells c1, c2, c3 and c5, then `PORT49_L94_ARM=fixed PORT49_L94_CELLS=c4`, which runs a lab-only build that holds accounting replies (`internal/daemon/acct/hold_lab.go`)
 - **Evidence:** `tests/lab/evidence/L94-cisco_nxos/{baseline,fixed}/{offered,single}/` — per cell, the summary (`<cell>-summary.txt`), port49's decision records, the typed commands, the device's TACACS+ debug counts, and the cell's TLS connections (`<cell>.tls.json`, built from the cell's capture). Committed as 4481bbd8 (baseline), 5131998b (fixed) and f57c3f75 (c4).
 - **Capture:** the raw captures are git-ignored (they hold lab credentials). The c4 run's are kept under `tests/lab/captures/L94-cisco_nxos-c4/`. The c1–c3 and c5 runs' raw captures were replaced by later runs before they were copied; each cell's `<cell>.tls.json` is the record taken from them.
 

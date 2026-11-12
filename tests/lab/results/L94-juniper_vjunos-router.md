@@ -5,7 +5,7 @@
 - **Image version:** vJunos-router 26.2R1.7 (`vrnetlab/juniper_vjunos-router:26.2R1.7`)
 - **Topology:** `tests/lab/topologies/vjunos26.clab.yml`
 - **Transport:** TACACS+ over TLS (RFC 9887), port 300, with `single-connection` configured on the device (`single`)
-- **Run:** `PORT49_LAB_PLATFORMS=vjunos26 go test -tags lab ./tests/lab/ -run '^TestL94$' -count=1 -v -timeout 300m`, with `PORT49_L94_ARM=baseline` (port49d before decision 59) and `PORT49_L94_ARM=fixed` for cells c1, c2, c3 and c5, then `PORT49_L94_ARM=fixed PORT49_L94_CELLS=c4`, which runs the lab-only `port49_lab_acct_hold` build
+- **Run:** `PORT49_LAB_PLATFORMS=vjunos26 go test -tags lab ./tests/lab/ -run '^TestL94$' -count=1 -v -timeout 300m`, with `PORT49_L94_ARM=baseline` (port49d before decision 59) and `PORT49_L94_ARM=fixed` for cells c1, c2, c3 and c5, then `PORT49_L94_ARM=fixed PORT49_L94_CELLS=c4`, which runs a lab-only build that holds accounting replies (`internal/daemon/acct/hold_lab.go`)
 - **Evidence:** `tests/lab/evidence/L94-juniper_vjunos-router/{baseline,fixed}/single/` — per cell, the summary (`<cell>-summary.txt`), port49's decision records, the typed commands, the device's TACACS+ log lines and the cell's TLS connections (`<cell>.tls.json`, built from the cell's capture). Committed as b4a2d9bd (baseline), aec97a04 (fixed) and c3f34dd7 with a4858992 (c4).
 - **Capture:** the raw captures are git-ignored (they hold lab credentials). The c4 run's are kept under `tests/lab/captures/L94-juniper_vjunos-router-c4-r3/`. The baseline and fixed c1–c3 and c5 runs' raw captures were replaced by later runs before they were copied; each cell's `<cell>.tls.json` is the record taken from them.
 
