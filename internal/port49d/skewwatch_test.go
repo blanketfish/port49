@@ -8,7 +8,7 @@ import (
 )
 
 // The watch says a broker clock running ahead once per window, with the
-// largest skew seen in it, and again in the next window: a login storm does
+// skew first seen in it, and again in the next window: a login storm does
 // not fill the log, and a skew that persists is not forgotten.
 func TestTheSkewWatchSaysOncePerWindow(t *testing.T) {
 	var out bytes.Buffer
