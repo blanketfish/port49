@@ -637,6 +637,14 @@ func TestL94(t *testing.T) {
 			}
 			l80Ask(typed, recorded)
 			l80Reasons(typed, recs)
+			// When port49 read each command (l94Match): what c1/c4/c3 grade
+			// where commands are asked; took= above is the prompt.
+			sum.WriteString("port49 read (authorize_command ts less typed):\n")
+			for i, m := range l94Match(typed, evs) {
+				if m != nil {
+					fmt.Fprintf(&sum, "  s%d %-24q +%s %s\n", typed[i].Session, typed[i].Command, m.TS.Sub(typed[i].At).Round(time.Millisecond), m.Verdict)
+				}
+			}
 			most := l80MostOpen(conns)
 			fmt.Fprintf(&sum, "tls connections: %d, most open at once: %d\n", len(conns), most)
 			for _, cn := range conns {

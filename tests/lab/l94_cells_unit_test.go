@@ -353,7 +353,7 @@ func TestL94RefusedPermittedLostPromptsSlowCommandsAndMissingAccountingStop(t *t
 	cases := map[string]func(*l94Grade){
 		"permitted command was refused":    func(g *l94Grade) { g.Typed[0].Denied = true },
 		"prompt never came back":           func(g *l94Grade) { g.Typed[1].Err = true },
-		"took 1.20s, over 1s":              func(g *l94Grade) { g.Typed[0].Took = 1.2 },
+		"reached port49 1.2s after":        func(g *l94Grade) { g.Events[4].TS = g.Typed[0].At.Add(1200 * time.Millisecond) },
 		"accounting START record(s), want": func(g *l94Grade) { g.Events = g.Events[2:] },
 		"accounting STOP record(s), want":  func(g *l94Grade) { g.Events = append(g.Events[:2:2], g.Events[4:]...) },
 	}
@@ -390,6 +390,60 @@ func TestL94RefusedPermittedLostPromptsSlowCommandsAndMissingAccountingStop(t *t
 	j.Typed[0].Took = 3.5
 	if got := strings.Join(l94Stops(j), "\n"); !strings.Contains(got, "took 3.50s, over 3s") {
 		t.Errorf("junos over its timeout: %q", got)
+	}
+}
+
+// Round 5, on the committed NX-OS evidence (1c1d105c, offered c1): NX-OS
+// holds one vty's prompt while another session runs (s1 "show version"
+// typed 04:48:05.229 took 6.76s; the baseline does it too), but port49 read
+// it at 05.249. Where commands are asked, c1/c4/c3 grade that arrival
+// (the matched authorize_command's ts less the typing), under l94FastB; the
+// prompt time is the summary's.
+func TestL94CommandsAreGradedOnArrivalNotPrompt(t *testing.T) {
+	typed := func() []l80Typed {
+		return []l80Typed{
+			{Session: 0, Command: "show version", Asked: true, Took: 1.75, At: l94At(t, "04:47:59.198")},
+			{Session: 1, Command: "show version", Asked: true, Took: 0.75, At: l94At(t, "04:47:59.213")},
+			{Session: 0, Command: "show users", Asked: true, Denied: true, Took: 0.25, At: l94At(t, "04:48:00.952")},
+			{Session: 1, Command: "show version", Asked: true, Took: 6.76, At: l94At(t, "04:48:05.229")},
+		}
+	}
+	events := func() []l94Event {
+		return append(l94SessionAcct(),
+			l94Event{TS: l94At(t, "04:47:59.219"), Event: "authorize_command", Verdict: "permit", Vector: "show version"},
+			l94Event{TS: l94At(t, "04:47:59.236"), Event: "authorize_command", Verdict: "permit", Vector: "show version"},
+			l94Event{TS: l94At(t, "04:48:00.972"), Event: "authorize_command", Verdict: "deny", Vector: "show users"},
+			l94Event{TS: l94At(t, "04:48:05.249"), Event: "authorize_command", Verdict: "permit", Vector: "show version"})
+	}
+	for _, cell := range []string{"c1", "c4", "c3"} {
+		g := l94Clean()
+		g.Cell, g.Typed, g.Events = cell, typed(), events()
+		if cell == "c3" {
+			g.Outcomes = []l94Outcome{{AuthFailed: true}, {AuthFailed: true}, {AuthFailed: true}}
+			g.Events = append(g.Events, l94Event{Event: "redeem", Verdict: "deny"}, l94Event{Event: "redeem", Verdict: "deny"}, l94Event{Event: "redeem", Verdict: "deny"})
+			g.Baseline = &l94Baseline{MaxTook: 0.5}
+		}
+		if got := l94Stops(g); len(got) != 0 {
+			t.Errorf("%s: the evidence's shape stops: %v", cell, got)
+		}
+		g.Events[len(l94SessionAcct())+3].TS = l94At(t, "04:48:06.329") // read 1.1s after it was typed
+		if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, `session 1 "show version" reached port49 1.1s after it was typed`) {
+			t.Errorf("%s: a late arrival: %q", cell, got)
+		}
+	}
+	// A stall is not hidden behind a later session's request: s0 typed at
+	// 59.198 and read at 00.400 (1.2s), s1 typed at 59.700 and read at
+	// 59.720. Each record goes to the latest unmatched typing before it.
+	g := l94Clean()
+	g.Typed = []l80Typed{
+		{Session: 0, Command: "show version", Asked: true, At: l94At(t, "04:47:59.198")},
+		{Session: 1, Command: "show version", Asked: true, At: l94At(t, "04:47:59.700")},
+	}
+	g.Events = append(l94SessionAcct(),
+		l94Event{TS: l94At(t, "04:47:59.720"), Event: "authorize_command", Verdict: "permit", Vector: "show version"},
+		l94Event{TS: l94At(t, "04:48:00.400"), Event: "authorize_command", Verdict: "permit", Vector: "show version"})
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, `session 0 "show version" reached port49 1.202s after`) {
+		t.Errorf("a stall behind a later request: %q", got)
 	}
 }
 
@@ -455,26 +509,27 @@ func TestL94C3Stops(t *testing.T) {
 	g.Cell = "c3"
 	g.Outcomes = []l94Outcome{{AuthFailed: true}, {AuthFailed: true}, {AuthFailed: true}}
 	g.Events = append(g.Events, l94Event{Event: "redeem", Verdict: "deny"}, l94Event{Event: "redeem", Verdict: "deny"}, l94Event{Event: "redeem", Verdict: "deny"})
-	g.Typed[0].Took, g.Typed[1].Took = 0.4, 0.9
-	if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "took") {
-		t.Errorf("0.9s is under the row's 1s with no baseline: %q", got)
-	}
-	// H5: the row's <1s where commands are asked.
-	g.Typed[1].Took = 1.2
-	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "took 1.20s, over the row's 1s") {
-		t.Errorf("over 1s: %q", got)
-	}
-	// H5: the baseline's slowest plus 250ms, not the bare slowest.
-	g.Typed[1].Took = 0.7
+	// Round 5: where commands are asked the prompt time is not graded
+	// (arrival is: TestL94CommandsAreGradedOnArrivalNotPrompt), so neither
+	// the row's 1s nor the baseline's slowest applies to it.
+	g.Typed[0].Took, g.Typed[1].Took = 0.4, 1.2
 	g.Baseline = &l94Baseline{MaxTook: 0.5}
 	if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "took") {
-		t.Errorf("0.7s is within the baseline's 0.5s + 250ms: %q", got)
-	}
-	g.Typed[1].Took = 0.8
-	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "took 0.80s, above 0.75s") {
-		t.Errorf("above the baseline's slowest + 250ms: %q", got)
+		t.Errorf("NX-OS c3 graded on its prompt: %q", got)
 	}
 	g.Baseline = nil
+	// H5: where no command is asked (Junos), the prompt is all there is: the
+	// baseline's slowest plus 250ms, not the bare slowest.
+	p, _ := l94PlatformFor("vjunos26")
+	j := l94Grade{Arm: "fixed", Cell: "c3", Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1,
+		Typed: []l80Typed{{Command: "show version | no-more", Took: 0.7}}, Baseline: &l94Baseline{MaxTook: 0.5}}
+	if got := strings.Join(l94Stops(j), "\n"); strings.Contains(got, "took") {
+		t.Errorf("0.7s is within the baseline's 0.5s + 250ms: %q", got)
+	}
+	j.Typed[0].Took = 0.8
+	if got := strings.Join(l94Stops(j), "\n"); !strings.Contains(got, "took 0.80s, above 0.75s") {
+		t.Errorf("above the baseline's slowest + 250ms: %q", got)
+	}
 	g.Typed[1].Took = 0.5
 	g.Outcomes = g.Outcomes[:2]
 	g.Events = g.Events[:len(g.Events)-2] // two of the three FAIL redeems gone

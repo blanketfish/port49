@@ -406,6 +406,38 @@ func l94Regressed(baseline, fixed []l94Outcome) []string {
 	return out
 }
 
+// l94Match is, for each typed command, the authorize_command port49 recorded
+// for it, or nil. Records are taken in ts order (port49's read,
+// author.go:245), and each goes to the unmatched command of its words typed
+// latest at or before it. Two sessions typing the same words are told apart
+// by time, not by the order typed was appended in, and a request that
+// stalled is not credited to a later session's that overtook it.
+func l94Match(typed []l80Typed, evs []l94Event) []*l94Event {
+	var asks []int
+	for j, e := range evs {
+		if e.Event == "authorize_command" {
+			asks = append(asks, j)
+		}
+	}
+	slices.SortStableFunc(asks, func(a, b int) int { return evs[a].TS.Compare(evs[b].TS) })
+	out := make([]*l94Event, len(typed))
+	for _, j := range asks {
+		best := -1
+		for i, x := range typed {
+			if out[i] != nil || x.Command != evs[j].Vector || x.At.After(evs[j].TS) {
+				continue
+			}
+			if best < 0 || x.At.After(typed[best].At) {
+				best = i
+			}
+		}
+		if best >= 0 {
+			out[best] = &evs[j]
+		}
+	}
+	return out
+}
+
 // l94Dup is a duplicate or retransmitted request: an authorize_command for a
 // command more often than it was typed, or an account record whose flags and
 // task_id repeat.
@@ -511,13 +543,20 @@ func l94Stops(g l94Grade) []string {
 	permitted, denied := l94Commands(g.Platform)
 	commanded := l94Commanded(g.Platform)
 	loop := g.Cell == "c1" || g.Cell == "c4"
-	// A c1/c4 command's bound: the platform's L13 timeout, and the row's
-	// <1s where the device asks port49 about each command.
-	bound := g.P.Timeout
-	if commanded && (bound == 0 || l94FastB < bound) {
-		bound = l94FastB
-	}
-	for _, x := range g.Typed {
+	// Where the device asks port49 about each command, c1/c4/c3 grade when
+	// port49 read it (l94Match), under the row's <1s: NX-OS holds one vty's
+	// prompt while another session runs, in the in-order baseline too, so
+	// the prompt time is the summary's, not a grade. Where it asks nothing,
+	// the prompt is all there is: c1/c4 against the platform's L13 timeout,
+	// c3 below.
+	arrival := commanded && (loop || g.Cell == "c3")
+	match := l94Match(g.Typed, g.Events)
+	for i, x := range g.Typed {
+		if m := match[i]; arrival && m != nil {
+			if lat := m.TS.Sub(x.At); lat >= l94FastB {
+				out = append(out, fmt.Sprintf("%s: session %d %q reached port49 %s after it was typed, not under %s", g.Cell, x.Session, x.Command, lat.Round(time.Millisecond), l94FastB))
+			}
+		}
 		if commanded && !x.Asked && (g.Cell != "c5" || l80Ran(x)) {
 			out = append(out, fmt.Sprintf("%s: session %d %q was never asked: lost or run unasked", g.Cell, x.Session, x.Command))
 		}
@@ -532,8 +571,8 @@ func l94Stops(g l94Grade) []string {
 		if x.Err {
 			out = append(out, fmt.Sprintf("%s: session %d %q: its prompt never came back", g.Cell, x.Session, x.Command))
 		}
-		if loop && bound > 0 && x.Took > bound.Seconds() {
-			out = append(out, fmt.Sprintf("%s: session %d %q took %.2fs, over %s", g.Cell, x.Session, x.Command, x.Took, bound))
+		if loop && !commanded && g.P.Timeout > 0 && x.Took > g.P.Timeout.Seconds() {
+			out = append(out, fmt.Sprintf("%s: session %d %q took %.2fs, over %s", g.Cell, x.Session, x.Command, x.Took, g.P.Timeout))
 		}
 	}
 	if loop {
@@ -576,9 +615,9 @@ func l94Stops(g l94Grade) []string {
 			out = append(out, "c2: A's refused-credential login was not refused as an authentication failure")
 		}
 	case "c3":
-		// The bound is the lower of the platform's L13 timeout and the
-		// baseline arm's slowest B command plus 250ms; where commands are
-		// asked, the row's <1s on top.
+		// Where no command is asked, B's prompt is bounded by the lower of
+		// the platform's L13 timeout and the baseline arm's slowest B command
+		// plus 250ms. Where commands are asked, arrival is graded above.
 		limit, from := g.P.Timeout.Seconds(), g.P.TimeoutFrom
 		if g.Baseline != nil {
 			if b := g.Baseline.MaxTook + 0.25; limit == 0 || b < limit {
@@ -586,10 +625,7 @@ func l94Stops(g l94Grade) []string {
 			}
 		}
 		for _, x := range g.Typed {
-			if commanded && x.Took > l94FastB.Seconds() {
-				out = append(out, fmt.Sprintf("c3: B's %q took %.2fs, over the row's %s", x.Command, x.Took, l94FastB))
-			}
-			if limit > 0 && x.Took > limit {
+			if !commanded && limit > 0 && x.Took > limit {
 				out = append(out, fmt.Sprintf("c3: B's %q took %.2fs, above %.2fs (%s)", x.Command, x.Took, limit, from))
 			}
 		}
