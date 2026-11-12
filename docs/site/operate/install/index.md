@@ -43,7 +43,9 @@ Each shape page states the first four again, in its own terms.
    lengthens every token by the skew, and `port49d` says so (`clock: a token was minted ... ahead of this
    host's clock`, `port49_token_minted_ahead_total`, the `port49_token_clock_skew` ticket). A session
    ceiling and a context's staleness are broker-clock times too, so skew moves them by the skew. In
-   Kubernetes this is the nodes' clocks; in a container, the host's.
+   Kubernetes this is the nodes' clocks; in a container, the host's. Alert on the hosts' own NTP sync,
+   because port49 cannot see a broker that is behind: with node_exporter, `node_timex_sync_status == 0`
+   and `abs(node_timex_offset_seconds) > 1`.
 
 ## Install the binaries with mode 0755
 

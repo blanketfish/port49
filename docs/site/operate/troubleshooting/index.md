@@ -429,7 +429,9 @@ lives `N` longer here. The other direction does not show: a broker `N` behind sh
 token was minted, compare the clocks first.
 
 **Do this:** put every broker host and every port49d host on NTP (`chronyc tracking`, or
-`timedatectl` on the host) and confirm they agree to well under the smallest `token_ttl`.
+`timedatectl` on the host) and confirm they agree to well under the smallest `token_ttl`. Alert on the
+hosts' own NTP sync, since port49 cannot see a broker that is behind: with node_exporter,
+`node_timex_sync_status == 0` and `abs(node_timex_offset_seconds) > 1`.
 
 **Don't:** lengthen `token_ttl` to cover the skew; it widens replay for an unspent token and leaves the
 clocks wrong for everything else that reads them.
