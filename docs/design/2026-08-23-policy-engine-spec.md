@@ -11996,6 +11996,22 @@ role with one of those names skipped the provability check, so a Junos reply fai
 refused at load, the message naming the role and saying to rename it, from one list in
 `internal/platform`. The match is exact; `Baseline` and `baseline_ops` are other names.
 
+**60. A person's queued mints go out as one request, and Mint has one deadline (fallacies audit F2-3,
+F1-5; Ryan 2026-11-11).** The agent holds one connection and `port49 token` asks for one device per call, so
+a run of 20 parallel calls against a broker that takes 2 seconds a mint queued them one exchange at a time
+and the tail failed "busy for 30s" for devices the broker would have permitted. The agent now sends the
+mints queued behind the wire as one request of up to the broker's `batch_max` devices (from `/v1/config`).
+Only mints with the same `enable` and `ttl`, no per-login proof (a proof covers one device) and no device
+named twice ride together. Each caller gets its own device's item or its own refusal; a failure of the whole
+request (a refused session, an outage) is every caller's. A batch is one request under one Idempotency-Key
+whose body does not change across its retries, and the broker keeps one record per device under a key, so a
+lost answer replays what was minted and no device is minted twice. The wire is given back while a batch
+waits on `idempotency_in_progress`, so a revocation never waits behind a sleeping mint, and it waits behind at
+most the exchange in flight and one batch. Mint is bounded by one deadline of `socketTimeout` minus 10 seconds
+(85 s), covering the wait for the connection, every post and every `idempotency_in_progress` wait; its error
+names the wait it was in and is an outage the caller may retry, so the socket client's generic timeout is
+never what a person sees. No new setting, reason code or log kind.
+
 ---
 
 ## 14. Required test assertions
