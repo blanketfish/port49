@@ -257,3 +257,39 @@ func TestAGrantEndsAtTheCallTimeoutAndAWaiterGrantsNext(t *testing.T) {
 		t.Fatalf("the first grant ended after %d ms, want about its 100 ms bound", ms)
 	}
 }
+
+// A lease's TTL is a duration worked out on the minting clock alone: the
+// expiry and the now it is measured from are both the broker's, and etcd counts
+// the TTL down on its own clock. So a broker whose clock is skewed asks for the
+// same TTL as one in step, and a token from a broker ahead is reclaimed no
+// later than ttl + lease_grace + one bucket after it was minted, whatever the
+// skew (design 8; audit F8-1).
+func TestALeaseTTLIsTheSameWhateverTheMintingClockSays(t *testing.T) {
+	const grace, ttl = 5 * time.Minute, 30 * time.Second
+	asked := func(skew time.Duration) int64 {
+		t.Helper()
+		// Near the real clock: a lease is asked for from the clock that mints it.
+		now := time.Now().Truncate(time.Minute).Add(10 * time.Second).Add(skew)
+		l := newLeases(etcdtest.Client(t), func() time.Time { return now }, grace, 0)
+		var got atomic.Int64
+		l.grant = func(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error) {
+			got.Store(ttl)
+			return &clientv3.LeaseGrantResponse{ID: 1, TTL: ttl}, nil
+		}
+		if _, err := l.For(context.Background(), now.Add(ttl)); err != nil {
+			t.Fatal(err)
+		}
+		return got.Load()
+	}
+	inStep := asked(0)
+	for _, skew := range []time.Duration{-2 * time.Minute, 2 * time.Minute, time.Hour} {
+		if got := asked(skew); got != inStep {
+			t.Errorf("a clock %v off asks for a %ds lease, in step asks %ds", skew, got, inStep)
+		}
+	}
+	// The bound the docs state: token_ttl + lease_grace plus up to a bucket, and the
+	// bucket the grant keeps spare for later records.
+	if max := int64((ttl + grace + 2*leaseBucket).Seconds()); inStep > max {
+		t.Errorf("a %ds lease for a %v token, want at most %ds", inStep, ttl, max)
+	}
+}
