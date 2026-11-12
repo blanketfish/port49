@@ -354,7 +354,7 @@ func l94Clean() l94Grade {
 	p, _ := l94PlatformFor("nxos106")
 	return l94Grade{Arm: "fixed", Cell: "c1", Platform: "cisco_nxos", P: p, Conns: 1, MostOpen: 1,
 		Typed:  []l80Typed{{Command: "show version", Asked: true}, {Command: "show users", Asked: true, Denied: true}},
-		Events: append(l94SessionAcct(), l94Event{Event: "authorize_command", Vector: "show version"}, l94Event{Event: "authorize_command", Vector: "show users"})}
+		Events: append(l94SessionAcct(), l94Event{Event: "authorize_command", Verdict: "permit", Vector: "show version"}, l94Event{Event: "authorize_command", Verdict: "deny", Vector: "show users"})}
 }
 
 // l94SessionAcct is c1's two sessions' accounting START and STOP records.
@@ -646,6 +646,36 @@ func TestL94C5Stops(t *testing.T) {
 	g.UpAt = time.Time{}
 	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "did not come back") {
 		t.Errorf("c5 no restart: %q", got)
+	}
+}
+
+// Round 5, on the committed NX-OS evidence (1c1d105c, offered c5): after
+// the restart port49 itself denied "show version" (context_missing: the
+// memory store lost the context), typed 05:06:26.718, read 26.737, and the
+// baseline does the same. A permitted command refused is a stop only where
+// port49 permitted it, in every cell.
+func TestL94PermittedRefusedMeansPort49PermittedIt(t *testing.T) {
+	for _, cell := range []string{"c5", "c1"} {
+		g := l94Clean()
+		g.Cell = cell
+		g.RestartAt, g.UpAt = l94At(t, "05:06:18.953"), l94At(t, "05:06:19.208")
+		if cell == "c5" {
+			g.Conns = 2
+		}
+		g.Typed = []l80Typed{
+			{Command: "show version", Asked: true, At: l94At(t, "05:06:16.949")},
+			{Command: "show version", Asked: true, Denied: true, At: l94At(t, "05:06:26.718")},
+		}
+		g.Events = append(l94SessionAcct(),
+			l94Event{TS: l94At(t, "05:06:16.969"), Event: "authorize_command", Verdict: "permit", Vector: "show version"},
+			l94Event{TS: l94At(t, "05:06:26.737"), Event: "authorize_command", Verdict: "deny", Reason: "context_missing", Vector: "show version"})
+		if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "permitted command was refused") {
+			t.Errorf("%s: port49 denied it: %q", cell, got)
+		}
+		g.Events[len(g.Events)-1].Verdict = "permit"
+		if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "a permitted command was refused") {
+			t.Errorf("%s: port49 permitted it and the device refused it: %q", cell, got)
+		}
 	}
 }
 
