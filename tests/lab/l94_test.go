@@ -515,9 +515,11 @@ func TestL94(t *testing.T) {
 					qc.Close()
 				}
 				time.Sleep(10 * time.Second)
-				if cell != "c2" {
-					recs = l.waitForRecords(off, 10*time.Second, func([]map[string]any) bool { return false })
-				}
+				// Every cell's records are collected here, after its last
+				// command. c2's loop read its last try's only as far as A's
+				// redeem, before B's trailing command; its gaps stay those
+				// of the loop, and off is still that try's mark.
+				recs = l.waitForRecords(off, 10*time.Second, func([]map[string]any) bool { return false })
 				after := l80Events()
 				second = after["single_connect_second_connection"] - before["single_connect_second_connection"]
 				if cell == "c5" {
