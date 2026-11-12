@@ -702,7 +702,14 @@ func retryAfter(h http.Header) time.Duration {
 	if s, err := strconv.Atoi(h.Get("Retry-After")); err == nil && s > 0 {
 		// Spread the broker's figure too: a fleet refused together by one
 		// blip would otherwise retry in step. The cap holds after the spread.
-		return min(jitter(min(time.Duration(s)*time.Second, time.Minute)), time.Minute)
+		d := time.Duration(s) * time.Second
+		if d >= time.Minute {
+			// At the cap, spread downward only (uniform in 0.8x to 1x): the
+			// plus side would clamp, and half the fleet would land on 60s.
+			j := jitter(time.Minute)
+			return time.Minute - max(j-time.Minute, time.Minute-j)
+		}
+		return min(jitter(d), time.Minute)
 	}
 	return jitter(5 * time.Second)
 }

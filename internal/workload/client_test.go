@@ -785,3 +785,23 @@ func TestRetryAfterIsJitteredWithinBoundsAndCapped(t *testing.T) {
 		}
 	}
 }
+
+// A Retry-After at the cap is spread downward only, so a fleet refused with
+// the broker's 60s does not pile on exactly 60s.
+func TestRetryAfterAtTheCapIsSpreadBelowIt(t *testing.T) {
+	h := http.Header{"Retry-After": []string{"60"}}
+	seen, atCap := map[time.Duration]bool{}, 0
+	for range 500 {
+		d := retryAfter(h)
+		if d < 48*time.Second || d > time.Minute {
+			t.Fatalf("a 60s Retry-After waited %v, outside 48s to 60s", d)
+		}
+		if d == time.Minute {
+			atCap++
+		}
+		seen[d] = true
+	}
+	if len(seen) < 100 || atCap > 5 {
+		t.Fatalf("%d distinct waits, %d of 500 exactly at the cap", len(seen), atCap)
+	}
+}
