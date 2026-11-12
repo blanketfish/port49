@@ -597,8 +597,9 @@ func unminted(err error, devices []string) error {
 // do sends one request, and again under the same key while the broker
 // cannot answer now: a 503 (but an uncovered certificate status), a 502, a
 // 504, a 429, a 409 idempotency_in_progress after its Retry-After (5s when
-// absent, 60s at most), a failed connection after 1s doubling to 30s (the
-// computed waits jittered by 20%); until deadline. Any other answer is final,
+// absent, 60s at most), a failed connection after 1s doubling to 30s; until
+// deadline. Every wait is jittered: below the 1m cap by 20% either way, then
+// capped at 1m; a Retry-After at or above the cap is spread over 48s to 60s. Any other answer is final,
 // as is a TLS verification failure either way (TLSError).
 func (c *Client) do(ctx context.Context, deadline time.Time, method, path string, body []byte, key string, out any) error {
 	wait := time.Second

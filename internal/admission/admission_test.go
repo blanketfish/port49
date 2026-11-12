@@ -539,3 +539,16 @@ func TestAMappedAndAPlainAddressOnTwoDevicesCollide(t *testing.T) {
 		t.Fatalf("want the one-address-on-two-devices refusal, got %v", err)
 	}
 }
+
+// Unmap drops a zone, so a zoned mapped address would silently admit the
+// IPv4: refused. A zone on any other address is not this change's business.
+func TestAZonedMappedFileAddressIsRefusedAndOtherZonesStillLoad(t *testing.T) {
+	_, err := ParseFile([]byte("devices:\n  - {name: leaf-01, addresses: ['::ffff:10.1.1.1%eth0']}\n"), "inv.yaml")
+	if err == nil || !strings.Contains(err.Error(), "devices[0]: addresses[0]") || !strings.Contains(err.Error(), "IPv4 form") ||
+		strings.Contains(err.Error(), "10.1.1.1") || strings.Contains(err.Error(), "eth0") {
+		t.Fatalf("want a refusal naming the position and the IPv4 form, quoting nothing: %v", err)
+	}
+	if _, err := ParseFile([]byte("devices:\n  - {name: leaf-01, addresses: ['fe80::1%eth0']}\n"), "inv.yaml"); err != nil {
+		t.Fatalf("a zone on a link-local address must still load: %v", err)
+	}
+}

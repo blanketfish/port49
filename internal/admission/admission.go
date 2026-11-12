@@ -526,6 +526,12 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 				return Inventory{}, fmt.Errorf("admission: %sdevices[%d]: addresses[%d] is not an IP address", at,
 					n, i)
 			}
+			// Unmap drops a zone, so a zoned mapped entry would quietly admit
+			// the plain IPv4. Zones on other addresses are left as they were.
+			if a.Is4In6() && a.Zone() != "" {
+				return Inventory{}, fmt.Errorf("admission: %sdevices[%d]: addresses[%d] is an IPv4-mapped IPv6 address "+
+					"with a zone; write the IPv4 form", at, n, i)
+			}
 			// The accepted source is unmapped, so a mapped entry is read as
 			// the IPv4 it is; written mapped it would never match.
 			dev.Addresses = append(dev.Addresses, a.Unmap())
