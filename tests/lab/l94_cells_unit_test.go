@@ -56,16 +56,21 @@ func TestL94CellSelection(t *testing.T) {
 	if got := l94CellNames("nxos", "fixed"); !slices.Equal(got, []string{"c1", "c2", "c3", "c4", "c5"}) {
 		t.Errorf("nxos fixed: %v", got)
 	}
-	for _, c := range [][2]string{{"nxos", "baseline"}, {"junos", "fixed"}, {"eos", "fixed"}} {
+	for _, c := range [][2]string{{"nxos", "baseline"}, {"junos", "baseline"}, {"eos", "fixed"}} {
 		if slices.Contains(l94CellNames(c[0], c[1]), "c4") {
 			t.Errorf("%v plays c4", c)
 		}
 	}
-	if _, err := l94Select("nxos", "fixed", nil); err == nil {
-		t.Error("a fixed NX-OS run of every cell mixes c4's build with the others'")
+	for _, f := range []string{"nxos", "junos"} {
+		if _, err := l94Select(f, "fixed", nil); err == nil {
+			t.Errorf("a fixed %s run of every cell mixes c4's build with the others'", f)
+		}
+		if got, err := l94Select(f, "fixed", []string{"c1", "c2", "c3", "c5"}); err != nil || len(got) != 4 {
+			t.Errorf("%s fixed without c4: %v %v", f, got, err)
+		}
 	}
-	if got, err := l94Select("junos", "fixed", nil); err != nil || len(got) != 4 {
-		t.Errorf("junos fixed: %v %v", got, err)
+	if got, err := l94Select("eos", "fixed", nil); err != nil || len(got) != 4 {
+		t.Errorf("eos fixed: %v %v", got, err)
 	}
 	if _, err := l94Select("nxos", "fixed", []string{"c4", "c1"}); err == nil {
 		t.Error("c4 beside c1 must be refused")
@@ -585,6 +590,127 @@ func TestL94AccountingDuplicatesAreKeyedByTheRequest(t *testing.T) {
 	}
 }
 
+// l94VJunosC4 is a Junos c4 grade in vJunos 26's measured shapes (fixed c1,
+// 2026-11-12): the two per-login connections port49 closes (server-fin) and
+// the one that stays open and carries the accounting bursts about 5s apart
+// (l94VJunosC1Acct); each session's three permitted commands ran and its
+// denied one was refused on the device.
+func l94VJunosC4(t *testing.T) l94Grade {
+	p, _ := l94PlatformFor("vjunos26")
+	var typed []l80Typed
+	for range 3 {
+		for s := range 2 {
+			typed = append(typed, l80Typed{Session: s, Command: "show version | no-more", Took: 0.25},
+				l80Typed{Session: s, Command: "show system users", Denied: true, Took: 0.25})
+		}
+	}
+	return l94Grade{Arm: "fixed", Cell: "c4", Platform: "juniper_junos", P: p, Typed: typed,
+		Events: l94AcctRows(t, l94VJunosC1Acct), Conns: 3, MostOpen: 1, Ends: []string{"server-fin", "server-fin", "open"},
+		Suspect: true, DeadOrSSL: 1, Baseline: &l94Baseline{Conns: 3, HasConns: true, Suspect: 1, HasSuspect: true}}
+}
+
+// Round 10: c4 on Junos. The device opens a connection per login, so c2/c3
+// never put two requests on one connection, but its accounting rides the one
+// connection that stays open: c4 holds every accounting reply 1.5s on it.
+// It stops if the device drops that connection, repeats a record, or loses
+// a session's accounting; a dead-server mark is l94SuspectMarks', compared to
+// the baseline arm's c1 (the same loop, unheld).
+func TestL94JunosC4Stops(t *testing.T) {
+	if got := l94CellNames("junos", "fixed"); !slices.Equal(got, []string{"c1", "c2", "c3", "c4", "c5"}) {
+		t.Errorf("junos fixed: %v", got)
+	}
+	if slices.Contains(l94CellNames("junos", "baseline"), "c4") {
+		t.Error("the baseline build has no hold")
+	}
+	g := l94VJunosC4(t)
+	if got := l94Stops(g); len(got) != 0 {
+		t.Fatalf("vJunos's measured shape stops: %q", got)
+	}
+	if got := l94Findings(g); !slices.Equal(got, []string{"c4: device opens a connection per login (baseline 3, fixed 3)"}) {
+		t.Errorf("findings %q", got)
+	}
+	drop := func(port, vector string) func(*l94Grade) {
+		return func(g *l94Grade) {
+			for i, e := range g.Events {
+				if e.Port == port && e.Vector == vector {
+					g.Events = slices.Delete(slices.Clone(g.Events), i, i+1)
+					return
+				}
+			}
+			t.Fatalf("no %s %q", port, vector)
+		}
+	}
+	cases := map[string]func(*l94Grade){
+		"c4: the device closed 1 connection(s) first (device-rst/device-fin) while accounting replies were held": func(g *l94Grade) { g.Ends = []string{"server-fin", "device-rst", "open"} },
+		"c4: no connection was open at the cell's end: the device dropped the held accounting connection":        func(g *l94Grade) { g.Ends = []string{"server-fin", "server-fin", "server-fin"} },
+		"c4: 5 accounting record(s) of a typed command, 6 typed command(s) ran: a session's accounting was lost": drop("2", "show version | no-more <cr>"),
+		"c4: port 2 carried typed commands, but its session has no accounting STOP":                              drop("2", "logout"),
+		"c4: port 1 carried typed commands, but its session has no accounting START":                             drop("1", "login"),
+		`c4: account flags/task_id/port/vector stop/3/1/"show version | no-more <cr>" recorded 2 times`: func(g *l94Grade) {
+			g.Events = append(slices.Clone(g.Events), l94AcctRows(t, "09:46:54.300\tstop\t3\t1\tshow version | no-more <cr>")...)
+		},
+		"c4: 2 suspect device debug line(s), the baseline arm's 1":                 func(g *l94Grade) { g.DeadOrSSL = 2 },
+		"c4: 4 TLS connection(s), the baseline arm's 3: port49 forced a reconnect": func(g *l94Grade) { g.Conns = 4 },
+		`c4: session 0 "show version | no-more" took 7.00s, over`:                  func(g *l94Grade) { g.Typed[0].Took = 7 },
+		"c4: typed commands' accounting on 1 port(s), want 2 (one per session)":    func(g *l94Grade) { g.Events = l94KeepPort(g.Events, "1") },
+	}
+	for want, mut := range cases {
+		g := l94VJunosC4(t)
+		g.Typed = slices.Clone(g.Typed)
+		mut(&g)
+		if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, want) {
+			t.Errorf("%s: stops %q", want, got)
+		}
+	}
+	// Where commands are asked (NX-OS), the session accounting stays
+	// l94SessionAccounting's, and its one connection is the held one.
+	n := l94Clean()
+	n.Cell, n.Ends = "c4", []string{"open"}
+	if got := l94Stops(n); len(got) != 0 {
+		t.Errorf("NX-OS c4 clean: %q", got)
+	}
+	n.Ends = []string{"device-fin"}
+	if got := strings.Join(l94Stops(n), "\n"); !strings.Contains(got, "dropped the held accounting connection") {
+		t.Errorf("NX-OS c4, its connection closed: %q", got)
+	}
+}
+
+// l94KeepPort is evs less every vty record but port's (non-tty and port 0
+// stay).
+func l94KeepPort(evs []l94Event, port string) []l94Event {
+	var out []l94Event
+	for _, e := range evs {
+		if e.Port == port || e.Port == "non-tty" || e.Port == "0" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// The collection waits for the accounting where no command is asked:
+// l94AcctComplete is the predicate, true once nothing is lost.
+func TestL94AcctCompleteWaitsForEveryTypedRecord(t *testing.T) {
+	g := l94VJunosC4(t)
+	if !l94AcctComplete(g.Platform, g.Events, g.Typed, 2) {
+		t.Error("the measured shape is complete")
+	}
+	if l94AcctComplete(g.Platform, g.Events[:12], g.Typed, 2) {
+		t.Error("a burst still to come is not complete")
+	}
+	if !l94AcctComplete("cisco_nxos", nil, g.Typed, 2) {
+		t.Error("where commands are asked there is nothing to wait for")
+	}
+}
+
+// c4 is compared to the baseline arm's c1: the baseline plays no c4.
+func TestL94C4IsComparedToTheBaselinesC1(t *testing.T) {
+	for cell, want := range map[string]string{"c1": "c1", "c2": "c2", "c3": "c3", "c4": "c1", "c5": "c5"} {
+		if got := l94BaselineCell(cell); got != want {
+			t.Errorf("%s: %s", cell, got)
+		}
+	}
+}
+
 // The port comes from the record's session.port.
 func TestL94EventsCarryTheSessionPort(t *testing.T) {
 	evs := l94Events([]map[string]any{{"event": "account", "ts": "2026-11-12T09:46:48.169Z", "flags": "stop", "task_id": "2",
@@ -596,7 +722,7 @@ func TestL94EventsCarryTheSessionPort(t *testing.T) {
 
 func l94Clean() l94Grade {
 	p, _ := l94PlatformFor("nxos106")
-	return l94Grade{Arm: "fixed", Cell: "c1", Platform: "cisco_nxos", P: p, Conns: 1, MostOpen: 1,
+	return l94Grade{Arm: "fixed", Cell: "c1", Platform: "cisco_nxos", P: p, Conns: 1, MostOpen: 1, Ends: []string{"open"},
 		Typed:  []l80Typed{{Command: "show version", Asked: true}, {Command: "show users", Asked: true, Denied: true}},
 		Events: append(l94SessionAcct(), l94Event{Event: "authorize_command", Verdict: "permit", Vector: "show version"}, l94Event{Event: "authorize_command", Verdict: "deny", Vector: "show users"})}
 }

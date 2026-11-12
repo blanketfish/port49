@@ -31,10 +31,11 @@ import (
 //	    within 200ms of A's request B types the permitted and the denied
 //	    command
 //	c3  queued FAILs: A1-A3 FAIL at once while B types every 250ms for 6s
-//	c4  NX-OS only, fixed arm only: c1's loop on a port49d built with
+//	c4  NX-OS and Junos, fixed arm only: c1's loop on a port49d built with
 //	    port49_lab_acct_hold, which holds every accounting reply 1.5s so the
 //	    command authorization NX-OS writes behind an accounting record is
-//	    answered first
+//	    answered first; on Junos, both vtys' accounting bursts ride the one
+//	    connection that stays open while their replies are held
 //	c5  restart: L80's restart cell, with a session inside its FAIL delay at
 //	    the restart
 
@@ -121,11 +122,14 @@ func l94PlatformFor(sel string) (l94Platform, error) {
 }
 
 // l94CellNames are the cells a platform plays on an arm, in order: c4 is
-// NX-OS's and the fixed arm's alone (the baseline build has no hold to
-// build with, and answers one reply at a time anyway).
+// NX-OS's and Junos's, on the fixed arm alone (the baseline build has no
+// hold to build with, and answers one reply at a time anyway). NX-OS
+// pipelines a command authorization behind an accounting record on its one
+// connection; vJunos opens a connection per login, but its accounting
+// bursts ride the one connection that stays open.
 func l94CellNames(family, arm string) []string {
 	cells := []string{"c1", "c2", "c3"}
-	if family == "nxos" && arm == "fixed" {
+	if (family == "nxos" || family == "junos") && arm == "fixed" {
 		cells = append(cells, "c4")
 	}
 	return append(cells, "c5")
@@ -560,7 +564,11 @@ type l94Grade struct {
 	Events   []l94Event
 	Conns    int // TLS connections the capture saw in the cell
 	MostOpen int
-	Second   float64 // single_connect_second_connection delta
+	// Ends is each of those connections' l73Conn.End (device-fin,
+	// server-fin, device-rst, server-rst, open): c4's held accounting
+	// connection must stay open, and the device must close none first.
+	Ends   []string
+	Second float64 // single_connect_second_connection delta
 	// DeadOrSSL is NX-OS's ssl_read_failed + mark_server_dead (+ fallbacks)
 	// in the cell's window, or l94Suspect's count elsewhere (Suspect true):
 	// that broad pattern stops only past the baseline arm's count.
@@ -685,6 +693,10 @@ func l94Stops(g l94Grade) []string {
 	}
 	if loop {
 		out = append(out, l94SessionAccounting(g.Cell, g.Events, 2)...)
+	}
+	if g.Cell == "c4" {
+		out = append(out, l94LostAccounting(g.Cell, g.Platform, g.Events, g.Typed, 2)...)
+		out = append(out, l94HeldStops(g)...)
 	}
 	out = append(out, prefixAll(g.Cell+": ", l94Dup(g.Platform, g.Events, g.Typed))...)
 	if s, _ := l94ConnGrade(g); s != "" {
@@ -816,6 +828,98 @@ func l94SessionAccounting(cell string, evs []l94Event, sessions int) []string {
 		if n[f] < sessions {
 			out = append(out, fmt.Sprintf("%s: %d accounting %s record(s), want at least %d (one per session)", cell, n[f], strings.ToUpper(f), sessions))
 		}
+	}
+	return out
+}
+
+// l94LostAccounting is c4's check, where the device asks
+// port49 about no command, that no session's accounting was lost: a record
+// for each typed command that ran (by flags/task_id/port/vector, as
+// l94Dup), on at least sessions ports, each with its session's START and
+// STOP. Junos logs system processes (port non-tty) and the harness's config
+// session (port 0) in the same window, so l94SessionAccounting's flag count
+// alone cannot tell a lost vty's records. Where commands are asked, there is
+// nothing here: l80Ask and l94SessionAccounting grade them.
+func l94LostAccounting(cell, platform string, evs []l94Event, typed []l80Typed, sessions int) []string {
+	if l94Commanded(platform) {
+		return nil
+	}
+	typedN := map[string]bool{}
+	ran := 0
+	for _, x := range typed {
+		typedN[x.Command] = true
+		if !x.Denied && !x.Err {
+			ran++
+		}
+	}
+	recs := map[string]bool{}
+	ports := map[string]bool{}
+	for _, e := range evs {
+		if e.Event == "account" && e.TaskID != "" && typedN[strings.TrimSuffix(e.Vector, " <cr>")] {
+			recs[fmt.Sprintf("%s/%s/%s/%q", e.Flags, e.TaskID, e.Port, e.Vector)] = true
+			ports[e.Port] = true
+		}
+	}
+	var out []string
+	if len(recs) < ran {
+		out = append(out, fmt.Sprintf("%s: %d accounting record(s) of a typed command, %d typed command(s) ran: a session's accounting was lost", cell, len(recs), ran))
+	}
+	if len(ports) < sessions {
+		out = append(out, fmt.Sprintf("%s: typed commands' accounting on %d port(s), want %d (one per session)", cell, len(ports), sessions))
+	}
+	for _, port := range slices.Sorted(maps.Keys(ports)) {
+		for _, f := range []string{"start", "stop"} {
+			if !slices.ContainsFunc(evs, func(e l94Event) bool {
+				return e.Event == "account" && e.Port == port && e.Flags == f && !typedN[strings.TrimSuffix(e.Vector, " <cr>")]
+			}) {
+				out = append(out, fmt.Sprintf("%s: port %s carried typed commands, but its session has no accounting %s", cell, port, strings.ToUpper(f)))
+			}
+		}
+	}
+	return out
+}
+
+// l94AcctWait bounds c4's wait for its accounting where no command is
+// asked: a 20-record burst answered one at a time at the 1.5s hold is 30s.
+const l94AcctWait = 60 * time.Second
+
+// l94BaselineCell is the baseline arm's cell the fixed arm's cell is
+// compared to: c4 is c1's loop on the held build, and the baseline arm plays
+// no c4, so c4 is compared to c1.
+func l94BaselineCell(cell string) string {
+	if cell == "c4" {
+		return "c1"
+	}
+	return cell
+}
+
+// l94AcctComplete is the record collection's wait predicate: nothing of the
+// sessions' accounting is still to come (l94LostAccounting finds nothing).
+// c4 holds each accounting reply 1.5s and its record is written before the
+// hold, so a device that sends its next record only after the last reply
+// drains a burst slowly: a short wait would read that as a loss.
+func l94AcctComplete(platform string, evs []l94Event, typed []l80Typed, sessions int) bool {
+	return len(l94LostAccounting("", platform, evs, typed, sessions)) == 0
+}
+
+// l94HeldStops is c4's check of the connection its accounting replies are
+// held on: still open at the cell's end, and no connection closed by the
+// device first (a device that gave up on a held reply). Per-login
+// connections are closed by port49 (server-fin) on every platform L94 has
+// measured.
+func l94HeldStops(g l94Grade) []string {
+	var out []string
+	closed := 0
+	for _, e := range g.Ends {
+		if e == "device-fin" || e == "device-rst" {
+			closed++
+		}
+	}
+	if closed > 0 {
+		out = append(out, fmt.Sprintf("%s: the device closed %d connection(s) first (device-rst/device-fin) while accounting replies were held", g.Cell, closed))
+	}
+	if !slices.Contains(g.Ends, "open") {
+		out = append(out, fmt.Sprintf("%s: no connection was open at the cell's end: the device dropped the held accounting connection", g.Cell))
 	}
 	return out
 }

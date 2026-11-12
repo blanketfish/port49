@@ -10,7 +10,7 @@ package lab
 //	PORT49_L94_ARM=fixed     port49d built from HEAD (decision 59's lanes)
 //
 // PORT49_L94_CELLS (optional, comma-separated) runs only the named cells
-// (l94CellNames). c4 is NX-OS's and the fixed arm's alone and runs on its own
+// (l94CellNames). c4 is NX-OS's and Junos's, on the fixed arm alone, and runs on its own
 // build (-tags port49_lab_acct_hold), so it runs alone: PORT49_L94_CELLS=c4.
 // PORT49_LAB_PLATFORMS names one platform of l94Platforms. The harness builds
 // bin/port49d for the arm itself, in a private clone, and checks the build.
@@ -525,6 +525,18 @@ func TestL94(t *testing.T) {
 				// redeem, before B's trailing command; its gaps stay those
 				// of the loop, and off is still that try's mark.
 				recs = l.waitForRecords(off, 10*time.Second, func([]map[string]any) bool { return false })
+				if cell == "c4" && !l94Commanded(q.run.Platform) {
+					// Each accounting reply is held 1.5s and its record is
+					// written before the hold: a device that sends the next
+					// record only after a reply drains a burst slowly, and a
+					// record still to come is not a lost one.
+					mu.Lock()
+					tc := slices.Clone(typed)
+					mu.Unlock()
+					recs = l.waitForRecords(off, l94AcctWait, func(rs []map[string]any) bool {
+						return l94AcctComplete(q.run.Platform, l94Events(rs), tc, 2)
+					})
+				}
 				after := l80Events()
 				second = after["single_connect_second_connection"] - before["single_connect_second_connection"]
 				if cell == "c5" {
@@ -666,8 +678,12 @@ func TestL94(t *testing.T) {
 			for _, ln := range l80Timeline(recs) {
 				sum.WriteString("  " + ln + "\n")
 			}
+			var ends []string
+			for _, cn := range conns {
+				ends = append(ends, cn.End)
+			}
 			g := l94Grade{Arm: arm, Cell: cell, Platform: q.run.Platform, P: p, Typed: typed, Events: evs,
-				Conns: len(conns), MostOpen: most, Second: second, DeadOrSSL: deadOrSSL, Outcomes: outcomes,
+				Conns: len(conns), MostOpen: most, Ends: ends, Second: second, DeadOrSSL: deadOrSSL, Outcomes: outcomes,
 				Gaps: gaps, RestartAt: restartAt, UpAt: upAt, BLogin: bLogin, BSHA: bSHA}
 			if bLogin != nil {
 				fmt.Fprintf(&sum, "B token login during A's FAILs: took=%.2fs logged_in=%v auth_failed=%v err=%q inside_delay=%v\n",
@@ -675,7 +691,10 @@ func TestL94(t *testing.T) {
 			}
 			g.Suspect = suspect
 			if arm == "fixed" {
-				g.Baseline = l94ReadBaseline(t, filepath.Join(evRoot, "baseline", mode), cell)
+				g.Baseline = l94ReadBaseline(t, filepath.Join(evRoot, "baseline", mode), l94BaselineCell(cell))
+				if cell == "c4" {
+					sum.WriteString("baseline: c4 is compared to the baseline arm's c1 (the same loop, no hold)\n")
+				}
 				if g.Baseline == nil {
 					sum.WriteString("baseline: no baseline evidence for this cell and mode; the fixed arm is graded on its own and on L13's timeout\n")
 				}
