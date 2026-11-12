@@ -2445,7 +2445,7 @@ team already operates.</p>
 <p>The people who sign in need the <a href="clients/">clients</a>, which are installed on their own machines and
 not on the server.</p>
 <h2 id="what-every-shape-needs">What every shape needs<a class="headerlink" href="#what-every-shape-needs" title="Permanent link">&para;</a></h2>
-<p>Each shape page states these four again, in its own terms.</p>
+<p>Each shape page states the first four again, in its own terms.</p>
 <ol>
 <li><strong>The device's source address reaches <code>port49d</code> unrewritten.</strong> <code>port49d</code> admits a device by the
    address it sees, so a NAT or a proxy in front of port 49 breaks admission.<ul>
@@ -2463,6 +2463,19 @@ not on the server.</p>
    under 10 ms, and a member at etcd 3.4.24, 3.5.8 or 3.6 or later: <code>port49d</code> refuses an older one and
    says which. A slow disk pushes port49's store calls past their timeout in bursts, and the
    <code>etcd_disk_slow</code> alert fires after ten minutes of it.</li>
+<li><strong>Every broker host and every port49d host keeps its clock on NTP.</strong> A token's expiry is the broker's
+   clock plus the TTL, read against <code>port49d</code>'s clock, and a subject's <code>token_ttl</code> may be 30 seconds. A
+   broker 30 seconds behind a <code>port49d</code> mints tokens that are dead on arrival: every login with one fails
+   <code>token_not_found</code>, the same as a typo, and nothing else points at the clock. A broker that runs ahead
+   lengthens every token by the skew, until its lease reclaims it (at most <code>lease_grace</code>, 5 minutes, plus
+   two minutes past <code>token_ttl</code>), and <code>port49d</code> says so (<code>clock: a token was minted ... ahead of this
+   host's clock</code>, <code>port49_token_minted_ahead_total</code>, the <code>port49_token_clock_skew</code> ticket). A session
+   ceiling follows the broker's own <code>auth_time</code> for a certificate login, and for OIDC the provider's,
+   capped at the broker's now, so skew moves it by the skew; a broker behind makes a context look staler (<code>context_stale</code> sooner), while one ahead
+   cannot push a refresh time into the future. In
+   Kubernetes this is the nodes' clocks; in a container, the host's. Alert on the hosts' own NTP sync,
+   because port49 cannot see a broker that is behind: with node_exporter, <code>node_timex_sync_status == 0</code>
+   and <code>abs(node_timex_offset_seconds) &gt; 1</code>.</li>
 </ol>
 <h2 id="install-the-binaries-with-mode-0755">Install the binaries with mode 0755<a class="headerlink" href="#install-the-binaries-with-mode-0755" title="Permanent link">&para;</a></h2>
 <p>Install <code>port49</code> with mode <code>0755</code>, owned by root, with no setgid bit and no file capabilities. The

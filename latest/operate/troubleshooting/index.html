@@ -2598,6 +2598,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#a-token-was-minted-ahead-of-this-hosts-clock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A token was minted ahead of this host's clock
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#shedding" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3004,6 +3015,23 @@ restore runbook.</p>
 <code>port49 token</code> again.</p>
 <p><strong>Don't:</strong> restart port49d to clear the line, or lift anything, before the runbook says. Don't assume a
 revoked person is still revoked until the revocations are re-issued.</p>
+<h3 id="a-token-was-minted-ahead-of-this-hosts-clock">A token was minted ahead of this host's clock<a class="headerlink" href="#a-token-was-minted-ahead-of-this-hosts-clock" title="Permanent link">&para;</a></h3>
+<p><strong>You see:</strong> <code>clock: a token was minted &lt;N&gt; ahead of this host's clock</code>, at most once every ten
+minutes, and <code>port49_token_minted_ahead_total</code> rising; the ticket
+<a href="../../reference/alerts/#port49_token_clock_skew">port49_token_clock_skew</a> fires on it.</p>
+<p><strong>It means:</strong> the broker that minted the token has a clock <code>N</code> ahead of this port49d's. A token's
+expiry is the broker's clock plus the TTL, read on port49d's clock, so every token from that broker
+lives <code>N</code> longer here, until its lease reclaims it: at most <code>lease_grace</code> (5 minutes) plus two minutes past
+<code>token_ttl</code>. The other direction does not show: a broker <code>N</code> behind shortens each token by
+<code>N</code>, and past a <code>token_ttl</code> its tokens are dead on arrival, so every login with one fails
+<code>token_not_found</code> with no other sign. If logins from one broker fail <code>token_not_found</code> right after the
+token was minted, compare the clocks first.</p>
+<p><strong>Do this:</strong> put every broker host and every port49d host on NTP (<code>chronyc tracking</code>, or
+<code>timedatectl</code> on the host) and confirm they agree to well under the smallest <code>token_ttl</code>. Alert on the
+hosts' own NTP sync, since port49 cannot see a broker that is behind: with node_exporter,
+<code>node_timex_sync_status == 0</code> and <code>abs(node_timex_offset_seconds) &gt; 1</code>.</p>
+<p><strong>Don't:</strong> lengthen <code>token_ttl</code> to cover the skew; it widens replay for an unspent token and leaves the
+clocks wrong for everything else that reads them.</p>
 <h3 id="shedding">Shedding<a class="headerlink" href="#shedding" title="Permanent link">&para;</a></h3>
 <p><strong>You see:</strong> <code>shedding: all &lt;N&gt; TACACS+ connection slots (limits.max_connections) are in use</code></p>
 <p><strong>It means:</strong> port49d's global connection cap is full and each new connection is reset at accept, so the

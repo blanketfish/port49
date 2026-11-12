@@ -2562,8 +2562,17 @@ deleting a token ends it at once.</p>
   must hold it recoverably. Tokens and contexts are therefore sealed with a key held by the broker and
   port49d, not by the store. A store dump alone yields no credential. See
   <a href="../../operate/secrets/">Secrets</a> for where the key lives.</li>
-<li><strong>Expiry is the store's.</strong> The broker writes a relative TTL; presence means valid, absence means
-  expired or spent. No clock comparison between broker and port49d decides a login.</li>
+<li><strong>Expiry is the record's, read on port49d's clock.</strong> The broker writes the token with its expiry
+  (its own time of minting plus the TTL), and port49d honours a token only before that time on its own
+  clock; the store's leases only clean up later. On etcd the broker's clock and port49d's therefore
+  decide a login together: a broker 20 seconds behind turns a 30-second token into a 10-second one,
+  and one 30 seconds behind mints tokens that are dead on arrival and fail <code>token_not_found</code>. A broker
+  ahead lengthens each token by the skew, until its lease reclaims it: at most <code>lease_grace</code> (5 minutes)
+  plus two minutes past <code>token_ttl</code>. Skew never admits a token minted for another device or one already
+  spent; it widens an unspent token's window only up to that bound. Keep every
+  broker host and every port49d host on NTP, so they disagree by far less than the shortest
+  <code>token_ttl</code>. A broker clock that runs ahead is counted (<code>port49_token_minted_ahead_total</code>) and
+  raises the <code>port49_token_clock_skew</code> ticket. The memory store is one process and has one clock.</li>
 </ul>
 <p>An <code>enable</code> login has no principal to type a name for, so the broker mints a <strong>pair</strong>: a login token
 and an enable token, both bound to the device, both single use, sharing a TTL. Tools that already have an

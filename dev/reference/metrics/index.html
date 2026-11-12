@@ -2519,6 +2519,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        token
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tokens" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3151,6 +3162,17 @@
     <span class="md-ellipsis">
       
         tls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        token
       
     </span>
   </a>
@@ -4580,6 +4602,27 @@
 <td></td>
 <td>The fraction of its own lifetime the RFC 9887 listener's certificate has left, below 0 once expired; 1 with no listener.</td>
 <td><a href="../alerts/#port49_tls_server_certificate_renewal_late">port49_tls_server_certificate_renewal_late</a>, <a href="../alerts/#port49_tls_server_certificate_expired">port49_tls_server_certificate_expired</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="token">token<a class="headerlink" href="#token" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Labels</th>
+<th>Meaning</th>
+<th>Alerts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>port49_token_minted_ahead_total</code></td>
+<td>counter</td>
+<td></td>
+<td>Token lookups that found a token whose minted_at is more than a second ahead of this port49d's clock: the minting broker's clock runs ahead of this host's, and every token's life shifts by the skew.</td>
+<td><a href="../alerts/#port49_token_clock_skew">port49_token_clock_skew</a></td>
 </tr>
 </tbody>
 </table>
