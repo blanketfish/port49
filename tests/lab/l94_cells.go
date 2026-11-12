@@ -50,8 +50,12 @@ const (
 	l94HoldTag = "port49_lab_acct_hold"
 	// l94Delay is both failure-delay knobs (as L13's writeDelayConfig sets them).
 	l94Delay = 2 * time.Second
-	// l94MinGap is c2's pass line: B's requests precede A's FAIL by at least this.
-	l94MinGap = 1500 * time.Millisecond
+	// l94Inside is c2's pass line: a B request port49 read under this after
+	// A's read was answered inside A's delay. A redeem record's ts is its
+	// read (newRecord, before the delay: internal/daemon/authen/authen.go:235),
+	// as an authorize_command's is (Handle's start: author.go:245); the
+	// baseline's B is read when A's delay runs out, +l94Delay.
+	l94Inside = l94Delay - 250*time.Millisecond
 	// l94FastB is how long, at most, a B command may take on the fixed arm in
 	// c2 (and the expectation in c3).
 	l94FastB = time.Second
@@ -254,10 +258,10 @@ func l94Fails(evs []l94Event) []l94Event {
 	return out
 }
 
-// l94Gaps is, for each of B's command events, how long before the first FAIL
-// redeem it was recorded (negative: after it). ok is false with no FAIL.
-// The FAIL redeem is recorded once its delay has passed, so a B event
-// recorded at least l94MinGap before it was answered inside A's delay.
+// l94Gaps is, for each of B's command events, how long after the first FAIL
+// redeem's ts (A's read) port49 read it (negative: before it). ok is false
+// with no FAIL. A gap in (0, l94Inside) was answered inside A's delay; one
+// near l94Delay waited behind A.
 func l94Gaps(platform string, evs []l94Event, cmds []string) (gaps []time.Duration, ok bool) {
 	fails := l94Fails(evs)
 	if len(fails) == 0 {
@@ -265,22 +269,22 @@ func l94Gaps(platform string, evs []l94Event, cmds []string) (gaps []time.Durati
 	}
 	for _, e := range evs {
 		if l94BEvent(platform, e, cmds) {
-			gaps = append(gaps, fails[0].TS.Sub(e.TS))
+			gaps = append(gaps, e.TS.Sub(fails[0].TS))
 		}
 	}
 	return gaps, true
 }
 
-// l94C2Timing is whether c2's timing stands: every B event recorded after
-// A's request was read (a gap no longer than the delay, with 250ms for the
-// record's own write), and at least one B event. "early" asks for another
-// play with a longer lead; "none" means B reached port49 not at all.
-func l94C2Timing(gaps []time.Duration, delay time.Duration) string {
+// l94C2Timing is whether c2's timing stands: every B event read after A's
+// request, and at least one B event. "early" (a B event read before A's)
+// asks for another play with a longer lead; "none" means B reached port49
+// not at all. A gap past l94Inside is a stop (l94Stops), not a retry.
+func l94C2Timing(gaps []time.Duration) string {
 	if len(gaps) == 0 {
 		return "none"
 	}
 	for _, g := range gaps {
-		if g > delay+250*time.Millisecond {
+		if g < 0 {
 			return "early"
 		}
 	}
@@ -559,8 +563,8 @@ func l94Stops(g l94Grade) []string {
 	switch g.Cell {
 	case "c2":
 		for i, gap := range g.Gaps {
-			if gap < l94MinGap {
-				out = append(out, fmt.Sprintf("c2: B's request %d was recorded %s before A's FAIL, under %s: it waited behind A", i+1, gap.Round(time.Millisecond), l94MinGap))
+			if gap >= l94Inside {
+				out = append(out, fmt.Sprintf("c2: B's request %d was read %s after A's, not under %s: it waited behind A", i+1, gap.Round(time.Millisecond), l94Inside))
 			}
 		}
 		for _, x := range g.Typed {
@@ -617,9 +621,8 @@ func l94Stops(g l94Grade) []string {
 // l94BLoginStops grades c2's and c3's B token login on a platform whose
 // device asks port49 about no command, so that a B request port49 must
 // answer is in the cell: it logs in, within the platform's L13 timeout, and
-// port49 recorded its permit redeem inside A's delay (after A's request was
-// read, before A's FAIL), so it neither waited behind A nor fell through to
-// a local method.
+// port49 read its permit redeem inside A's delay (l94LoginInsideDelay), so
+// it neither waited behind A nor fell through to a local method.
 func l94BLoginStops(g l94Grade) []string {
 	b := g.BLogin
 	if b == nil {
@@ -633,22 +636,22 @@ func l94BLoginStops(g l94Grade) []string {
 		out = append(out, fmt.Sprintf("%s: B's token login took %.2fs, over %s (%s)", g.Cell, b.Took, g.P.Timeout, g.P.TimeoutFrom))
 	}
 	if !l94LoginInsideDelay(g.Events) {
-		out = append(out, g.Cell+": B's token login was not answered inside A's delay: no permit redeem recorded between A's read and A's FAIL")
+		out = append(out, g.Cell+": B's token login was not answered inside A's delay: no permit redeem read within "+l94Inside.String()+" after A's")
 	}
 	return out
 }
 
-// l94LoginInsideDelay is whether a permit redeem was recorded inside the
-// first FAIL's delay: after its read (the FAIL's ts less l94Delay) and
-// before the FAIL.
+// l94LoginInsideDelay is whether port49 read a permit redeem inside the
+// first FAIL's delay: at or after the FAIL's ts (A's read) and under
+// l94Inside later, c2's line (the baseline's B is read at +l94Delay).
 func l94LoginInsideDelay(evs []l94Event) bool {
 	fails := l94Fails(evs)
 	if len(fails) == 0 {
 		return false
 	}
-	from, to := fails[0].TS.Add(-l94Delay), fails[0].TS
+	from, to := fails[0].TS, fails[0].TS.Add(l94Inside)
 	return slices.ContainsFunc(evs, func(e l94Event) bool {
-		return e.Event == "redeem" && e.Verdict == "permit" && e.TS.After(from) && e.TS.Before(to)
+		return e.Event == "redeem" && e.Verdict == "permit" && !e.TS.Before(from) && e.TS.Before(to)
 	})
 }
 

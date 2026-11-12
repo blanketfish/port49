@@ -104,7 +104,7 @@ func l94Rec(ts time.Time, ev, verdict, vec string) map[string]any {
 }
 
 // c2's order is read from the records' ts: B's authorize_command against A's
-// FAIL redeem, which is recorded once the delay has passed.
+// FAIL redeem, whose ts is A's read (before the delay).
 // H2: c2 whose last try's timing is not "ok" measured nothing: INVALID, on
 // either arm, never a pass.
 func TestL94C2TimingThatNeverSettlesIsInvalid(t *testing.T) {
@@ -133,17 +133,22 @@ func TestL94GapsAreReadFromRecordTimes(t *testing.T) {
 	if len(evs) != 4 {
 		t.Fatalf("%d events, want 4 (the unparseable ts and the other event dropped)", len(evs))
 	}
+	// A redeem's ts is A's read (newRecord, before the delay: authen.go:235),
+	// so a gap is B's read less A's: negative is B before A.
 	gaps, ok := l94Gaps("cisco_nxos", evs, []string{"show version", "show users"})
-	if !ok || len(gaps) != 2 || gaps[0] != 1900*time.Millisecond || gaps[1] != 1800*time.Millisecond {
+	if !ok || len(gaps) != 2 || gaps[0] != -1900*time.Millisecond || gaps[1] != -1800*time.Millisecond {
 		t.Fatalf("gaps %v ok=%v", gaps, ok)
 	}
-	if got := l94C2Timing(gaps, l94Delay); got != "ok" {
-		t.Errorf("timing %s", got)
+	if got := l94C2Timing(gaps); got != "early" {
+		t.Errorf("B read before A: timing %s, want early", got)
 	}
-	if got := l94C2Timing([]time.Duration{2600 * time.Millisecond}, l94Delay); got != "early" {
-		t.Errorf("a B request before A's read: timing %s, want early", got)
+	if got := l94C2Timing([]time.Duration{300 * time.Millisecond, 1000 * time.Millisecond}); got != "ok" {
+		t.Errorf("B after A's read: timing %s", got)
 	}
-	if got := l94C2Timing(nil, l94Delay); got != "none" {
+	if got := l94C2Timing([]time.Duration{2000 * time.Millisecond}); got != "ok" {
+		t.Errorf("B waited (a stop, not a retry): timing %s", got)
+	}
+	if got := l94C2Timing(nil); got != "none" {
 		t.Errorf("no B request: %s", got)
 	}
 	if _, ok := l94Gaps("cisco_nxos", evs[:3], []string{"show version"}); ok {
@@ -151,12 +156,84 @@ func TestL94GapsAreReadFromRecordTimes(t *testing.T) {
 	}
 	// Junos asks about no command: B's account records are what is ordered.
 	jrecs := []map[string]any{
-		l94Rec(t0.Add(200*time.Millisecond), "account", "", "show version"),
+		l94Rec(t0.Add(2400*time.Millisecond), "account", "", "show version"),
 		l94Rec(t0.Add(2100*time.Millisecond), "redeem", "deny", ""),
 	}
 	jg, ok := l94Gaps("juniper_junos", l94Events(jrecs), []string{"show version | no-more"})
-	if !ok || len(jg) != 1 || jg[0] != 1900*time.Millisecond {
+	if !ok || len(jg) != 1 || jg[0] != 300*time.Millisecond {
 		t.Errorf("junos gaps %v ok=%v", jg, ok)
+	}
+}
+
+// l94At is a time on the evidence's day, from its hh:mm:ss.mmm.
+func l94At(t *testing.T, clock string) time.Time {
+	t.Helper()
+	ts, err := time.Parse("2006-01-02T15:04:05.000Z", "2026-11-12T"+clock+"Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts
+}
+
+// Round 5, on the committed NX-OS evidence (1c1d105c fixed, 4481bbd8
+// baseline, offered c2): fixed, A's deny 04:57:29.730 and B's
+// authorize_commands 30.021 and 30.772 were answered inside A's delay;
+// baseline, A 03:48:00.665 and B 02.665 (+2.000s) waited behind it.
+func TestL94C2GradesTheEvidenceShapes(t *testing.T) {
+	cmds := []string{"show version", "show users"}
+	shape := func(a string, b ...string) []l94Event {
+		evs := []l94Event{{TS: l94At(t, a), Event: "redeem", Verdict: "deny", Reason: "token_not_found"}}
+		for i, ts := range b {
+			evs = append(evs, l94Event{TS: l94At(t, ts), Event: "authorize_command", Vector: cmds[i]})
+		}
+		return evs
+	}
+	grade := func(evs []l94Event) (string, []string) {
+		gaps, ok := l94Gaps("cisco_nxos", evs, cmds)
+		if !ok {
+			t.Fatal("no FAIL")
+		}
+		g := l94Clean()
+		g.Cell, g.Outcomes, g.Gaps, g.Events = "c2", []l94Outcome{{AuthFailed: true}}, gaps, nil
+		g.Typed = []l80Typed{{Command: "show version", Asked: true, Took: 0.75}, {Command: "show users", Asked: true, Denied: true, Took: 0.25}}
+		return l94C2Timing(gaps), l94Stops(g)
+	}
+	timing, stops := grade(shape("04:57:29.730", "04:57:30.021", "04:57:30.772"))
+	if timing != "ok" || len(stops) != 0 {
+		t.Errorf("fixed shape: timing %s stops %v", timing, stops)
+	}
+	timing, stops = grade(shape("03:48:00.665", "03:48:02.665", "03:48:03.459"))
+	if got := strings.Join(stops, "\n"); timing != "ok" || !strings.Contains(got, "waited behind A") {
+		t.Errorf("baseline shape: timing %s stops %q", timing, got)
+	}
+	// B read before A: a retry, not a grade.
+	if timing, _ := grade(shape("04:57:30.900", "04:57:30.021", "04:57:30.772")); timing != "early" {
+		t.Errorf("B before A: timing %s", timing)
+	}
+	// The line is l94Delay less 250ms after A's read.
+	if _, stops := grade(shape("04:57:29.730", "04:57:31.420")); len(stops) != 0 {
+		t.Errorf("1.69s after A: %v", stops)
+	}
+	if _, stops := grade(shape("04:57:29.730", "04:57:31.480")); !strings.Contains(strings.Join(stops, "\n"), "waited behind A") {
+		t.Errorf("1.75s after A: %v", stops)
+	}
+}
+
+// Round 5: B's token login is inside A's delay when port49 read it after
+// A's read and under l94Delay less 250ms later.
+func TestL94LoginInsideDelayIsFromAsRead(t *testing.T) {
+	a := l94At(t, "04:57:29.730")
+	evs := func(b time.Duration) []l94Event {
+		return []l94Event{{TS: a, Event: "redeem", Verdict: "deny"}, {TS: a.Add(b), Event: "redeem", Verdict: "permit"}}
+	}
+	if !l94LoginInsideDelay(evs(500 * time.Millisecond)) {
+		t.Error("0.5s after A's read: inside")
+	}
+	if l94LoginInsideDelay(evs(-300 * time.Millisecond)) {
+		t.Error("before A's read: not inside")
+	}
+	if l94LoginInsideDelay(evs(2 * time.Second)) {
+		t.Error("the baseline's +2.000s: it waited, not inside")
 	}
 }
 
@@ -298,7 +375,7 @@ func TestL94RefusedPermittedLostPromptsSlowCommandsAndMissingAccountingStop(t *t
 	}
 	// c2 has its own latency bound and runs no session START/STOP check.
 	g := l94Clean()
-	g.Cell, g.Outcomes, g.Gaps = "c2", []l94Outcome{{AuthFailed: true}}, []time.Duration{1800 * time.Millisecond}
+	g.Cell, g.Outcomes, g.Gaps = "c2", []l94Outcome{{AuthFailed: true}}, []time.Duration{300 * time.Millisecond}
 	g.Events = g.Events[4:]
 	if got := l94Stops(g); len(got) != 0 {
 		t.Errorf("c2 graded on c1's accounting: %v", got)
@@ -350,12 +427,12 @@ func TestL94C2Stops(t *testing.T) {
 	g := l94Clean()
 	g.Cell = "c2"
 	g.Outcomes = []l94Outcome{{AuthFailed: true}}
-	g.Gaps = []time.Duration{1800 * time.Millisecond, 1700 * time.Millisecond}
+	g.Gaps = []time.Duration{300 * time.Millisecond, 1000 * time.Millisecond}
 	g.Typed[0].Took, g.Typed[1].Took = 0.3, 0.4
 	if got := l94Stops(g); len(got) != 0 {
 		t.Fatalf("a clean c2 stops: %v", got)
 	}
-	g.Gaps[1] = -100 * time.Millisecond // answered after A's FAIL: it waited behind A
+	g.Gaps[1] = 2000 * time.Millisecond // read when A's delay ran out: it waited behind A
 	g.Typed[1].Took = 2.1
 	g.Outcomes[0] = l94Outcome{Err: "timeout"}
 	got := strings.Join(l94Stops(g), "\n")
@@ -420,7 +497,8 @@ func TestL94C3Stops(t *testing.T) {
 // H5: where the device asks port49 about no command (Junos), c2 and c3 hold a
 // B token login during A's FAILs: it must log in, within the platform's L13
 // timeout, and port49 must have answered it inside A's delay (a permit
-// redeem recorded before A's FAIL), so it was neither queued nor a fall-through.
+// redeem read under l94Inside after A's), so it was neither queued nor a
+// fall-through.
 func TestL94JunosHoldsABLoginDuringTheFails(t *testing.T) {
 	t0 := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
 	p, _ := l94PlatformFor("vjunos26")
@@ -431,13 +509,13 @@ func TestL94JunosHoldsABLoginDuringTheFails(t *testing.T) {
 		}
 		clean := func() l94Grade {
 			g := l94Grade{Arm: "fixed", Cell: cell, Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1,
-				Typed: []l80Typed{{Command: "show version | no-more", Took: 0.3}}, Gaps: []time.Duration{1800 * time.Millisecond},
+				Typed: []l80Typed{{Command: "show version | no-more", Took: 0.3}}, Gaps: []time.Duration{300 * time.Millisecond},
 				BLogin: &l94Outcome{LoggedIn: true, Took: 1.1},
 				Events: []l94Event{{TS: t0.Add(-5 * time.Second), Event: "redeem", Verdict: "permit"}, // B's session
 					{TS: t0.Add(1200 * time.Millisecond), Event: "redeem", Verdict: "permit"}}} // B's login, inside the delay
 			for range fails {
 				g.Outcomes = append(g.Outcomes, l94Outcome{AuthFailed: true})
-				g.Events = append(g.Events, l94Event{TS: t0.Add(2100 * time.Millisecond), Event: "redeem", Verdict: "deny"})
+				g.Events = append(g.Events, l94Event{TS: t0, Event: "redeem", Verdict: "deny"}) // A's read
 			}
 			return g
 		}
@@ -448,7 +526,7 @@ func TestL94JunosHoldsABLoginDuringTheFails(t *testing.T) {
 			"no B token login":         func(g *l94Grade) { g.BLogin = nil },
 			"B's token login did not":  func(g *l94Grade) { g.BLogin = &l94Outcome{AuthFailed: true, Took: 2.2} },
 			"B's token login took 3.4": func(g *l94Grade) { g.BLogin.Took = 3.4 },
-			"not answered inside A's":  func(g *l94Grade) { g.Events[1].TS = t0.Add(2300 * time.Millisecond) },
+			"not answered inside A's":  func(g *l94Grade) { g.Events[1].TS = t0.Add(2000 * time.Millisecond) },
 		}
 		for want, mut := range cases {
 			g := clean()
@@ -462,7 +540,7 @@ func TestL94JunosHoldsABLoginDuringTheFails(t *testing.T) {
 	}
 	// Where commands are asked the B login is not part of the cell.
 	g := l94Clean()
-	g.Cell, g.Outcomes, g.Gaps = "c2", []l94Outcome{{AuthFailed: true}}, []time.Duration{1800 * time.Millisecond}
+	g.Cell, g.Outcomes, g.Gaps = "c2", []l94Outcome{{AuthFailed: true}}, []time.Duration{300 * time.Millisecond}
 	if got := l94Stops(g); len(got) != 0 {
 		t.Errorf("NX-OS c2 graded on a B login: %v", got)
 	}

@@ -425,7 +425,7 @@ func TestL94(t *testing.T) {
 						})
 						var ok bool
 						gaps, ok = l94Gaps(q.run.Platform, l94Events(recs), []string{permitted, d})
-						timing = l94C2Timing(gaps, l94Delay)
+						timing = l94C2Timing(gaps)
 						fmt.Fprintf(&sum, "try %d: lead=%s fail_recorded=%v timing=%s gaps=%v\n", try, lead, ok, timing, gaps)
 						if timing != "early" {
 							break
