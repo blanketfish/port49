@@ -2786,8 +2786,11 @@ whether a <code>port49 login</code> to the running agent puts it back on the key
 another process; whether <code>port49 token</code> still mints on the connection the agent already holds
 after it; and what other processes using the token do to the agent. Whether parallel forks, such
 as several Ansible workers sharing one agent, are asked for one touch or for several when a
-device requires <code>hardware_key_touch</code> is a question for <a href="../../reference/lab-register/#l60">L60</a>'s next session. The agent serializes
-token requests, but what the key does is not measured. A person runs <code>port49 ssh &lt;device&gt;</code> once for one such
+device requires <code>hardware_key_touch</code> is a question for <a href="../../reference/lab-register/#l60">L60</a>'s next session. The agent sends one
+request to the broker at a time and batches the token requests queued behind it
+(<a href="../../concepts/identities/">Identities</a>), but what the key does is not measured. A mint whose
+caller gave up after its batch was sent is still minted for the others' sake; that token goes
+unused, and the person can revoke it. A person runs <code>port49 ssh &lt;device&gt;</code> once for one such
 device before a play, as the Ansible collection's README says.</p>
 </div>
 <div class="admonition warning">
