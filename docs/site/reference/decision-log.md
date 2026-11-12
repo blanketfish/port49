@@ -169,11 +169,11 @@ A report event shares the envelope but is not a decision: it carries no verdict.
 | `gap.stage` | string | Where accounting records were dropped: `offer_refused` (answered `ERROR`, so the device may send the record again), `drain_unparseable` or `drain_set_aside` (answered `SUCCESS` and not in the log). |
 | `gap.records` | integer | How many accounting records were dropped at this stage. |
 | `gap.since` | string | The earliest arrival among the dropped records, as far as the spool knows it. |
-| `change.kind` | string | What changed. Only security-relevant changes are written: `device_added` (a device added and admitted), `admission_changed` (a device already in the inventory becoming admitted), `address_added` (an address added to a device already in the inventory), `key_ref_changed`, `transport_changed` and `platform_changed` (a device's key assignment, `transport` or `platform` changed), and `scope_joined` or `scope_left` (a device entering or leaving a scope with `security_log: true`). |
+| `change.kind` | string | What changed. Only security-relevant changes are written: `device_added` (a device added and admitted), `admission_changed` (a device already in the inventory becoming admitted), `address_added` (an address added to a device already in the inventory), `address_moved` (an address that left one device and landed on another in the same swap: `change.address`, `change.from` the device that held it and `change.to` the device that holds it now), `key_ref_changed`, `transport_changed` and `platform_changed` (a device's key assignment, `transport` or `platform` changed), and `scope_joined` or `scope_left` (a device entering or leaving a scope with `security_log: true`). |
 | `change.scope` | string | The scope involved, when the change names one. |
 | `change.address` | string | The address involved, when the change names one. |
-| `change.from` | string | The earlier value, on `key_ref_changed`, `transport_changed`, `platform_changed` and `admission_changed`. |
-| `change.to` | string | The later value, on those kinds and on `device_added`, where it is `admitted`. |
+| `change.from` | string | The earlier value, on `key_ref_changed`, `transport_changed`, `platform_changed` and `admission_changed`; on `address_moved`, the device that held the address. |
+| `change.to` | string | The later value, on those kinds and on `device_added`, where it is `admitted`; on `address_moved`, the device that holds the address now. |
 | `change.from_bundle` | string | The policy version before the swap that made the change. |
 | `change.to_bundle` | string | The policy version after it. |
 | `forget.entry_id` | string | The id of the directory entry the principal was pinned to. |

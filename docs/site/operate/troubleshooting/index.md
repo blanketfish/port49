@@ -34,7 +34,8 @@ port49 as a whole. The decision log record for the attempt carries a [reason](..
   device. See [tokens, receipts and contexts](../../concepts/tokens-receipts-contexts.md).
 - An `unvalidated` record, and a connection the device sees reset with no reply: no key validated what the
   device sent. Its `unvalidated.diagnosis` says why: `no_known_key_matches` (a wrong key),
-  `matches_retired` (a retired key), `unadmitted_source` (the address is not in the inventory),
+  `matches_retired` (a retired key), `unadmitted_source` (the address is not in the inventory; the record's
+  `unvalidated.source` names it, and a device whose source address changed looks exactly like this),
   `device_quarantined`, `admission_refused` or `transport_mismatch` (the device reached the listener it
   does not speak).
 
@@ -182,10 +183,21 @@ job name fires it too. See [monitoring](../monitoring.md#scraping).
 ### Connections
 
 Alerts: **page** [port49_global_cap_shedding](../../reference/alerts.md#port49_global_cap_shedding);
-**ticket** [port49_connections_near_cap](../../reference/alerts.md#port49_connections_near_cap).
+**ticket** [port49_connections_near_cap](../../reference/alerts.md#port49_connections_near_cap) and
+[port49_unadmitted_source](../../reference/alerts.md#port49_unadmitted_source).
 
 **Do this:** raise `limits.max_connections` or add replicas. The shed devices were reset on purpose and tried
 their next server.
+
+For `port49_unadmitted_source`, find the `unvalidated` records with
+`unvalidated.diagnosis: unadmitted_source` in the [decision log](../../reference/decision-log.md): each carries
+the address in `unvalidated.source`. Either that address belongs to a device and the inventory does not list it,
+or a listed device is now sourcing from another address. A device whose source changed (a `source-interface`
+that is not pinned and moved with an uplink failover, a loopback renumbered before the source of truth was, the
+wrong VRF) looks exactly like this: the person sees break-glass work and their token fail, and port49d sees a
+stranger. Pin the device's source (see the
+[device reference configuration](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/README.md))
+or put the new address in the source of truth.
 
 **Don't:** restart port49d to clear it. A restart resets every open connection and does not change the
 cap. See [monitoring](../monitoring.md#shedding).
@@ -314,6 +326,16 @@ names. For example, after a restore left `/var/lib/port49/enrollments.json` owne
 path by its last 32 bytes, so a deeper path starts with `…`. The file is `enrollments.json` in
 `broker.state_dir`, or beside `broker.revocations_file` when `broker.state_dir` is unset. See [backup and restore](../backup-and-restore.md).
 
+A directory server that stops answering without closing its connection (a firewall or NAT that dropped its
+state, a VIP whose server was replaced) costs one query its `broker.directory.query_timeout`: when nothing at
+all was read on the connection by then, the broker closes it and the next query dials a new one. A brief burst
+of slow mints with `port49_directory_server_up` still 1 is that; `port49_directory_queries_total{outcome="fault"}`
+counts each one. The health check dials a connection of its own and does not clear faults that queries counted;
+only a query that answers does. A server that keeps timing out therefore opens its breaker after
+`circuit_breaker.failure_threshold` faults in a row, even at a site with few sign-ins. Each such query dials and
+binds a new connection (a successful bind, which counts nothing toward the service account's lockout), so a server
+in this state costs a bind and a full `query_timeout` per query until its breaker opens.
+
 **Don't:** run `init-enrollments` to fix a lost store on an install that had enrolled people: it makes an
 empty store, and everyone enrolls again. Restore the export instead. Don't use the escapes in the alert (`session.staleness_ceiling: 0s`, or stopping port49d) as a
 routine fix; each gives up a bound.
@@ -347,6 +369,17 @@ Alerts, all **ticket**: [port49_inventory_sync_failing](../../reference/alerts.m
 **Do this:** read the inventory service's log. The fleet keeps authenticating on the snapshot in force, and
 nothing fails closed. For `port49_inventory_privilege_changes`, the `inventory_change` record names the
 device: review it.
+
+**Page:** [port49_inventory_address_moved](../../reference/alerts.md#port49_inventory_address_moved). An address
+left one device and landed on another in a single swap. Find the `inventory_change` record with
+`change.kind: address_moved`: `change.address` is the address, `change.from` the device that held it and
+`change.to` the device that holds it now. On an RFC 8907 (`transport: tcp`) device whose key comes from a CIDR or
+attribute key group, port49d names a connection by its source address and the shared key admits the whole range,
+so the move lets the new name's grants be used from hardware that held another's. Ask who edited the source of
+truth. A real RMA or re-IP raises it too; confirm that with whoever did it. A move spread over two swaps (removed
+in one, added in the next) is not seen, and neither is one a restart applies: a restart, including a Helm
+upgrade that rolls the pods, is not a swap. For a crown-jewel device, use `transport: tls` or a name pin to a
+per-device key, which a moved address does not reach.
 
 **Don't:** restart port49d to refresh the inventory; the bundle in force keeps serving until a good one
 arrives.
@@ -414,6 +447,28 @@ restore runbook.
 
 **Don't:** restart port49d to clear the line, or lift anything, before the runbook says. Don't assume a
 revoked person is still revoked until the revocations are re-issued.
+
+### A token was minted ahead of this host's clock
+
+**You see:** `clock: a token was minted <N> ahead of this host's clock`, at most once every ten
+minutes, and `port49_token_minted_ahead_total` rising; the ticket
+[port49_token_clock_skew](../../reference/alerts.md#port49_token_clock_skew) fires on it.
+
+**It means:** the broker that minted the token has a clock `N` ahead of this port49d's. A token's
+expiry is the broker's clock plus the TTL, read on port49d's clock, so every token from that broker
+lives `N` longer here, until its lease reclaims it: at most `lease_grace` (5 minutes) plus two minutes past
+`token_ttl`. The other direction does not show: a broker `N` behind shortens each token by
+`N`, and past a `token_ttl` its tokens are dead on arrival, so every login with one fails
+`token_not_found` with no other sign. If logins from one broker fail `token_not_found` right after the
+token was minted, compare the clocks first.
+
+**Do this:** put every broker host and every port49d host on NTP (`chronyc tracking`, or
+`timedatectl` on the host) and confirm they agree to well under the smallest `token_ttl`. Alert on the
+hosts' own NTP sync, since port49 cannot see a broker that is behind: with node_exporter,
+`node_timex_sync_status == 0` and `abs(node_timex_offset_seconds) > 1`.
+
+**Don't:** lengthen `token_ttl` to cover the skew; it widens replay for an unspent token and leaves the
+clocks wrong for everything else that reads them.
 
 ### Shedding
 

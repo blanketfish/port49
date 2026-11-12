@@ -160,7 +160,7 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 | `port49_inventory_api_refused_total` | counter | `reason` | API requests refused, by reason (untrusted, forbidden, bad_path). |  |
 | `port49_inventory_bundle_refused` | gauge |  | 1 while a document port49d was given did not open or was refused; the bundle in force keeps serving. | [port49_inventory_bundle_refused](alerts.md#port49_inventory_bundle_refused) |
 | `port49_inventory_bundle_sequence` | gauge |  | The inventory service's sequence of the document in force; 0 with inventory_file. |  |
-| `port49_inventory_changes_total` | counter | `kind` | Security-relevant changes a bundle swap made, by kind. | [port49_inventory_transport_changed](alerts.md#port49_inventory_transport_changed), [port49_inventory_privilege_changes](alerts.md#port49_inventory_privilege_changes) |
+| `port49_inventory_changes_total` | counter | `kind` | Security-relevant changes a bundle swap made, by kind. | [port49_inventory_transport_changed](alerts.md#port49_inventory_transport_changed), [port49_inventory_privilege_changes](alerts.md#port49_inventory_privilege_changes), [port49_inventory_address_moved](alerts.md#port49_inventory_address_moved) |
 | `port49_inventory_devices` | gauge |  | Devices in the bundle published. |  |
 | `port49_inventory_devices_left_out` | gauge |  | Devices the last sync left out: a name or text that cannot reach a line safely. |  |
 | `port49_inventory_fetches_total` | counter | `outcome` | Asks of the inventory service, by outcome: unchanged, refused (the service confirmed a document port49d refused), received, invalid or failed. |  |
@@ -302,6 +302,12 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 | `port49_tls_handshakes_total` | counter | `outcome` | RFC 9887 listener handshakes by outcome. | [port49_tls_handshake_failures](alerts.md#port49_tls_handshake_failures) |
 | `port49_tls_server_certificate_lifetime_left_ratio` | gauge |  | The fraction of its own lifetime the RFC 9887 listener's certificate has left, below 0 once expired; 1 with no listener. | [port49_tls_server_certificate_renewal_late](alerts.md#port49_tls_server_certificate_renewal_late), [port49_tls_server_certificate_expired](alerts.md#port49_tls_server_certificate_expired) |
 
+## token
+
+| Metric | Type | Labels | Meaning | Alerts |
+|---|---|---|---|---|
+| `port49_token_minted_ahead_total` | counter |  | Token lookups that found a token whose minted_at is more than a second ahead of this port49d's clock: the minting broker's clock runs ahead of this host's, and every token's life shifts by the skew. | [port49_token_clock_skew](alerts.md#port49_token_clock_skew) |
+
 ## tokens
 
 | Metric | Type | Labels | Meaning | Alerts |
@@ -312,7 +318,7 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 
 | Metric | Type | Labels | Meaning | Alerts |
 |---|---|---|---|---|
-| `port49_unvalidated_packets_total` | counter | `diagnosis` | Packets no accepted key validated, by diagnosis. |  |
+| `port49_unvalidated_packets_total` | counter | `diagnosis` | Packets no accepted key validated, by diagnosis. | [port49_unadmitted_source](alerts.md#port49_unadmitted_source) |
 
 ## workload
 

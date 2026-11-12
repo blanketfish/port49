@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/bundle"
 	"github.com/blanketfish/port49/internal/hwkey"
 	"github.com/blanketfish/port49/internal/mfatouch"
 	"github.com/blanketfish/port49/internal/printsafe"
@@ -206,6 +207,12 @@ func retryAfter(h http.Header) time.Duration {
 	return min(time.Duration(n)*time.Second, inProgressDelayMax)
 }
 
+// mintDeadline bounds one Mint from its call to its answer: the wait for
+// the connection, every post and every idempotency_in_progress wait. It is
+// below socketTimeout, so the agent, not the socket client's generic
+// timeout, is what a person sees give up. A var so a test can shorten it.
+var mintDeadline = socketTimeout - 10*time.Second
+
 // Agent is one operator session.
 type Agent struct {
 	broker       string
@@ -251,6 +258,18 @@ type Agent struct {
 	// in Unix nanoseconds; 0 when none holds it.
 	wire     chan struct{}
 	revoking atomic.Int64
+	// mintQ is the person-path mints waiting for the wire, in arrival order;
+	// whoever takes the wire sends the head and what can ride with it
+	// (claimBatch). batchMax is the broker's, from Connect; 0 until then,
+	// which sends one device per request.
+	mintMu   sync.Mutex
+	mintQ    []*mintCall
+	batchMax atomic.Int64
+	// senders counts the batches being sent, so a test can wait for them.
+	senders sync.WaitGroup
+	// wireTakes counts the times a mint took the wire, so a test can tell a
+	// waiting caller from a spinning one.
+	wireTakes atomic.Int64
 	// touching is set while an admin call waits on the touch key: one at a
 	// time (AdminPrompt).
 	touching atomic.Bool
@@ -452,6 +471,7 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	a.deadline = a.now().Add(time.Duration(c.MaxSessionAgeSeconds) * time.Second)
 	a.ceilingWarning = time.Duration(c.CeilingWarningSeconds) * time.Second
 	a.mu.Unlock()
+	a.batchMax.Store(int64(c.BatchMax))
 	return c, nil
 }
 
@@ -550,23 +570,293 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	if ends := a.SessionEndsAt(); ends.IsZero() || !a.now().Before(ends) {
 		return api.MintItem{}, ErrSessionOver
 	}
-	body, err := json.Marshal(api.MintRequest{Devices: []string{device}, Enable: enable, TTLSeconds: int(ttl / time.Second),
-		PerLoginMFAChallenge: challenge})
+	// The broker refuses a whole request that names a device it cannot
+	// take, so this one is refused here, alone, by the broker's own rule.
+	if !bundle.DeviceNameOK(device) {
+		return api.MintItem{}, errors.New(badDeviceName)
+	}
+	limit := mintDeadline
+	c := &mintCall{device: device, enable: enable, ttl: ttl, challenge: challenge, ctx: ctx, limit: limit,
+		deadline: time.Now().Add(limit), done: make(chan mintAnswer, 1), wake: make(chan struct{}, 1)}
+	a.mintMu.Lock()
+	a.mintQ = append(a.mintQ, c)
+	a.mintMu.Unlock()
+	overall := time.NewTimer(limit)
+	defer overall.Stop()
+	queued := time.NewTimer(wireWait)
+	defer queued.Stop()
+	wireC := queued.C
+	for {
+		// A call claimed into a batch has no business with the wire: its
+		// batch's sender takes it, and a claimed caller that kept asking
+		// would spin whenever the wire is free (a batch asleep on an
+		// idempotency_in_progress answer). Only a queued call competes.
+		var wireSend chan struct{}
+		if !a.claimed(c) {
+			wireSend = a.wire
+		}
+		select {
+		case <-c.wake: // claimed, or put back in the queue: look again
+		case ans := <-c.done:
+			return ans.item, ans.err
+		case <-ctx.Done():
+			a.unqueue(c)
+			return api.MintItem{}, ctx.Err()
+		case <-overall.C:
+			a.unqueue(c)
+			return api.MintItem{}, mintDeadlineError(limit, a.mintPhase(c))
+		case <-wireC:
+			wireC = nil
+			if a.unqueue(c) {
+				// Never claimed into a batch: nothing of it was sent.
+				return api.MintItem{}, a.wireBusyError("minted", "port49 token")
+			}
+		case wireSend <- struct{}{}:
+			a.wireTakes.Add(1)
+			// This caller holds the wire: it sends the queue's head batch,
+			// which may or may not hold its own mint, and goes back to
+			// waiting for its answer.
+			if b := a.claimBatch(); b != nil {
+				a.senders.Add(1)
+				go func() {
+					defer a.senders.Done()
+					a.runBatch(b)
+				}()
+			} else {
+				<-a.wire
+			}
+		}
+	}
+}
+
+// badDeviceName is what a name the broker would refuse is told, in the
+// broker's words (bundle.MaxDeviceName, printable ASCII), with nothing sent.
+var badDeviceName = fmt.Sprintf("agent: a device name is 1 to %d printable ASCII characters; nothing was sent", bundle.MaxDeviceName)
+
+// mintCall is one Mint waiting to be sent, alone or in a batch.
+type mintCall struct {
+	device    string
+	enable    bool
+	ttl       time.Duration
+	challenge string
+	ctx       context.Context
+	limit     time.Duration   // mintDeadline when the call was made
+	deadline  time.Time       // when the call was made, plus limit
+	alone     bool            // set when a batch's challenge was not this call's
+	done      chan mintAnswer // buffered: the sender never waits for a caller that left
+	batch     *mintBatch      // set, under mintMu, when claimed
+	wake      chan struct{}   // told, without waiting, when batch is set or cleared
+}
+
+// sendsAlone is a mint that is sent in a request of its own: one that names
+// a per-login proof (a proof covers one device's mint), or one a batch's
+// shared challenge was not for (requeueAlone).
+func (c *mintCall) sendsAlone() bool { return c.alone || c.challenge != "" }
+
+// requeueAlone puts calls back at the head of the queue to be sent one to a
+// request, as a call that was not claimed would have been, so each is given
+// its own challenge. A call whose caller has gone is dropped.
+func (a *Agent) requeueAlone(calls []*mintCall) {
+	a.mintMu.Lock()
+	defer a.mintMu.Unlock()
+	var back []*mintCall
+	for _, c := range calls {
+		if c.ctx.Err() != nil || !time.Now().Before(c.deadline) {
+			continue
+		}
+		c.batch, c.alone = nil, true
+		back = append(back, c)
+	}
+	a.mintQ = append(back, a.mintQ...)
+	for _, c := range back {
+		c.nudge()
+	}
+}
+
+// claimed reports whether c is in a batch being sent.
+func (a *Agent) claimed(c *mintCall) bool {
+	a.mintMu.Lock()
+	defer a.mintMu.Unlock()
+	return c.batch != nil
+}
+
+// nudge tells c's caller its claim changed.
+func (c *mintCall) nudge() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// mintAnswer is one caller's result.
+type mintAnswer struct {
+	item api.MintItem
+	err  error
+}
+
+// mintBatch is the calls sent as one request. phase is which wait it is in,
+// for the deadline's error.
+type mintBatch struct {
+	calls []*mintCall
+	phase atomic.Pointer[string]
+}
+
+func (b *mintBatch) at(phase string) { b.phase.Store(&phase) }
+
+const (
+	phaseQueued     = "queued for the connection to the broker"
+	phaseWire       = "waiting for the connection to the broker to send the mint again"
+	phasePost       = "waiting for the broker's answer"
+	phaseInProgress = "waiting for an earlier try under the same key to finish"
+)
+
+// mintDeadlineError is Mint's own deadline running out in phase: an outage
+// the caller may try again, said before the socket client's timeout can be.
+func mintDeadlineError(limit time.Duration, phase string) error {
+	return &BrokerUnavailableError{fmt.Errorf("agent: the mint did not finish within %v: still %s", limit, phase)}
+}
+
+// unqueue takes c out of the queue; false when it was already claimed.
+func (a *Agent) unqueue(c *mintCall) bool {
+	a.mintMu.Lock()
+	defer a.mintMu.Unlock()
+	if i := slices.Index(a.mintQ, c); i >= 0 {
+		a.mintQ = slices.Delete(a.mintQ, i, i+1)
+		return true
+	}
+	return false
+}
+
+func (a *Agent) mintPhase(c *mintCall) string {
+	a.mintMu.Lock()
+	b := c.batch
+	a.mintMu.Unlock()
+	if b == nil {
+		return phaseQueued
+	}
+	if p := b.phase.Load(); p != nil {
+		return *p
+	}
+	return phasePost
+}
+
+// claimBatch takes the queue's head and, behind it, every queued mint that
+// can ride in the same request, up to the broker's batch_max: the same
+// enable and ttl, no per-login proof (a proof covers one device's mint), a
+// device not already named. nil when the queue is empty.
+func (a *Agent) claimBatch() *mintBatch {
+	a.mintMu.Lock()
+	defer a.mintMu.Unlock()
+	if len(a.mintQ) == 0 {
+		return nil
+	}
+	head := a.mintQ[0]
+	b := &mintBatch{calls: []*mintCall{head}}
+	rest := a.mintQ[:0:0]
+	limit := max(int(a.batchMax.Load()), 1)
+	for _, c := range a.mintQ[1:] {
+		if !head.sendsAlone() && !c.sendsAlone() && len(b.calls) < limit && c.enable == head.enable &&
+			c.ttl == head.ttl && !slices.ContainsFunc(b.calls, func(o *mintCall) bool { return o.device == c.device }) {
+			b.calls = append(b.calls, c)
+			continue
+		}
+		rest = append(rest, c)
+	}
+	a.mintQ = rest
+	for _, c := range b.calls {
+		c.batch = b
+		c.nudge()
+	}
+	return b
+}
+
+// runBatch sends b, holding the wire it is handed, and answers every call in
+// it. Every retry is the same request under the same Idempotency-Key, so the
+// broker, which keeps one record per device under a key, replays what a lost
+// answer minted and mints no device twice. A failure of the whole request is
+// every call's; an item's is its own call's.
+func (a *Agent) runBatch(b *mintBatch) {
+	held := true
+	give := func() {
+		if held {
+			held = false
+			a.giveWire(false)
+		}
+	}
+	defer give()
+	fail := func(err error) {
+		for _, c := range b.calls {
+			c.done <- mintAnswer{err: err}
+		}
+	}
+	// The request lives until the latest caller's deadline, and until every
+	// caller has gone: one caller leaving never cancels another's mint.
+	var limit time.Duration
+	var latest time.Time
+	for _, c := range b.calls {
+		limit = max(limit, c.limit)
+		if c.deadline.After(latest) {
+			latest = c.deadline
+		}
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), latest)
+	defer cancel()
+	remaining := atomic.Int64{}
+	remaining.Store(int64(len(b.calls)))
+	for _, c := range b.calls {
+		defer context.AfterFunc(c.ctx, func() {
+			if remaining.Add(-1) == 0 {
+				cancel()
+			}
+		})()
+	}
+	failed := func(err error) {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			var ph string
+			if p := b.phase.Load(); p != nil {
+				ph = *p
+			}
+			err = mintDeadlineError(limit, ph)
+		}
+		fail(err)
+	}
+	select {
+	case <-a.done:
+		fail(ErrSessionOver)
+		return
+	default:
+	}
+	head := b.calls[0]
+	req := api.MintRequest{Enable: head.enable, TTLSeconds: int(head.ttl / time.Second), PerLoginMFAChallenge: head.challenge}
+	for _, c := range b.calls {
+		req.Devices = append(req.Devices, c.device)
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
-		return api.MintItem{}, err
+		fail(err)
+		return
 	}
 	key, err := newKey()
 	if err != nil {
-		return api.MintItem{}, err
+		fail(err)
+		return
 	}
 	var resp *http.Response
 	for wait := 0; ; wait++ {
-		if err := a.takeWire(ctx, false, "minted", "port49 token"); err != nil {
-			return api.MintItem{}, err
+		if wait > 0 {
+			b.at(phaseWire)
+			if err := a.takeWire(ctx, false, "minted", "port49 token"); err != nil {
+				failed(err)
+				return
+			}
+			held = true
+			a.wireTakes.Add(1)
 		}
+		b.at(phasePost)
 		if resp, err = a.post(ctx, body, key); err != nil {
-			a.giveWire(false)
-			return api.MintItem{}, err
+			give()
+			failed(err)
+			return
 		}
 		if resp.StatusCode != http.StatusConflict {
 			break // the wire is held through this answer's read, and given back below
@@ -576,49 +866,79 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		drain(resp.Body)
 		// Given back across the wait: a revocation sent now goes at once,
 		// never behind a mint that is only sleeping.
-		a.giveWire(false)
+		give()
 		if e.Error != "idempotency_in_progress" || wait >= inProgressRetries {
-			return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
+			fail(fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail))
+			return
 		}
 		// The first try under this key is still minting at the broker (a
 		// lost response, retried by post): wait for it and be answered
 		// from it, under the same key (design §17).
+		b.at(phaseInProgress)
 		select {
 		case <-ctx.Done():
-			return api.MintItem{}, ctx.Err()
+			failed(ctx.Err())
+			return
 		case <-time.After(retryAfter(resp.Header)):
 		}
 	}
-	defer a.giveWire(false)
 	defer drain(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
 		_ = json.NewDecoder(resp.Body).Decode(&e)
 		if over := sessionOver(resp.StatusCode, e); over != nil {
 			a.end(over)
-			return api.MintItem{}, over
+			fail(over)
+			return
 		}
 		if busy := unavailable(resp, e); busy != nil {
-			return api.MintItem{}, busy
+			fail(busy)
+			return
 		}
 		if err := redirected(resp); err != nil {
-			return api.MintItem{}, err
+			fail(err)
+			return
 		}
-		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
+		fail(fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail))
+		return
 	}
 	var mr api.MintResponse
 	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
-		return api.MintItem{}, fmt.Errorf("agent: the broker's answer: %w", err)
+		fail(fmt.Errorf("agent: the broker's answer: %w", err))
+		return
 	}
-	if len(mr.Results) != 1 || mr.Results[0].Device != device {
-		return api.MintItem{}, fmt.Errorf("agent: asked for %s, the broker answered %d items", device, len(mr.Results))
+	var again []*mintCall
+	proofGiven := false
+	for _, c := range b.calls {
+		i := slices.IndexFunc(mr.Results, func(it api.MintItem) bool { return it.Device == c.device })
+		if i < 0 {
+			c.done <- mintAnswer{err: fmt.Errorf("agent: asked for %s, the broker answered %d items", c.device, len(mr.Results))}
+			continue
+		}
+		it := mr.Results[i]
+		if len(b.calls) > 1 && it.Reason == "per_login_mfa_required" && it.PerLoginMFA != nil && it.PerLoginMFA.Challenge != "" {
+			// The broker issues one challenge for a request and a proof
+			// takes it once, so it is the first such caller's alone; the
+			// rest are sent again by themselves, each to be given its own.
+			if proofGiven {
+				again = append(again, c)
+				continue
+			}
+			proofGiven = true
+		}
+		item, err := mintItem(it)
+		c.done <- mintAnswer{item: item, err: err}
 	}
-	item := mr.Results[0]
+	a.requeueAlone(again)
+}
+
+// mintItem is one device's answer: the item, or the error it carries.
+func mintItem(item api.MintItem) (api.MintItem, error) {
 	switch {
 	case item.Error != "":
 		return item, &ItemError{Device: item.Device, Code: item.Error, Detail: item.Detail}
 	case item.Verdict == "":
-		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s with neither a verdict nor an error", device)
+		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s with neither a verdict nor an error", item.Device)
 	case item.Reason == "per_login_mfa_required" && item.PerLoginMFA != nil && item.PerLoginMFA.Challenge != "":
 		req := *item.PerLoginMFA
 		if req.Device == "" {
@@ -750,6 +1070,15 @@ func (a *Agent) takeWire(ctx context.Context, revocation bool, undone, again str
 		a.revoking.Store(a.now().UnixNano())
 	}
 	return nil
+}
+
+// wireBusyError is takeWire's error for a non-revocation call that waited
+// wireWait: the running revocation, when one holds the wire, else busy.
+func (a *Agent) wireBusyError(undone, again string) error {
+	if since := a.revoking.Load(); since != 0 {
+		return &RevocationRunningError{Since: time.Unix(0, since), Undone: undone, Again: again}
+	}
+	return fmt.Errorf("agent: the connection to the broker at %s was busy for %v", a.broker, wireWait)
 }
 
 func (a *Agent) giveWire(revocation bool) {
@@ -1755,6 +2084,10 @@ func (a *Agent) Handler() http.Handler {
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil || req.Device == "" {
 			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "name one device"})
+			return
+		}
+		if !bundle.DeviceNameOK(req.Device) {
+			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: badDeviceName})
 			return
 		}
 		item, err := a.Mint(r.Context(), req.Device, req.Enable, time.Duration(req.TTLSeconds)*time.Second,

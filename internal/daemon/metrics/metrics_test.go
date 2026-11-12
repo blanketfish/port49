@@ -70,6 +70,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.BrokerLogoutsQueueFull.Add(0)
 	m.RedemptionRestoreUnjudged.Set(0)
 	m.RedemptionRestoredRefused.Add(0)
+	m.TokenMintedAhead.Add(0)
 	m.StoreRestoreDetected.Set(0)
 	m.InventoryReloads.WithLabelValues("applied").Inc()
 	m.InventoryFileRefused.Set(0)
@@ -143,6 +144,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_broker_mint_gate_closed":                    false,
 		"port49_redemption_restore_unjudged":                false,
 		"port49_redemption_restored_refused_total":          false,
+		"port49_token_minted_ahead_total":                   false,
 		"port49_store_restore_detected_timestamp_seconds":   false,
 		"port49_inventory_reloads_total":                    false,
 		"port49_inventory_file_refused":                     false,
@@ -560,5 +562,28 @@ func TestDirectoryPasswordConfiguredStartsAtZero(t *testing.T) {
 	m := New(prometheus.NewRegistry())
 	if v := testutil.ToFloat64(m.DirectoryPasswordConfigured); v != 0 {
 		t.Fatalf("starts at %v, want 0", v)
+	}
+}
+
+// increase() over a series that first appears at 1 reads 0, so the first
+// address_moved of a process would never page: each security kind, and the
+// unadmitted_source diagnosis, exist at 0 from the first scrape.
+func TestTheAlarmedSeriesExistAtZeroFromTheFirstScrape(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	// Counted before any WithLabelValues, which would create the series.
+	if n := testutil.CollectAndCount(m.InventoryChanges); n != 9 {
+		t.Fatalf("%d inventory_changes series; every security kind from the first scrape", n)
+	}
+	if n := testutil.CollectAndCount(m.Unvalidated); n != 1 {
+		t.Fatalf("%d unvalidated series; unadmitted_source from the first scrape", n)
+	}
+	for _, k := range []string{"address_moved", "address_added", "device_added", "admission_changed", "key_ref_changed",
+		"transport_changed", "platform_changed", "scope_joined", "scope_left"} {
+		if v := testutil.ToFloat64(m.InventoryChanges.WithLabelValues(k)); v != 0 {
+			t.Errorf("%s: %v", k, v)
+		}
+	}
+	if v := testutil.ToFloat64(m.Unvalidated.WithLabelValues("unadmitted_source")); v != 0 {
+		t.Errorf("unadmitted_source: %v", v)
 	}
 }

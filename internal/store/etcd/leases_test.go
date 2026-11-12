@@ -257,3 +257,47 @@ func TestAGrantEndsAtTheCallTimeoutAndAWaiterGrantsNext(t *testing.T) {
 		t.Fatalf("the first grant ended after %d ms, want about its 100 ms bound", ms)
 	}
 }
+
+// A lease's TTL is a duration worked out on the minting clock alone: the
+// expiry and the now it is measured from are both the broker's, and etcd counts
+// the TTL down on its own clock. So a broker whose clock is skewed asks for the
+// same TTL as one in step, and a token from a broker ahead is reclaimed no
+// later than ttl + lease_grace + one bucket after it was minted, whatever the
+// skew (design 8; audit F8-1).
+func TestALeaseTTLIsTheSameWhateverTheMintingClockSays(t *testing.T) {
+	const grace, ttl = 5 * time.Minute, 30 * time.Second
+	asked := func(skew time.Duration) int64 {
+		t.Helper()
+		// Near the real clock: a lease is asked for from the clock that mints it.
+		now := time.Now().Truncate(time.Minute).Add(10 * time.Second).Add(skew)
+		l := newLeases(etcdtest.Client(t), func() time.Time { return now }, grace, 0)
+		var got atomic.Int64
+		l.grant = func(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error) {
+			got.Store(ttl)
+			return &clientv3.LeaseGrantResponse{ID: 1, TTL: ttl}, nil
+		}
+		if _, err := l.For(context.Background(), now.Add(ttl)); err != nil {
+			t.Fatal(err)
+		}
+		return got.Load()
+	}
+	// The bound the docs state: token_ttl + lease_grace plus two buckets (the
+	// bucket the lease ends in, and the one the grant keeps spare for later
+	// records), for every skew. A whole-minute skew is the same bucket
+	// alignment, so it asks for exactly the in-step TTL; a sub-minute one may
+	// land in the next bucket, so it is bounded, not equal.
+	lo, hi := int64((ttl + grace).Seconds()), int64((ttl + grace + 2*leaseBucket).Seconds())
+	inStep := asked(0)
+	for _, c := range []struct {
+		skew  time.Duration
+		exact bool
+	}{{0, false}, {-2 * time.Minute, true}, {2 * time.Minute, true}, {time.Hour, true}, {17 * time.Second, false}, {-17 * time.Second, false}} {
+		got := asked(c.skew)
+		if got < lo || got > hi {
+			t.Errorf("a clock %v off asks for a %ds lease for a %v token, want %d to %d", c.skew, got, ttl, lo, hi)
+		}
+		if c.exact && got != inStep {
+			t.Errorf("a clock %v off asks for a %ds lease, in step asks %ds", c.skew, got, inStep)
+		}
+	}
+}

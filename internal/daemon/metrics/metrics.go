@@ -509,6 +509,12 @@ type Metrics struct {
 	// token_spent because the token's store revision is at or below this
 	// port49d's restore floor.
 	RedemptionRestoredRefused prometheus.Counter
+	// port49_token_minted_ahead_total: token lookups that found a token whose
+	// minted_at is more than a second ahead of this port49d's clock, so the
+	// minting broker's clock runs ahead of this host's. Expiry on etcd is the
+	// record's, read against this clock (design §12), so a skewed pair
+	// shortens or lengthens every token by the skew.
+	TokenMintedAhead prometheus.Counter
 	// port49_store_restore_detected_timestamp_seconds: the Unix time this
 	// port49d last found its session store restored, 0 if never. The process
 	// holds the time; each run's registry is set again at begin.
@@ -537,7 +543,9 @@ type Metrics struct {
 	InventorySnapshotAge prometheus.GaugeFunc
 	// port49_inventory_changes_total{kind}: security-relevant changes a bundle
 	// swap made (spec §10) — "address_added" (an address on a device already
-	// in inventory, which a mint hands to an SSH client), "scope_joined" and
+	// in inventory, which a mint hands to an SSH client), "address_moved"
+	// (an address that left one device and landed on another in one swap;
+	// decision 61), "scope_joined" and
 	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
 	// device moved onto another key), "transport_changed" (a device moved
 	// between tcp and tls), "platform_changed" (a device moved to another
@@ -982,6 +990,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		RedemptionRestoredRefused: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_redemption_restored_refused_total",
 			Help: "Token redemptions refused token_spent because the token's store revision is at or below this " +
 				"port49d's restore floor: an etcd restore brought it back."}),
+		TokenMintedAhead: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_token_minted_ahead_total",
+			Help: "Token lookups that found a token whose minted_at is more than a second ahead of this port49d's " +
+				"clock: the minting broker's clock runs ahead of this host's, and every token's life shifts by the skew."}),
 		StoreRestoreDetected: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "port49_store_restore_detected_timestamp_seconds",
 			Help: "The Unix time this port49d last found its session store restored from a snapshot, 0 if never: " +
@@ -1088,6 +1099,15 @@ func New(reg prometheus.Registerer) *Metrics {
 	for _, o := range append([]devicecert.Outcome{devicecert.OK, devicecert.Resumed}, devicecert.Outcomes...) {
 		m.TLSHandshakes.WithLabelValues(string(o))
 	}
+	// increase() over a series that first appears at 1 reads 0, so an alarm on
+	// a counter's first event needs the series at 0 before it: every security
+	// kind of inventory_change (bundle.Report.Security) and the
+	// unadmitted_source diagnosis.
+	for _, k := range []string{"device_added", "admission_changed", "address_added", "address_moved", "key_ref_changed",
+		"transport_changed", "platform_changed", "scope_joined", "scope_left"} {
+		m.InventoryChanges.WithLabelValues(k)
+	}
+	m.Unvalidated.WithLabelValues("unadmitted_source")
 	m.ConnectionsShed.WithLabelValues("global_cap") // the alarm's series exists before the first shed
 	reg.MustRegister(m.ConnectionsMax, m.ConnectionsShed)
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
@@ -1098,7 +1118,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.DirectoryPinsSealedPrevious, m.DirectoryPinsUnopenable, m.DirectoryPinsResealLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
-		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.BrokerLogoutsQueueFull, m.RedemptionRestoreUnjudged, m.RedemptionRestoredRefused, m.StoreRestoreDetected,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.BrokerLogoutsQueueFull, m.RedemptionRestoreUnjudged, m.RedemptionRestoredRefused, m.TokenMintedAhead, m.StoreRestoreDetected,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,

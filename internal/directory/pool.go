@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -123,6 +124,7 @@ type serverState struct {
 	gen          int       // bumped each time the pool closes or replaces conn
 	refusedSaid  time.Time // the last bind refusal said (once an hour)
 	faults       int       // consecutive
+	queryFaulted bool      // a query's fault is in faults; only a query's answer clears it, not a health check's pass
 	open         bool      // the breaker
 	openedAt     time.Time // its last probe or opening
 	healthySince time.Time // the first pass since the last fault; zero while faulting
@@ -254,8 +256,9 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 			return Server{}, fmt.Errorf("%w (the last: %s: %v)", ErrUnavailable, srv.Label(), err)
 		}
 		dialErr := err != nil
+		stale := new(atomic.Bool)
 		if err == nil {
-			err = f(bound{ctx: qctx, c: conn})
+			err = f(bound{ctx: qctx, c: conn, stale: stale})
 		} else if ctx.Err() == nil && Refusal(err) {
 			// The refusal is counted and the hold-off stepped as the bind
 			// ended (bindDoneLocked); the query fails over to a server
@@ -266,12 +269,20 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 		}
 		if ctx.Err() != nil {
 			// A caller that went away is no fault. Its own search was
-			// abandoned; the connection stays for every other query.
+			// abandoned; the connection stays for every other query,
+			// unless it is silent (half-open), which is no one's to keep.
+			if stale.Load() {
+				p.dropConn(i, gen)
+			}
 			return Server{}, ctx.Err()
 		}
 		if err != nil && last != nil && qctx.Err() != nil {
 			// The budget ran out inside this later server's turn: it was
-			// never given the time, so it is charged no fault.
+			// never given the time, so it is charged no fault. A
+			// connection that answered nothing is dropped all the same.
+			if stale.Load() {
+				p.dropConn(i, gen)
+			}
 			return Server{}, fmt.Errorf("%w (the last: %v)", ErrUnavailable, err)
 		}
 		switch {
@@ -282,25 +293,55 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 			p.answered(i, "error")
 			return srv, err
 		}
-		p.fault(i, gen, err)
+		p.fault(i, gen, err, stale.Load())
 		p.moveFrom(i)
 		last = fmt.Errorf("%s: %v", srv.Label(), err)
 	}
 }
 
+// unresponsiveError is a Client's search ending at its deadline with nothing
+// read on the connection since the request: the connection is half-open (the
+// peer is gone and no RST or FIN came), and waiting on it again would cost
+// every later query its full query_timeout. It wraps the context's error, so
+// it is still a Fault; the pool closes the connection.
+type unresponsiveError struct{ err error }
+
+func (e unresponsiveError) Error() string {
+	return "no response on the connection before the deadline: " + e.err.Error()
+}
+func (e unresponsiveError) Unwrap() error { return e.err }
+
 // bound is a Client as one query sees it: every search under the query's
-// deadline.
+// deadline. stale is set when a search on it ended unresponsive.
 type bound struct {
-	ctx context.Context
-	c   Client
+	ctx   context.Context
+	c     Client
+	stale *atomic.Bool
 }
 
 func (b bound) Search(req *ldap.SearchRequest) (*ldap.SearchResult, error) {
-	return b.c.SearchContext(b.ctx, req, 0)
+	return b.SearchWithPaging(req, 0)
 }
 
 func (b bound) SearchWithPaging(req *ldap.SearchRequest, pagingSize uint32) (*ldap.SearchResult, error) {
-	return b.c.SearchContext(b.ctx, req, pagingSize)
+	res, err := b.c.SearchContext(b.ctx, req, pagingSize)
+	var u unresponsiveError
+	if b.stale != nil && errors.As(err, &u) {
+		b.stale.Store(true)
+	}
+	return res, err
+}
+
+// dropConn closes i's connection of generation gen, when the pool still holds
+// it: the next query dials a new one.
+func (p *Pool) dropConn(i, gen int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if s := p.srv[i]; s.gen == gen && s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+		s.gen++
+	}
 }
 
 // moveFrom ends the sticky selection of i after a query's fault on it:
@@ -437,7 +478,7 @@ func (p *Pool) answered(i int, outcome string) {
 	p.m.DirectoryQueries.WithLabelValues(p.srv[i].Label(), outcome).Inc()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.srv[i].faults = 0
+	p.srv[i].faults, p.srv[i].queryFaulted = 0, false
 }
 
 // broken reports whether err leaves the connection unusable: a network
@@ -452,8 +493,10 @@ func broken(err error) bool {
 // its stability window restarts, and failure_threshold in a row open its
 // breaker. gen is the generation of the connection the fault came on; an
 // error on a connection the pool has since closed or replaced is no fault
-// of the server's and counts nothing. A health check passes gen -1.
-func (p *Pool) fault(i, gen int, err error) {
+// of the server's and counts nothing. A health check passes gen -1. silent is
+// a query's search that read nothing on the connection before its deadline:
+// the connection is half-open and is dropped too.
+func (p *Pool) fault(i, gen int, err error, silent bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.srv[i]
@@ -461,12 +504,15 @@ func (p *Pool) fault(i, gen int, err error) {
 		return
 	}
 	p.m.DirectoryQueries.WithLabelValues(s.Label(), "fault").Inc()
-	if s.conn != nil && gen >= 0 && broken(err) {
+	if s.conn != nil && gen >= 0 && (silent || broken(err)) {
 		_ = s.conn.Close()
 		s.conn = nil
 		s.gen++
 	}
 	s.faults++
+	if gen >= 0 {
+		s.queryFaulted = true
+	}
 	s.healthySince = time.Time{}
 	if !s.open && s.faults >= p.cfg.FailureThreshold {
 		s.open, s.openedAt = true, p.now()
@@ -749,11 +795,18 @@ func (p *Pool) Check(ctx context.Context) {
 		case err != nil && !dialed && Refusal(err):
 			continue
 		case err != nil:
-			p.fault(i, -1, err)
+			p.fault(i, -1, err, false)
 			continue
 		}
 		p.mu.Lock()
-		s.faults = 0
+		// The check exercised a connection of its own and a query that
+		// searches may not: a half-open or hung-search server passes the
+		// check and would look healthy between queries (audit F1-3). Faults
+		// a query earned stay until a query answers; the check clears only
+		// its own, and any when the breaker was open (a probe's pass closes it).
+		if !s.queryFaulted || s.open {
+			s.faults, s.queryFaulted = 0, false
+		}
 		if s.open {
 			s.open = false
 			p.m.DirectoryServerUp.WithLabelValues(s.Label()).Set(1)

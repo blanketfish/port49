@@ -2525,8 +2525,11 @@ changing, `transport_changed` with `"from"` and `"to"` for a device's `transport
 `key_ref_changed` is then not also written), `platform_changed` with `"from"` and `"to"` for a
 device's `platform` changing (decision 56 ruling 6: it moves the device between platform-keyed
 scopes and rule sets, so it can lift a deny), `admission_changed` with `"to": "admitted"` for a
-device already in inventory becoming admitted, and `device_added` with `"to": "admitted"` for a device added and admitted, whose
-addresses are new capture targets. Its `device` block names the device. It is what makes a
+device already in inventory becoming admitted, `device_added` with `"to": "admitted"` for a device added and admitted, whose
+addresses are new capture targets, and `address_moved` with `"address"`, `"from"` (the device
+that held it) and `"to"` (the device that holds it now) for an address that left one device and
+landed on another, or on a new name, in the same swap (decision 61; the same swap still writes the
+`address_added` of the device that gained it, or the `device_added` of a new name). Its `device` block names the device. It is what makes a
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
 `port49_inventory_changes_total{kind}` is its alarm.
 
@@ -6045,6 +6048,12 @@ Mitigations, designed in rather than documented afterward:
   already in inventory and each device joining or leaving a scope with `security_log: true`.
   A device's `key_ref` changing, and a device becoming admitted, are recorded the same way: a
   record's pin can move a device onto a weaker or a shared key.
+- An address that leaves one device and lands on another in one swap is an `address_moved`
+  record of its own, and the page alert `port49_inventory_address_moved` (decision 61). On an
+  RFC 8907 device whose key comes from a CIDR or attribute key group, port49d names a
+  connection by its source address alone, so the move lets the new name's grants be used from
+  hardware that held another's. A move across two swaps is not seen, and neither is one a restart
+  applies: a restart, including a Helm upgrade that rolls the pods, is not a swap.
 - A scope MUST be able to pin a device set explicitly instead of by attribute:
   `match: {name: [leaf-01, leaf-02]}` reads the device's inventory name, as `platform` reads
   its platform (§5.5).
@@ -6348,6 +6357,8 @@ It says, when shedding begins (the first shed after a minute with none): `port49
 TACACS+ connection slots (limits.max_connections) are in use; each new connection is reset at
 Accept and the device tries its next server`, and while it lasts, at most once a minute:
 `port49d: still shedding: M connections reset at Accept in the last minute; K of N slots in use`, K being the slots held when it is said.
+
+**A token minted ahead of port49d's clock.** When a token lookup finds a token whose `minted_at` is more than a second ahead of port49d's clock (a broker clock running ahead; design §8), port49d counts it in `port49_token_minted_ahead_total` and says, at most once every 10 minutes: `port49d: clock: a token was minted <N> ahead of this host's clock: the broker's clock runs ahead of this host's, ...`. The line is a process log line, not a decision record, and carries no reason code. A broker clock behind is not seen: its tokens are dead on arrival and never reach a lookup.
 
 **A key secret rewritten in place.** At every SIGHUP, after every swap, and every 30 s, port49d reads each held `file:` key reference again (decision 54 ruling 11). For a file whose bytes differ from those it holds it says, per version that names it: `port49d: keys.<ref> version <n>: <path> has changed since port49d read it; port49d keeps the secret it read, and a restart would take the new one on that replica alone; a version's secret never changes (§10): put the new secret in a new file under a new version`. For one it can no longer read: `port49d: keys.<ref> version <n>: <path> can no longer be read (<error>); port49d keeps the secret it read, but a restart will refuse to start until the file is back or the policy no longer names the version`. Each line is said when first seen, then at most every 10 minutes per reference, and at every SIGHUP. `port49_key_secret_files_changed`, a gauge with no label, is the number of key versions whose held file is in either state. Neither refuses a reload. An `env:` reference is never re-read: a variable cannot change in a running process.
 
@@ -12055,6 +12066,50 @@ about the order of the replies.
    asked twice, a denied command run, a connection the baseline arm did not open, a server-dead
    mark or a fall to local on the fixed arm on NX-OS, Junos or EOS reopens this decision: the remedy is a platform-scoped
    release of replies in request order, mandatory on NX-OS.
+
+**60. A person's queued mints go out as one request, and Mint has one deadline (fallacies audit F2-3,
+F1-5; Ryan 2026-11-11).** The agent holds one connection and `port49 token` asks for one device per call, so
+a run of 20 parallel calls against a broker that takes 2 seconds a mint queued them one exchange at a time
+and the tail failed "busy for 30s" for devices the broker would have permitted. The agent now sends the
+mints queued behind the wire as one request of up to the broker's `batch_max` devices (from `/v1/config`).
+Only mints with the same `enable` and `ttl`, no per-login proof (a proof covers one device) and no device
+named twice ride together. Each caller gets its own device's item or its own refusal; a failure of the whole
+request (a refused session, an outage) is every caller's. A batch is one request under one Idempotency-Key
+whose body does not change across its retries, and the broker keeps one record per device under a key, so a
+lost answer replays what was minted and no device is minted twice. The wire is given back while a batch
+waits on `idempotency_in_progress`, so a revocation never waits behind a sleeping mint. Queued mints are served
+first-come, so a revocation sent behind them waits for the exchange in flight and the ⌈queued / `batch_max`⌉
+batches ahead of it (31 queued with `batch_max` 10: four batches), and no longer than the one-at-a-time
+agent made it wait. When a batch answer carries `per_login_mfa_required` for several devices, the broker's one
+challenge goes to the first such caller and the others are sent again alone, each to be given its own. A device
+name the broker would refuse is refused for its own caller before queuing. A device whose caller has left
+(cancelled or past its deadline) is still minted if its batch was already sent, for the others' sake; that
+token goes unused and the person can revoke it. Mint is bounded by one deadline of `socketTimeout` minus 10 seconds
+(85 s), covering the wait for the connection, every post and every `idempotency_in_progress` wait; its error
+names the wait it was in and is an outage the caller may retry, so the socket client's generic timeout is
+never what a person sees. No new setting, reason code or log kind.
+
+**61. An address that moves between devices is detected, not blocked (fallacies audit S0).** On
+an RFC 8907 (`transport: tcp`) device whose key comes from a CIDR or attribute key group, port49d
+names a connection by its source address and the shared key admits the whole range, so whoever
+writes the source of truth can put device A's name on device B's address and use A's grants from
+B. Ruling: detection only. (1) `address_moved` is a security kind of `inventory_change`: in one
+swap, an address held by one device in the old inventory is held by a different name in the new one
+(a device already in inventory, or a new name). The record's `device` is the device that holds it
+now, and `change` carries `address`, `from` (the old holder) and `to`. No token, key or secret.
+(2) The same swap still writes `address_added` for the device that gained the address, or
+`device_added` where the holder is a new name (no ticket if that device is refused or quarantined,
+since that `device_added` is not a security change); `address_removed` is not a record. So
+`port49_inventory_privilege_changes` and every dashboard on `address_added` stay true; the move
+adds a record and a count, it replaces none.
+(3) `port49_inventory_changes_total{kind="address_moved"}` counts it. (4) The page alert
+`port49_inventory_address_moved` fires on any increase over 15m. Onboarding (a new device on a
+fresh address) and an address added to a device nobody held write no `address_moved`, so the page
+does not fire on routine growth. (5) Out of scope: a move across two swaps, removed in one and
+added in the next, and a move a restart applies: a restart, including a Helm upgrade that rolls the
+pods, is not a swap and is not seen, since start runs no diff. (6) No mint hold or quarantine, and no binding of a token to an address: an
+edit made before the mint defeats the binding, and a hold delays a legitimate RMA. Crown-jewel
+devices should use `transport: tls` or a name pin to a per-device key.
 
 ---
 

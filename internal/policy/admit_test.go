@@ -110,6 +110,7 @@ func TestKeyGroupLoadErrors(t *testing.T) {
 		{"no match", "  - {key_ref: k}\n", "matches on neither name, cidr nor attributes"},
 		{"both terms", "  - {match: {cidr: 10.0.0.0/8, attributes: {a: b}}, key_ref: k}\n", "exactly one of name, cidr or attributes"},
 		{"host bits", "  - {match: {cidr: 10.0.0.1/8}, key_ref: k}\n", "host bits"},
+		{"a mapped cidr", "  - {match: {cidr: '::ffff:10.0.0.0/104'}, key_ref: k}\n", "IPv4 form"},
 		{"one prefix twice", "  - {match: {cidr: 10.0.0.0/8}, key_ref: a}\n  - {match: {cidr: 10.0.0.0/8}, key_ref: b}\n",
 			"tie for every device"},
 		{"one attribute set twice", "  - {match: {attributes: {a: b}}, key_ref: a}\n  - {match: {attributes: {a: b}}, key_ref: b}\n",
