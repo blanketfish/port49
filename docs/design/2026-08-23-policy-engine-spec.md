@@ -11995,12 +11995,16 @@ refused at load, the message naming the role and saying to rename it, from one l
 `internal/platform`. The match is exact; `Baseline` and `baseline_ops` are other names.
 
 **59. Sessions on one single-connect connection are answered at once (Ryan 2026-11-11; the
-fallacies audit's F2-1).** port49d's read loop ran each packet's work inline: the
-authentication failure delay (to `auth_failure_delay_max`, 2s) and the store's round trips (to
-`packet_deadline`, 2s). Every RFC 9887 reference configuration turns single-connection on, and
-port49 offers it to NX-OS over TLS (decision 50 ruling 20), so every session of such a device
-queued behind one slow or failing packet; two FAILs ahead of a command authorization pass vEOS's
-5.0s reply timeout (§15 L13), and the device marks port49 dead.
+fallacies audit's F2-1). Provisional on L94.** port49d's read loop ran each packet's work inline:
+the authentication failure delay (to `auth_failure_delay_max`, 2s) and the store's round trips
+(to `packet_deadline`, 2s). Every RFC 9887 reference configuration turns single-connection on,
+and port49 offers it to NX-OS over TLS (decision 50 ruling 20), so every session of such a device
+queued behind one slow or failing packet. Each delay counted from its packet's dispatch, so a
+command authorization queued behind three FAILs (or two and a slow store answer) waited past
+vEOS's 5.0s reply timeout (§15 L13). What a device does then is derived from L13, not measured
+with packets queued: it would treat port49 as unreachable and fall to its next server or method.
+RFC 8907 §4.3 lets a client multiplex sessions on a single-connect connection and says nothing
+about the order of the replies.
 
 1. **Lanes.** On a single-connect connection, packets of different `session_id`s are dispatched
    at once, each session in its own lane; the packets of one session are answered strictly in
@@ -12008,8 +12012,8 @@ queued behind one slow or failing packet; two FAILs ahead of a command authoriza
    dispatch (admission, the quarantine, the TLS recheck, key validation, the `seq_no` 255 rule)
    still runs in it, packet by packet, as before. Each reply goes out in one write under the
    connection's write lock, so replies never interleave. Replies of different sessions may leave
-   in another order than their requests came (RFC 8907 §4.3: the client tells sessions apart by
-   `session_id`). A connection that is not single-connect has one session and is served inline,
+   in another order than their requests came; whether each platform takes that is L94. A
+   connection that is not single-connect has one session and is served inline,
    unchanged.
 2. **The bound is 16 packets in flight per connection** (`maxInFlight`): read and not yet
    answered. Past it the read loop stops reading until one is answered; the device's next packet
@@ -12032,9 +12036,12 @@ queued behind one slow or failing packet; two FAILs ahead of a command authoriza
    written. Any other close (the device's, an idle close) waits for owed replies first. Every
    lane has ended before the connection is counted closed, and a panic in a lane is recovered,
    counted and logged as a connection's is.
-5. **Unmeasured.** No device has been run against it. Whether each platform takes replies to its
-   sessions out of request order, and the queued-behind-FAIL case under L13, are not measured;
-   the audit report lists the run.
+5. **Provisional on L94.** No device has been run against it. Whether each platform takes
+   replies to its sessions out of request order, and a command's latency behind queued FAILs,
+   are L94's cells, run on the fixed arm and the baseline arm. A command lost, run unasked or
+   asked twice, a denied command run, a second connection, a server-dead mark or a fall to local
+   on the fixed arm on NX-OS, Junos or EOS reopens this decision: the remedy is a platform-scoped
+   release of replies in request order, mandatory on NX-OS.
 
 ---
 
@@ -12837,6 +12844,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L91** | `port49 hwkey status` and `setup` on a real YubiKey, on the SER8 (needs Ryan at the SER8, where he is away long-term from 2026-11-02; the agent never runs ykman, and nothing writes to the token). (a) `status` before setup, with slots 9a and 9c made as L86's runbook made them and the config's `issued_key`/`touch_key` removed: PASS iff exit 1, the config checks FAIL and the slot checks pass, no PIN is asked, and no serial is printed. (b) `setup`: PASS iff exit 0, only `issued_key` and `touch_key` change in the config, and `ykman piv info` (Ryan types it) reads the same before and after. (c) Whether libykcs11 lists a slot's key with no certificate in it, if the token has such a slot: an observation, recorded as "no such slot" otherwise. (d) `status` after setup, with an agent logged in: PASS iff exit 0 and the agent check reads `touch_key: true`. (e) `status --json`: PASS iff the keys are snake_case and neither the serial nor the PIN appears. | Decision 55 rulings 16 and 17; plan 13's "set up your key" page | YubiKey 5 (firmware operator-reported), libykcs11 (version recorded), SER8 | open |
 | **L92** | SR Linux over RFC 9887 (L88 h). The schema has `system aaa server-group server tls-profile` (`tree flat system aaa server-group`, SR Linux 26.7.2), and `system tls profile` takes key, certificate and trust-anchor. (a) The port and the unencrypted flag with a profile set. (b) Whether the client sends a ClientHello (L88 saw plain TACACS+ on port 300 with a profile set and a CPM entry for replies from port 300; the default CPM entry 110 accepts only source port 49). (c) Server-certificate checking and client-certificate enrolment. (d) L88 cells a, b, d, e, f over RFC 9887. Needs an SR Linux enrolment dialect for L73. | Design §12; RFC 9887 | SR Linux 26.7.2 | open; one L88 observation in `tests/lab/results/L88-nokia_srlinux-tls.md` |
 | **L93** | IOS XR over plain TCP under the reference configuration: whether an authentication ERROR is final. PASS iff a break-glass login after an authentication ERROR is refused (final), or the observation is recorded either way. | The device README's XR ERROR row | XRd (26.1.1) | open |
+| **L94** | Replies to the sessions of one single-connect connection, sent out of request order, and the latency of a command queued behind failing logins (L13's timeouts with more than one packet in flight). Order is graded from port49's decision records (`authorize_command`, `account`, `redeem`), since `session_id` is inside the TLS stream; each cell runs on exactly one TCP connection, on the fixed arm and on the baseline arm (port49d before decision 59). C1 two CLI sessions interleaving 20 commands each: PASS iff every command is asked once, denies hold, permitted commands run, accounting START and STOP arrive, and the device debug has no server-dead mark or `ssl_read` error. C2 a FAIL forced 1.5 s behind a later session's commands: PASS iff those commands complete in under 1 s and the failed login reports an authentication failure (no fall-through, no server-dead). C3 three concurrent FAILs while a command runs every 250 ms: PASS iff every command's latency is under 1 s and inside the platform's L13 timeout, and every FAIL arrives as FAIL. C4 (NX-OS) accounting replies held 1.5 s so the next command's authorization reply leaves first: PASS iff C1's conditions hold. C5 a port49d restart while a session is in its failure delay: PASS iff the device reconnects and no command runs unasked. | Decision 59 (sessions answered at once); the devices page's single-connection section | NX-OS 10.6(2)F N9Kv over TLS, offered and with `single-connection`; Junos (vJunos-router, then vSRX) over TLS; EOS over TLS; IOS-XE C8000V over TLS; IOS XR XRd over TLS | open |
 
 Every cell of L82–L85 carries its own PASS condition, so a row closes when every cell has a PASS or a FAIL. A FAIL is a measured answer, not an open row. A README names a mechanism only where every one of its cells is PASS.
 

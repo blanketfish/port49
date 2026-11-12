@@ -587,3 +587,9 @@ Results notes: [L88-nokia_srlinux-tls.md](https://github.com/blanketfish/port49/
 **Open.** IOS XR over plain TCP under the reference configuration: whether an authentication ERROR is final.
 
 No results note yet.
+
+### [L94](#l94) {#l94}
+
+**Open.** Replies to the sessions of one single-connect connection, sent out of request order, and the latency of a command queued behind failing logins ([L13](#l13)'s timeouts with more than one packet in flight).
+
+No results note yet.

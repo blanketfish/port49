@@ -51,7 +51,7 @@ At most 16 packets on one connection are in progress at a time. A 17th waits, un
 If a device's packet breaks the protocol (a CONTINUE for a session it never started, more than 64 unfinished logins, a `seq_no` of 255), port49d closes the connection at once, with the record and backoff it always has. Replies still owed to the device's other sessions on that connection are not sent, so those sessions time out on the device as they would after any close.
 
 !!! warning "Unmeasured: replies out of order, and queued failures"
-    With sessions answered at once, a reply can leave before the reply to a request the device sent earlier, on another session. RFC 8907 has the device tell sessions apart by `session_id`; whether each platform does is not measured. Nor is a device's reply timeout measured with several failing logins queued on one connection (lab register entry [L13](../../reference/lab-register.md#l13) measured one packet at a time).
+    With sessions answered at once, a reply can leave before the reply to a request the device sent earlier, on another session. RFC 8907 lets a device share one connection among sessions and says nothing about the order of replies; whether each platform takes them out of order is not measured. Nor is a command's latency with several failing logins queued on one connection ([L13](../../reference/lab-register.md#l13) measured one packet at a time). Both are lab register entry [L94](../../reference/lab-register.md#l94), open.
 
 ## Reference configurations
 
