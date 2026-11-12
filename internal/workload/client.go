@@ -700,7 +700,9 @@ func retriable(status int, e api.Error) bool {
 
 func retryAfter(h http.Header) time.Duration {
 	if s, err := strconv.Atoi(h.Get("Retry-After")); err == nil && s > 0 {
-		return min(time.Duration(s)*time.Second, time.Minute)
+		// Spread the broker's figure too: a fleet refused together by one
+		// blip would otherwise retry in step. The cap holds after the spread.
+		return min(jitter(min(time.Duration(s)*time.Second, time.Minute)), time.Minute)
 	}
 	return jitter(5 * time.Second)
 }
