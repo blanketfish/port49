@@ -278,6 +278,22 @@ func l94C2Timing(gaps []time.Duration, delay time.Duration) string {
 	return "ok"
 }
 
+// l94C2Valid is whether c2 measured anything: its last try's timing must be
+// "ok". Still "early" after tries plays, or "none", is INVALID on either
+// arm: the cell did not put B's requests inside A's delay, so it can neither
+// pass nor fail.
+func l94C2Valid(timing string, tries int) error {
+	switch timing {
+	case "ok":
+		return nil
+	case "early":
+		return fmt.Errorf("INVALID: c2: in %d tries B's requests reached port49 before A's, so none was inside A's delay", tries)
+	case "none":
+		return errors.New("INVALID: c2: none of B's commands reached port49")
+	}
+	return fmt.Errorf("INVALID: c2: timing %q", timing)
+}
+
 // l94Outcome is one A login's outcome, as the CLI saw it.
 type l94Outcome struct {
 	Took       float64 `json:"took_s"`

@@ -99,6 +99,20 @@ func l94Rec(ts time.Time, ev, verdict, vec string) map[string]any {
 
 // c2's order is read from the records' ts: B's authorize_command against A's
 // FAIL redeem, which is recorded once the delay has passed.
+// H2: c2 whose last try's timing is not "ok" measured nothing: INVALID, on
+// either arm, never a pass.
+func TestL94C2TimingThatNeverSettlesIsInvalid(t *testing.T) {
+	if err := l94C2Valid("ok", 1); err != nil {
+		t.Errorf("ok: %v", err)
+	}
+	for _, timing := range []string{"early", "none", ""} {
+		err := l94C2Valid(timing, l94C2Tries)
+		if err == nil || !strings.HasPrefix(err.Error(), "INVALID") {
+			t.Errorf("%q: %v, want INVALID", timing, err)
+		}
+	}
+}
+
 func TestL94GapsAreReadFromRecordTimes(t *testing.T) {
 	t0 := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
 	recs := []map[string]any{

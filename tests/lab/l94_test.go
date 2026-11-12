@@ -348,7 +348,9 @@ func TestL94(t *testing.T) {
 				case "c2":
 					qc := openB(0)
 					lead := l94C2Lead
+					timing, tries := "", 0
 					for try := 1; try <= l94C2Tries; try++ {
+						tries = try
 						if try > 1 {
 							staleToks[0] = stale()
 						}
@@ -368,12 +370,17 @@ func TestL94(t *testing.T) {
 						})
 						var ok bool
 						gaps, ok = l94Gaps(q.run.Platform, l94Events(recs), []string{permitted, d})
-						timing := l94C2Timing(gaps, l94Delay)
+						timing = l94C2Timing(gaps, l94Delay)
 						fmt.Fprintf(&sum, "try %d: lead=%s fail_recorded=%v timing=%s gaps=%v\n", try, lead, ok, timing, gaps)
 						if timing != "early" {
 							break
 						}
 						lead += 400 * time.Millisecond
+					}
+					// A c2 that never put B inside A's delay measured nothing.
+					if err := l94C2Valid(timing, tries); err != nil {
+						qc.Close()
+						t.Fatal(err)
 					}
 					// B's next command, on the same connection.
 					add(l94Type(l, qc, 0, permitted))
