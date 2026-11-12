@@ -1,0 +1,103 @@
+L94, arm fixed, cell c3, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version | no-more" took=1.00s denied=false err=false at=09:48:23.532
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:24.548
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:24.798
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:25.049
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:25.300
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:25.551
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:25.802
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:26.053
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:26.304
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:26.555
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:26.806
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:27.057
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:27.309
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:27.560
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:27.810
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:28.060
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:28.311
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:28.562
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:28.814
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:29.064
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:48:29.316
+debug: 453 device log lines, kept 170, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 09:48:21.476229 authd_config_read: old seq 0 and new one 59
+port49 read (authorize_command ts less typed):
+tls connections: 9, most open at once: 5
+  conn port=38434 syn=09:48:23.254 hold=0.01s end=server-fin
+  conn port=38444 syn=09:48:23.630 hold=2.02s end=server-fin
+  conn port=38454 syn=09:48:23.646 hold=open end=open
+  conn port=38462 syn=09:48:23.653 hold=2.03s end=server-fin
+  conn port=38468 syn=09:48:23.668 hold=2.01s end=server-fin
+  conn port=38474 syn=09:48:24.578 hold=0.01s end=server-fin
+  conn port=48852 syn=09:48:27.104 hold=2.02s end=server-fin
+  conn port=48858 syn=09:48:27.118 hold=2.02s end=server-fin
+  conn port=48872 syn=09:48:27.127 hold=2.01s end=server-fin
+<LONG> delta: 0
+refused-credential login 1: took=10.59s auth_failed=true logged_in=false err=""
+refused-credential login 2: took=10.60s auth_failed=true logged_in=false err=""
+refused-credential login 3: took=10.62s auth_failed=true logged_in=false err=""
+port49 records:
+  09:48:23.263 redeem permit
+  09:48:23.264 authorize_session permit
+  09:48:23.654 account
+  09:48:23.654 account
+  09:48:23.655 account
+  09:48:23.656 account
+  09:48:23.657 account
+  09:48:23.657 account
+  09:48:23.658 account
+  09:48:23.659 account
+  09:48:23.659 account
+  09:48:23.660 account
+  09:48:23.661 account
+  09:48:24.588 redeem permit
+  09:48:24.588 authorize_session permit
+  09:48:23.647 redeem deny
+  09:48:23.679 redeem deny
+  09:48:23.682 redeem deny
+  09:48:28.671 account
+  09:48:28.672 account
+  09:48:28.673 account
+  09:48:28.673 account
+  09:48:28.674 account
+  09:48:28.675 account
+  09:48:28.676 account
+  09:48:28.676 account
+  09:48:28.677 account
+  09:48:28.677 account
+  09:48:28.678 account
+  09:48:28.678 account
+  09:48:28.679 account
+  09:48:28.679 account
+  09:48:28.680 account
+  09:48:28.681 account
+  09:48:28.682 account
+  09:48:28.682 account
+  09:48:28.683 account
+  09:48:28.684 account
+  09:48:28.684 account
+  09:48:28.685 account
+  09:48:28.686 account
+  09:48:28.686 account
+  09:48:27.118 redeem deny
+  09:48:27.131 redeem deny
+  09:48:27.141 redeem deny
+  09:48:33.720 account
+  09:48:33.722 account
+  09:48:33.723 account
+  09:48:38.747 account
+STOP: c3: account flags/task_id start/1 recorded 3 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/1 recorded 4 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/10 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/2 recorded 4 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/3 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/4 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/5 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/6 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/7 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/8 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: account flags/task_id stop/9 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: 9 TLS connection(s), 5 open at once: the cell must hold exactly one
+

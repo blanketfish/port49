@@ -1,0 +1,78 @@
+L94, arm fixed, cell c5, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version | no-more" took=0.75s denied=false err=false at=09:49:14.281
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:15.533
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:16.284
+  s0 "show system users"      took=0.25s denied=true err=false at=09:49:17.036
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:17.788
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:18.539
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:19.291
+  s0 "show system users"      took=0.25s denied=true err=false at=09:49:20.042
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:21.294
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:22.046
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:22.797
+  s0 "show system users"      took=0.25s denied=true err=false at=09:49:23.548
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:24.300
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:25.051
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:49:25.804
+  s0 "show system users"      took=0.25s denied=true err=false at=09:49:26.556
+debug: 339 device log lines, kept 172, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 09:49:11.686864 authd_config_read: old seq 0 and new one 61
+port49 read (authorize_command ts less typed):
+tls connections: 6, most open at once: 2
+  conn port=48552 syn=09:49:13.509 hold=0.01s end=server-fin
+  conn port=48560 syn=09:49:13.950 hold=6.84s end=server-fin
+  conn port=42990 syn=09:49:20.328 hold=0.47s end=server-fin
+  conn port=42992 syn=09:49:20.796 hold=0.00s end=server-rst
+  conn port=42996 syn=09:49:21.195 hold=2.02s end=server-fin
+  conn port=42998 syn=09:49:24.026 hold=open end=open
+<LONG> delta: 0
+refused-credential login 1: took=7.93s auth_failed=true logged_in=false err=""
+restart window: stop=09:49:20.793 up=09:49:21.049
+port49 records:
+  09:49:13.517 redeem permit
+  09:49:13.518 authorize_session permit
+  09:49:13.963 account
+  09:49:13.964 account
+  09:49:13.965 account
+  09:49:13.965 account
+  09:49:13.966 account
+  09:49:13.967 account
+  09:49:13.967 account
+  09:49:13.968 account
+  09:49:13.970 account
+  09:49:13.970 account
+  09:49:13.971 account
+  09:49:18.992 account
+  09:49:18.993 account
+  09:49:18.994 account
+  09:49:18.995 account
+  09:49:18.997 account
+  09:49:18.998 account
+  09:49:18.998 account
+  09:49:18.999 account
+  09:49:19.000 account
+  09:49:19.001 account
+  09:49:19.002 account
+  09:49:20.336 redeem deny
+  09:49:21.208 redeem deny
+  09:49:24.038 account
+  09:49:24.040 account
+  09:49:24.040 account
+  09:49:24.042 account
+  09:49:29.056 account
+  09:49:29.058 account
+  09:49:29.059 account
+  09:49:29.061 account
+STOP: c5: account flags/task_id start/1 recorded 3 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/1 recorded 4 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/10 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/2 recorded 4 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/3 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/4 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/5 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/6 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/7 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/8 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c5: account flags/task_id stop/9 recorded 2 times: a duplicate or retransmitted accounting record
+
