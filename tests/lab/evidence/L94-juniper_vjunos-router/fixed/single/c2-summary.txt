@@ -1,40 +1,47 @@
 L94, arm fixed, cell c2, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
 port49d: port49d <LONG> vcs.modified=false tags=""
-  s0 "show version | no-more" took=0.75s denied=false err=false at=10:36:57.269
-  s0 "show system users"      took=0.25s denied=true err=false at=10:36:58.021
-try 1: lead=400ms fail_recorded=true timing=ok gaps=[415ms]
-  s0 "show version | no-more" took=0.25s denied=false err=false at=10:37:06.023
-debug: 295 device log lines, kept 169, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
-  suspect: Nov 12 10:36:53.848887 authd_config_read: old seq 0 and new one 59
+  s0 "show version | no-more" took=0.75s denied=false err=false at=10:44:05.642
+  s0 "show system users"      took=0.25s denied=true err=false at=10:44:06.393
+try 1: lead=400ms fail_recorded=true timing=ok gaps=[416ms]
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:15.209
+debug: 296 device log lines, kept 171, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 10:44:03.113532 authd_config_read: old seq 0 and new one 58
 port49 read (authorize_command ts less typed):
 tls connections: 5, most open at once: 2
-  conn port=48088 syn=10:36:56.571 hold=0.01s end=server-fin
-  conn port=36098 syn=10:36:56.889 hold=2.01s end=server-fin
-  conn port=36100 syn=10:36:57.305 hold=0.01s end=server-fin
-  conn port=36114 syn=10:36:58.989 hold=2.02s end=server-fin
-  conn port=36116 syn=10:36:59.619 hold=open end=open
+  conn port=54352 syn=10:44:04.955 hold=0.01s end=server-fin
+  conn port=54356 syn=10:44:05.262 hold=2.01s end=server-fin
+  conn port=54370 syn=10:44:05.671 hold=0.01s end=server-fin
+  conn port=54386 syn=10:44:06.097 hold=open end=open
+  conn port=46642 syn=10:44:08.190 hold=2.01s end=server-fin
 <LONG> delta: 0
-refused-credential login 1: took=9.17s auth_failed=true logged_in=false err=""
+refused-credential login 1: took=9.98s auth_failed=true logged_in=false err=""
 port49 records:
-  10:36:57.312 redeem permit
-  10:36:57.313 authorize_session permit
-  10:36:56.897 redeem deny
-  10:36:59.629 account
-  10:36:59.630 account
-  10:36:59.631 account
-  10:36:59.631 account
-  10:36:59.632 account
-  10:36:59.632 account
-  10:36:59.633 account
-  10:36:59.633 account
-  10:36:59.005 redeem deny
-  10:37:04.655 account
-  10:37:04.655 account
-  10:37:04.656 account
-  10:37:04.657 account
-  10:37:04.658 account
-  10:37:04.659 account
-  10:37:09.685 account
-  10:37:09.686 account
+  10:44:05.685 redeem permit
+  10:44:05.686 authorize_session permit
+  10:44:06.105 account
+  10:44:06.106 account
+  10:44:06.107 account
+  10:44:06.108 account
+  10:44:06.109 account
+  10:44:06.110 account
+  10:44:06.111 account
+  10:44:06.111 account
+  10:44:06.112 account
+  10:44:06.112 account
+  10:44:06.113 account
+  10:44:06.113 account
+  10:44:06.114 account
+  10:44:06.114 account
+  10:44:05.269 redeem deny
+  10:44:08.201 redeem deny
+  10:44:11.128 account
+  10:44:11.129 account
+  10:44:11.130 account
+  10:44:11.131 account
+  10:44:11.133 account
+  10:44:11.133 account
+  10:44:11.134 account
+  10:44:16.158 account
+  10:44:16.159 account
 FINDING: c2: device opens a connection per login (baseline 5, fixed 5)
 
