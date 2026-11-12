@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -1551,7 +1552,7 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 	cellConn := l73FakePcap(48328, l73TLSPort, []l73FakeSeg{
 		{true, tcpSYN, 1000, nil, at("09:46:48.152")}, {false, tcpSYN | tcpACK, 5000, nil, at("09:46:48.153")},
 		{true, tcpACK, 1001, nil, at("09:46:48.154")}})
-	if _, err := l94OlderThanCapture(cellConn, l73TDevice, l73TLSPort, clean); err != nil {
+	if _, err := l94OlderThanCapture(cellConn, l73TDevice, l73TLSPort, clean, nil); err != nil {
 		t.Errorf("a captured SYN: %v", err)
 	}
 	orphan := func(port uint16, segs ...l73FakeSeg) []byte { return l73FakePcap(port, l73TLSPort, segs) }
@@ -1561,26 +1562,26 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 		"device's packet after": orphan(41000, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{true, tcpACK | tcpPSH, 7000, nil, at("09:46:46.200")}),
 		"server's packet after": orphan(41000, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{false, tcpACK, 9000, nil, at("09:46:46.000")}),
 	} {
-		_, err := l94OlderThanCapture(l94Splice(cellConn, o), l73TDevice, l73TLSPort, clean)
+		_, err := l94OlderThanCapture(l94Splice(cellConn, o), l73TDevice, l73TLSPort, clean, nil)
 		if err == nil || !strings.Contains(err.Error(), "INVALID: a connection older than the capture") || !strings.Contains(err.Error(), "device port 41000") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
 	// Wholly before the clean point: ignored, as the gauge's 0 says it ended.
 	before := orphan(41002, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{true, tcpFIN | tcpACK, 7000, nil, at("09:46:45.900")})
-	if _, err := l94OlderThanCapture(l94Splice(cellConn, before), l73TDevice, l73TLSPort, clean); err != nil {
+	if _, err := l94OlderThanCapture(l94Splice(cellConn, before), l73TDevice, l73TLSPort, clean, nil); err != nil {
 		t.Errorf("an old flow wholly before the clean point: %v", err)
 	}
 	// Another server port is not the cell's TLS server.
 	other := l73FakePcap(41004, 49, []l73FakeSeg{{true, tcpACK, 7000, nil, at("09:46:47.000")}})
-	if _, err := l94OlderThanCapture(l94Splice(cellConn, other), l73TDevice, l73TLSPort, clean); err != nil {
+	if _, err := l94OlderThanCapture(l94Splice(cellConn, other), l73TDevice, l73TLSPort, clean, nil); err != nil {
 		t.Errorf("port 49: %v", err)
 	}
 	// A reused source port: the old flow's packets before the clean point,
 	// then a new connection's captured SYN on the same port: not an orphan.
 	reused := orphan(41006, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")},
 		l73FakeSeg{true, tcpSYN, 8000, nil, at("09:46:47.000")}, l73FakeSeg{false, tcpSYN | tcpACK, 9000, nil, at("09:46:47.001")})
-	if _, err := l94OlderThanCapture(reused, l73TDevice, l73TLSPort, clean); err != nil {
+	if _, err := l94OlderThanCapture(reused, l73TDevice, l73TLSPort, clean, nil); err != nil {
 		t.Errorf("a reused port with its SYN captured: %v", err)
 	}
 	// Stale: the server's only answer after the clean point is a RST, with
@@ -1589,8 +1590,8 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 	// 2026-11-12: a c2 connection port49d's stop left open on the device).
 	// A finding, not INVALID; the cell grades on.
 	rst := orphan(41008, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.100")})
-	stale, err := l94OlderThanCapture(rst, l73TDevice, l73TLSPort, clean)
-	want := "device port 41008 wrote on a connection from before the capture at 09:46:45.500; the server reset it (no socket): the device carried a stale connection into the cell"
+	stale, err := l94OlderThanCapture(rst, l73TDevice, l73TLSPort, clean, nil)
+	want := "device port 41008 sent a packet on a connection from before the capture at 09:46:45.500; the server reset it (no socket): the device carried a stale connection into the cell"
 	if err != nil || !slices.Equal(stale, []string{want}) {
 		t.Errorf("a server RST alone after the clean point: stale %q err %v", stale, err)
 	}
@@ -1599,10 +1600,19 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 	// allowed.
 	ceos := orphan(41012, l73FakeSeg{false, tcpACK, 9000, nil, at("09:46:45.600")},
 		l73FakeSeg{true, tcpACK | tcpPSH, 7000, []byte{1, 2, 3}, at("09:46:46.561")}, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.561")})
-	stale, err = l94OlderThanCapture(l94Splice(cellConn, ceos), l73TDevice, l73TLSPort, clean)
-	want = "device port 41012 wrote on a connection from before the capture at 09:46:46.561; the server reset it (no socket): the device carried a stale connection into the cell"
+	stale, err = l94OlderThanCapture(l94Splice(cellConn, ceos), l73TDevice, l73TLSPort, clean, nil)
+	want = "device port 41012 sent a packet on a connection from before the capture at 09:46:46.561; the server reset it (no socket): the device carried a stale connection into the cell"
 	if err != nil || !slices.Equal(stale, []string{want}) {
 		t.Errorf("cEOS's stale write: stale %q err %v", stale, err)
+	}
+	// The same shape while port49 refused a connection in the cell: port49
+	// may have accepted the pre-capture SYN after the 0 read and reset it
+	// itself (reset at Accept: shed, held, declined). INVALID.
+	refused := []string{`port49_connections_shed_total{reason="global_cap"} +1`}
+	stale, err = l94OlderThanCapture(l94Splice(cellConn, ceos), l73TDevice, l73TLSPort, clean, refused)
+	if err == nil || stale != nil || !strings.Contains(err.Error(), "device port 41012") ||
+		!strings.Contains(err.Error(), `port49 refused connections in the cell (port49_connections_shed_total{reason="global_cap"} +1)`) {
+		t.Errorf("a reset while port49 refused: stale %q err %v", stale, err)
 	}
 	// Anything else from the server is a socket port49 had: INVALID.
 	dev := l73FakeSeg{true, tcpACK | tcpPSH, 7000, []byte{1, 2, 3}, at("09:46:46.500")}
@@ -1616,7 +1626,7 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 		"server FIN after the clean": orphan(41014, dev, l73FakeSeg{false, tcpFIN | tcpACK, 9000, nil, at("09:46:46.501")}),
 		"server RST and then ACK":    orphan(41014, dev, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.501")}, l73FakeSeg{false, tcpACK, 9000, nil, at("09:46:46.502")}),
 	} {
-		stale, err := l94OlderThanCapture(l94Splice(cellConn, o), l73TDevice, l73TLSPort, clean)
+		stale, err := l94OlderThanCapture(l94Splice(cellConn, o), l73TDevice, l73TLSPort, clean, nil)
 		if err == nil || !strings.Contains(err.Error(), "INVALID: a connection older than the capture") || !strings.Contains(err.Error(), "device port 41014") || stale != nil {
 			t.Errorf("%s: stale %q err %v", name, stale, err)
 		}
@@ -1628,9 +1638,74 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 	a1 := orphan(41010, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")})
 	toB := l94ReServer(t, orphan(41010, l73FakeSeg{true, tcpSYN, 8000, nil, at("09:46:46.200")}, l73FakeSeg{false, tcpSYN | tcpACK, 9000, nil, at("09:46:46.201")}), "172.100.100.2")
 	a2 := orphan(41010, l73FakeSeg{true, tcpACK | tcpPSH, 7000, nil, at("09:46:46.500")})
-	if _, err := l94OlderThanCapture(l94Splice(l94Splice(a1, toB), a2), l73TDevice, l73TLSPort, clean); err == nil ||
+	if _, err := l94OlderThanCapture(l94Splice(l94Splice(a1, toB), a2), l73TDevice, l73TLSPort, clean, nil); err == nil ||
 		!strings.Contains(err.Error(), "device port 41010") || !strings.Contains(err.Error(), "172.100.100.1:300") {
 		t.Errorf("a SYN to another server on the same device port: %v", err)
+	}
+}
+
+// The refusal series are every counter port49 moves when it resets or closes
+// a connection it refused (internal/daemon/server: server.go's Accept,
+// tls.go, conn.go), and nothing a served connection moves.
+func TestL94RefusalsAreTheCountersOfARefusedConnection(t *testing.T) {
+	before := l94Refusals(`# HELP port49_connection_events_total x
+port49_connection_events_total{event="admission_closed"} 0
+port49_connection_events_total{event="declined_refused"} 0
+port49_connection_events_total{event="held_refused"} 0
+port49_connection_events_total{event="idle_closed"} 4
+port49_connection_events_total{event="key_miss_closed"} 0
+port49_connection_events_total{event="refused_cap"} 0
+port49_connection_events_total{event="single_connect_second_connection"} 2
+port49_connection_events_total{event="tls_refused"} 1
+port49_connection_events_total{event="transport_mismatch"} 0
+port49_connection_events_total{event="unadmitted_source"} 0
+port49_connections_shed_total{reason="global_cap"} 0
+port49_tls_handshakes_total{outcome="ok"} 7
+port49_tls_handshakes_total{outcome="resumed"} 1
+port49_tls_handshakes_total{outcome="sni_mismatch"} 0
+port49_tls_handshakes_total{outcome="status_unavailable"} 0
+port49_connections{state="open"} 1
+`)
+	// Eight connection events, the shed, two TLS declines; not idle_closed,
+	// a second connection, ok or resumed, which served connections move.
+	if len(before) != 11 || before[`port49_connection_events_total{event="tls_refused"}`] != 1 {
+		t.Errorf("the refusal series read: %v", before)
+	}
+	if got := l94RefusalMoves(before, before); got != nil {
+		t.Errorf("nothing moved: %q", got)
+	}
+	served := l94Refusals("port49_connection_events_total{event=\"idle_closed\"} 9\nport49_tls_handshakes_total{outcome=\"ok\"} 9\n" +
+		"port49_connection_events_total{event=\"single_connect_second_connection\"} 3\n")
+	if len(served) != 0 {
+		t.Errorf("served connections' series read as refusals: %v", served)
+	}
+	for _, s := range []string{
+		`port49_connection_events_total{event="admission_closed"}`, `port49_connection_events_total{event="declined_refused"}`,
+		`port49_connection_events_total{event="held_refused"}`, `port49_connection_events_total{event="key_miss_closed"}`,
+		`port49_connection_events_total{event="refused_cap"}`, `port49_connection_events_total{event="tls_refused"}`,
+		`port49_connection_events_total{event="transport_mismatch"}`, `port49_connection_events_total{event="unadmitted_source"}`,
+		`port49_connections_shed_total{reason="global_cap"}`, `port49_tls_handshakes_total{outcome="sni_mismatch"}`,
+		`port49_tls_handshakes_total{outcome="status_unavailable"}`,
+	} {
+		after := maps.Clone(before)
+		after[s]++
+		if got := l94RefusalMoves(before, after); !slices.Equal(got, []string{s + " +1"}) {
+			t.Errorf("%s moved: %q", s, got)
+		}
+	}
+	// A series that first appears in the cell moved from 0; a counter that
+	// fell (port49d restarted, c5) counts from 0 again.
+	after := maps.Clone(before)
+	after[`port49_tls_handshakes_total{outcome="unknown_ca"}`] = 2
+	if got := l94RefusalMoves(before, after); !slices.Equal(got, []string{`port49_tls_handshakes_total{outcome="unknown_ca"} +2`}) {
+		t.Errorf("a new series: %q", got)
+	}
+	high := maps.Clone(before)
+	high[`port49_connection_events_total{event="tls_refused"}`] = 5
+	restarted := maps.Clone(before)
+	restarted[`port49_connection_events_total{event="tls_refused"}`] = 2 // below 5: reset, then 2
+	if got := l94RefusalMoves(high, restarted); !slices.Equal(got, []string{`port49_connection_events_total{event="tls_refused"} +2`}) {
+		t.Errorf("a restarted counter: %q", got)
 	}
 }
 

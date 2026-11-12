@@ -30,6 +30,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,6 +43,22 @@ import (
 	"github.com/blanketfish/port49/internal/decision"
 	"github.com/blanketfish/port49/internal/testpki"
 )
+
+// l94MetricsText is port49d's /metrics page. Without it the refusal guard
+// (l94Refusals) cannot be read, and an orphan could not be called stale.
+func l94MetricsText(t *testing.T) string {
+	t.Helper()
+	r, err := http.Get("http://" + metricsAddr + "/metrics")
+	if err != nil {
+		t.Fatalf("INVALID: metrics for the refusal guard: %v", err)
+	}
+	defer r.Body.Close()
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("INVALID: metrics for the refusal guard: %v", err)
+	}
+	return string(b)
+}
 
 // l94Prompts are the prompts a token session's command can end at: the
 // node's exec prompts, and Junos's operational prompt.
@@ -377,6 +395,8 @@ func TestL94(t *testing.T) {
 				// it closed before the clean point.
 				q.cell(name)
 				stop := e.capture(name)
+				// port49's refusal counters over the capture (l94Refusals).
+				refBefore := l94Refusals(l94MetricsText(t))
 				// c4's hold goes on at the clean point and off when body
 				// returns, on every path: deferred before it goes on, a
 				// Fatal anywhere in the cell still removes the file.
@@ -576,6 +596,7 @@ func TestL94(t *testing.T) {
 					second = 0 // the restart reset port49d's counters
 				}
 				conns = stop()
+				refAfter := l94Refusals(l94MetricsText(t))
 				if conns, pre, err = l94SinceClean(conns, cleanAt); err != nil {
 					t.Fatal(err)
 				}
@@ -587,7 +608,10 @@ func TestL94(t *testing.T) {
 				}
 				// A stale device socket the server reset is a finding; the
 				// cell grades on, so whatever it cost the device is graded.
-				if stale, err = l94OlderThanCapture(raw, e.l.p.addr, l73TLSPort, cleanAt); err != nil {
+				// It is stale only if port49 refused nothing over the
+				// capture: a refusal at Accept is a bare RST too.
+				refused := l94RefusalMoves(refBefore, refAfter)
+				if stale, err = l94OlderThanCapture(raw, e.l.p.addr, l73TLSPort, cleanAt, refused); err != nil {
 					t.Fatal(err)
 				}
 				// The cell's wire evidence is the cell's connections alone, so

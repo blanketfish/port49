@@ -1234,13 +1234,16 @@ func l94SinceClean(conns []l73Conn, cleanAt time.Time) (kept, pre []l73Conn, err
 //
 // One such flow is stale, not INVALID: one the server only reset. Every
 // server packet at or after the clean point is a RST, at least one is, no
-// server packet in the flow carries data, and the device wrote on it. port49
-// had no socket for it; the server's kernel reset the write (cEOS 4.36
-// baseline c3, 2026-11-12: a c2 connection the device kept open across
-// port49d's stop between cells). It comes back as a finding, and the cell
-// grades on. A flow port49 accepted after the gauge's 0 carries its TLS
-// flight, so it stays INVALID.
-func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time.Time) (stale []string, err error) {
+// server packet in the flow carries data, the device sent a packet on it,
+// and port49 refused no connection over the capture (refused, from
+// l94RefusalMoves, is empty). port49 had no socket for it; the server's
+// kernel reset the packet (cEOS 4.36 baseline c3, 2026-11-12: a c2
+// connection the device kept open across port49d's stop between cells). It
+// comes back as a finding, and the cell grades on. A refusal at Accept is a
+// bare RST too (reset, internal/daemon/server/conn.go), so with refused
+// non-empty the same shape stays INVALID; a flow port49 served after the
+// gauge's 0 carries its TLS flight, and stays INVALID.
+func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time.Time, refused []string) (stale []string, err error) {
 	f, err := labpcap.Parse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("INVALID: reading the cell's capture for connections older than it: %w", err)
@@ -1318,8 +1321,12 @@ func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time
 		if o.last.Before(cleanAt) {
 			continue
 		}
+		if !o.reset.IsZero() && !o.data && !o.other && !o.wrote.IsZero() && len(refused) > 0 {
+			return nil, fmt.Errorf("INVALID: a connection older than the capture: device port %d to %s was reset by the server at %s, and port49 refused connections in the cell (%s): port49 may have accepted it after the gauge's 0 and reset it; the capture did not start clean",
+				k.port, k.server, o.reset.UTC().Format("15:04:05.000"), strings.Join(refused, ", "))
+		}
 		if !o.reset.IsZero() && !o.data && !o.other && !o.wrote.IsZero() {
-			stale = append(stale, fmt.Sprintf("device port %d wrote on a connection from before the capture at %s; the server reset it (no socket): the device carried a stale connection into the cell",
+			stale = append(stale, fmt.Sprintf("device port %d sent a packet on a connection from before the capture at %s; the server reset it (no socket): the device carried a stale connection into the cell",
 				k.port, o.wrote.UTC().Format("15:04:05.000")))
 			continue
 		}
@@ -1327,6 +1334,60 @@ func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time
 			k.port, k.server, o.first.UTC().Format("15:04:05.000"), o.last.UTC().Format("15:04:05.000"), cleanAt.UTC().Format("15:04:05.000"))
 	}
 	return stale, nil
+}
+
+// l94RefusalEvents are the port49_connection_events_total events of a
+// connection port49 refused, reset or closed unserved
+// (internal/daemon/server: server.go's Accept, tls.go, conn.go;
+// internal/daemon/metrics names them all). Not idle_closed or
+// single_connect_second_connection, which a served connection moves.
+var l94RefusalEvents = []string{"refused_cap", "held_refused", "declined_refused", "unadmitted_source",
+	"key_miss_closed", "admission_closed", "tls_refused", "transport_mismatch"}
+
+var l94RefusalLine = regexp.MustCompile(`^(port49_connection_events_total\{event="([a-z_]+)"\}|port49_connections_shed_total\{reason="[a-z_]+"\}|port49_tls_handshakes_total\{outcome="([a-z_]+)"\}) ([0-9.e+]+)$`)
+
+// l94Refusals reads every counter port49 moves when it refuses a
+// connection, by series: l94RefusalEvents; port49_connections_shed_total,
+// reset at Accept on a full cap; and every TLS handshake outcome but ok and
+// resumed (status_unavailable and sni_mismatch are declines tls_refused
+// does not count, reset with no handshake reply).
+func l94Refusals(metrics string) map[string]float64 {
+	out := map[string]float64{}
+	for _, ln := range strings.Split(metrics, "\n") {
+		m := l94RefusalLine.FindStringSubmatch(ln)
+		if m == nil {
+			continue
+		}
+		if m[2] != "" && !slices.Contains(l94RefusalEvents, m[2]) {
+			continue
+		}
+		if m[3] == "ok" || m[3] == "resumed" {
+			continue
+		}
+		v, err := strconv.ParseFloat(m[4], 64)
+		if err != nil {
+			continue
+		}
+		out[m[1]] = v
+	}
+	return out
+}
+
+// l94RefusalMoves is each refusal series that moved from before to after, as
+// "<series> +<delta>", sorted. A series new in after moved from 0; one that
+// fell was reset (port49d restarted, c5) and moved by its after value.
+func l94RefusalMoves(before, after map[string]float64) []string {
+	var out []string
+	for _, s := range slices.Sorted(maps.Keys(after)) {
+		d := after[s] - before[s]
+		if after[s] < before[s] {
+			d = after[s]
+		}
+		if d > 0 {
+			out = append(out, fmt.Sprintf("%s +%s", s, strconv.FormatFloat(d, 'f', -1, 64)))
+		}
+	}
+	return out
 }
 
 // l94TCPRST is the TCP header's RST flag.
