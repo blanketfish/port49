@@ -2,214 +2,214 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://blanketfish.github.io/port49/latest/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/identity-providers/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/inventory/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/key-rotation/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/policy/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/revocation/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/roles-and-grants/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/workloads/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/devices/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/devices/arista-eos/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/devices/cisco-ios-xe/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/devices/cisco-ios-xr/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/devices/cisco-nx-os/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/devices/juniper-junos/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/devices/nokia-sr-linux/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/admin/devices/other-platforms/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/agents/quick-start/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/agents/setup-runbook/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/concepts/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/concepts/identities/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/concepts/revocation/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/concepts/tokens-receipts-contexts/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/concepts/trust-domains/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/contributing/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/contributing/qualification/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/contributing/releasing/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/backup-and-restore/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/broker-and-agent/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/hardware-keys/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/login/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/monitoring/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/secrets/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/stores/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/tls/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/versions/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/install/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/install/clients/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/install/container/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/install/helm/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/install/systemd/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/troubleshooting/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/troubleshooting/failure-matrix/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/operate/troubleshooting/will-not-start/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/alerts/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/decision-log/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/lab-register/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/metrics/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/reason-codes/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/config/client/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/config/inventory/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/config/policy/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/config/port49-inventory/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
     <url>
          <loc>https://blanketfish.github.io/port49/latest/reference/config/port49d/</loc>
-         <lastmod>2026-11-10</lastmod>
+         <lastmod>2026-11-12</lastmod>
     </url>
 </urlset>

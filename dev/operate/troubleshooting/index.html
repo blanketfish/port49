@@ -2924,6 +2924,15 @@ names. For example, after a restore left <code>/var/lib/port49/enrollments.json<
 <code>the file /var/lib/port49/enrollments.json: owner uid 1000, wants uid 999 or root - chown it</code>. The line names each
 path by its last 32 bytes, so a deeper path starts with <code>…</code>. The file is <code>enrollments.json</code> in
 <code>broker.state_dir</code>, or beside <code>broker.revocations_file</code> when <code>broker.state_dir</code> is unset. See <a href="../backup-and-restore/">backup and restore</a>.</p>
+<p>A directory server that stops answering without closing its connection (a firewall or NAT that dropped its
+state, a VIP whose server was replaced) costs one query its <code>broker.directory.query_timeout</code>: when nothing at
+all was read on the connection by then, the broker closes it and the next query dials a new one. A brief burst
+of slow mints with <code>port49_directory_server_up</code> still 1 is that; <code>port49_directory_queries_total{outcome="fault"}</code>
+counts each one. The health check dials a connection of its own and does not clear faults that queries counted;
+only a query that answers does. A server that keeps timing out therefore opens its breaker after
+<code>circuit_breaker.failure_threshold</code> faults in a row, even at a site with few sign-ins. Each such query dials and
+binds a new connection (a successful bind, which counts nothing toward the service account's lockout), so a server
+in this state costs a bind and a full <code>query_timeout</code> per query until its breaker opens.</p>
 <p><strong>Don't:</strong> run <code>init-enrollments</code> to fix a lost store on an install that had enrolled people: it makes an
 empty store, and everyone enrolls again. Restore the export instead. Don't use the escapes in the alert (<code>session.staleness_ceiling: 0s</code>, or stopping port49d) as a
 routine fix; each gives up a bound.</p>
