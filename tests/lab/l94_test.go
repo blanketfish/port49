@@ -552,6 +552,15 @@ func TestL94(t *testing.T) {
 				if conns, pre, err = l94SinceClean(conns, cleanAt); err != nil {
 					t.Fatal(err)
 				}
+				// A connection whose SYN came before tcpdump was live is no
+				// l73Conn: the same savefile, headers only, is scanned for it.
+				raw, err := os.ReadFile(filepath.Join(e.capDir, name+".pcap"))
+				if err != nil {
+					t.Fatalf("INVALID: %v", err)
+				}
+				if err := l94OlderThanCapture(raw, e.l.p.addr, l73TLSPort, cleanAt); err != nil {
+					t.Fatal(err)
+				}
 				// The cell's wire evidence is the cell's connections alone, so
 				// its count is the graded one and the baseline's (l94Baseline).
 				js, _ := json.MarshalIndent(append([]l73Conn{}, conns...), "", "  ")

@@ -1429,3 +1429,55 @@ func TestL94SinceCleanNeverLoosensTheCleanStart(t *testing.T) {
 		t.Errorf("SYN at the clean point: kept %d pre %d %v", len(kept), len(pre), err)
 	}
 }
+
+// l94Splice is a's savefile with b's records after a's (b's file header
+// dropped): one capture holding both flows.
+func l94Splice(a, b []byte) []byte {
+	return append(append([]byte{}, a...), b[24:]...)
+}
+
+// A connection whose SYN came before tcpdump was live is no l73Conn
+// (l73Conns counts from a captured SYN), so l94SinceClean never sees it.
+// l94OlderThanCapture scans the same savefile, headers only, for a flow to
+// the server port with packets but no captured device SYN: one with a
+// packet at or after the clean point is INVALID, one wholly before is not.
+func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
+	clean := l94At(t, "09:46:46.000")
+	at := func(c string) time.Time { return l94At(t, c) }
+	// A cell connection, its SYN captured after the clean point.
+	cellConn := l73FakePcap(48328, l73TLSPort, []l73FakeSeg{
+		{true, tcpSYN, 1000, nil, at("09:46:48.152")}, {false, tcpSYN | tcpACK, 5000, nil, at("09:46:48.153")},
+		{true, tcpACK, 1001, nil, at("09:46:48.154")}})
+	if err := l94OlderThanCapture(cellConn, l73TDevice, l73TLSPort, clean); err != nil {
+		t.Errorf("a captured SYN: %v", err)
+	}
+	orphan := func(port uint16, segs ...l73FakeSeg) []byte { return l73FakePcap(port, l73TLSPort, segs) }
+	// Packets of a connection that was open before the capture, the last
+	// after the clean point: INVALID, whichever side sent it.
+	for name, o := range map[string][]byte{
+		"device's packet after": orphan(41000, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{true, tcpACK | tcpPSH, 7000, nil, at("09:46:46.200")}),
+		"server's packet after": orphan(41000, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{false, tcpACK, 9000, nil, at("09:46:46.000")}),
+	} {
+		err := l94OlderThanCapture(l94Splice(cellConn, o), l73TDevice, l73TLSPort, clean)
+		if err == nil || !strings.Contains(err.Error(), "INVALID: a connection older than the capture") || !strings.Contains(err.Error(), "device port 41000") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// Wholly before the clean point: ignored, as the gauge's 0 says it ended.
+	before := orphan(41002, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{true, tcpFIN | tcpACK, 7000, nil, at("09:46:45.900")})
+	if err := l94OlderThanCapture(l94Splice(cellConn, before), l73TDevice, l73TLSPort, clean); err != nil {
+		t.Errorf("an old flow wholly before the clean point: %v", err)
+	}
+	// Another server port is not the cell's TLS server.
+	other := l73FakePcap(41004, 49, []l73FakeSeg{{true, tcpACK, 7000, nil, at("09:46:47.000")}})
+	if err := l94OlderThanCapture(l94Splice(cellConn, other), l73TDevice, l73TLSPort, clean); err != nil {
+		t.Errorf("port 49: %v", err)
+	}
+	// A reused source port: the old flow's packets before the clean point,
+	// then a new connection's captured SYN on the same port: not an orphan.
+	reused := orphan(41006, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")},
+		l73FakeSeg{true, tcpSYN, 8000, nil, at("09:46:47.000")}, l73FakeSeg{false, tcpSYN | tcpACK, 9000, nil, at("09:46:47.001")})
+	if err := l94OlderThanCapture(reused, l73TDevice, l73TLSPort, clean); err != nil {
+		t.Errorf("a reused port with its SYN captured: %v", err)
+	}
+}

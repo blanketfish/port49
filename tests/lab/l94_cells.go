@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 // L94 (spec §15 L94; §13 decision 59, provisional on it): whether a device
@@ -1122,8 +1123,9 @@ func l94WaitClean(read func() (float64, bool), limit int, sleep func(time.Durati
 // One whose SYN is before it is set aside (pre) only if it also ended before
 // it, as the gauge's 0 says every connection port49 accepted had. One opened
 // before the clean point and still open after it (or ended after it) is
-// INVALID: a SYN port49 had not accepted when the gauge read 0, or a capture
-// that did not start clean. The clean start is never loosened.
+// INVALID: a SYN port49 had not accepted when the gauge read 0. It sees only
+// connections whose SYN the capture holds (l73Conns counts from the SYN); one
+// whose SYN came before tcpdump was live is l94OlderThanCapture's.
 func l94SinceClean(conns []l73Conn, cleanAt time.Time) (kept, pre []l73Conn, err error) {
 	for _, c := range conns {
 		switch {
@@ -1137,4 +1139,59 @@ func l94SinceClean(conns []l73Conn, cleanAt time.Time) (kept, pre []l73Conn, err
 		}
 	}
 	return kept, pre, nil
+}
+
+// l94OlderThanCapture is INVALID for a connection older than the cell's
+// capture: a flow between the device and srvPort with packets but no
+// captured device SYN, and a packet at or after the clean point.
+// l73Conns counts a connection only from its SYN, so such a flow is no
+// l73Conn and l94SinceClean cannot see it; port49 may have accepted it
+// after the gauge's first 0. A flow wholly before the clean point ended
+// before it (the gauge says so) and is ignored. It reads the savefile with
+// the same reader as l73Conns, headers only: addresses, ports, flags and
+// times. No payload byte is read and no body is decoded.
+func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time.Time) error {
+	f, err := labpcap.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("INVALID: reading the cell's capture for connections older than it: %w", err)
+	}
+	type orphan struct{ first, last time.Time }
+	synced := map[uint16]bool{} // device ports whose SYN the capture holds
+	orphans := map[uint16]*orphan{}
+	for i, r := range f.Records {
+		fl, ok := labpcap.FlowOf(f.Link, f.Bytes(r))
+		if !ok {
+			continue
+		}
+		var port uint16
+		fromDevice := fl.Src.String() == device && fl.DstPort == srvPort
+		switch {
+		case fromDevice:
+			port = fl.SrcPort
+		case fl.Dst.String() == device && fl.SrcPort == srvPort:
+			port = fl.DstPort
+		default:
+			continue
+		}
+		if fromDevice && fl.SYN() {
+			synced[port] = true // a new connection on this port, counted by l73Conns
+			continue
+		}
+		if synced[port] {
+			continue
+		}
+		at := f.TimeOf(i)
+		if o := orphans[port]; o == nil {
+			orphans[port] = &orphan{at, at}
+		} else {
+			o.last = at
+		}
+	}
+	for _, port := range slices.Sorted(maps.Keys(orphans)) {
+		if o := orphans[port]; !o.last.Before(cleanAt) {
+			return fmt.Errorf("INVALID: a connection older than the capture: device port %d sent or received packets from %s to %s with no SYN captured, the last at or after the cell's clean point %s; the capture did not start clean",
+				port, o.first.UTC().Format("15:04:05.000"), o.last.UTC().Format("15:04:05.000"), cleanAt.UTC().Format("15:04:05.000"))
+		}
+	}
+	return nil
 }
