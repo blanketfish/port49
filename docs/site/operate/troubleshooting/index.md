@@ -34,7 +34,8 @@ port49 as a whole. The decision log record for the attempt carries a [reason](..
   device. See [tokens, receipts and contexts](../../concepts/tokens-receipts-contexts.md).
 - An `unvalidated` record, and a connection the device sees reset with no reply: no key validated what the
   device sent. Its `unvalidated.diagnosis` says why: `no_known_key_matches` (a wrong key),
-  `matches_retired` (a retired key), `unadmitted_source` (the address is not in the inventory),
+  `matches_retired` (a retired key), `unadmitted_source` (the address is not in the inventory; the record's
+  `unvalidated.source` names it, and a device whose source address changed looks exactly like this),
   `device_quarantined`, `admission_refused` or `transport_mismatch` (the device reached the listener it
   does not speak).
 
@@ -182,10 +183,21 @@ job name fires it too. See [monitoring](../monitoring.md#scraping).
 ### Connections
 
 Alerts: **page** [port49_global_cap_shedding](../../reference/alerts.md#port49_global_cap_shedding);
-**ticket** [port49_connections_near_cap](../../reference/alerts.md#port49_connections_near_cap).
+**ticket** [port49_connections_near_cap](../../reference/alerts.md#port49_connections_near_cap) and
+[port49_unadmitted_source](../../reference/alerts.md#port49_unadmitted_source).
 
 **Do this:** raise `limits.max_connections` or add replicas. The shed devices were reset on purpose and tried
 their next server.
+
+For `port49_unadmitted_source`, find the `unvalidated` records with
+`unvalidated.diagnosis: unadmitted_source` in the [decision log](../../reference/decision-log.md): each carries
+the address in `unvalidated.source`. Either that address belongs to a device and the inventory does not list it,
+or a listed device is now sourcing from another address. A device whose source changed (a `source-interface`
+that is not pinned and moved with an uplink failover, a loopback renumbered before the source of truth was, the
+wrong VRF) looks exactly like this: the person sees break-glass work and their token fail, and port49d sees a
+stranger. Pin the device's source (see the
+[device reference configuration](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/README.md))
+or put the new address in the source of truth.
 
 **Don't:** restart port49d to clear it. A restart resets every open connection and does not change the
 cap. See [monitoring](../monitoring.md#shedding).
@@ -357,6 +369,16 @@ Alerts, all **ticket**: [port49_inventory_sync_failing](../../reference/alerts.m
 **Do this:** read the inventory service's log. The fleet keeps authenticating on the snapshot in force, and
 nothing fails closed. For `port49_inventory_privilege_changes`, the `inventory_change` record names the
 device: review it.
+
+**Page:** [port49_inventory_address_moved](../../reference/alerts.md#port49_inventory_address_moved). An address
+left one device and landed on another in a single swap. Find the `inventory_change` record with
+`change.kind: address_moved`: `change.address` is the address, `change.from` the device that held it and
+`change.to` the device that holds it now. On an RFC 8907 (`transport: tcp`) device whose key comes from a CIDR or
+attribute key group, port49d names a connection by its source address and the shared key admits the whole range,
+so the move lets the new name's grants be used from hardware that held another's. Ask who edited the source of
+truth. A real RMA or re-IP raises it too; confirm that with whoever did it. A move spread over two swaps (removed
+in one, added in the next) is not seen. For a crown-jewel device, use `transport: tls` or a name pin to a
+per-device key, which a moved address does not reach.
 
 **Don't:** restart port49d to refresh the inventory; the bundle in force keeps serving until a good one
 arrives.

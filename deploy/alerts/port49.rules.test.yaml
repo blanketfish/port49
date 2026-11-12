@@ -117,6 +117,27 @@ tests:
       - eval_time: 10m
         alertname: port49_token_clock_skew
         exp_alerts: []
+  # port49_unadmitted_source
+  - interval: 1m
+    input_series:
+      - {series: "port49_unvalidated_packets_total{instance=\"a\",diagnosis=\"unadmitted_source\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_unadmitted_source
+        exp_alerts:
+          - exp_labels: {instance: "a", diagnosis: "unadmitted_source", severity: "ticket"}
+            exp_annotations:
+              summary: "A connection came from a source address that is not in the inventory; a device whose source address changed (an unpinned source-interface, an uplink failover, a renumbered loopback, the wrong VRF) looks exactly like this. The unvalidated record's unvalidated.source names the address."
+              runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_unadmitted_source"
+  # Other diagnoses, and a count that stopped rising, do not fire it.
+  - interval: 1m
+    input_series:
+      - {series: "port49_unvalidated_packets_total{instance=\"a\",diagnosis=\"no_known_key_matches\"}", values: "0+1x30"}
+      - {series: "port49_unvalidated_packets_total{instance=\"b\",diagnosis=\"unadmitted_source\"}", values: "5+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_unadmitted_source
+        exp_alerts: []
   # port49_connections_near_cap
   - interval: 1m
     input_series:
@@ -1590,6 +1611,38 @@ tests:
   - interval: 1m
     input_series:
       - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"key_ref_changed\"}", values: "2+0x80"}
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: port49_inventory_privilege_changes
+        exp_alerts: []
+  # port49_inventory_address_moved
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"address_moved\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_address_moved
+        exp_alerts:
+          - exp_labels: {instance: "a", kind: "address_moved", severity: "page"}
+            exp_annotations:
+              summary: "An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen."
+              runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_inventory_address_moved"
+  # No move (onboarding writes device_added and address_added, never address_moved), and a count that
+  # stopped rising, do not page.
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"address_moved\"}", values: "2+0x30"}
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"device_added\"}", values: "0+1x30"}
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"address_added\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_address_moved
+        exp_alerts: []
+  # A move alone does not also raise the ticket-severity privilege-changes alert; a real move raises
+  # it through the address_added the same swap writes.
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"address_moved\"}", values: "0+1x80"}
     alert_rule_test:
       - eval_time: 70m
         alertname: port49_inventory_privilege_changes
