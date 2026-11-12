@@ -631,6 +631,13 @@ func prefixAll(p string, ss []string) []string {
 // l94DelayConfig is a port49d config text with both failure-delay knobs set
 // to d, as L13's writeDelayConfig sets them on the lab config: both, so the
 // first FAIL already waits d.
+//
+// It edits lines, in l73SetLine's style, and never re-encodes: every line
+// but the two keys stays the file's own, because the edits l73DaemonYAML
+// makes after it match exact lines (`limits:`) and prefixes (`  idle_timeout: `).
+// A key under limits is replaced in place at the block's own indent; a
+// missing one goes right under `limits:`; with no limits block, one is
+// appended. The YAML is parsed only to check it, before and after.
 func l94DelayConfig(text string, d time.Duration) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
@@ -639,34 +646,76 @@ func l94DelayConfig(text string, d time.Duration) (string, error) {
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return "", errors.New("the config is not a mapping")
 	}
-	m := doc.Content[0]
-	var limits *yaml.Node
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == "limits" {
-			limits = m.Content[i+1]
+	keys := []string{"auth_failure_delay_base", "auth_failure_delay_max"}
+	lines := strings.Split(text, "\n")
+	at := -1
+	for i, ln := range lines {
+		switch {
+		case ln == "limits:":
+			if at >= 0 {
+				return "", errors.New("the config has two `limits:` lines")
+			}
+			at = i
+		case strings.HasPrefix(ln, "limits:"):
+			return "", fmt.Errorf("limits is not a block mapping on a line of its own (%q): a line edit cannot set it", ln)
 		}
 	}
-	if limits == nil {
-		limits = &yaml.Node{Kind: yaml.MappingNode}
-		m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "limits"}, limits)
-	}
-	if limits.Kind != yaml.MappingNode {
-		return "", errors.New("limits is not a mapping")
-	}
-	for _, k := range []string{"auth_failure_delay_base", "auth_failure_delay_max"} {
-		set := false
-		for i := 0; i+1 < len(limits.Content); i += 2 {
-			if limits.Content[i].Value == k {
-				limits.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Value: d.String()}
-				set = true
+	var out string
+	if at < 0 {
+		var b strings.Builder
+		b.WriteString(strings.TrimRight(text, "\n") + "\nlimits:\n")
+		for _, k := range keys {
+			fmt.Fprintf(&b, "  %s: %s\n", k, d)
+		}
+		out = b.String()
+	} else {
+		// The block runs to the first non-blank line at column 0; its indent
+		// is its first key's.
+		end := at + 1
+		for end < len(lines) && (lines[end] == "" || strings.HasPrefix(lines[end], " ")) {
+			end++
+		}
+		indent := "  "
+		for _, ln := range lines[at+1 : end] {
+			if t := strings.TrimLeft(ln, " "); t != "" && !strings.HasPrefix(t, "#") {
+				indent = ln[:len(ln)-len(t)]
+				break
 			}
 		}
-		if !set {
-			limits.Content = append(limits.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, &yaml.Node{Kind: yaml.ScalarNode, Value: d.String()})
+		set := map[string]bool{}
+		for i := at + 1; i < end; i++ {
+			ln := lines[i]
+			if !strings.HasPrefix(ln, indent) || strings.HasPrefix(ln, indent+" ") {
+				continue
+			}
+			for _, k := range keys {
+				if strings.HasPrefix(ln[len(indent):], k+":") {
+					lines[i] = indent + k + ": " + d.String()
+					set[k] = true
+				}
+			}
+		}
+		var add []string
+		for _, k := range keys {
+			if !set[k] {
+				add = append(add, indent+k+": "+d.String())
+			}
+		}
+		lines = append(lines[:at+1], append(add, lines[at+1:]...)...)
+		out = strings.Join(lines, "\n")
+	}
+	var check struct {
+		Limits map[string]any `yaml:"limits"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &check); err != nil {
+		return "", fmt.Errorf("the delay config does not parse: %w", err)
+	}
+	for _, k := range keys {
+		if v, _ := check.Limits[k].(string); v != d.String() {
+			return "", fmt.Errorf("the delay config's limits.%s reads %v, want %s", k, check.Limits[k], d)
 		}
 	}
-	out, err := yaml.Marshal(&doc)
-	return string(out), err
+	return out, nil
 }
 
 // parseBuildTags is the -tags a `go version -m` output says the binary was

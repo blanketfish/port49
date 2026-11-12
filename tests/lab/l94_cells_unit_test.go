@@ -432,6 +432,62 @@ func TestL94JunosIsNotGradedOnAsking(t *testing.T) {
 	}
 }
 
+// Fix round 3: the delay config is the conformance config TestL94 builds
+// (qualConfigYAML, as q.config does), and the line edits l73DaemonYAML
+// applies after it (the exact `limits:` line, the 2-space `idle_timeout`
+// that DefaultIdle comments out) must still find their lines. Every line but
+// the two delay keys is the file's own, byte for byte.
+func TestL94DelayConfigKeepsTheRealConfigsLayout(t *testing.T) {
+	read := func(parts ...string) string {
+		b, err := os.ReadFile(filepath.Join(append([]string{qualRoot(t)}, parts...)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	base, err := qualConfigYAML(read("tests", "lab", "port49d-lab.yaml"), read("tests", "lab", "slice", "broker.yaml"),
+		read("tests", "qual", "qual-daemon.yaml"), "/x/qual-policy.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delayed, err := l94DelayConfig(base, l94Delay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, ln := range strings.Split(delayed, "\n") {
+		if k := strings.TrimSpace(ln); !strings.HasPrefix(k, "auth_failure_delay_base:") && !strings.HasPrefix(k, "auth_failure_delay_max:") {
+			kept = append(kept, ln)
+		}
+	}
+	var was []string
+	for _, ln := range strings.Split(base, "\n") {
+		if k := strings.TrimSpace(ln); !strings.HasPrefix(k, "auth_failure_delay_base:") && !strings.HasPrefix(k, "auth_failure_delay_max:") {
+			was = append(was, ln)
+		}
+	}
+	if !slices.Equal(kept, was) {
+		t.Fatal("l94DelayConfig changed lines other than the two delay keys: the later prefix edits may not find theirs")
+	}
+	out, err := l73DaemonYAML(delayed, l73Daemon{Inventory: "/x/inv.yaml", TLSListen: "172.100.100.1:300", DefaultIdle: true,
+		Cert: "/x/c", Key: "/x/k", ClientCA: "/x/ca", StateDir: "/x/s", Status: "{disabled: true}"})
+	if err != nil {
+		t.Fatalf("l73DaemonYAML on the delay config: %v", err)
+	}
+	var cfg struct {
+		Limits map[string]string `yaml:"limits"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Limits["auth_failure_delay_base"] != l94Delay.String() || cfg.Limits["auth_failure_delay_max"] != l94Delay.String() {
+		t.Errorf("limits %v: want both delay keys %s", cfg.Limits, l94Delay)
+	}
+	if _, ok := cfg.Limits["idle_timeout"]; ok {
+		t.Error("DefaultIdle did not comment out idle_timeout")
+	}
+}
+
 func TestL94DelayConfigSetsBothKnobs(t *testing.T) {
 	in := "listen: 0.0.0.0:49\nlimits:\n    idle_timeout: 5m\n    auth_failure_delay_max: 9s\n"
 	out, err := l94DelayConfig(in, l94Delay)
@@ -448,6 +504,13 @@ func TestL94DelayConfigSetsBothKnobs(t *testing.T) {
 	if cfg.Listen != "0.0.0.0:49" || cfg.Limits["idle_timeout"] != "5m" || cfg.Limits["auth_failure_delay_base"] != "2s" || cfg.Limits["auth_failure_delay_max"] != "2s" {
 		t.Errorf("config %+v", cfg)
 	}
+	// The block's own indent is kept, the existing key replaced in place.
+	if !strings.Contains(out, "\n    idle_timeout: 5m\n") || !strings.Contains(out, "\n    auth_failure_delay_max: 2s\n") || strings.Contains(out, "9s") {
+		t.Errorf("the 4-space block was re-laid out: %q", out)
+	}
+	if _, err := l94DelayConfig("limits: {}\n", l94Delay); err == nil {
+		t.Error("a flow-style limits cannot take a line edit and must be refused")
+	}
 	out, err = l94DelayConfig("listen: x\n", l94Delay)
 	if err != nil || !strings.Contains(out, "auth_failure_delay_base: 2s") {
 		t.Errorf("no limits block: %q %v", out, err)
@@ -457,7 +520,6 @@ func TestL94DelayConfigSetsBothKnobs(t *testing.T) {
 	}
 }
 
-// c4's build carries the hold tag and no other cell's does.
 // H4: the harness's standard daemon path refuses a binary built with the
 // hold tag, read from the binary itself (go version -m), and takes one
 // built without it. Two throwaway binaries are built to show it.
@@ -501,6 +563,7 @@ func TestTheStandardDaemonPathRefusesTheHoldBuild(t *testing.T) {
 	}
 }
 
+// c4's build carries the hold tag and no other cell's does.
 func TestL94BuildTags(t *testing.T) {
 	out := "port49d: go1.26.0\n\tpath\tgithub.com/blanketfish/port49/cmd/port49d\n\tbuild\t-tags=port49_lab_acct_hold\n\tbuild\tvcs.revision=abc\n"
 	if got := parseBuildTags(out); got != l94HoldTag {
