@@ -1,21 +1,26 @@
 L94, arm fixed, cell c2, mode offered, nxos106 (Nexus 9300v 10.6(2)F) over RFC 9887, reference <LONG>, failure delay 2s
 port49d: port49d <LONG> vcs.modified=false tags=""
-  s0 "show version"           took=0.75s denied=false err=false at=04:57:29.999
-  s0 "show users"             took=0.25s denied=true err=false at=04:57:30.751
-try 1: lead=400ms fail_recorded=true timing=ok gaps=[-291ms -1.042s]
-  s0 "show version"           took=0.75s denied=false err=false at=04:57:33.773
-debug counts: ssl_read_failed=0 mark_server_dead=0 fallbacks=0 request_authen=3 request_author=4 request_acct=4 window_unmeasured=0
+  s0 "show version"           took=0.75s denied=false err=false at=06:39:30.243
+  s0 "show users"             took=0.25s denied=true err=false at=06:39:30.994
+try 1: lead=400ms fail_recorded=true timing=ok gaps=[293ms 1.041s]
+  s0 "show version"           took=0.75s denied=false err=false at=06:39:34.861
+debug counts: ssl_read_failed=0 mark_server_dead=0 fallbacks=0 request_authen=3 request_author=4 request_acct=5 window_unmeasured=0
+port49 read (authorize_command ts less typed):
+  s0 "show version"           +23ms permit
+  s0 "show users"             +20ms deny
+  s0 "show version"           +32ms permit
 tls connections: 1, most open at once: 1
-  conn port=45808 syn=04:57:24.274 hold=open end=open
+  conn port=42040 syn=06:39:24.516 hold=open end=open
 <LONG> delta: 0
-refused-credential login 1: took=4.17s auth_failed=true logged_in=false err=""
+refused-credential login 1: took=5.02s auth_failed=true logged_in=false err=""
 port49 records:
-  04:57:30.021 authorize_command permit "show version"
-  04:57:30.772 authorize_command deny "show users"
-  04:57:29.730 redeem deny
-  04:57:31.749 account
-  04:57:31.767 redeem deny
-STOP: c2: session 0 "show version" was never asked: lost or run unasked
-STOP: c2: B's request 1 was recorded -291ms before A's FAIL, under 1.5s: it waited behind A
-STOP: c2: B's request 2 was recorded -1.042s before A's FAIL, under 1.5s: it waited behind A
+  06:39:30.266 authorize_command permit "show version"
+  06:39:31.014 authorize_command deny "show users"
+  06:39:29.973 redeem deny
+  06:39:31.995 account
+  06:39:32.855 redeem deny
+  06:39:34.876 account
+  06:39:34.894 authorize_command permit "show version"
+  06:39:35.633 account
+  06:39:35.650 account
 

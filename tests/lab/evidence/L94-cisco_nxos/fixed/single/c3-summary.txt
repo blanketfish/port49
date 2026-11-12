@@ -1,46 +1,53 @@
 L94, arm fixed, cell c3, mode single, nxos106 (Nexus 9300v 10.6(2)F) over RFC 9887, reference <LONG>, failure delay 2s
 port49d: port49d <LONG> vcs.modified=false tags=""
-  s0 "show version"           took=1.00s denied=false err=false at=05:26:40.614
-  s0 "show version"           took=0.75s denied=false err=false at=05:26:41.616
-  s0 "show version"           took=0.75s denied=false err=false at=05:26:42.367
-  s0 "show version"           took=0.75s denied=false err=false at=05:26:43.119
-  s0 "show version"           took=0.75s denied=false err=false at=05:26:43.871
-  s0 "show version"           took=0.75s denied=false err=false at=05:26:44.623
-  s0 "show version"           took=0.75s denied=false err=false at=05:26:45.375
-  s0 "show version"           took=0.75s denied=false err=false at=05:26:46.127
-debug counts: ssl_read_failed=0 mark_server_dead=0 fallbacks=0 request_authen=6 request_author=9 request_acct=9 window_unmeasured=0
+  s0 "show version"           took=1.00s denied=false err=false at=07:10:28.994
+  s0 "show version"           took=0.75s denied=false err=false at=07:10:29.996
+  s0 "show version"           took=0.75s denied=false err=false at=07:10:30.747
+  s0 "show version"           took=0.75s denied=false err=false at=07:10:31.499
+  s0 "show version"           took=0.75s denied=false err=false at=07:10:32.250
+  s0 "show version"           took=0.75s denied=false err=false at=07:10:33.002
+  s0 "show version"           took=0.75s denied=false err=false at=07:10:33.754
+  s0 "show version"           took=0.75s denied=false err=false at=07:10:34.506
+debug counts: ssl_read_failed=0 mark_server_dead=0 fallbacks=0 request_authen=7 request_author=9 request_acct=8 window_unmeasured=0
+port49 read (authorize_command ts less typed):
+  s0 "show version"           +24ms permit
+  s0 "show version"           +20ms permit
+  s0 "show version"           +20ms permit
+  s0 "show version"           +20ms permit
+  s0 "show version"           +19ms permit
+  s0 "show version"           +19ms permit
+  s0 "show version"           +21ms permit
+  s0 "show version"           +19ms permit
 tls connections: 1, most open at once: 1
-  conn port=47034 syn=05:26:35.290 hold=open end=open
+  conn port=43484 syn=07:10:23.671 hold=open end=open
 <LONG> delta: 0
-refused-credential login 1: took=6.22s auth_failed=true logged_in=false err=""
-refused-credential login 2: took=4.20s auth_failed=true logged_in=false err=""
-refused-credential login 3: took=6.20s auth_failed=true logged_in=false err=""
+refused-credential login 1: took=5.06s auth_failed=true logged_in=false err=""
+refused-credential login 2: took=5.04s auth_failed=true logged_in=false err=""
+refused-credential login 3: took=5.02s auth_failed=true logged_in=false err=""
 port49 records:
-  05:26:40.298 redeem permit
-  05:26:40.322 authorize_session permit
-  05:26:40.464 account
-  05:26:40.637 authorize_command permit "show version"
-  05:26:41.638 authorize_command permit "show version"
-  05:26:42.388 authorize_command permit "show version"
-  05:26:40.743 redeem deny
-  05:26:40.758 redeem deny
-  05:26:42.762 account
-  05:26:40.774 redeem deny
-  05:26:42.779 account
-  05:26:42.814 account
-  05:26:43.139 authorize_command permit "show version"
-  05:26:43.890 authorize_command permit "show version"
-  05:26:44.645 authorize_command permit "show version"
-  05:26:42.796 redeem deny
-  05:26:44.849 account
-  05:26:45.396 authorize_command permit "show version"
-  05:26:46.146 authorize_command permit "show version"
-  05:26:44.814 redeem deny
-  05:26:44.832 redeem deny
-  05:26:46.833 account
-  05:26:46.852 account
-  05:26:46.899 account
-  05:26:46.915 account
-STOP: c3: account flags/task_id stop/172.100.100.1@pts/4 recorded 2 times: a duplicate or retransmitted accounting record
-STOP: c3: B's "show version" took 1.00s, over the row's 1s
+  07:10:28.679 redeem permit
+  07:10:28.703 authorize_session permit
+  07:10:28.846 account
+  07:10:29.019 authorize_command permit "show version"
+  07:10:30.016 authorize_command permit "show version"
+  07:10:30.768 authorize_command permit "show version"
+  07:10:29.126 redeem deny
+  07:10:29.142 redeem deny
+  07:10:31.146 account
+  07:10:29.158 redeem deny
+  07:10:31.164 account
+  07:10:31.182 account
+  07:10:31.520 authorize_command permit "show version"
+  07:10:32.270 authorize_command permit "show version"
+  07:10:33.022 authorize_command permit "show version"
+  07:10:33.776 authorize_command permit "show version"
+  07:10:32.010 redeem deny
+  07:10:32.027 redeem deny
+  07:10:34.029 account
+  07:10:32.044 redeem deny
+  07:10:34.048 account
+  07:10:34.068 account
+  07:10:34.525 authorize_command permit "show version"
+  07:10:35.279 account
+  07:10:35.296 account
 
