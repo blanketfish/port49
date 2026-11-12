@@ -646,8 +646,10 @@ func l94Stops(g l94Grade) []string {
 				out = append(out, fmt.Sprintf("c2: B's request %d was read %s after A's, not under %s: it waited behind A", i+1, gap.Round(time.Millisecond), l94Inside))
 			}
 		}
+		// B's prompt time measures port49 only where port49 is asked about
+		// the command; elsewhere B's login is graded (l94BLoginStops).
 		for _, x := range g.Typed {
-			if x.Took > l94FastB.Seconds() {
+			if commanded && x.Took > l94FastB.Seconds() {
 				out = append(out, fmt.Sprintf("c2: B's %q took %.2fs, over %s", x.Command, x.Took, l94FastB))
 			}
 		}

@@ -252,6 +252,20 @@ func TestL94JunosC2IsGradedOnBsLogin(t *testing.T) {
 	if got := l94Stops(g); len(got) != 0 {
 		t.Errorf("a Junos c2 inside A's delay stops: %v", got)
 	}
+	// Round 8 (ruling): port49 is never asked about a Junos command, so its
+	// prompt time is not c2's grade (vJunos's first command takes 1.50s in
+	// both arms). Where commands are asked it still is.
+	g.Typed[0].Took = 1.5
+	if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "took") {
+		t.Errorf("Junos c2 graded on B's prompt: %q", got)
+	}
+	n := l94Clean()
+	n.Cell, n.Outcomes, n.Gaps = "c2", []l94Outcome{{AuthFailed: true}}, []time.Duration{300 * time.Millisecond}
+	n.Typed = slices.Clone(n.Typed)
+	n.Typed[0].Took = 1.5
+	if got := strings.Join(l94Stops(n), "\n"); !strings.Contains(got, `c2: B's "show version" took 1.50s, over 1s`) {
+		t.Errorf("NX-OS c2 at 1.5s: %q", got)
+	}
 	g.Events = shape("08:34:13.534") // the baseline's +2.000s
 	g.Gaps, _ = l94Gaps("juniper_junos", g.Events, cmds)
 	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "waited behind A") {
