@@ -136,7 +136,7 @@ func TestL94GapsAreReadFromRecordTimes(t *testing.T) {
 	}
 	// A redeem's ts is A's read (newRecord, before the delay: authen.go:235),
 	// so a gap is B's read less A's: negative is B before A.
-	gaps, ok := l94Gaps("cisco_nxos", evs, []string{"show version", "show users"})
+	gaps, ok := l94Gaps("cisco_nxos", evs, []string{"show version", "show users"}, "")
 	if !ok || len(gaps) != 2 || gaps[0] != -1900*time.Millisecond || gaps[1] != -1800*time.Millisecond {
 		t.Fatalf("gaps %v ok=%v", gaps, ok)
 	}
@@ -152,17 +152,20 @@ func TestL94GapsAreReadFromRecordTimes(t *testing.T) {
 	if got := l94C2Timing(nil); got != "none" {
 		t.Errorf("no B request: %s", got)
 	}
-	if _, ok := l94Gaps("cisco_nxos", evs[:3], []string{"show version"}); ok {
+	if _, ok := l94Gaps("cisco_nxos", evs[:3], []string{"show version"}, ""); ok {
 		t.Error("no FAIL redeem: ok must be false")
 	}
 	// Junos asks about no command: B's token login is what is ordered, not
 	// its command accounting (round 7, TestL94JunosC2IsGradedOnBsLogin).
+	bSHA := decision.CredentialHash([]byte(l94RefusedCredential()))
+	bRec := l94Rec(t0.Add(2400*time.Millisecond), "redeem", "permit", "")
+	bRec["auth"] = map[string]any{"method": "ascii", "credential_sha256": bSHA}
 	jrecs := []map[string]any{
 		l94Rec(t0.Add(2400*time.Millisecond), "account", "", "show version | no-more <cr>"),
-		l94Rec(t0.Add(2400*time.Millisecond), "redeem", "permit", ""),
+		bRec,
 		l94Rec(t0.Add(2100*time.Millisecond), "redeem", "deny", ""),
 	}
-	jg, ok := l94Gaps("juniper_junos", l94Events(jrecs), []string{"show version | no-more"})
+	jg, ok := l94Gaps("juniper_junos", l94Events(jrecs), []string{"show version | no-more"}, bSHA)
 	if !ok || len(jg) != 1 || jg[0] != 300*time.Millisecond {
 		t.Errorf("junos gaps %v ok=%v", jg, ok)
 	}
@@ -192,7 +195,7 @@ func TestL94C2GradesTheEvidenceShapes(t *testing.T) {
 		return evs
 	}
 	grade := func(evs []l94Event) (string, []string) {
-		gaps, ok := l94Gaps("cisco_nxos", evs, cmds)
+		gaps, ok := l94Gaps("cisco_nxos", evs, cmds, "")
 		if !ok {
 			t.Fatal("no FAIL")
 		}
@@ -231,22 +234,40 @@ func TestL94C2GradesTheEvidenceShapes(t *testing.T) {
 // 105ms apart (11.534, 11.639).
 func TestL94JunosC2IsGradedOnBsLogin(t *testing.T) {
 	cmds := []string{"show version | no-more", "show system users"}
-	shape := func(b string) []l94Event {
+	b := decision.CredentialHash([]byte(l94RefusedCredential()))
+	shape := func(ts string) []l94Event {
 		evs := []l94Event{{TS: l94At(t, "08:34:11.534"), Event: "redeem", Verdict: "deny", Reason: "token_not_found"}}
-		if b != "" {
-			evs = append(evs, l94Event{TS: l94At(t, b), Event: "redeem", Verdict: "permit"})
+		if ts != "" {
+			evs = append(evs, l94Event{TS: l94At(t, ts), Event: "redeem", Verdict: "permit", Cred: b})
 		}
 		return append(evs, l94Event{TS: l94At(t, "08:34:13.388"), Event: "account", Flags: "stop", TaskID: "2", Vector: "show version | no-more <cr>"})
 	}
-	gaps, ok := l94Gaps("juniper_junos", shape("08:34:11.639"), cmds)
+	gaps, ok := l94Gaps("juniper_junos", shape("08:34:11.639"), cmds, b)
 	if !ok || len(gaps) != 1 || gaps[0] != 105*time.Millisecond || l94C2Timing(gaps) != "ok" {
 		t.Fatalf("B's login 105ms after A: gaps %v ok=%v timing %s", gaps, ok, l94C2Timing(gaps))
 	}
-	if !l94LoginInsideDelay(shape("08:34:11.639")) {
+	if !l94LoginInsideDelay(shape("08:34:11.639"), b) {
 		t.Error("the same window as l94LoginInsideDelay")
 	}
+	// Round 7c: B's login is the redeem of B's own token. A permit redeem
+	// with another credential inside the window (a re-authentication, a
+	// second attempt) is not B: c2 grades "none", the wait goes on, and
+	// the B-login check finds no B login inside A's delay.
+	stray := shape("")
+	stray = append(stray, l94Event{TS: l94At(t, "08:34:11.639"), Event: "redeem", Verdict: "permit", Cred: decision.CredentialHash([]byte(l94RefusedCredential()))})
+	if gaps, _ := l94Gaps("juniper_junos", stray, cmds, b); l94C2Timing(gaps) != "none" {
+		t.Errorf("a stray permit timed as B: gaps %v", gaps)
+	}
+	if l94LoginInsideDelay(stray, b) {
+		t.Error("a stray permit taken for B's login inside A's delay")
+	}
+	strayA := decision.CredentialHash([]byte(l94RefusedCredential()))
+	stray[0].Cred = strayA
+	if l94C2Recorded("juniper_junos", stray, strayA, b) {
+		t.Error("a stray permit ended the wait for B's login")
+	}
 	p, _ := l94PlatformFor("vjunos26")
-	g := l94Grade{Arm: "fixed", Cell: "c2", Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1, Gaps: gaps,
+	g := l94Grade{Arm: "fixed", Cell: "c2", Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1, Gaps: gaps, BSHA: b,
 		Outcomes: []l94Outcome{{AuthFailed: true}}, BLogin: &l94Outcome{LoggedIn: true, Took: 0.4}, Events: shape("08:34:11.639"),
 		Typed: []l80Typed{{Command: cmds[0], Took: 0.25}, {Command: cmds[1], Denied: true, Took: 0.25}}}
 	if got := l94Stops(g); len(got) != 0 {
@@ -267,25 +288,25 @@ func TestL94JunosC2IsGradedOnBsLogin(t *testing.T) {
 		t.Errorf("NX-OS c2 at 1.5s: %q", got)
 	}
 	g.Events = shape("08:34:13.534") // the baseline's +2.000s
-	g.Gaps, _ = l94Gaps("juniper_junos", g.Events, cmds)
+	g.Gaps, _ = l94Gaps("juniper_junos", g.Events, cmds, b)
 	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "waited behind A") {
 		t.Errorf("B's login read when A's delay ran out: %q", got)
 	}
-	if gaps, _ := l94Gaps("juniper_junos", shape("08:34:11.300"), cmds); l94C2Timing(gaps) != "early" {
+	if gaps, _ := l94Gaps("juniper_junos", shape("08:34:11.300"), cmds, b); l94C2Timing(gaps) != "early" {
 		t.Errorf("B's login before A: %v", gaps)
 	}
-	if gaps, _ := l94Gaps("juniper_junos", shape(""), cmds); l94C2Timing(gaps) != "none" {
+	if gaps, _ := l94Gaps("juniper_junos", shape(""), cmds, b); l94C2Timing(gaps) != "none" {
 		t.Errorf("no B login: %v", gaps)
 	}
 	// The loop's wait ends when A's redeem is in and, where no command is
 	// asked, B's login too; where commands are asked, A's alone, as before.
 	a := decision.CredentialHash([]byte(l94RefusedCredential()))
 	aOnly := []l94Event{{TS: l94At(t, "08:34:11.534"), Event: "redeem", Verdict: "deny", Cred: a}}
-	both := append(slices.Clone(aOnly), l94Event{TS: l94At(t, "08:34:11.639"), Event: "redeem", Verdict: "permit"})
-	if l94C2Recorded("juniper_junos", aOnly, a) || !l94C2Recorded("juniper_junos", both, a) {
+	both := append(slices.Clone(aOnly), l94Event{TS: l94At(t, "08:34:11.639"), Event: "redeem", Verdict: "permit", Cred: b})
+	if l94C2Recorded("juniper_junos", aOnly, a, b) || !l94C2Recorded("juniper_junos", both, a, b) {
 		t.Error("Junos: wait for A's redeem and B's login")
 	}
-	if !l94C2Recorded("cisco_nxos", aOnly, a) || l94C2Recorded("cisco_nxos", nil, a) {
+	if !l94C2Recorded("cisco_nxos", aOnly, a, "") || l94C2Recorded("cisco_nxos", nil, a, "") {
 		t.Error("NX-OS: wait for A's redeem only")
 	}
 }
@@ -324,7 +345,7 @@ func TestL94NXOSC2EvidenceRegradesTheSame(t *testing.T) {
 			}
 			evs = append(evs, e)
 		}
-		gaps, ok := l94Gaps("cisco_nxos", evs, []string{"show version", "show users"})
+		gaps, ok := l94Gaps("cisco_nxos", evs, []string{"show version", "show users"}, "")
 		if !ok || printed == "" || len(gaps) < 2 {
 			t.Fatalf("%s: gaps %v ok=%v printed %q", mode, gaps, ok, printed)
 		}
@@ -341,16 +362,17 @@ func TestL94NXOSC2EvidenceRegradesTheSame(t *testing.T) {
 // A's read and under l94Delay less 250ms later.
 func TestL94LoginInsideDelayIsFromAsRead(t *testing.T) {
 	a := l94At(t, "04:57:29.730")
+	bSHA := decision.CredentialHash([]byte(l94RefusedCredential()))
 	evs := func(b time.Duration) []l94Event {
-		return []l94Event{{TS: a, Event: "redeem", Verdict: "deny"}, {TS: a.Add(b), Event: "redeem", Verdict: "permit"}}
+		return []l94Event{{TS: a, Event: "redeem", Verdict: "deny"}, {TS: a.Add(b), Event: "redeem", Verdict: "permit", Cred: bSHA}}
 	}
-	if !l94LoginInsideDelay(evs(500 * time.Millisecond)) {
+	if !l94LoginInsideDelay(evs(500*time.Millisecond), bSHA) {
 		t.Error("0.5s after A's read: inside")
 	}
-	if l94LoginInsideDelay(evs(-300 * time.Millisecond)) {
+	if l94LoginInsideDelay(evs(-300*time.Millisecond), bSHA) {
 		t.Error("before A's read: not inside")
 	}
-	if l94LoginInsideDelay(evs(2 * time.Second)) {
+	if l94LoginInsideDelay(evs(2*time.Second), bSHA) {
 		t.Error("the baseline's +2.000s: it waited, not inside")
 	}
 }
@@ -697,6 +719,7 @@ func TestL94C3Stops(t *testing.T) {
 func TestL94JunosHoldsABLoginDuringTheFails(t *testing.T) {
 	t0 := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
 	p, _ := l94PlatformFor("vjunos26")
+	bSHA := decision.CredentialHash([]byte(l94RefusedCredential()))
 	for _, cell := range []string{"c2", "c3"} {
 		fails := 1
 		if cell == "c3" {
@@ -705,9 +728,9 @@ func TestL94JunosHoldsABLoginDuringTheFails(t *testing.T) {
 		clean := func() l94Grade {
 			g := l94Grade{Arm: "fixed", Cell: cell, Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1,
 				Typed: []l80Typed{{Command: "show version | no-more", Took: 0.3}}, Gaps: []time.Duration{300 * time.Millisecond},
-				BLogin: &l94Outcome{LoggedIn: true, Took: 1.1},
+				BLogin: &l94Outcome{LoggedIn: true, Took: 1.1}, BSHA: bSHA,
 				Events: []l94Event{{TS: t0.Add(-5 * time.Second), Event: "redeem", Verdict: "permit"}, // B's session
-					{TS: t0.Add(1200 * time.Millisecond), Event: "redeem", Verdict: "permit"}}} // B's login, inside the delay
+					{TS: t0.Add(1200 * time.Millisecond), Event: "redeem", Verdict: "permit", Cred: bSHA}}} // B's login, inside the delay
 			for range fails {
 				g.Outcomes = append(g.Outcomes, l94Outcome{AuthFailed: true})
 				g.Events = append(g.Events, l94Event{TS: t0, Event: "redeem", Verdict: "deny"}) // A's read

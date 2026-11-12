@@ -238,15 +238,16 @@ func l94Commanded(platform string) bool { return !qualNoCommandAuth(platform) }
 
 // l94BEvent is whether e is one of B's requests c2 times against A's read on
 // platform. Where commands are asked, B's authorize_command for one of cmds
-// (B's typed commands). Where none is, B's token login: a permit redeem (B's
-// session logged in before the try's mark, and A's are denies, l94AValid).
+// (B's typed commands). Where none is, B's token login: the permit redeem of
+// B's own token, credential_sha256 bSHA (startBLogin mints it), so a stray
+// permit (a re-authentication, a second attempt) never times the cell.
 // Command accounting is no clock there: vJunos 26.2R1.7 sends it in bursts
 // about 5s apart, each line as the device logged it ("show version |
 // no-more <cr>"), so a B command's record may come after A's FAIL however
 // fast port49 was.
-func l94BEvent(platform string, e l94Event, cmds []string) bool {
+func l94BEvent(platform string, e l94Event, cmds []string, bSHA string) bool {
 	if !l94Commanded(platform) {
-		return e.Event == "redeem" && e.Verdict == "permit"
+		return l94BLogin(e, bSHA)
 	}
 	if !slices.Contains(cmds, e.Vector) && !slices.ContainsFunc(cmds, func(c string) bool { return strings.HasPrefix(c, e.Vector+" |") }) {
 		return false
@@ -254,11 +255,17 @@ func l94BEvent(platform string, e l94Event, cmds []string) bool {
 	return e.Event == "authorize_command"
 }
 
+// l94BLogin is whether e is B's token login: a permit redeem whose
+// credential_sha256 is bSHA, B's token's. An empty bSHA is no login.
+func l94BLogin(e l94Event, bSHA string) bool {
+	return bSHA != "" && e.Event == "redeem" && e.Verdict == "permit" && e.Cred == bSHA
+}
+
 // l94C2Recorded is whether c2's loop has the records it grades: A's redeem
-// for aSHA and, where no command is asked, B's login (l94BEvent).
-func l94C2Recorded(platform string, evs []l94Event, aSHA string) bool {
+// for aSHA and, where no command is asked, B's login for bSHA (l94BEvent).
+func l94C2Recorded(platform string, evs []l94Event, aSHA, bSHA string) bool {
 	a := slices.ContainsFunc(evs, func(e l94Event) bool { return e.Event == "redeem" && e.Cred == aSHA })
-	return a && (l94Commanded(platform) || slices.ContainsFunc(evs, func(e l94Event) bool { return l94BEvent(platform, e, nil) }))
+	return a && (l94Commanded(platform) || slices.ContainsFunc(evs, func(e l94Event) bool { return l94BEvent(platform, e, nil, bSHA) }))
 }
 
 // l94Fails are recs' FAIL redeems, in order: A's refused-credential logins
@@ -277,13 +284,13 @@ func l94Fails(evs []l94Event) []l94Event {
 // redeem's ts (A's read) port49 read it (negative: before it). ok is false
 // with no FAIL. A gap in (0, l94Inside) was answered inside A's delay; one
 // near l94Delay waited behind A.
-func l94Gaps(platform string, evs []l94Event, cmds []string) (gaps []time.Duration, ok bool) {
+func l94Gaps(platform string, evs []l94Event, cmds []string, bSHA string) (gaps []time.Duration, ok bool) {
 	fails := l94Fails(evs)
 	if len(fails) == 0 {
 		return nil, false
 	}
 	for _, e := range evs {
-		if l94BEvent(platform, e, cmds) {
+		if l94BEvent(platform, e, cmds, bSHA) {
 			gaps = append(gaps, e.TS.Sub(fails[0].TS))
 		}
 	}
@@ -541,7 +548,10 @@ type l94Grade struct {
 	Outcomes  []l94Outcome // c2/c3/c5: A's logins
 	// BLogin is c2's and c3's B token login during A's FAILs, on a platform
 	// whose device asks port49 about no command (l94Commanded false).
-	BLogin   *l94Outcome
+	BLogin *l94Outcome
+	// BSHA is that login's credential_sha256 (its token's hash): the one
+	// redeem that is B's login (l94BEvent, l94LoginInsideDelay).
+	BSHA     string
 	Baseline *l94Baseline // the baseline arm's evidence, when it was run
 	Gaps     []time.Duration
 	// Restart is c5's window.
@@ -713,23 +723,23 @@ func l94BLoginStops(g l94Grade) []string {
 	if g.P.Timeout > 0 && b.Took > g.P.Timeout.Seconds() {
 		out = append(out, fmt.Sprintf("%s: B's token login took %.2fs, over %s (%s)", g.Cell, b.Took, g.P.Timeout, g.P.TimeoutFrom))
 	}
-	if !l94LoginInsideDelay(g.Events) {
+	if !l94LoginInsideDelay(g.Events, g.BSHA) {
 		out = append(out, g.Cell+": B's token login was not answered inside A's delay: no permit redeem read within "+l94Inside.String()+" after A's")
 	}
 	return out
 }
 
-// l94LoginInsideDelay is whether port49 read a permit redeem inside the
-// first FAIL's delay: at or after the FAIL's ts (A's read) and under
-// l94Inside later, c2's line (the baseline's B is read at +l94Delay).
-func l94LoginInsideDelay(evs []l94Event) bool {
+// l94LoginInsideDelay is whether port49 read B's login (l94BLogin, bSHA)
+// inside the first FAIL's delay: at or after the FAIL's ts (A's read) and
+// under l94Inside later, c2's line (the baseline's B is read at +l94Delay).
+func l94LoginInsideDelay(evs []l94Event, bSHA string) bool {
 	fails := l94Fails(evs)
 	if len(fails) == 0 {
 		return false
 	}
 	from, to := fails[0].TS, fails[0].TS.Add(l94Inside)
 	return slices.ContainsFunc(evs, func(e l94Event) bool {
-		return e.Event == "redeem" && e.Verdict == "permit" && !e.TS.Before(from) && e.TS.Before(to)
+		return l94BLogin(e, bSHA) && !e.TS.Before(from) && e.TS.Before(to)
 	})
 }
 

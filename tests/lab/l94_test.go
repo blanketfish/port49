@@ -310,15 +310,19 @@ func TestL94(t *testing.T) {
 				upAt      time.Time
 				restartAt time.Time
 				bLogin    *l94Outcome
+				bSHA      string
 			)
 			// startBLogin starts c2's and c3's B token login, where the
-			// device asks port49 about no command; nil elsewhere.
+			// device asks port49 about no command; nil elsewhere. bSHA is
+			// its token's credential_sha256, the one redeem that is B's
+			// login (never printed).
 			startBLogin := func() chan l94Outcome {
 				if l94Commanded(q.run.Platform) {
 					return nil
 				}
 				ch := make(chan l94Outcome, 1)
 				tok := mint()
+				bSHA = decision.CredentialHash([]byte(tok))
 				go func() {
 					b0 := time.Now()
 					c, err := l.dial(qualUser, tok, dialFor)
@@ -422,10 +426,10 @@ func TestL94(t *testing.T) {
 						// is graded, l94C2Verdict, not waited out), with B's
 						// login where no command is asked (l94C2Recorded).
 						recs = l.waitForRecords(off, l94Delay+30*time.Second, func(rs []map[string]any) bool {
-							return l94C2Recorded(q.run.Platform, l94Events(rs), aSHAs[0])
+							return l94C2Recorded(q.run.Platform, l94Events(rs), aSHAs[0], bSHA)
 						})
 						var ok bool
-						gaps, ok = l94Gaps(q.run.Platform, l94Events(recs), []string{permitted, d})
+						gaps, ok = l94Gaps(q.run.Platform, l94Events(recs), []string{permitted, d}, bSHA)
 						timing = l94C2Timing(gaps)
 						fmt.Fprintf(&sum, "try %d: lead=%s fail_recorded=%v timing=%s gaps=%v\n", try, lead, ok, timing, gaps)
 						if timing != "early" {
@@ -664,10 +668,10 @@ func TestL94(t *testing.T) {
 			}
 			g := l94Grade{Arm: arm, Cell: cell, Platform: q.run.Platform, P: p, Typed: typed, Events: evs,
 				Conns: len(conns), MostOpen: most, Second: second, DeadOrSSL: deadOrSSL, Outcomes: outcomes,
-				Gaps: gaps, RestartAt: restartAt, UpAt: upAt, BLogin: bLogin}
+				Gaps: gaps, RestartAt: restartAt, UpAt: upAt, BLogin: bLogin, BSHA: bSHA}
 			if bLogin != nil {
 				fmt.Fprintf(&sum, "B token login during A's FAILs: took=%.2fs logged_in=%v auth_failed=%v err=%q inside_delay=%v\n",
-					bLogin.Took, bLogin.LoggedIn, bLogin.AuthFailed, bLogin.Err, l94LoginInsideDelay(evs))
+					bLogin.Took, bLogin.LoggedIn, bLogin.AuthFailed, bLogin.Err, l94LoginInsideDelay(evs, bSHA))
 			}
 			g.Suspect = suspect
 			if arm == "fixed" {
