@@ -175,7 +175,61 @@ func l94Clean() l94Grade {
 	p, _ := l94PlatformFor("nxos106")
 	return l94Grade{Arm: "fixed", Cell: "c1", Platform: "cisco_nxos", P: p, Conns: 1, MostOpen: 1,
 		Typed:  []l80Typed{{Command: "show version", Asked: true}, {Command: "show users", Asked: true, Denied: true}},
-		Events: []l94Event{{Event: "authorize_command", Vector: "show version"}, {Event: "authorize_command", Vector: "show users"}}}
+		Events: append(l94SessionAcct(), l94Event{Event: "authorize_command", Vector: "show version"}, l94Event{Event: "authorize_command", Vector: "show users"})}
+}
+
+// l94SessionAcct is c1's two sessions' accounting START and STOP records.
+func l94SessionAcct() []l94Event {
+	return []l94Event{{Event: "account", Flags: "start", TaskID: "1"}, {Event: "account", Flags: "start", TaskID: "2"},
+		{Event: "account", Flags: "stop", TaskID: "1"}, {Event: "account", Flags: "stop", TaskID: "2"}}
+}
+
+// H1: on the fixed arm a permitted command refused, any prompt that never came
+// back, a c1/c4 command slower than the platform's L13 timeout (or than
+// l94FastB where commands are asked), and a c1 without its sessions'
+// accounting START and STOP records are each a stop.
+func TestL94RefusedPermittedLostPromptsSlowCommandsAndMissingAccountingStop(t *testing.T) {
+	cases := map[string]func(*l94Grade){
+		"permitted command was refused":    func(g *l94Grade) { g.Typed[0].Denied = true },
+		"prompt never came back":           func(g *l94Grade) { g.Typed[1].Err = true },
+		"took 1.20s, over 1s":              func(g *l94Grade) { g.Typed[0].Took = 1.2 },
+		"accounting START record(s), want": func(g *l94Grade) { g.Events = g.Events[2:] },
+		"accounting STOP record(s), want":  func(g *l94Grade) { g.Events = append(g.Events[:2:2], g.Events[4:]...) },
+	}
+	for want, mut := range cases {
+		for _, cell := range []string{"c1", "c4"} {
+			g := l94Clean()
+			g.Cell = cell
+			g.Typed = slices.Clone(g.Typed)
+			g.Events = slices.Clone(g.Events)
+			mut(&g)
+			if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, want) {
+				t.Errorf("%s %s: stops %q", cell, want, got)
+			}
+			g.Arm = "baseline"
+			if s := l94Stops(g); len(s) != 0 {
+				t.Errorf("%s %s: the baseline stops: %v", cell, want, s)
+			}
+		}
+	}
+	// c2 has its own latency bound and runs no session START/STOP check.
+	g := l94Clean()
+	g.Cell, g.Outcomes, g.Gaps = "c2", []l94Outcome{{AuthFailed: true}}, []time.Duration{1800 * time.Millisecond}
+	g.Events = g.Events[4:]
+	if got := l94Stops(g); len(got) != 0 {
+		t.Errorf("c2 graded on c1's accounting: %v", got)
+	}
+	// Junos asks about no command: its bound is its L13 timeout (3s), not l94FastB.
+	p, _ := l94PlatformFor("vjunos26")
+	j := l94Grade{Arm: "fixed", Cell: "c1", Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1, Events: l94SessionAcct(),
+		Typed: []l80Typed{{Command: "show version | no-more", Took: 2}, {Command: "show system users"}}}
+	if got := l94Stops(j); len(got) != 0 {
+		t.Errorf("junos 2s under its 3s timeout: %v", got)
+	}
+	j.Typed[0].Took = 3.5
+	if got := strings.Join(l94Stops(j), "\n"); !strings.Contains(got, "took 3.50s, over 3s") {
+		t.Errorf("junos over its timeout: %q", got)
+	}
 }
 
 // The merge criteria, one at a time, on the fixed arm; the baseline stops on nothing.
@@ -255,7 +309,7 @@ func TestL94C3Stops(t *testing.T) {
 	}
 	g.Typed[1].Took = 0.5
 	g.Outcomes = g.Outcomes[:2]
-	g.Events = g.Events[:3]
+	g.Events = g.Events[:len(g.Events)-2] // two of the three FAIL redeems gone
 	got := strings.Join(l94Stops(g), "\n")
 	if !strings.Contains(got, "2 of 3 FAILs") || !strings.Contains(got, "recorded 1 FAIL") {
 		t.Errorf("a FAIL lost: %q", got)
@@ -271,7 +325,7 @@ func TestL94C5Stops(t *testing.T) {
 	g.Cell, g.Conns, g.MostOpen = "c5", 2, 1
 	g.RestartAt, g.UpAt = t0, t0.Add(3*time.Second)
 	g.Typed = []l80Typed{{Command: "show version", Asked: true, At: t0.Add(-time.Second)},
-		{Command: "show version", Err: true, At: t0.Add(time.Second)},
+		{Command: "show version", Denied: true, At: t0.Add(time.Second)}, // refused locally inside the restart
 		{Command: "show version", Asked: true, At: t0.Add(5 * time.Second)}}
 	g.Events = []l94Event{{Event: "authorize_command", Vector: "show version"}, {Event: "authorize_command", Vector: "show version"}}
 	if got := l94Stops(g); len(got) != 0 {
@@ -292,7 +346,7 @@ func TestL94C5Stops(t *testing.T) {
 // denied command is the policy's business at login, not this cell's.
 func TestL94JunosIsNotGradedOnAsking(t *testing.T) {
 	p, _ := l94PlatformFor("vjunos26")
-	g := l94Grade{Arm: "fixed", Cell: "c1", Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1,
+	g := l94Grade{Arm: "fixed", Cell: "c1", Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1, Events: l94SessionAcct(),
 		Typed: []l80Typed{{Command: "show version | no-more"}, {Command: "show system users"}}}
 	if got := l94Stops(g); len(got) != 0 {
 		t.Errorf("junos c1: %v", got)

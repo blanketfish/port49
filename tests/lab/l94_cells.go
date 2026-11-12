@@ -416,8 +416,15 @@ func l94Stops(g l94Grade) []string {
 		return nil
 	}
 	var out []string
-	_, denied := l94Commands(g.Platform)
+	permitted, denied := l94Commands(g.Platform)
 	commanded := l94Commanded(g.Platform)
+	loop := g.Cell == "c1" || g.Cell == "c4"
+	// A c1/c4 command's bound: the platform's L13 timeout, and the row's
+	// <1s where the device asks port49 about each command.
+	bound := g.P.Timeout
+	if commanded && (bound == 0 || l94FastB < bound) {
+		bound = l94FastB
+	}
 	for _, x := range g.Typed {
 		if commanded && !x.Asked && (g.Cell != "c5" || l80Ran(x)) {
 			out = append(out, fmt.Sprintf("%s: session %d %q was never asked: lost or run unasked", g.Cell, x.Session, x.Command))
@@ -425,9 +432,20 @@ func l94Stops(g l94Grade) []string {
 		if commanded && x.Command == denied && !x.Denied && !x.Err {
 			out = append(out, fmt.Sprintf("%s: session %d %q, which port49 denies, ran", g.Cell, x.Session, x.Command))
 		}
-		if !commanded && x.Err {
-			out = append(out, fmt.Sprintf("%s: session %d %q never got its prompt back", g.Cell, x.Session, x.Command))
+		// c5's commands inside the restart are refused locally by design;
+		// one after port49d is back must run.
+		if x.Command == permitted && x.Denied && (g.Cell != "c5" || x.At.After(g.UpAt)) {
+			out = append(out, fmt.Sprintf("%s: session %d %q: a permitted command was refused", g.Cell, x.Session, x.Command))
 		}
+		if x.Err {
+			out = append(out, fmt.Sprintf("%s: session %d %q: its prompt never came back", g.Cell, x.Session, x.Command))
+		}
+		if loop && bound > 0 && x.Took > bound.Seconds() {
+			out = append(out, fmt.Sprintf("%s: session %d %q took %.2fs, over %s", g.Cell, x.Session, x.Command, x.Took, bound))
+		}
+	}
+	if loop {
+		out = append(out, l94SessionAccounting(g.Cell, g.Events, 2)...)
 	}
 	out = append(out, prefixAll(g.Cell+": ", l94Dup(g.Events, g.Typed))...)
 	if g.Cell != "c5" && (g.Conns != 1 || g.MostOpen > 1) {
@@ -484,6 +502,25 @@ func l94Stops(g l94Grade) []string {
 	}
 	if g.Baseline != nil && (g.Cell == "c2" || g.Cell == "c3") {
 		out = append(out, prefixAll(g.Cell+": ", l94Regressed(g.Baseline.Outcomes, g.Outcomes))...)
+	}
+	return out
+}
+
+// l94SessionAccounting is c1's (and c4's) check that each of its sessions
+// left an accounting START and STOP record: at least sessions of each. A
+// command's own accounting is a STOP too, so STOP is a floor, not a count.
+func l94SessionAccounting(cell string, evs []l94Event, sessions int) []string {
+	n := map[string]int{}
+	for _, e := range evs {
+		if e.Event == "account" {
+			n[e.Flags]++
+		}
+	}
+	var out []string
+	for _, f := range []string{"start", "stop"} {
+		if n[f] < sessions {
+			out = append(out, fmt.Sprintf("%s: %d accounting %s record(s), want at least %d (one per session)", cell, n[f], strings.ToUpper(f), sessions))
+		}
 	}
 	return out
 }
