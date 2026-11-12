@@ -95,6 +95,14 @@ type fakeBroker struct {
 	dropAfterMint int
 	minted        map[string]int
 	seenMint      map[string]bool
+	// mfaDevices are denied per_login_mfa_required unless the request names a
+	// challenge the fake issued and no one has used: one challenge per
+	// request, taken once, as the broker's is. challenges is how many it
+	// issued, usedChallenge the ones spent.
+	mfaDevices    map[string]bool
+	challenges    int
+	usedChallenge map[string]bool
+	wrongProof    int // a device refused for a challenge already spent
 
 	addrs           map[string][]string
 	sessions        map[string][]string // api.AgentSessionHeader as each path saw it
@@ -305,7 +313,27 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fb.minted, fb.seenMint = map[string]int{}, map[string]bool{}
 		}
 		items := make([]api.MintItem, 0, len(req.Devices))
+		var issued string // this request's one challenge, issued on first use
 		for _, d := range req.Devices {
+			if fb.mfaDevices[d] {
+				if ch := req.PerLoginMFAChallenge; ch != "" && !fb.usedChallenge[ch] {
+					if fb.usedChallenge == nil {
+						fb.usedChallenge = map[string]bool{}
+					}
+					fb.usedChallenge[ch] = true
+				} else {
+					if ch != "" {
+						fb.wrongProof++
+					}
+					if issued == "" {
+						fb.challenges++
+						issued = fmt.Sprintf("ch-%d", fb.challenges)
+					}
+					items = append(items, api.MintItem{Device: d, Verdict: "deny", Reason: "per_login_mfa_required",
+						PerLoginMFA: &api.PerLoginMFA{Challenge: issued}})
+					continue
+				}
+			}
 			if code := fb.itemErrFor[d]; code != "" {
 				items = append(items, api.MintItem{Device: d, Error: code, Detail: "this device was refused"})
 				continue

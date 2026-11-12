@@ -577,7 +577,7 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	}
 	limit := mintDeadline
 	c := &mintCall{device: device, enable: enable, ttl: ttl, challenge: challenge, ctx: ctx, limit: limit,
-		done: make(chan mintAnswer, 1), wake: make(chan struct{}, 1)}
+		deadline: time.Now().Add(limit), done: make(chan mintAnswer, 1), wake: make(chan struct{}, 1)}
 	a.mintMu.Lock()
 	a.mintQ = append(a.mintQ, c)
 	a.mintMu.Unlock()
@@ -641,9 +641,36 @@ type mintCall struct {
 	challenge string
 	ctx       context.Context
 	limit     time.Duration   // mintDeadline when the call was made
+	deadline  time.Time       // when the call was made, plus limit
+	alone     bool            // set when a batch's challenge was not this call's
 	done      chan mintAnswer // buffered: the sender never waits for a caller that left
 	batch     *mintBatch      // set, under mintMu, when claimed
 	wake      chan struct{}   // told, without waiting, when batch is set or cleared
+}
+
+// sendsAlone is a mint that is sent in a request of its own: one that names
+// a per-login proof (a proof covers one device's mint), or one a batch's
+// shared challenge was not for (requeueAlone).
+func (c *mintCall) sendsAlone() bool { return c.alone || c.challenge != "" }
+
+// requeueAlone puts calls back at the head of the queue to be sent one to a
+// request, as a call that was not claimed would have been, so each is given
+// its own challenge. A call whose caller has gone is dropped.
+func (a *Agent) requeueAlone(calls []*mintCall) {
+	a.mintMu.Lock()
+	defer a.mintMu.Unlock()
+	var back []*mintCall
+	for _, c := range calls {
+		if c.ctx.Err() != nil || !time.Now().Before(c.deadline) {
+			continue
+		}
+		c.batch, c.alone = nil, true
+		back = append(back, c)
+	}
+	a.mintQ = append(back, a.mintQ...)
+	for _, c := range back {
+		c.nudge()
+	}
 }
 
 // claimed reports whether c is in a batch being sent.
@@ -728,7 +755,7 @@ func (a *Agent) claimBatch() *mintBatch {
 	rest := a.mintQ[:0:0]
 	limit := max(int(a.batchMax.Load()), 1)
 	for _, c := range a.mintQ[1:] {
-		if head.challenge == "" && c.challenge == "" && len(b.calls) < limit && c.enable == head.enable &&
+		if !head.sendsAlone() && !c.sendsAlone() && len(b.calls) < limit && c.enable == head.enable &&
 			c.ttl == head.ttl && !slices.ContainsFunc(b.calls, func(o *mintCall) bool { return o.device == c.device }) {
 			b.calls = append(b.calls, c)
 			continue
@@ -876,15 +903,29 @@ func (a *Agent) runBatch(b *mintBatch) {
 		fail(fmt.Errorf("agent: the broker's answer: %w", err))
 		return
 	}
+	var again []*mintCall
+	proofGiven := false
 	for _, c := range b.calls {
 		i := slices.IndexFunc(mr.Results, func(it api.MintItem) bool { return it.Device == c.device })
 		if i < 0 {
 			c.done <- mintAnswer{err: fmt.Errorf("agent: asked for %s, the broker answered %d items", c.device, len(mr.Results))}
 			continue
 		}
-		item, err := mintItem(mr.Results[i])
+		it := mr.Results[i]
+		if len(b.calls) > 1 && it.Reason == "per_login_mfa_required" && it.PerLoginMFA != nil && it.PerLoginMFA.Challenge != "" {
+			// The broker issues one challenge for a request and a proof
+			// takes it once, so it is the first such caller's alone; the
+			// rest are sent again by themselves, each to be given its own.
+			if proofGiven {
+				again = append(again, c)
+				continue
+			}
+			proofGiven = true
+		}
+		item, err := mintItem(it)
 		c.done <- mintAnswer{item: item, err: err}
 	}
+	a.requeueAlone(again)
 }
 
 // mintItem is one device's answer: the item, or the error it carries.
