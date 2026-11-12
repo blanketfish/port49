@@ -4,6 +4,7 @@ package lab
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,9 +155,11 @@ func TestL94GapsAreReadFromRecordTimes(t *testing.T) {
 	if _, ok := l94Gaps("cisco_nxos", evs[:3], []string{"show version"}); ok {
 		t.Error("no FAIL redeem: ok must be false")
 	}
-	// Junos asks about no command: B's account records are what is ordered.
+	// Junos asks about no command: B's token login is what is ordered, not
+	// its command accounting (round 7, TestL94JunosC2IsGradedOnBsLogin).
 	jrecs := []map[string]any{
-		l94Rec(t0.Add(2400*time.Millisecond), "account", "", "show version"),
+		l94Rec(t0.Add(2400*time.Millisecond), "account", "", "show version | no-more <cr>"),
+		l94Rec(t0.Add(2400*time.Millisecond), "redeem", "permit", ""),
 		l94Rec(t0.Add(2100*time.Millisecond), "redeem", "deny", ""),
 	}
 	jg, ok := l94Gaps("juniper_junos", l94Events(jrecs), []string{"show version | no-more"})
@@ -216,6 +219,107 @@ func TestL94C2GradesTheEvidenceShapes(t *testing.T) {
 	}
 	if _, stops := grade(shape("04:57:29.730", "04:57:31.480")); !strings.Contains(strings.Join(stops, "\n"), "waited behind A") {
 		t.Errorf("1.75s after A: %v", stops)
+	}
+}
+
+// Round 7, on vJunos 26.2R1.7 (baseline c1, 08:34): Junos asks about no
+// command, and its command accounting is no clock for c2: the records come
+// in bursts about 5s apart (13.381-.389, 18.415-.431, 23.452) and each
+// carries the line as the device logged it, "show version | no-more <cr>".
+// So c2's gap there is B's token login: its permit redeem's ts less A's
+// read, the window l94LoginInsideDelay grades. The session logins were read
+// 105ms apart (11.534, 11.639).
+func TestL94JunosC2IsGradedOnBsLogin(t *testing.T) {
+	cmds := []string{"show version | no-more", "show system users"}
+	shape := func(b string) []l94Event {
+		evs := []l94Event{{TS: l94At(t, "08:34:11.534"), Event: "redeem", Verdict: "deny", Reason: "token_not_found"}}
+		if b != "" {
+			evs = append(evs, l94Event{TS: l94At(t, b), Event: "redeem", Verdict: "permit"})
+		}
+		return append(evs, l94Event{TS: l94At(t, "08:34:13.388"), Event: "account", Flags: "stop", TaskID: "2", Vector: "show version | no-more <cr>"})
+	}
+	gaps, ok := l94Gaps("juniper_junos", shape("08:34:11.639"), cmds)
+	if !ok || len(gaps) != 1 || gaps[0] != 105*time.Millisecond || l94C2Timing(gaps) != "ok" {
+		t.Fatalf("B's login 105ms after A: gaps %v ok=%v timing %s", gaps, ok, l94C2Timing(gaps))
+	}
+	if !l94LoginInsideDelay(shape("08:34:11.639")) {
+		t.Error("the same window as l94LoginInsideDelay")
+	}
+	p, _ := l94PlatformFor("vjunos26")
+	g := l94Grade{Arm: "fixed", Cell: "c2", Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1, Gaps: gaps,
+		Outcomes: []l94Outcome{{AuthFailed: true}}, BLogin: &l94Outcome{LoggedIn: true, Took: 0.4}, Events: shape("08:34:11.639"),
+		Typed: []l80Typed{{Command: cmds[0], Took: 0.25}, {Command: cmds[1], Denied: true, Took: 0.25}}}
+	if got := l94Stops(g); len(got) != 0 {
+		t.Errorf("a Junos c2 inside A's delay stops: %v", got)
+	}
+	g.Events = shape("08:34:13.534") // the baseline's +2.000s
+	g.Gaps, _ = l94Gaps("juniper_junos", g.Events, cmds)
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "waited behind A") {
+		t.Errorf("B's login read when A's delay ran out: %q", got)
+	}
+	if gaps, _ := l94Gaps("juniper_junos", shape("08:34:11.300"), cmds); l94C2Timing(gaps) != "early" {
+		t.Errorf("B's login before A: %v", gaps)
+	}
+	if gaps, _ := l94Gaps("juniper_junos", shape(""), cmds); l94C2Timing(gaps) != "none" {
+		t.Errorf("no B login: %v", gaps)
+	}
+	// The loop's wait ends when A's redeem is in and, where no command is
+	// asked, B's login too; where commands are asked, A's alone, as before.
+	a := decision.CredentialHash([]byte(l94RefusedCredential()))
+	aOnly := []l94Event{{TS: l94At(t, "08:34:11.534"), Event: "redeem", Verdict: "deny", Cred: a}}
+	both := append(slices.Clone(aOnly), l94Event{TS: l94At(t, "08:34:11.639"), Event: "redeem", Verdict: "permit"})
+	if l94C2Recorded("juniper_junos", aOnly, a) || !l94C2Recorded("juniper_junos", both, a) {
+		t.Error("Junos: wait for A's redeem and B's login")
+	}
+	if !l94C2Recorded("cisco_nxos", aOnly, a) || l94C2Recorded("cisco_nxos", nil, a) {
+		t.Error("NX-OS: wait for A's redeem only")
+	}
+}
+
+// Round 7: NX-OS's c2 grading is unchanged. The committed fixed-arm c2
+// summaries (5131998b) print the loop's gaps; the records they list, graded
+// again here, give the same gaps first (the trailing command's follows).
+func TestL94NXOSC2EvidenceRegradesTheSame(t *testing.T) {
+	for _, mode := range []string{"offered", "single"} {
+		b, err := os.ReadFile(filepath.Join(qualRoot(t), "tests", "lab", "evidence", "L94-cisco_nxos", "fixed", mode, "c2-summary.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var printed string
+		var evs []l94Event
+		inRecs := false
+		for _, ln := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(ln, "try ") {
+				printed = ln[strings.Index(ln, "gaps=")+len("gaps="):]
+			}
+			if ln == "port49 records:" {
+				inRecs = true
+				continue
+			}
+			if !inRecs || !strings.HasPrefix(ln, "  ") {
+				inRecs = inRecs && strings.HasPrefix(ln, "  ")
+				continue
+			}
+			f := strings.Fields(ln)
+			e := l94Event{TS: l94At(t, f[0]), Event: f[1]}
+			if len(f) > 2 {
+				e.Verdict = f[2]
+			}
+			if i := strings.Index(ln, `"`); i >= 0 {
+				e.Vector = strings.Trim(ln[i:], `"`)
+			}
+			evs = append(evs, e)
+		}
+		gaps, ok := l94Gaps("cisco_nxos", evs, []string{"show version", "show users"})
+		if !ok || printed == "" || len(gaps) < 2 {
+			t.Fatalf("%s: gaps %v ok=%v printed %q", mode, gaps, ok, printed)
+		}
+		if got := fmt.Sprint(gaps[:len(gaps)-1]); got != printed {
+			t.Errorf("%s: regraded %s, the run printed %s", mode, got, printed)
+		}
+		if l94C2Timing(gaps[:len(gaps)-1]) != "ok" {
+			t.Errorf("%s: timing %s", mode, l94C2Timing(gaps))
+		}
 	}
 }
 

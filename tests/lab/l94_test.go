@@ -418,10 +418,11 @@ func TestL94(t *testing.T) {
 						add(l94Type(l, qc, 0, d))
 						outcomes = append(outcomes, <-done)
 						bLogin = waitBLogin(bDone)
-						// Any redeem for A's credential ends the wait: a permit
-						// is graded (l94C2Verdict), not waited out.
+						// Any redeem for A's credential ends the wait (a permit
+						// is graded, l94C2Verdict, not waited out), with B's
+						// login where no command is asked (l94C2Recorded).
 						recs = l.waitForRecords(off, l94Delay+30*time.Second, func(rs []map[string]any) bool {
-							return slices.ContainsFunc(l94Events(rs), func(e l94Event) bool { return e.Event == "redeem" && e.Cred == aSHAs[0] })
+							return l94C2Recorded(q.run.Platform, l94Events(rs), aSHAs[0])
 						})
 						var ok bool
 						gaps, ok = l94Gaps(q.run.Platform, l94Events(recs), []string{permitted, d})

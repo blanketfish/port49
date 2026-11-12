@@ -232,21 +232,33 @@ func l94Events(recs []map[string]any) []l94Event {
 
 // l94Commanded is whether platform's device asks port49 about each command
 // (Junos and SR Linux do not: qualNoCommandAuth). Where it does not, a B
-// command reaches port49 only as accounting, and c2/c3 order B's account
-// records against A's FAIL instead.
+// command reaches port49 only as accounting, sent when the device likes, so
+// c2/c3 time B's token login against A's read instead (l94BEvent).
 func l94Commanded(platform string) bool { return !qualNoCommandAuth(platform) }
 
-// l94BEvent is whether e is one of B's command events on platform: an
-// authorize_command where commands are asked, a command account record
-// otherwise. cmds are B's typed commands.
+// l94BEvent is whether e is one of B's requests c2 times against A's read on
+// platform. Where commands are asked, B's authorize_command for one of cmds
+// (B's typed commands). Where none is, B's token login: a permit redeem (B's
+// session logged in before the try's mark, and A's are denies, l94AValid).
+// Command accounting is no clock there: vJunos 26.2R1.7 sends it in bursts
+// about 5s apart, each line as the device logged it ("show version |
+// no-more <cr>"), so a B command's record may come after A's FAIL however
+// fast port49 was.
 func l94BEvent(platform string, e l94Event, cmds []string) bool {
+	if !l94Commanded(platform) {
+		return e.Event == "redeem" && e.Verdict == "permit"
+	}
 	if !slices.Contains(cmds, e.Vector) && !slices.ContainsFunc(cmds, func(c string) bool { return strings.HasPrefix(c, e.Vector+" |") }) {
 		return false
 	}
-	if l94Commanded(platform) {
-		return e.Event == "authorize_command"
-	}
-	return e.Event == "account"
+	return e.Event == "authorize_command"
+}
+
+// l94C2Recorded is whether c2's loop has the records it grades: A's redeem
+// for aSHA and, where no command is asked, B's login (l94BEvent).
+func l94C2Recorded(platform string, evs []l94Event, aSHA string) bool {
+	a := slices.ContainsFunc(evs, func(e l94Event) bool { return e.Event == "redeem" && e.Cred == aSHA })
+	return a && (l94Commanded(platform) || slices.ContainsFunc(evs, func(e l94Event) bool { return l94BEvent(platform, e, nil) }))
 }
 
 // l94Fails are recs' FAIL redeems, in order: A's refused-credential logins
@@ -261,7 +273,7 @@ func l94Fails(evs []l94Event) []l94Event {
 	return out
 }
 
-// l94Gaps is, for each of B's command events, how long after the first FAIL
+// l94Gaps is, for each of B's events (l94BEvent), how long after the first FAIL
 // redeem's ts (A's read) port49 read it (negative: before it). ok is false
 // with no FAIL. A gap in (0, l94Inside) was answered inside A's delay; one
 // near l94Delay waited behind A.
