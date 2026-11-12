@@ -2273,6 +2273,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#port49_unadmitted_source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_unadmitted_source
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#port49_token_clock_skew" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3025,6 +3036,17 @@
     <span class="md-ellipsis">
       
         port49_inventory_privilege_changes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#port49_inventory_address_moved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_address_moved
       
     </span>
   </a>
@@ -3374,6 +3396,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#port49_unadmitted_source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_unadmitted_source
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#port49_token_clock_skew" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4133,6 +4166,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#port49_inventory_address_moved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        port49_inventory_address_moved
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#etcd_no_leader" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4332,6 +4376,13 @@ cannot work that way, a <code>*_configured</code> gauge says whether to expect i
 </code></pre></div>
 <p><strong>Source:</strong> A warning before shedding starts: <code>port49_connections</code> near the cap</p>
 <p><strong>Why this threshold:</strong> Ten minutes at 80% is a trend, not a burst; the page above covers the cap itself.</p>
+<h3 id="port49_unadmitted_source">port49_unadmitted_source<a class="headerlink" href="#port49_unadmitted_source" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
+<p>A connection came from a source address that is not in the inventory; a device whose source address changed (an unpinned source-interface, an uplink failover, a renumbered loopback, the wrong VRF) looks exactly like this. The unvalidated record's unvalidated.source names the address.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_unvalidated_packets_total</span><span class="p">{</span><span class="nl">diagnosis</span><span class="o">=</span><span class="p">"</span><span class="s">unadmitted_source</span><span class="p">"}[</span><span class="s">10m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> Connections from a source address not in the inventory: <code>increase(port49_unvalidated_packets_total{diagnosis="unadmitted_source"}[10m]) &gt; 0</code></p>
+<p><strong>Why this threshold:</strong> A device whose source address changed (an unpinned source-interface, an uplink failover, a renumbered loopback, the wrong VRF) looks exactly like this: its token logins fail and break-glass works. The <code>unvalidated</code> records carry the address in <code>unvalidated.source</code>.</p>
 <h3 id="port49_token_clock_skew">port49_token_clock_skew<a class="headerlink" href="#port49_token_clock_skew" title="Permanent link">&para;</a></h3>
 <p><strong>Severity:</strong> ticket. <strong>For:</strong> none.</p>
 <p>A port49d read a token minted more than a second ahead of its own clock: a broker's clock runs ahead of this host's. Put every broker and port49d host on NTP; a broker clock behind by a token_ttl mints tokens that are dead on arrival.</p>
@@ -4815,6 +4866,13 @@ cannot work that way, a <code>*_configured</code> gauge says whether to expect i
 </code></pre></div>
 <p><strong>Source:</strong> Source-of-truth edits that move privilege: <code>port49_inventory_changes_total{kind}</code></p>
 <p><strong>Why this threshold:</strong> Every kind but transport_changed, which has its own alert. A device_added during onboarding raises it too: expected, and it is the only place a new capture target shows.</p>
+<h3 id="port49_inventory_address_moved">port49_inventory_address_moved<a class="headerlink" href="#port49_inventory_address_moved" title="Permanent link">&para;</a></h3>
+<p><strong>Severity:</strong> page. <strong>For:</strong> none.</p>
+<p>An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen, and neither is one applied by a restart (including a Helm upgrade that rolls the pods), which is not a swap.</p>
+<div class="highlight"><pre><span></span><code><span class="kr">increase</span><span class="o">(</span><span class="nv">port49_inventory_changes_total</span><span class="p">{</span><span class="nl">kind</span><span class="o">=</span><span class="p">"</span><span class="s">address_moved</span><span class="p">"}[</span><span class="s">15m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+<p><strong>Source:</strong> An address moved from one device to another in one swap: <code>increase(port49_inventory_changes_total{kind="address_moved"}[15m]) &gt; 0</code></p>
+<p><strong>Why this threshold:</strong> On an RFC 8907 device with a shared CIDR or attribute key, the move lets the new name's grants be used from hardware that held another's. Onboarding never raises it (a new device on a fresh address is <code>device_added</code>). The same swap also raises <code>port49_inventory_privilege_changes</code> through the <code>address_added</code> it writes, or the <code>device_added</code> for a new name (no ticket if that device is refused or quarantined, since that <code>device_added</code> is not a security change). A move across two swaps, removed in one and added in the next, is not seen; nor is a restart, including a Helm upgrade that rolls the pods onto a changed inventory, which is not a swap.</p>
 <h3 id="etcd_no_leader">etcd_no_leader<a class="headerlink" href="#etcd_no_leader" title="Permanent link">&para;</a></h3>
 <p><strong>Severity:</strong> page. <strong>For:</strong> 1m.</p>
 <p>An etcd member has no leader; a dark member costs up to 12 s, a lost quorum stops the store.</p>

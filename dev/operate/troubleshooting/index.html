@@ -2702,7 +2702,8 @@ port49 as a whole. The decision log record for the attempt carries a <a href="..
   device. See <a href="../../concepts/tokens-receipts-contexts/">tokens, receipts and contexts</a>.</li>
 <li>An <code>unvalidated</code> record, and a connection the device sees reset with no reply: no key validated what the
   device sent. Its <code>unvalidated.diagnosis</code> says why: <code>no_known_key_matches</code> (a wrong key),
-  <code>matches_retired</code> (a retired key), <code>unadmitted_source</code> (the address is not in the inventory),
+  <code>matches_retired</code> (a retired key), <code>unadmitted_source</code> (the address is not in the inventory; the record's
+  <code>unvalidated.source</code> names it, and a device whose source address changed looks exactly like this),
   <code>device_quarantined</code>, <code>admission_refused</code> or <code>transport_mismatch</code> (the device reached the listener it
   does not speak).</li>
 </ul>
@@ -2829,9 +2830,19 @@ target exists, so every device has lost port49 and falls to local); <strong>tick
 job name fires it too. See <a href="../monitoring/#scraping">monitoring</a>.</p>
 <h3 id="connections">Connections<a class="headerlink" href="#connections" title="Permanent link">&para;</a></h3>
 <p>Alerts: <strong>page</strong> <a href="../../reference/alerts/#port49_global_cap_shedding">port49_global_cap_shedding</a>;
-<strong>ticket</strong> <a href="../../reference/alerts/#port49_connections_near_cap">port49_connections_near_cap</a>.</p>
+<strong>ticket</strong> <a href="../../reference/alerts/#port49_connections_near_cap">port49_connections_near_cap</a> and
+<a href="../../reference/alerts/#port49_unadmitted_source">port49_unadmitted_source</a>.</p>
 <p><strong>Do this:</strong> raise <code>limits.max_connections</code> or add replicas. The shed devices were reset on purpose and tried
 their next server.</p>
+<p>For <code>port49_unadmitted_source</code>, find the <code>unvalidated</code> records with
+<code>unvalidated.diagnosis: unadmitted_source</code> in the <a href="../../reference/decision-log/">decision log</a>: each carries
+the address in <code>unvalidated.source</code>. Either that address belongs to a device and the inventory does not list it,
+or a listed device is now sourcing from another address. A device whose source changed (a <code>source-interface</code>
+that is not pinned and moved with an uplink failover, a loopback renumbered before the source of truth was, the
+wrong VRF) looks exactly like this: the person sees break-glass work and their token fail, and port49d sees a
+stranger. Pin the device's source (see the
+<a href="https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/README.md">device reference configuration</a>)
+or put the new address in the source of truth.</p>
 <p><strong>Don't:</strong> restart port49d to clear it. A restart resets every open connection and does not change the
 cap. See <a href="../monitoring/#shedding">monitoring</a>.</p>
 <h3 id="keys-and-the-issuing-ca">Keys and the issuing CA<a class="headerlink" href="#keys-and-the-issuing-ca" title="Permanent link">&para;</a></h3>
@@ -2970,6 +2981,16 @@ treat <code>foreign</code> as a port49 bug before you check the device's local a
 <p><strong>Do this:</strong> read the inventory service's log. The fleet keeps authenticating on the snapshot in force, and
 nothing fails closed. For <code>port49_inventory_privilege_changes</code>, the <code>inventory_change</code> record names the
 device: review it.</p>
+<p><strong>Page:</strong> <a href="../../reference/alerts/#port49_inventory_address_moved">port49_inventory_address_moved</a>. An address
+left one device and landed on another in a single swap. Find the <code>inventory_change</code> record with
+<code>change.kind: address_moved</code>: <code>change.address</code> is the address, <code>change.from</code> the device that held it and
+<code>change.to</code> the device that holds it now. On an RFC 8907 (<code>transport: tcp</code>) device whose key comes from a CIDR or
+attribute key group, port49d names a connection by its source address and the shared key admits the whole range,
+so the move lets the new name's grants be used from hardware that held another's. Ask who edited the source of
+truth. A real RMA or re-IP raises it too; confirm that with whoever did it. A move spread over two swaps (removed
+in one, added in the next) is not seen, and neither is one a restart applies: a restart, including a Helm
+upgrade that rolls the pods, is not a swap. For a crown-jewel device, use <code>transport: tls</code> or a name pin to a
+per-device key, which a moved address does not reach.</p>
 <p><strong>Don't:</strong> restart port49d to refresh the inventory; the bundle in force keeps serving until a good one
 arrives.</p>
 <h3 id="etcd">etcd<a class="headerlink" href="#etcd" title="Permanent link">&para;</a></h3>

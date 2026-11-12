@@ -3257,7 +3257,7 @@ left out of a record when they have no value, so a query must treat a missing ke
 <tr>
 <td><code>change.kind</code></td>
 <td>string</td>
-<td>What changed. Only security-relevant changes are written: <code>device_added</code> (a device added and admitted), <code>admission_changed</code> (a device already in the inventory becoming admitted), <code>address_added</code> (an address added to a device already in the inventory), <code>key_ref_changed</code>, <code>transport_changed</code> and <code>platform_changed</code> (a device's key assignment, <code>transport</code> or <code>platform</code> changed), and <code>scope_joined</code> or <code>scope_left</code> (a device entering or leaving a scope with <code>security_log: true</code>).</td>
+<td>What changed. Only security-relevant changes are written: <code>device_added</code> (a device added and admitted), <code>admission_changed</code> (a device already in the inventory becoming admitted), <code>address_added</code> (an address added to a device already in the inventory), <code>address_moved</code> (an address that left one device and landed on another in the same swap: <code>change.address</code>, <code>change.from</code> the device that held it and <code>change.to</code> the device that holds it now), <code>key_ref_changed</code>, <code>transport_changed</code> and <code>platform_changed</code> (a device's key assignment, <code>transport</code> or <code>platform</code> changed), and <code>scope_joined</code> or <code>scope_left</code> (a device entering or leaving a scope with <code>security_log: true</code>).</td>
 </tr>
 <tr>
 <td><code>change.scope</code></td>
@@ -3272,12 +3272,12 @@ left out of a record when they have no value, so a query must treat a missing ke
 <tr>
 <td><code>change.from</code></td>
 <td>string</td>
-<td>The earlier value, on <code>key_ref_changed</code>, <code>transport_changed</code>, <code>platform_changed</code> and <code>admission_changed</code>.</td>
+<td>The earlier value, on <code>key_ref_changed</code>, <code>transport_changed</code>, <code>platform_changed</code> and <code>admission_changed</code>; on <code>address_moved</code>, the device that held the address.</td>
 </tr>
 <tr>
 <td><code>change.to</code></td>
 <td>string</td>
-<td>The later value, on those kinds and on <code>device_added</code>, where it is <code>admitted</code>.</td>
+<td>The later value, on those kinds and on <code>device_added</code>, where it is <code>admitted</code>; on <code>address_moved</code>, the device that holds the address now.</td>
 </tr>
 <tr>
 <td><code>change.from_bundle</code></td>
