@@ -320,7 +320,6 @@ func avOf(raw []string, key string) string {
 	return ""
 }
 
-// storeOutcome maps a store error to the StoreOps metric's outcome label.
 // holdReply holds an accounting reply for labAcctHold, or until ctx ends.
 // Only a lab build holds anything (hold.go).
 func holdReply(ctx context.Context) {
@@ -332,6 +331,7 @@ func holdReply(ctx context.Context) {
 	}
 }
 
+// storeOutcome maps a store error to the StoreOps metric's outcome label.
 func storeOutcome(err error) string {
 	switch {
 	case err == nil:

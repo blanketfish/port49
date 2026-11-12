@@ -2,8 +2,9 @@ package ci
 
 import (
 	"go/build"
-	"io/fs"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -43,34 +44,29 @@ func TestNoReleaseBuildNamesTheAccountingHoldTag(t *testing.T) {
 		}
 		return false
 	}
+	// The tracked tree is what a release builds from: untracked scratch
+	// (a worktree's notes, a local build) is no release input.
 	root := filepath.Join("..", "..")
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
 	found := 0
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(root, p)
-		rel = filepath.ToSlash(rel)
-		name := d.Name()
-		if d.IsDir() {
-			if name == ".git" || name == "node_modules" || name == "site" && rel == "site" ||
-				rel == "tests/lab/logs" || rel == "tests/lab/captures" || rel == "bin" || name == ".worktrees" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	for _, rel := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+		name := path.Base(rel)
 		// Never read a credential file.
 		if name == "realm.json" || strings.HasSuffix(name, ".env") || strings.HasSuffix(name, "-key.pem") ||
 			strings.HasSuffix(name, ".keytab") {
-			return nil
+			continue
 		}
-		info, err := d.Info()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		info, err := os.Lstat(p)
 		if err != nil || info.Size() > 4<<20 || !info.Mode().IsRegular() {
-			return nil
+			continue
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
-			return nil
+			continue
 		}
 		if strings.Contains(string(b), labAcctHoldTag) {
 			found++
@@ -78,10 +74,6 @@ func TestNoReleaseBuildNamesTheAccountingHoldTag(t *testing.T) {
 				t.Errorf("%s names the lab-only build tag %s: no build outside the lab may", rel, labAcctHoldTag)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	if found < 3 {
 		t.Fatalf("the tag was found in %d files: the scan is broken", found)
