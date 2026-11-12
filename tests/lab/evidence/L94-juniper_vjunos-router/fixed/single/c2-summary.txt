@@ -1,53 +1,40 @@
 L94, arm fixed, cell c2, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
 port49d: port49d <LONG> vcs.modified=false tags=""
-  s0 "show version | no-more" took=0.75s denied=false err=false at=09:47:33.369
-  s0 "show system users"      took=0.25s denied=true err=false at=09:47:34.121
-try 1: lead=400ms fail_recorded=true timing=ok gaps=[432ms]
-  s0 "show version | no-more" took=0.25s denied=false err=false at=09:47:43.497
-debug: 299 device log lines, kept 172, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
-  suspect: Nov 12 09:47:30.958469 authd_config_read: old seq 0 and new one 57
+  s0 "show version | no-more" took=0.75s denied=false err=false at=10:36:57.269
+  s0 "show system users"      took=0.25s denied=true err=false at=10:36:58.021
+try 1: lead=400ms fail_recorded=true timing=ok gaps=[415ms]
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:37:06.023
+debug: 295 device log lines, kept 169, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 10:36:53.848887 authd_config_read: old seq 0 and new one 59
 port49 read (authorize_command ts less typed):
-tls connections: 5, most open at once: 3
-  conn port=56566 syn=09:47:32.677 hold=0.01s end=server-fin
-  conn port=56570 syn=09:47:32.990 hold=2.01s end=server-fin
-  conn port=56582 syn=09:47:33.412 hold=open end=open
-  conn port=56588 syn=09:47:33.422 hold=0.01s end=server-fin
-  conn port=56594 syn=09:47:36.476 hold=2.01s end=server-fin
+tls connections: 5, most open at once: 2
+  conn port=48088 syn=10:36:56.571 hold=0.01s end=server-fin
+  conn port=36098 syn=10:36:56.889 hold=2.01s end=server-fin
+  conn port=36100 syn=10:36:57.305 hold=0.01s end=server-fin
+  conn port=36114 syn=10:36:58.989 hold=2.02s end=server-fin
+  conn port=36116 syn=10:36:59.619 hold=open end=open
 <LONG> delta: 0
-refused-credential login 1: took=10.54s auth_failed=true logged_in=false err=""
+refused-credential login 1: took=9.17s auth_failed=true logged_in=false err=""
 port49 records:
-  09:47:33.421 account
-  09:47:33.422 account
-  09:47:33.424 account
-  09:47:33.425 account
-  09:47:33.425 account
-  09:47:33.426 account
-  09:47:33.427 account
-  09:47:33.428 account
-  09:47:33.428 account
-  09:47:33.429 account
-  09:47:33.429 redeem permit
-  09:47:33.429 account
-  09:47:33.430 authorize_session permit
-  09:47:33.430 account
-  09:47:33.431 account
-  09:47:33.431 account
-  09:47:33.432 account
-  09:47:33.432 account
-  09:47:32.997 redeem deny
-  09:47:38.454 account
-  09:47:38.455 account
-  09:47:38.456 account
-  09:47:38.457 account
-  09:47:38.458 account
-  09:47:38.459 account
-  09:47:38.460 account
-  09:47:36.488 redeem deny
-  09:47:48.489 account
-  09:47:48.491 account
-STOP: c2: account flags/task_id start/1 recorded 3 times: a duplicate or retransmitted accounting record
-STOP: c2: account flags/task_id stop/1 recorded 4 times: a duplicate or retransmitted accounting record
-STOP: c2: account flags/task_id stop/2 recorded 4 times: a duplicate or retransmitted accounting record
-STOP: c2: account flags/task_id stop/3 recorded 2 times: a duplicate or retransmitted accounting record
-STOP: c2: 5 TLS connection(s), 3 open at once: the cell must hold exactly one
+  10:36:57.312 redeem permit
+  10:36:57.313 authorize_session permit
+  10:36:56.897 redeem deny
+  10:36:59.629 account
+  10:36:59.630 account
+  10:36:59.631 account
+  10:36:59.631 account
+  10:36:59.632 account
+  10:36:59.632 account
+  10:36:59.633 account
+  10:36:59.633 account
+  10:36:59.005 redeem deny
+  10:37:04.655 account
+  10:37:04.655 account
+  10:37:04.656 account
+  10:37:04.657 account
+  10:37:04.658 account
+  10:37:04.659 account
+  10:37:09.685 account
+  10:37:09.686 account
+FINDING: c2: device opens a connection per login (baseline 5, fixed 5)
 
