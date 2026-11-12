@@ -3,8 +3,11 @@
 package lab
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1480,4 +1483,40 @@ func TestL94RefusesAConnectionOlderThanItsCapture(t *testing.T) {
 	if err := l94OlderThanCapture(reused, l73TDevice, l73TLSPort, clean); err != nil {
 		t.Errorf("a reused port with its SYN captured: %v", err)
 	}
+	// The only packet after the clean point is the server's RST: the
+	// connection was still port49's then, so INVALID.
+	rst := orphan(41008, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")}, l73FakeSeg{false, tcpRST, 9000, nil, at("09:46:46.100")})
+	if err := l94OlderThanCapture(rst, l73TDevice, l73TLSPort, clean); err == nil || !strings.Contains(err.Error(), "device port 41008") {
+		t.Errorf("a server RST after the clean point: %v", err)
+	}
+	// Flows are keyed by device port and server, as l73Conns keys them: a
+	// captured SYN from the same device port to another server (the lab's
+	// second port49, 172.100.100.2) does not mask an orphan to the first.
+	// In time order, as tcpdump writes: A's packet, B's SYN, A's packet.
+	a1 := orphan(41010, l73FakeSeg{true, tcpACK, 7000, nil, at("09:46:45.500")})
+	toB := l94ReServer(t, orphan(41010, l73FakeSeg{true, tcpSYN, 8000, nil, at("09:46:46.200")}, l73FakeSeg{false, tcpSYN | tcpACK, 9000, nil, at("09:46:46.201")}), "172.100.100.2")
+	a2 := orphan(41010, l73FakeSeg{true, tcpACK | tcpPSH, 7000, nil, at("09:46:46.500")})
+	if err := l94OlderThanCapture(l94Splice(l94Splice(a1, toB), a2), l73TDevice, l73TLSPort, clean); err == nil ||
+		!strings.Contains(err.Error(), "device port 41010") || !strings.Contains(err.Error(), "172.100.100.1:300") {
+		t.Errorf("a SYN to another server on the same device port: %v", err)
+	}
+}
+
+// l94ReServer is raw (an l73FakePcap savefile) with the server's address,
+// l73TServer, rewritten to server in every record's IPv4 header.
+func l94ReServer(t *testing.T, raw []byte, server string) []byte {
+	t.Helper()
+	out := append([]byte{}, raw...)
+	old, ip := net.ParseIP(l73TServer).To4(), net.ParseIP(server).To4()
+	for off := 24; off+16 <= len(out); {
+		n := int(binary.LittleEndian.Uint32(out[off+8:]))
+		pkt := out[off+16 : off+16+n]
+		for _, at := range []int{14 + 12, 14 + 16} {
+			if bytes.Equal(pkt[at:at+4], old) {
+				copy(pkt[at:at+4], ip)
+			}
+		}
+		off += 16 + n
+	}
+	return out
 }

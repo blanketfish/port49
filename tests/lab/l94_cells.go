@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1155,42 +1157,51 @@ func l94OlderThanCapture(raw []byte, device string, srvPort uint16, cleanAt time
 	if err != nil {
 		return fmt.Errorf("INVALID: reading the cell's capture for connections older than it: %w", err)
 	}
+	// A flow is keyed by (device port, server), as l73Conns keys a
+	// connection: a SYN to one server does not speak for a flow to another
+	// on the same device port.
+	type key struct {
+		port   uint16
+		server string
+	}
 	type orphan struct{ first, last time.Time }
-	synced := map[uint16]bool{} // device ports whose SYN the capture holds
-	orphans := map[uint16]*orphan{}
+	synced := map[key]bool{} // flows whose device SYN the capture holds
+	orphans := map[key]*orphan{}
+	var order []key
 	for i, r := range f.Records {
 		fl, ok := labpcap.FlowOf(f.Link, f.Bytes(r))
 		if !ok {
 			continue
 		}
-		var port uint16
+		var k key
 		fromDevice := fl.Src.String() == device && fl.DstPort == srvPort
 		switch {
 		case fromDevice:
-			port = fl.SrcPort
+			k = key{fl.SrcPort, net.JoinHostPort(fl.Dst.String(), strconv.Itoa(int(fl.DstPort)))}
 		case fl.Dst.String() == device && fl.SrcPort == srvPort:
-			port = fl.DstPort
+			k = key{fl.DstPort, net.JoinHostPort(fl.Src.String(), strconv.Itoa(int(fl.SrcPort)))}
 		default:
 			continue
 		}
 		if fromDevice && fl.SYN() {
-			synced[port] = true // a new connection on this port, counted by l73Conns
+			synced[k] = true // a new connection on this flow, counted by l73Conns
 			continue
 		}
-		if synced[port] {
+		if synced[k] {
 			continue
 		}
 		at := f.TimeOf(i)
-		if o := orphans[port]; o == nil {
-			orphans[port] = &orphan{at, at}
+		if o := orphans[k]; o == nil {
+			orphans[k] = &orphan{at, at}
+			order = append(order, k)
 		} else {
 			o.last = at
 		}
 	}
-	for _, port := range slices.Sorted(maps.Keys(orphans)) {
-		if o := orphans[port]; !o.last.Before(cleanAt) {
-			return fmt.Errorf("INVALID: a connection older than the capture: device port %d sent or received packets from %s to %s with no SYN captured, the last at or after the cell's clean point %s; the capture did not start clean",
-				port, o.first.UTC().Format("15:04:05.000"), o.last.UTC().Format("15:04:05.000"), cleanAt.UTC().Format("15:04:05.000"))
+	for _, k := range order {
+		if o := orphans[k]; !o.last.Before(cleanAt) {
+			return fmt.Errorf("INVALID: a connection older than the capture: device port %d to %s sent or received packets from %s to %s with no SYN captured, the last at or after the cell's clean point %s; the capture did not start clean",
+				k.port, k.server, o.first.UTC().Format("15:04:05.000"), o.last.UTC().Format("15:04:05.000"), cleanAt.UTC().Format("15:04:05.000"))
 		}
 	}
 	return nil
