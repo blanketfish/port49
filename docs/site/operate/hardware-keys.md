@@ -177,8 +177,11 @@ offline, and when you are, take the file from the broker's administrator, not fr
     another process; whether `port49 token` still mints on the connection the agent already holds
     after it; and what other processes using the token do to the agent. Whether parallel forks, such
     as several Ansible workers sharing one agent, are asked for one touch or for several when a
-    device requires `hardware_key_touch` is a question for [L60](../reference/lab-register.md#l60)'s next session. The agent serializes
-    token requests, but what the key does is not measured. A person runs `port49 ssh <device>` once for one such
+    device requires `hardware_key_touch` is a question for [L60](../reference/lab-register.md#l60)'s next session. The agent sends one
+    request to the broker at a time and batches the token requests queued behind it
+    ([Identities](../concepts/identities.md)), but what the key does is not measured. A mint whose
+    caller gave up after its batch was sent is still minted for the others' sake; that token goes
+    unused, and the person can revoke it. A person runs `port49 ssh <device>` once for one such
     device before a play, as the Ansible collection's README says.
 
 !!! warning "Unmeasured"

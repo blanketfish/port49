@@ -28,9 +28,14 @@ downstream.
 validates the chain, expiry, revocation status and the client-authentication usage. The handshake itself
 is the proof that the person holds the key.
 
-The agent's session *is* that held connection. Every token for the rest of the day is minted over it, so a
-run across hundreds of devices is a batch mint with no further key use. If the connection drops, and the
-key is on a hardware token, the next sign-in costs one more PIN or touch. See
+The agent's session *is* that held connection. Every token for the rest of the day is minted over it, with
+no further key use. The connection carries one request at a time. `port49 token` asks for one device
+per call, so a run that asks for hundreds of devices at once, such as Ansible with `forks: 20`, queues
+in the agent. The agent sends what is queued as one request of up to the broker's `batch_max` devices
+and gives each caller its own device's token or its own refusal. The cost: the first mint goes alone, and
+a mint that waits longer than 30 seconds for the connection fails with "busy" and nothing minted. A
+mint that does not finish within about 85 seconds of being asked fails with the wait it was in. If the
+connection drops, and the key is on a hardware token, the next sign-in costs one more PIN or touch. See
 [Hardware keys](../operate/hardware-keys.md).
 
 The certificate must map to exactly one directory entry. Zero matches deny; more than one denies loudly
