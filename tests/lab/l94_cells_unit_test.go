@@ -405,6 +405,16 @@ func TestL94C3Stops(t *testing.T) {
 	if !strings.Contains(got, "2 of 3 FAILs") || !strings.Contains(got, "recorded 1 FAIL") {
 		t.Errorf("a FAIL lost: %q", got)
 	}
+	// Round 4: the lab client offers password, then keyboard-interactive
+	// (labSSHConfig), so one refused A login may be two FAIL redeems. Six for
+	// three logins is not a stop: l94AValid checks each credential instead.
+	g.Outcomes = append(g.Outcomes, l94Outcome{AuthFailed: true})
+	for range 5 {
+		g.Events = append(g.Events, l94Event{Event: "redeem", Verdict: "deny"})
+	}
+	if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "FAIL redeem") {
+		t.Errorf("two FAILs per login: %q", got)
+	}
 }
 
 // H5: where the device asks port49 about no command (Junos), c2 and c3 hold a

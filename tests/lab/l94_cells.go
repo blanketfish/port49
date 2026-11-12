@@ -592,8 +592,11 @@ func l94Stops(g l94Grade) []string {
 		if n := l94FailsDelivered(g.Outcomes); n != l94C3Fails {
 			out = append(out, fmt.Sprintf("c3: %d of %d FAILs delivered as an authentication failure", n, l94C3Fails))
 		}
-		if len(l94Fails(g.Events)) != l94C3Fails {
-			out = append(out, fmt.Sprintf("c3: port49 recorded %d FAIL redeem(s), want %d", len(l94Fails(g.Events)), l94C3Fails))
+		// At least one per A login: the lab client offers password and then
+		// keyboard-interactive (labSSHConfig), so a login can be two FAILs.
+		// That each of A's credentials was refused is l94AValid's.
+		if n := len(l94Fails(g.Events)); n < l94C3Fails {
+			out = append(out, fmt.Sprintf("c3: port49 recorded %d FAIL redeem(s), want at least %d", n, l94C3Fails))
 		}
 	case "c5":
 		if g.UpAt.IsZero() {
