@@ -48,16 +48,25 @@ import (
 // (l94Refusals) cannot be read, and an orphan could not be called stale.
 func l94MetricsText(t *testing.T) string {
 	t.Helper()
+	s, err := l94MetricsRead()
+	if err != nil {
+		t.Fatalf("INVALID: metrics for the refusal guard: %v", err)
+	}
+	return s
+}
+
+// l94MetricsRead is l94MetricsText without the test, for a goroutine.
+func l94MetricsRead() (string, error) {
 	r, err := http.Get("http://" + metricsAddr + "/metrics")
 	if err != nil {
-		t.Fatalf("INVALID: metrics for the refusal guard: %v", err)
+		return "", err
 	}
 	defer r.Body.Close()
-	b, err := io.ReadAll(r.Body)
-	if err != nil {
-		t.Fatalf("INVALID: metrics for the refusal guard: %v", err)
+	if r.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("metrics: %s", r.Status)
 	}
-	return string(b)
+	b, err := io.ReadAll(r.Body)
+	return string(b), err
 }
 
 // l94Prompts are the prompts a token session's command can end at: the
@@ -394,9 +403,13 @@ func TestL94(t *testing.T) {
 				// between is captured, and l94SinceClean sets it aside only if
 				// it closed before the clean point.
 				q.cell(name)
-				stop := e.capture(name)
-				// port49's refusal counters over the capture (l94Refusals).
+				// port49's refusal counters over the capture (l94Refusals),
+				// read before it starts so the window has no gap; c5 reads
+				// the old daemon's once more just before its restart.
 				refBefore := l94Refusals(l94MetricsText(t))
+				var refPre map[string]float64
+				var refPreErr error
+				stop := e.capture(name)
 				// c4's hold goes on at the clean point and off when body
 				// returns, on every path: deferred before it goes on, a
 				// Fatal anywhere in the cell still removes the file.
@@ -551,10 +564,14 @@ func TestL94(t *testing.T) {
 							rw.Add(1)
 							go func() {
 								defer rw.Done()
+								// The old daemon's refusals, read while it is
+								// still up: the new one counts from 0.
+								text, err := l94MetricsRead()
 								mu.Lock()
+								refPre, refPreErr = l94Refusals(text), err
 								restartAt = time.Now()
 								mu.Unlock()
-								err := l80RestartDaemon(e, l)
+								err = l80RestartDaemon(e, l)
 								mu.Lock()
 								defer mu.Unlock()
 								restartErr = err
@@ -566,6 +583,9 @@ func TestL94(t *testing.T) {
 					}
 					aw.Wait()
 					rw.Wait()
+					if refPreErr != nil {
+						t.Fatalf("INVALID: the old daemon's refusal counters before c5's restart: %v", refPreErr)
+					}
 					if restartErr != nil {
 						sum.WriteString("restart: port49d did not come back\n")
 					}
@@ -610,7 +630,9 @@ func TestL94(t *testing.T) {
 				// cell grades on, so whatever it cost the device is graded.
 				// It is stale only if port49 refused nothing over the
 				// capture: a refusal at Accept is a bare RST too.
-				refused := l94RefusalMoves(refBefore, refAfter)
+				mu.Lock()
+				refused := l94RefusalMovesAcross(refBefore, refPre, refAfter)
+				mu.Unlock()
 				if stale, err = l94OlderThanCapture(raw, e.l.p.addr, l73TLSPort, cleanAt, refused); err != nil {
 					t.Fatal(err)
 				}

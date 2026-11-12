@@ -1709,6 +1709,29 @@ port49_connections{state="open"} 1
 	}
 }
 
+// c5 restarts port49d: the first snapshot is the old daemon's, the last the
+// new one's. The old daemon's refusals are counted to a snapshot taken just
+// before the restart, and every count of the new daemon from 0.
+func TestL94RefusalsAreCountedAcrossC5sRestart(t *testing.T) {
+	s := `port49_connection_events_total{event="held_refused"}`
+	o := `port49_connections_shed_total{reason="global_cap"}`
+	before, pre, after := map[string]float64{s: 1, o: 0}, map[string]float64{s: 2, o: 0}, map[string]float64{s: 1, o: 0}
+	if got := l94RefusalMovesAcross(before, pre, after); !slices.Equal(got, []string{s + " +2"}) {
+		t.Errorf("before 1, pre-restart 2, after 1: %q, want +2", got)
+	}
+	// The old daemon refused nothing; the new one refused once.
+	if got := l94RefusalMovesAcross(before, before, map[string]float64{s: 0, o: 1}); !slices.Equal(got, []string{o + " +1"}) {
+		t.Errorf("the new daemon's refusal: %q", got)
+	}
+	if got := l94RefusalMovesAcross(before, before, map[string]float64{s: 0, o: 0}); got != nil {
+		t.Errorf("no refusal on either daemon: %q", got)
+	}
+	// No restart (pre nil): before to after.
+	if got := l94RefusalMovesAcross(before, nil, pre); !slices.Equal(got, []string{s + " +1"}) {
+		t.Errorf("no restart: %q", got)
+	}
+}
+
 // A RST is a minimum-size Ethernet frame: 54 bytes padded to 60. The
 // padding is not data, or every kernel reset would read as port49's.
 func TestL94TCPDataLenIgnoresEthernetPadding(t *testing.T) {

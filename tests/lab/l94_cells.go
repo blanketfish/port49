@@ -1379,15 +1379,38 @@ func l94Refusals(metrics string) map[string]float64 {
 func l94RefusalMoves(before, after map[string]float64) []string {
 	var out []string
 	for _, s := range slices.Sorted(maps.Keys(after)) {
-		d := after[s] - before[s]
-		if after[s] < before[s] {
-			d = after[s]
-		}
-		if d > 0 {
+		if d := l94CounterDelta(before[s], after[s]); d > 0 {
 			out = append(out, fmt.Sprintf("%s +%s", s, strconv.FormatFloat(d, 'f', -1, 64)))
 		}
 	}
 	return out
+}
+
+// l94RefusalMovesAcross is l94RefusalMoves over a cell that restarted
+// port49d (c5): before and pre are the old daemon's, pre read just before
+// the restart, and after is the new daemon's, every series counted from 0.
+// With pre nil there was no restart: before to after.
+func l94RefusalMovesAcross(before, pre, after map[string]float64) []string {
+	if pre == nil {
+		return l94RefusalMoves(before, after)
+	}
+	total := map[string]float64{}
+	for s := range pre {
+		total[s] += l94CounterDelta(before[s], pre[s])
+	}
+	for s, v := range after {
+		total[s] += v
+	}
+	return l94RefusalMoves(map[string]float64{}, total)
+}
+
+// l94CounterDelta is a counter's move from b to a; one that fell was reset
+// and moved by a.
+func l94CounterDelta(b, a float64) float64 {
+	if a < b {
+		return a
+	}
+	return a - b
 }
 
 // l94TCPRST is the TCP header's RST flag.
