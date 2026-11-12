@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/bundle"
 	"github.com/blanketfish/port49/internal/hwkey"
 	"github.com/blanketfish/port49/internal/mfatouch"
 	"github.com/blanketfish/port49/internal/printsafe"
@@ -569,6 +570,11 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	if ends := a.SessionEndsAt(); ends.IsZero() || !a.now().Before(ends) {
 		return api.MintItem{}, ErrSessionOver
 	}
+	// The broker refuses a whole request that names a device it cannot
+	// take, so this one is refused here, alone, by the broker's own rule.
+	if !bundle.DeviceNameOK(device) {
+		return api.MintItem{}, errors.New(badDeviceName)
+	}
 	limit := mintDeadline
 	c := &mintCall{device: device, enable: enable, ttl: ttl, challenge: challenge, ctx: ctx, limit: limit,
 		done: make(chan mintAnswer, 1), wake: make(chan struct{}, 1)}
@@ -622,6 +628,10 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		}
 	}
 }
+
+// badDeviceName is what a name the broker would refuse is told, in the
+// broker's words (bundle.MaxDeviceName, printable ASCII), with nothing sent.
+var badDeviceName = fmt.Sprintf("agent: a device name is 1 to %d printable ASCII characters; nothing was sent", bundle.MaxDeviceName)
 
 // mintCall is one Mint waiting to be sent, alone or in a batch.
 type mintCall struct {
@@ -2029,6 +2039,10 @@ func (a *Agent) Handler() http.Handler {
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil || req.Device == "" {
 			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "name one device"})
+			return
+		}
+		if !bundle.DeviceNameOK(req.Device) {
+			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: badDeviceName})
 			return
 		}
 		item, err := a.Mint(r.Context(), req.Device, req.Enable, time.Duration(req.TTLSeconds)*time.Second,
