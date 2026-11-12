@@ -2596,6 +2596,7 @@ tacacs-server host &lt;PORT49_1&gt; tls client-trustpoint &lt;CERT_ID&gt;
 <li>While port49 is dark, commands in sessions that were already open ran under local authorization, so a command port49 would deny is then decided locally (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L41-cisco_nxos.md">L41-cisco_nxos.md</a>, cell 3).</li>
 <li>An ERROR does not make break-glass a way around port49's commands: the break-glass login lands and then every command is refused <code>Error: AAA authorization failed</code> (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_nxos.md">L4-error-cisco_nxos.md</a>). <a href="../../../operate/troubleshooting/#break-glass-does-not-work">Troubleshooting</a> says what to do.</li>
 <li>Break-glass with <code>single-connection</code> on, after port49d reset a de-admitted device's connection, was closed with the fix: on every declined path it logged in within 0.5 s of the key miss (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-breakglass-cisco-singleconnection.md">L31-breakglass-cisco-singleconnection.md</a>).</li>
+<li>Sessions on one single-connect connection, offered and with <code>single-connection</code>: NX-OS 10.6(2)F takes replies out of request order, including a command authorization answered before the accounting record it was written behind. With three failing logins on the connection, a command answered in under 1 s; before port49 answered sessions at once it waited up to 7.3 s, and the device marked port49 dead 7 times and fell back once (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_nxos.md">L94-cisco_nxos.md</a>).</li>
 </ul>
 <h2 id="traps">Traps<a class="headerlink" href="#traps" title="Permanent link">&para;</a></h2>
 <ul>
@@ -2945,6 +2946,13 @@ tacacs-server host &lt;PORT49_1&gt; tls client-trustpoint &lt;CERT_ID&gt;
 <td>Nexus 9300v 10.4(2)F</td>
 <td>2026-11-04</td>
 <td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_nxos.md">L88-cisco_nxos.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l94">L94 (open)</a></td>
+<td>cisco_nxos</td>
+<td>Nexus 9300v 10.6(2)F</td>
+<td>2026-11-12</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_nxos.md">L94-cisco_nxos.md</a></td>
 </tr>
 </tbody>
 </table>

@@ -2546,6 +2546,7 @@ tacacs-server host &lt;PORT49_1&gt; tls vrf &lt;MGMT_VRF&gt; single-connection p
 <li>Over RFC 9887 on cEOS 4.36.3M: break-glass in 2.3 s with port49d stopped and 2.4 s dark, and a token login through the second server in 2.9 s (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_ceos-tls.md">L88-arista_ceos-tls.md</a>).</li>
 <li>Over RFC 9887 EOS sends no server name and offers a session ticket, which port49 accepted 11 of 11 times (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md">L73-arista_ceos.md</a>, cells c and g).</li>
 <li>Break-glass with single-connection on, after port49d reset a de-admitted device's connection, was closed with the fix: on every declined path it logged in within 0.5 s of the key miss (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-arista_eos.md">L31-arista_eos.md</a>).</li>
+<li>With <code>single-connection</code> set, cEOS 4.36.3M over RFC 9887 still opens a new connection for each login while another is in use, so a failing login never held up another session's command; commands answered in 0.25 s with three failing logins under way (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-arista_ceos.md">L94-arista_ceos.md</a>).</li>
 </ul>
 <h2 id="traps">Traps<a class="headerlink" href="#traps" title="Permanent link">&para;</a></h2>
 <ul>
@@ -2905,6 +2906,13 @@ tacacs-server host &lt;PORT49_1&gt; tls vrf &lt;MGMT_VRF&gt; single-connection p
 <td>vEOS-lab 4.31.2F (image tagged 4.32.2F)</td>
 <td>2026-11-06</td>
 <td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L90-oxidized-arista_eos.md">L90-oxidized-arista_eos.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l94">L94 (open)</a></td>
+<td>arista_eos</td>
+<td>cEOS-lab 4.36.3M</td>
+<td>2026-11-12</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-arista_ceos.md">L94-arista_ceos.md</a></td>
 </tr>
 </tbody>
 </table>

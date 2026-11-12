@@ -2548,6 +2548,7 @@ set system tacplus-server &lt;PORT49_1&gt; single-connection
 <li>Over RFC 9887 on vJunos-router 26.2R1.7: with no port set the device dials 49, it sends the literal server address as the SNI name, and it sends its leaf and its intermediate certificate (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-juniper_vjunos-router.md">L73-juniper_vjunos-router.md</a>, cells a, c, e).</li>
 <li>The reference over TLS on vJunos-router 26.2R1.7, loaded unchanged: break-glass in 40 ms with port49d stopped and 190 ms dark, and a token login through the second server in 190 ms (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vjunos-router-vjunos26-tls.md">L88-juniper_vjunos-router-vjunos26-tls.md</a>).</li>
 <li>A permit reply of up to 375 bytes, every attribute at most 255, logged in with no lockout on vJunos-router 23.4R2-S2.1 and 26.2R1.7, and break-glass logged in before and after every step. That is a VM; hardware is below (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md">L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md</a>).</li>
+<li>With <code>single-connection</code> set, vJunos-router 26.2R1.7 over RFC 9887 still opens a new connection for each login and for its accounting, sends each accounting record only after the reply to the one before, and, with the reference configuration, asks port49 about no command: it decides commands locally from the login's attributes. A failing login never held up another session, and with every accounting reply held 1.5 s no record was lost (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-juniper_vjunos-router.md">L94-juniper_vjunos-router.md</a>).</li>
 </ul>
 <h2 id="traps">Traps<a class="headerlink" href="#traps" title="Permanent link">&para;</a></h2>
 <ul>
@@ -3303,6 +3304,13 @@ set system tacplus-server &lt;PORT49_1&gt; single-connection
 <td>vSRX3 21.4R3.15</td>
 <td>2026-11-04</td>
 <td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-juniper_vsrx.md">L88-juniper_vsrx.md</a></td>
+</tr>
+<tr>
+<td><a href="../../../reference/lab-register/#l94">L94 (open)</a></td>
+<td>juniper_vjunos-router</td>
+<td>vJunos-router 26.2R1.7</td>
+<td>2026-11-12</td>
+<td><a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-juniper_vjunos-router.md">L94-juniper_vjunos-router.md</a></td>
 </tr>
 </tbody>
 </table>
