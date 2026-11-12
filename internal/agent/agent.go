@@ -792,10 +792,14 @@ func (a *Agent) runBatch(b *mintBatch) {
 	// The request lives until the latest caller's deadline, and until every
 	// caller has gone: one caller leaving never cancels another's mint.
 	var limit time.Duration
+	var latest time.Time
 	for _, c := range b.calls {
 		limit = max(limit, c.limit)
+		if c.deadline.After(latest) {
+			latest = c.deadline
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	ctx, cancel := context.WithDeadline(context.Background(), latest)
 	defer cancel()
 	remaining := atomic.Int64{}
 	remaining.Store(int64(len(b.calls)))
