@@ -463,11 +463,11 @@ func TestL94DuplicatesAreFound(t *testing.T) {
 	typed := []l80Typed{{Command: "show version"}, {Command: "show users"}}
 	evs := []l94Event{{Event: "authorize_command", Vector: "show version"}, {Event: "authorize_command", Vector: "show users"},
 		{Event: "account", Flags: "start", TaskID: "7"}, {Event: "account", Flags: "stop", TaskID: "7"}}
-	if got := l94Dup(evs, typed); len(got) != 0 {
+	if got := l94Dup("cisco_nxos", evs, typed); len(got) != 0 {
 		t.Errorf("no duplicate: %v", got)
 	}
 	evs = append(evs, l94Event{Event: "authorize_command", Vector: "show version"}, l94Event{TS: evs[3].TS.Add(2 * time.Second), Event: "account", Flags: "stop", TaskID: "7"})
-	if got := l94Dup(evs, typed); len(got) != 2 {
+	if got := l94Dup("cisco_nxos", evs, typed); len(got) != 2 {
 		t.Errorf("a retransmitted authorization and accounting record: %v", got)
 	}
 }
@@ -477,16 +477,120 @@ func TestL94DuplicatesAreFound(t *testing.T) {
 // after the first.
 func TestL94AccountingRepeatsCountFromOneSecond(t *testing.T) {
 	stop := func(clock string) l94Event {
-		return l94Event{TS: l94At(t, clock), Event: "account", Flags: "stop", TaskID: "172.100.100.1@pts/4"}
+		return l94Event{TS: l94At(t, clock), Event: "account", Flags: "stop", TaskID: "172.100.100.1@pts/4", Port: "0"}
 	}
-	if got := l94Dup([]l94Event{stop("04:48:11.253"), stop("04:48:11.269")}, nil); len(got) != 0 {
+	if got := l94Dup("cisco_nxos", []l94Event{stop("04:48:11.253"), stop("04:48:11.269")}, nil); len(got) != 0 {
 		t.Errorf("NX-OS's pair 16ms apart: %v", got)
 	}
-	if got := l94Dup([]l94Event{stop("04:48:11.253"), stop("04:48:11.269"), stop("04:48:12.300")}, nil); len(got) != 1 || !strings.Contains(got[0], "recorded 2 times") {
+	if got := l94Dup("cisco_nxos", []l94Event{stop("04:48:11.253"), stop("04:48:11.269"), stop("04:48:12.300")}, nil); len(got) != 1 || !strings.Contains(got[0], "recorded 2 times") {
 		t.Errorf("a repeat 1.05s after the first: %v", got)
 	}
-	if got := l94Dup([]l94Event{stop("04:48:12.253"), stop("04:48:11.253")}, nil); len(got) != 1 {
+	if got := l94Dup("cisco_nxos", []l94Event{stop("04:48:12.253"), stop("04:48:11.253")}, nil); len(got) != 1 {
 		t.Errorf("a repeat 1s apart, out of record order: %v", got)
+	}
+}
+
+// l94AcctRows reads "hh:mm:ss.mmm<TAB>flags<TAB>task_id<TAB>port<TAB>vector"
+// rows, the decision log's account fields as jq prints them.
+func l94AcctRows(t *testing.T, rows string) []l94Event {
+	t.Helper()
+	var out []l94Event
+	for _, ln := range strings.Split(strings.Trim(rows, "\n"), "\n") {
+		f := strings.SplitN(ln, "\t", 5)
+		if len(f) != 5 {
+			t.Fatalf("row %q", ln)
+		}
+		out = append(out, l94Event{TS: l94At(t, f[0]), Event: "account", Flags: f[1], TaskID: f[2], Port: f[3], Vector: f[4]})
+	}
+	return out
+}
+
+// vJunos 26's fixed c1 (2026-11-12, tests/lab/logs/decisions-juniper_vjunos-router.jsonl,
+// 09:46:48-09:47:04): two vtys (ports 1 and 2) whose task_ids count up per
+// session from 1, in bursts about 5s apart; system processes (port non-tty)
+// and the harness's own config session (port 0) in the same window. The old
+// key, flags/task_id, stopped it on start/1 x3, stop/1 x5 and stop/2 x3.
+const l94VJunosC1Acct = `
+09:46:48.164	stop	1	0	commit and-quit <cr>
+09:46:48.164	start	1	non-tty	login
+09:46:48.165	start	1	non-tty	login
+09:46:48.166	stop	2	non-tty	clear alarm 130 <cr>
+09:46:48.166	stop	2	non-tty	clear alarm 0 <cr>
+09:46:48.167	stop	1	non-tty	logout
+09:46:48.168	stop	1	non-tty	logout
+09:46:48.168	start	1	1	login
+09:46:48.169	start	1	2	login
+09:46:48.169	stop	2	1	show version | no-more <cr>
+09:46:48.170	stop	2	2	show version | no-more <cr>
+09:46:53.198	stop	3	1	show version | no-more <cr>
+09:46:53.199	stop	3	2	show version | no-more <cr>
+09:46:53.201	stop	4	1	show version | no-more <cr>
+09:46:53.202	stop	4	2	show version | no-more <cr>
+09:46:58.232	stop	1	1	logout
+09:46:58.234	stop	1	2	logout
+09:47:03.258	start	1	non-tty	login
+09:47:03.259	stop	2	non-tty	set alarm yellow alarm-id 0 <cr>
+09:47:03.261	start	1	non-tty	login
+09:47:03.262	stop	1	non-tty	logout
+09:47:03.264	stop	1	non-tty	logout`
+
+// The accounting key is flags/task_id/port/vector: a retransmission is the
+// same request. Where the device asks port49 about no command, only records
+// of a typed command count; session START and STOP are
+// l94SessionAccounting's.
+func TestL94AccountingDuplicatesAreKeyedByTheRequest(t *testing.T) {
+	typed := []l80Typed{{Session: 0, Command: "show version | no-more"}, {Session: 1, Command: "show version | no-more"},
+		{Session: 0, Command: "show system users"}}
+	evs := l94AcctRows(t, l94VJunosC1Acct)
+	if got := l94Dup("juniper_junos", evs, typed); len(got) != 0 {
+		t.Errorf("vJunos c1 as measured: %v", got)
+	}
+	// Two vtys with the same task_id and vector, 1s or more apart: two requests.
+	two := l94AcctRows(t, "09:46:48.169\tstop\t2\t1\tshow version | no-more <cr>\n09:46:49.500\tstop\t2\t2\tshow version | no-more <cr>")
+	if got := l94Dup("juniper_junos", two, typed); len(got) != 0 {
+		t.Errorf("two vtys, one task_id: %v", got)
+	}
+	// The same port, task_id and vector 1s or more apart: a retransmission.
+	again := append(slices.Clone(evs), l94AcctRows(t, "09:46:54.300\tstop\t3\t1\tshow version | no-more <cr>")...)
+	if got := l94Dup("juniper_junos", again, typed); len(got) != 1 ||
+		!strings.Contains(got[0], `account flags/task_id/port/vector stop/3/1/"show version | no-more <cr>" recorded 2 times`) {
+		t.Errorf("a repeat on port 1: %v", got)
+	}
+	// Non-tty and the config session repeat 1s or more apart, and are not
+	// counted where no command is asked.
+	sys := l94AcctRows(t, "09:46:48.164\tstart\t1\tnon-tty\tlogin\n09:47:03.258\tstart\t1\tnon-tty\tlogin\n"+
+		"09:46:48.164\tstop\t1\t0\tcommit and-quit <cr>\n09:47:03.300\tstop\t1\t0\tcommit and-quit <cr>")
+	if got := l94Dup("juniper_junos", sys, typed); len(got) != 0 {
+		t.Errorf("non-tty and port 0 on Junos: %v", got)
+	}
+	// Where commands are asked, every record counts, as before.
+	if got := l94Dup("cisco_nxos", sys, typed); len(got) != 2 {
+		t.Errorf("the same records on NX-OS: %v", got)
+	}
+	// NX-OS's measured shape (decisions-cisco_nxos.jsonl, 2026-11-12 07:58):
+	// session records at port 0 with no vector, STOP pairs 17-19ms apart.
+	nx := l94AcctRows(t, "07:58:37.723\tstart\t172.100.100.1@pts/4\t0\t\n07:58:37.739\tstart\t172.100.100.1@pts/5\t0\t\n"+
+		"07:58:54.942\tstop\t172.100.100.1@pts/5\t0\t\n07:58:54.961\tstop\t172.100.100.1@pts/5\t0\t\n"+
+		"07:58:57.941\tstop\t172.100.100.1@pts/4\t0\t\n07:58:57.958\tstop\t172.100.100.1@pts/4\t0\t")
+	if got := l94Dup("cisco_nxos", nx, nil); len(got) != 0 {
+		t.Errorf("NX-OS as measured: %v", got)
+	}
+	if got := l94Dup("cisco_nxos", append(nx, l94AcctRows(t, "07:58:59.000\tstop\t172.100.100.1@pts/4\t0\t")...), nil); len(got) != 1 {
+		t.Errorf("NX-OS, a third STOP 1s on: %v", got)
+	}
+	// One session's task_id on two commands, 2s apart: two requests.
+	cmds := l94AcctRows(t, "07:58:40.000\tstop\t172.100.100.1@pts/4\t0\tshow version\n07:58:42.000\tstop\t172.100.100.1@pts/4\t0\tshow users")
+	if got := l94Dup("cisco_nxos", cmds, nil); len(got) != 0 {
+		t.Errorf("two commands under one task_id: %v", got)
+	}
+}
+
+// The port comes from the record's session.port.
+func TestL94EventsCarryTheSessionPort(t *testing.T) {
+	evs := l94Events([]map[string]any{{"event": "account", "ts": "2026-11-12T09:46:48.169Z", "flags": "stop", "task_id": "2",
+		"session": map[string]any{"port": "1"}, "record": map[string]any{"vector": []any{"show", "version"}}}})
+	if len(evs) != 1 || evs[0].Port != "1" {
+		t.Fatalf("%+v", evs)
 	}
 }
 

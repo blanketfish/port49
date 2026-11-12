@@ -186,6 +186,7 @@ type l94Event struct {
 	Vector  string // authorize_command's request vector, account's record vector
 	Flags   string // account
 	TaskID  string // account
+	Port    string // session.port
 	Cred    string // redeem: auth.credential_sha256
 }
 
@@ -210,6 +211,9 @@ func l94Events(recs []map[string]any) []l94Event {
 		e.TaskID, _ = r["task_id"].(string)
 		if a, ok := r["auth"].(map[string]any); ok {
 			e.Cred, _ = a["credential_sha256"].(string)
+		}
+		if s, ok := r["session"].(map[string]any); ok {
+			e.Port, _ = s["port"].(string)
 		}
 		switch ev {
 		case "authorize_command":
@@ -461,19 +465,36 @@ func l94Match(typed []l80Typed, evs []l94Event) []*l94Event {
 }
 
 // l94Dup is a duplicate or retransmitted request: an authorize_command for a
-// command more often than it was typed, or an account record whose flags and
-// task_id repeat l94AcctRepeat or more after the first. NX-OS sends two
-// STOPs per session 15-19ms apart, in both arms (1c1d105c, 4481bbd8): that
-// pair is the device's, not a retransmission.
-func l94Dup(evs []l94Event, typed []l80Typed) []string {
+// command more often than it was typed, or an account record whose
+// flags/task_id/port/vector (one request: a retransmission repeats all four)
+// repeats l94AcctRepeat or more after the first. NX-OS sends two STOPs per
+// session 15-19ms apart, in both arms (1c1d105c, 4481bbd8): that pair is the
+// device's, not a retransmission. Junos counts task_ids from 1 in each
+// session, so two vtys share them; port tells them apart.
+//
+// Where the device asks port49 about no command, only the records of a
+// typed command count: vJunos logs system processes (port non-tty) and the
+// harness's config session (port 0) in the same window, and session START
+// and STOP are l94SessionAccounting's.
+func l94Dup(platform string, evs []l94Event, typed []l80Typed) []string {
 	typedN := map[string]int{}
 	for _, x := range typed {
 		typedN[x.Command]++
 	}
+	commanded := l94Commanded(platform)
+	counted := func(e l94Event) bool {
+		if e.Event != "account" || e.TaskID == "" {
+			return false
+		}
+		return commanded || typedN[strings.TrimSuffix(e.Vector, " <cr>")] > 0
+	}
+	key := func(e l94Event) string {
+		return fmt.Sprintf("%s/%s/%s/%q", e.Flags, e.TaskID, e.Port, e.Vector)
+	}
 	asked := map[string]int{}
 	first := map[string]time.Time{}
 	for _, e := range evs {
-		if k := e.Flags + "/" + e.TaskID; e.Event == "account" && e.TaskID != "" {
+		if k := key(e); counted(e) {
 			if f, ok := first[k]; !ok || e.TS.Before(f) {
 				first[k] = e.TS
 			}
@@ -484,11 +505,11 @@ func l94Dup(evs []l94Event, typed []l80Typed) []string {
 		acct[k] = 1
 	}
 	for _, e := range evs {
-		switch e.Event {
-		case "authorize_command":
+		switch {
+		case e.Event == "authorize_command":
 			asked[e.Vector]++
-		case "account":
-			if k := e.Flags + "/" + e.TaskID; e.TaskID != "" && e.TS.Sub(first[k]) >= l94AcctRepeat {
+		case counted(e):
+			if k := key(e); e.TS.Sub(first[k]) >= l94AcctRepeat {
 				acct[k]++
 			}
 		}
@@ -501,7 +522,7 @@ func l94Dup(evs []l94Event, typed []l80Typed) []string {
 	}
 	for _, k := range slices.Sorted(maps.Keys(acct)) {
 		if acct[k] > 1 {
-			out = append(out, fmt.Sprintf("account flags/task_id %s recorded %d times: a duplicate or retransmitted accounting record", k, acct[k]))
+			out = append(out, fmt.Sprintf("account flags/task_id/port/vector %s recorded %d times: a duplicate or retransmitted accounting record", k, acct[k]))
 		}
 	}
 	return out
@@ -665,7 +686,7 @@ func l94Stops(g l94Grade) []string {
 	if loop {
 		out = append(out, l94SessionAccounting(g.Cell, g.Events, 2)...)
 	}
-	out = append(out, prefixAll(g.Cell+": ", l94Dup(g.Events, g.Typed))...)
+	out = append(out, prefixAll(g.Cell+": ", l94Dup(g.Platform, g.Events, g.Typed))...)
 	if s, _ := l94ConnGrade(g); s != "" {
 		out = append(out, s)
 	}
