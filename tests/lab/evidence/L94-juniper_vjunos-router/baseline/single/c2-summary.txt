@@ -1,0 +1,48 @@
+L94, arm baseline, cell c2, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version | no-more" took=0.75s denied=false err=false at=09:18:57.590
+  s0 "show system users"      took=0.25s denied=true err=false at=09:18:58.342
+try 1: lead=400ms fail_recorded=true timing=ok gaps=[423ms]
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:07.523
+debug: 294 device log lines, kept 168, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 09:18:54.439077 authd_config_read: old seq 0 and new one 58
+port49 read (authorize_command ts less typed):
+tls connections: 5, most open at once: 3
+  conn port=38704 syn=09:18:56.905 hold=0.01s end=server-fin
+  conn port=38708 syn=09:18:57.212 hold=2.01s end=server-fin
+  conn port=38720 syn=09:18:57.544 hold=open end=open
+  conn port=38730 syn=09:18:57.635 hold=0.01s end=server-fin
+  conn port=38736 syn=09:19:00.505 hold=2.01s end=server-fin
+<LONG> delta: 0
+refused-credential login 1: took=10.34s auth_failed=true logged_in=false err=""
+port49 records:
+  09:18:57.553 account
+  09:18:57.554 account
+  09:18:57.555 account
+  09:18:57.556 account
+  09:18:57.556 account
+  09:18:57.557 account
+  09:18:57.558 account
+  09:18:57.559 account
+  09:18:57.560 account
+  09:18:57.560 account
+  09:18:57.561 account
+  09:18:57.561 account
+  09:18:57.562 account
+  09:18:57.562 account
+  09:18:57.563 account
+  09:18:57.563 account
+  09:18:57.643 redeem permit
+  09:18:57.643 authorize_session permit
+  09:18:57.220 redeem deny
+  09:19:00.517 redeem deny
+  09:19:02.579 account
+  09:19:02.580 account
+  09:19:02.581 account
+  09:19:02.582 account
+  09:19:02.582 account
+  09:19:02.584 account
+  09:19:02.584 account
+  09:19:07.602 account
+  09:19:12.621 account
+

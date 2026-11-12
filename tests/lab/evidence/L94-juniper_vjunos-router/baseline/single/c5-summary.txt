@@ -1,0 +1,60 @@
+L94, arm baseline, cell c5, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version | no-more" took=0.75s denied=false err=false at=09:20:41.824
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:43.076
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:43.828
+  s0 "show system users"      took=0.25s denied=true err=false at=09:20:44.580
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:45.331
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:46.083
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:46.835
+  s0 "show system users"      took=0.25s denied=true err=false at=09:20:47.587
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:48.838
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:49.590
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:50.342
+  s0 "show system users"      took=0.25s denied=true err=false at=09:20:51.094
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:51.845
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:52.596
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:20:53.348
+  s0 "show system users"      took=0.25s denied=true err=false at=09:20:54.099
+debug: 340 device log lines, kept 173, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 09:20:38.547976 authd_config_read: old seq 0 and new one 62
+port49 read (authorize_command ts less typed):
+tls connections: 6, most open at once: 2
+  conn port=42926 syn=09:20:41.046 hold=0.01s end=server-fin
+  conn port=42930 syn=09:20:43.146 hold=5.19s end=server-fin
+  conn port=55790 syn=09:20:47.869 hold=0.47s end=server-fin
+  conn port=55796 syn=09:20:48.340 hold=0.00s end=server-rst
+  conn port=55802 syn=09:20:48.700 hold=2.02s end=server-fin
+  conn port=55804 syn=09:20:53.215 hold=open end=open
+<LONG> delta: 0
+refused-credential login 1: took=7.89s auth_failed=true logged_in=false err=""
+restart window: stop=09:20:48.338 up=09:20:48.592
+port49 records:
+  09:20:41.054 redeem permit
+  09:20:41.055 authorize_session permit
+  09:20:43.155 account
+  09:20:43.156 account
+  09:20:43.157 account
+  09:20:43.157 account
+  09:20:43.158 account
+  09:20:43.158 account
+  09:20:48.180 account
+  09:20:48.181 account
+  09:20:48.182 account
+  09:20:48.182 account
+  09:20:48.183 account
+  09:20:48.184 account
+  09:20:48.184 account
+  09:20:48.185 account
+  09:20:48.186 account
+  09:20:48.187 account
+  09:20:47.877 redeem deny
+  09:20:48.712 redeem deny
+  09:20:53.224 account
+  09:20:53.225 account
+  09:20:53.226 account
+  09:20:53.227 account
+  09:20:53.228 account
+  09:20:58.254 account
+  09:20:58.255 account
+
