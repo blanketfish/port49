@@ -28,6 +28,7 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -306,6 +307,8 @@ func TestL94(t *testing.T) {
 				gaps      []time.Duration
 				recs      []map[string]any
 				conns     []l73Conn
+				pre       []l73Conn // closed before the clean point (l94SinceClean)
+				cleanAt   time.Time
 				second    float64
 				upAt      time.Time
 				restartAt time.Time
@@ -356,12 +359,15 @@ func TestL94(t *testing.T) {
 				q.tlsDaemon(e, "l94", daemon)
 				q.login()
 				read := func() (float64, bool) { return e.metric(qualConnectionsOpen) }
-				if err := qualWaitNoConnections(read, l80CleanPolls, time.Sleep); err != nil {
-					t.Fatal(err)
-				}
+				// The capture starts first, then the wait for no connection
+				// open: a connection the device opens on its own schedule in
+				// between is captured, and l94SinceClean sets it aside only if
+				// it closed before the clean point.
 				q.cell(name)
 				stop := e.capture(name)
-				if err := qualStillClean(read); err != nil {
+				var err error
+				if cleanAt, err = l94WaitClean(read, l80CleanPolls, time.Sleep, time.Now); err != nil {
+					stop()
 					t.Fatal(err)
 				}
 				// A's refused credentials, one per A login, each its own so
@@ -543,6 +549,16 @@ func TestL94(t *testing.T) {
 					second = 0 // the restart reset port49d's counters
 				}
 				conns = stop()
+				if conns, pre, err = l94SinceClean(conns, cleanAt); err != nil {
+					t.Fatal(err)
+				}
+				// The cell's wire evidence is the cell's connections alone, so
+				// its count is the graded one and the baseline's (l94Baseline).
+				js, _ := json.MarshalIndent(append([]l73Conn{}, conns...), "", "  ")
+				if hits := l73SummaryLeaks(string(js)); len(hits) > 0 {
+					t.Fatalf("INVALID: the %s summary holds %v; nothing written", cell, hits)
+				}
+				e.evidence[name+".tls.json"] = js
 				if err := e.l.stopDaemon(); err != nil {
 					t.Errorf("stopping port49d after %s: %v", cell, err)
 				}
@@ -667,6 +683,10 @@ func TestL94(t *testing.T) {
 			for _, cn := range conns {
 				sum.WriteString("  " + l80ConnLine(cn) + "\n")
 			}
+			fmt.Fprintf(&sum, "clean point (the capture started first, then the gauge read 0): %s\n", l80Clock(cleanAt))
+			for _, cn := range pre {
+				sum.WriteString("  excluded: closed before the clean point " + l80Clock(cleanAt) + ": " + l80ConnLine(cn) + "\n")
+			}
 			fmt.Fprintf(&sum, "single_connect_second_connection delta: %v\n", second)
 			for i, o := range outcomes {
 				fmt.Fprintf(&sum, "refused-credential login %d: took=%.2fs auth_failed=%v logged_in=%v err=%q\n", i+1, o.Took, o.AuthFailed, o.LoggedIn, o.Err)
@@ -711,14 +731,26 @@ func TestL94(t *testing.T) {
 			findings = append(findings, prefixAll(mode+" ", cellFindings)...)
 			tj, _ := json.Marshal(typed)
 			aj, _ := json.Marshal(outcomes)
-			write(out, map[string]string{
+			files := map[string]string{
 				cell + "-summary.txt":  l80Filter(sum.String()),
 				cell + "-debug.txt":    kept,
 				cell + ".tls.json":     string(e.evidence[name+".tls.json"]),
 				cell + "-typed.json":   string(tj),
 				cell + "-a.json":       string(aj),
 				cell + "-suspect.json": string(suspectJSON),
-			})
+			}
+			if len(pre) > 0 {
+				// The connections set aside, kept for audit; the same leak
+				// gate as the cell's own.
+				pj, _ := json.MarshalIndent(pre, "", "  ")
+				if hits := l73SummaryLeaks(string(pj)); len(hits) > 0 {
+					t.Fatalf("INVALID: the %s pre-clean summary holds %v; nothing written", cell, hits)
+				}
+				files[cell+"-preclean.tls.json"] = string(pj)
+			} else if err := os.Remove(filepath.Join(out, cell+"-preclean.tls.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err) // an earlier run's would speak for this one
+			}
+			write(out, files)
 			if p.Blocks {
 				stops = append(stops, prefixAll(mode+" ", cellStops)...)
 			} else {

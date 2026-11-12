@@ -1356,3 +1356,76 @@ func TestL94SuspectLinesStopOnlyPastTheBaseline(t *testing.T) {
 		t.Errorf("an NX-OS marker: %q", got)
 	}
 }
+
+// vJunos fixed r2 and c4 ended INVALID at qualStillClean twice: the device
+// opens accounting connections on its own schedule, between the gauge's 0
+// and the capture's start. The capture now starts first; the clean point is
+// the start of the first read that came back 0.
+func TestL94WaitCleanIsTheFirstZeroRead(t *testing.T) {
+	t0 := l94At(t, "09:46:40.000")
+	clock := t0
+	now := func() time.Time { return clock }
+	sleep := func(d time.Duration) { clock = clock.Add(d) }
+	reads := []float64{1, 0, 1}
+	read := func() (float64, bool) {
+		v := reads[0]
+		reads = reads[1:]
+		clock = clock.Add(5 * time.Millisecond) // the scrape takes time
+		return v, true
+	}
+	at, err := l94WaitClean(read, 60, sleep, now)
+	if err != nil || !at.Equal(t0.Add(time.Second+5*time.Millisecond)) {
+		t.Errorf("gauge 1 then 0: %s %v, want the second read's start", at.Format("15:04:05.000"), err)
+	}
+	none := func() (float64, bool) { return 0, false }
+	if at, err := l94WaitClean(none, 60, sleep, now); err != nil || at.IsZero() {
+		t.Errorf("no series is no connection: %s %v", at, err)
+	}
+	busy := func() (float64, bool) { return 2, true }
+	if _, err := l94WaitClean(busy, 3, sleep, now); err == nil || !strings.Contains(err.Error(), "INVALID: 2 connections still open after 3s") {
+		t.Errorf("never 0: %v", err)
+	}
+}
+
+// l94SinceClean keeps the connections whose SYN is at or after the clean
+// point, sets aside one before it only if it closed before it (the gauge's
+// 0 says so of every connection port49 accepted), and is INVALID for one
+// opened before it and still open after: a SYN port49 had not accepted when
+// the gauge read 0, or a capture that did not start clean.
+func TestL94SinceCleanNeverLoosensTheCleanStart(t *testing.T) {
+	clean := l94At(t, "09:46:46.000")
+	conn := func(port uint16, syn, end string, how string) l73Conn {
+		c := l73Conn{Server: "172.100.100.1:300", DevicePort: port, SYNAt: l94At(t, syn), End: how}
+		if end != "" {
+			c.EndAt = l94At(t, end)
+		}
+		return c
+	}
+	// vJunos fixed c1's shape, all after the clean point: kept whole.
+	c1 := []l73Conn{conn(58970, "09:46:46.184", "09:46:46.195", "server-fin"),
+		conn(58982, "09:46:46.285", "09:46:46.295", "server-fin"), conn(48328, "09:46:48.152", "", "open")}
+	kept, pre, err := l94SinceClean(c1, clean)
+	if err != nil || len(kept) != 3 || len(pre) != 0 {
+		t.Errorf("vJunos c1: kept %d pre %d %v", len(kept), len(pre), err)
+	}
+	// An accounting connection that opened and closed before the clean point.
+	early := conn(41000, "09:46:45.100", "09:46:45.900", "server-fin")
+	kept, pre, err = l94SinceClean(append([]l73Conn{early}, c1...), clean)
+	if err != nil || len(kept) != 3 || len(pre) != 1 || pre[0].DevicePort != 41000 {
+		t.Errorf("closed before: kept %d pre %v %v", len(kept), pre, err)
+	}
+	for name, c := range map[string]l73Conn{
+		"still open":         conn(41002, "09:46:45.100", "", "open"),
+		"closed after clean": conn(41004, "09:46:45.100", "09:46:46.300", "server-fin"),
+	} {
+		if _, _, err := l94SinceClean(append([]l73Conn{c}, c1...), clean); err == nil ||
+			!strings.Contains(err.Error(), "INVALID: the connection from device port") || !strings.Contains(err.Error(), "the capture did not start clean") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// A SYN exactly at the clean point is the cell's.
+	at := conn(41006, "09:46:46.000", "", "open")
+	if kept, pre, err := l94SinceClean([]l73Conn{at}, clean); err != nil || len(kept) != 1 || len(pre) != 0 {
+		t.Errorf("SYN at the clean point: kept %d pre %d %v", len(kept), len(pre), err)
+	}
+}

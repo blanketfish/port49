@@ -1096,3 +1096,45 @@ func binaryTags(path string) (string, error) {
 	}
 	return parseBuildTags(string(out)), nil
 }
+
+// l94WaitClean waits, with the cell's capture already running, for no
+// connection open on port49d (the gauge, one poll a second, at most limit
+// polls) and returns the clean point: the time just before the first read
+// that came back 0 (or with no series, which is no connection). vJunos opens
+// accounting connections on its own schedule, so waiting for 0 before the
+// capture started left a window qualStillClean lost twice (fixed r2, c4).
+func l94WaitClean(read func() (float64, bool), limit int, sleep func(time.Duration), now func() time.Time) (time.Time, error) {
+	last := -1.0
+	for range limit {
+		at := now()
+		v, ok := read()
+		if !ok || v == 0 {
+			return at, nil
+		}
+		last = v
+		sleep(time.Second)
+	}
+	return time.Time{}, fmt.Errorf("INVALID: %v connections still open after %ds; the capture would not start clean", last, limit)
+}
+
+// l94SinceClean splits the capture's connections at the clean point. One
+// whose SYN is at or after it is the cell's, and its SYN is in the capture.
+// One whose SYN is before it is set aside (pre) only if it also ended before
+// it, as the gauge's 0 says every connection port49 accepted had. One opened
+// before the clean point and still open after it (or ended after it) is
+// INVALID: a SYN port49 had not accepted when the gauge read 0, or a capture
+// that did not start clean. The clean start is never loosened.
+func l94SinceClean(conns []l73Conn, cleanAt time.Time) (kept, pre []l73Conn, err error) {
+	for _, c := range conns {
+		switch {
+		case !c.SYNAt.Before(cleanAt):
+			kept = append(kept, c)
+		case c.End != "open" && !c.EndAt.IsZero() && c.EndAt.Before(cleanAt):
+			pre = append(pre, c)
+		default:
+			return nil, nil, fmt.Errorf("INVALID: the connection from device port %d opened at %s, before the cell's clean point %s, and was still open after it (%s at %s); the capture did not start clean",
+				c.DevicePort, c.SYNAt.UTC().Format("15:04:05.000"), cleanAt.UTC().Format("15:04:05.000"), c.End, c.EndAt.UTC().Format("15:04:05.000"))
+		}
+	}
+	return kept, pre, nil
+}
