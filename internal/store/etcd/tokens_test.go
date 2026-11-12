@@ -118,3 +118,35 @@ func TestAPutWhoseIndexEntryMovedReadsAgainAndLands(t *testing.T) {
 		t.Fatalf("candidates: %v %v", got, err)
 	}
 }
+
+// Expiry on etcd is the record's, read against port49d's clock (design §12,
+// plan 7d Ruling 3): a broker whose clock runs more than the TTL behind
+// mints a token dead on arrival, and one ahead lengthens it by the skew. This
+// pins that, so the NTP requirement in the install pages stays true
+// (audit F8-1).
+func TestABrokerClockSkewedPastTheTTLLosesTheToken(t *testing.T) {
+	ctx := context.Background()
+	daemon := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	s := onShared(t, func() time.Time { return daemon })
+	for _, c := range []struct {
+		name string
+		skew time.Duration // broker clock minus port49d's
+		live bool
+	}{
+		{"in step", 0, true},
+		{"20s behind, a 30s token has 10s left", -20 * time.Second, true},
+		{"60s behind, dead on arrival", -60 * time.Second, false},
+		{"60s ahead, 90s of life", 60 * time.Second, true},
+	} {
+		k := store.TokenKey{NAS: "leaf", Username: c.name}
+		broker := daemon.Add(c.skew)
+		if _, err := s.PutToken(ctx, k, store.Token{ID: "t", Kind: store.KindLogin, MintedAt: broker,
+			ExpiresAt: broker.Add(30 * time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Candidates(ctx, k)
+		if err != nil || (len(got) == 1) != c.live {
+			t.Errorf("%s: %d candidates (%v), want live=%v", c.name, len(got), err, c.live)
+		}
+	}
+}

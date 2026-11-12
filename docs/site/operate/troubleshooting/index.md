@@ -425,6 +425,28 @@ restore runbook.
 **Don't:** restart port49d to clear the line, or lift anything, before the runbook says. Don't assume a
 revoked person is still revoked until the revocations are re-issued.
 
+### A token was minted ahead of this host's clock
+
+**You see:** `clock: a token was minted <N> ahead of this host's clock`, at most once every ten
+minutes, and `port49_token_minted_ahead_total` rising; the ticket
+[port49_token_clock_skew](../../reference/alerts.md#port49_token_clock_skew) fires on it.
+
+**It means:** the broker that minted the token has a clock `N` ahead of this port49d's. A token's
+expiry is the broker's clock plus the TTL, read on port49d's clock, so every token from that broker
+lives `N` longer here, until its lease reclaims it: at most `lease_grace` (5 minutes) plus two minutes past
+`token_ttl`. The other direction does not show: a broker `N` behind shortens each token by
+`N`, and past a `token_ttl` its tokens are dead on arrival, so every login with one fails
+`token_not_found` with no other sign. If logins from one broker fail `token_not_found` right after the
+token was minted, compare the clocks first.
+
+**Do this:** put every broker host and every port49d host on NTP (`chronyc tracking`, or
+`timedatectl` on the host) and confirm they agree to well under the smallest `token_ttl`. Alert on the
+hosts' own NTP sync, since port49 cannot see a broker that is behind: with node_exporter,
+`node_timex_sync_status == 0` and `abs(node_timex_offset_seconds) > 1`.
+
+**Don't:** lengthen `token_ttl` to cover the skew; it widens replay for an unspent token and leaves the
+clocks wrong for everything else that reads them.
+
 ### Shedding
 
 **You see:** `shedding: all <N> TACACS+ connection slots (limits.max_connections) are in use`

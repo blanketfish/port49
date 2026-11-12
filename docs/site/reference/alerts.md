@@ -186,6 +186,20 @@ sum by (instance) (port49_connections{state="open"}) / on(instance) port49_conne
 
 **Why this threshold:** Ten minutes at 80% is a trend, not a burst; the page above covers the cap itself.
 
+### port49_token_clock_skew {#port49_token_clock_skew}
+
+**Severity:** ticket. **For:** none.
+
+A port49d read a token minted more than a second ahead of its own clock: a broker's clock runs ahead of this host's. Put every broker and port49d host on NTP; a broker clock behind by a token_ttl mints tokens that are dead on arrival.
+
+```promql
+increase(port49_token_minted_ahead_total[15m]) > 0
+```
+
+**Source:** A broker's clock runs ahead of a port49d's: `port49_token_minted_ahead_total` increasing
+
+**Why this threshold:** Expiry on etcd is the record's, read against port49d's clock, so a skewed pair shifts every token's life by the skew. A token minted more than a second in port49d's future is read directly from the record. A broker behind by a token_ttl cannot be seen this way (its tokens are dead on arrival); the fix is the same, NTP on every broker and port49d host.
+
 ### port49_key_secret_files_changed {#port49_key_secret_files_changed}
 
 **Severity:** ticket. **For:** 10m.

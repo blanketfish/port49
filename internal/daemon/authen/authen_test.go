@@ -3383,3 +3383,77 @@ func TestAnEnableTokenOfAnotherPrincipalIsRefused(t *testing.T) {
 		t.Fatal("the other principal's enable token was spent")
 	}
 }
+
+// fakeSkew records what the skew watch was told.
+type fakeSkew struct{ seen []time.Duration }
+
+func (f *fakeSkew) Ahead(by time.Duration) { f.seen = append(f.seen, by) }
+
+// A token whose minted_at is ahead of port49d's own clock by more than a
+// second names a broker clock that runs ahead: the counter moves once per
+// lookup and the watch is told by how much (audit F8-1). Within a second, or
+// with no minted_at, it is not skew.
+func TestATokenMintedAheadOfTheDaemonCountsClockSkew(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		mintedAt func(now time.Time) time.Time
+		want     float64
+	}{
+		{"ten seconds ahead", func(now time.Time) time.Time { return now.Add(10 * time.Second) }, 1},
+		{"half a second ahead", func(now time.Time) time.Time { return now.Add(500 * time.Millisecond) }, 0},
+		{"exactly the slack ahead", func(now time.Time) time.Time { return now.Add(clockSkewSlack) }, 0},
+		{"a millisecond past the slack", func(now time.Time) time.Time { return now.Add(clockSkewSlack + time.Millisecond) }, 1},
+		{"behind", func(now time.Time) time.Time { return now.Add(-10 * time.Second) }, 0},
+		{"no minted_at", func(time.Time) time.Time { return time.Time{} }, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			watch := &fakeSkew{}
+			f.h.WithSkewWatch(watch)
+			secret := f.tag() + "skewskewskewskewskew01"
+			if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+				store.Token{ID: "s", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+					Principal: "user:alice@example.com", BlobHash: "sha256:b", AuthTime: f.now,
+					MintedAt: c.mintedAt(f.now), ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			if reply := f.login(secret); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("the login still passes: %+v", reply)
+			}
+			if got := testutil.ToFloat64(f.m.TokenMintedAhead); got != c.want {
+				t.Fatalf("port49_token_minted_ahead_total = %v, want %v", got, c.want)
+			}
+			if by := c.mintedAt(f.now).Sub(f.now); c.want == 1 && (len(watch.seen) != 1 || watch.seen[0] != by) {
+				t.Fatalf("the watch was told %v, want one %v", watch.seen, by)
+			}
+			if c.want == 0 && len(watch.seen) != 0 {
+				t.Fatalf("the watch was told %v, want nothing", watch.seen)
+			}
+		})
+	}
+}
+
+// Two skewed tokens under one key (a login and an enable token, minted
+// together) are one lookup: the counter moves once, and the watch is told the
+// furthest ahead.
+func TestTwoSkewedTokensInOneLookupCountOnce(t *testing.T) {
+	f := setup(t)
+	watch := &fakeSkew{}
+	f.h.WithSkewWatch(watch)
+	secret := f.tag() + "pairpairpairpairpair01"
+	for i, kind := range []string{store.KindLogin, store.KindEnable} {
+		if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+			store.Token{ID: "p" + kind, Secret: []byte(secret + string(rune('a'+i))), Kind: kind, Username: "alice",
+				Principal: "user:alice@example.com", BlobHash: "sha256:b", AuthTime: f.now,
+				MintedAt: f.now.Add(time.Duration(10+i) * time.Second), ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.login(secret + "a")
+	if got := testutil.ToFloat64(f.m.TokenMintedAhead); got != 1 {
+		t.Fatalf("port49_token_minted_ahead_total = %v, want 1 for one lookup", got)
+	}
+	if len(watch.seen) != 1 || watch.seen[0] != 11*time.Second {
+		t.Fatalf("the watch was told %v, want one 11s", watch.seen)
+	}
+}

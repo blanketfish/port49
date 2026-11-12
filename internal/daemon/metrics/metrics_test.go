@@ -70,6 +70,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.BrokerLogoutsQueueFull.Add(0)
 	m.RedemptionRestoreUnjudged.Set(0)
 	m.RedemptionRestoredRefused.Add(0)
+	m.TokenMintedAhead.Add(0)
 	m.StoreRestoreDetected.Set(0)
 	m.InventoryReloads.WithLabelValues("applied").Inc()
 	m.InventoryFileRefused.Set(0)
@@ -143,6 +144,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_broker_mint_gate_closed":                    false,
 		"port49_redemption_restore_unjudged":                false,
 		"port49_redemption_restored_refused_total":          false,
+		"port49_token_minted_ahead_total":                   false,
 		"port49_store_restore_detected_timestamp_seconds":   false,
 		"port49_inventory_reloads_total":                    false,
 		"port49_inventory_file_refused":                     false,

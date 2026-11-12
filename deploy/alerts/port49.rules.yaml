@@ -42,6 +42,14 @@ groups:
         annotations:
           summary: "A port49d is holding more than 80% of limits.max_connections open; raise the cap or add replicas before it sheds."
           runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_connections_near_cap"
+  - name: port49_clock
+    rules:
+      - alert: port49_token_clock_skew
+        expr: "increase(port49_token_minted_ahead_total[15m]) > 0"
+        labels: {severity: ticket}
+        annotations:
+          summary: "A port49d read a token minted more than a second ahead of its own clock: a broker's clock runs ahead of this host's. Put every broker and port49d host on NTP; a broker clock behind by a token_ttl mints tokens that are dead on arrival."
+          runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_token_clock_skew"
   - name: port49_keys_and_ca
     rules:
       - alert: port49_key_secret_files_changed

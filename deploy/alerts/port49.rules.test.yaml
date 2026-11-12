@@ -98,6 +98,25 @@ tests:
       - eval_time: 5m
         alertname: port49_global_cap_shedding
         exp_alerts: []
+  # port49_token_clock_skew
+  - interval: 1m
+    input_series:
+      - {series: "port49_token_minted_ahead_total{instance=\"a\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_token_clock_skew
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "ticket"}
+            exp_annotations:
+              summary: "A port49d read a token minted more than a second ahead of its own clock: a broker's clock runs ahead of this host's. Put every broker and port49d host on NTP; a broker clock behind by a token_ttl mints tokens that are dead on arrival."
+              runbook_url: "https://blanketfish.github.io/port49/latest/reference/alerts/#port49_token_clock_skew"
+  - interval: 1m
+    input_series:
+      - {series: "port49_token_minted_ahead_total{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_token_clock_skew
+        exp_alerts: []
   # port49_connections_near_cap
   - interval: 1m
     input_series:

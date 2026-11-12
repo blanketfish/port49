@@ -302,6 +302,12 @@ Every metric port49d and port49-broker export on `/metrics`, with its type, labe
 | `port49_tls_handshakes_total` | counter | `outcome` | RFC 9887 listener handshakes by outcome. | [port49_tls_handshake_failures](alerts.md#port49_tls_handshake_failures) |
 | `port49_tls_server_certificate_lifetime_left_ratio` | gauge |  | The fraction of its own lifetime the RFC 9887 listener's certificate has left, below 0 once expired; 1 with no listener. | [port49_tls_server_certificate_renewal_late](alerts.md#port49_tls_server_certificate_renewal_late), [port49_tls_server_certificate_expired](alerts.md#port49_tls_server_certificate_expired) |
 
+## token
+
+| Metric | Type | Labels | Meaning | Alerts |
+|---|---|---|---|---|
+| `port49_token_minted_ahead_total` | counter |  | Token lookups that found a token whose minted_at is more than a second ahead of this port49d's clock: the minting broker's clock runs ahead of this host's, and every token's life shifts by the skew. | [port49_token_clock_skew](alerts.md#port49_token_clock_skew) |
+
 ## tokens
 
 | Metric | Type | Labels | Meaning | Alerts |
