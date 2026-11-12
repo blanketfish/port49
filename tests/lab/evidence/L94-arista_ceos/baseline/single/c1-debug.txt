@@ -1,594 +1,579 @@
 show agent Aaa logs
-===> /var/log/agents/Aaa-963 Thu Nov 12 11:30:49 2026 <===
-===== Output from /usr/bin/Aaa [] (PID=963) started Nov 12 11:29:11.173310 ===
+===> /var/log/agents/Aaa-970 Thu Nov 12 12:09:55 2026 <===
+===== Output from /usr/bin/Aaa [] (PID=970) started Nov 12 12:08:11.265637 ===
 initializing per-process SM for main agent Aaa
-2026-11-12 11:30:19.213311  1020 Tacacs               0 tac_send_acct failed: connect: Connection refused
-2026-11-12 11:30:19.213385  1020 Tacacs               0 closing tacacs+ connection
-2026-11-12 11:30:19.213587  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= False
-2026-11-12 11:30:19.462902  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:19.463584  1020 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:19.464112  1020 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:19.464268  1020 Tacacs               0 tac_send_acct failed: connect: Connection refused
-2026-11-12 11:30:19.464374  1020 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:19.464571  1020 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:19.464688  1020 Tacacs               0 tac_send_acct failed: connect: Connection refused
-2026-11-12 11:30:19.464743  1020 Tacacs               0 closing tacacs+ connection
-2026-11-12 11:30:19.464954  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= False
-2026-11-12 11:30:21.125724  4858 Aaa                  9 getPwEnt name: qual01 uid: None force True
-2026-11-12 11:30:21.125869  4858 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:21.125896  4858 Aaa                  6 plugin group port49 has unknown user
-2026-11-12 11:30:21.125946  4858 Aaa                  6 getPwEnt: unknown user qual01 ; generating bogus pwent
-2026-11-12 11:30:21.126012  4858 Aaa                  6 plugin found by name for method local
-2026-11-12 11:30:21.126734  4859 Aaa                  9 getPwEnt name: qual01 uid: None force True
-2026-11-12 11:30:21.126834  4859 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:21.126857  4859 Aaa                  6 plugin group port49 has unknown user
-2026-11-12 11:30:21.126894  4859 Aaa                  6 getPwEnt: unknown user qual01 ; generating bogus pwent
-2026-11-12 11:30:21.126947  4859 Aaa                  6 plugin found by name for method local
-2026-11-12 11:30:21.129371  4861 Aaa                  9 getPwEnt name: qual01 uid: None force True
-2026-11-12 11:30:21.129458  4861 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:21.129480  4861 Aaa                  6 plugin group port49 has unknown user
-2026-11-12 11:30:21.129516  4861 Aaa                  6 getPwEnt: unknown user qual01 ; generating bogus pwent
-2026-11-12 11:30:21.129569  4861 Aaa                  6 plugin found by name for method local
-2026-11-12 11:30:21.130148  4862 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
-2026-11-12 11:30:21.130226  4862 Aaa                  6 service is: sshd
-2026-11-12 11:30:21.130253  4862 Aaa                  6 method list is: group port49,local
-2026-11-12 11:30:21.130300  4862 Aaa                  6 In _startNewAuthenticator
-2026-11-12 11:30:21.130332  4862 Aaa                  6 find next plugin starting 0 total 2
-2026-11-12 11:30:21.130385  4862 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:21.130421  4862 AaaPlugin::TacacsAaa 2 Tacacs Authenticator service sshd remoteHost 172.100.100.1 remoteUser  tty ssh user qual01 privLevel 0
-2026-11-12 11:30:21.130671  4862 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.132602  4862 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.132843  4862 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.132893  4862 Tacacs               2 tac_send_authen returned 261 status: 5 noecho: True
-2026-11-12 11:30:21.132972  4862 Aaa                  2 authenticator returned status inProgress user qual01
-2026-11-12 11:30:21.132989  4862 Aaa                  1 maybeLogFailure inProgress
-2026-11-12 11:30:21.134295  4862 Aaa                  2 continueAuthenticate for authenStateId 15
-2026-11-12 11:30:21.134416  4862 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.134870  4862 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.134976  4862 Tacacs               2 tac_send_authen returned 1 status: 1 noecho: False
-2026-11-12 11:30:21.135071  4862 Tacacs               6 cur server 0
-2026-11-12 11:30:21.135244  4862 Aaa                  2 authenticator returned status success user qual01
-2026-11-12 11:30:21.135274  4862 Aaa                  6 handleUser qual01 via group port49
-2026-11-12 11:30:21.135662  4862 Aaa                  2 Copying files in /etc/skel to home dir /home/qual01
-2026-11-12 11:30:21.135777  4862 Aaa                  6 Copying /etc/skel/.bashrc to /home/qual01/.bashrc
-2026-11-12 11:30:21.135907  4862 Aaa                  6 Copying /etc/skel/.bash_profile to <LONG>
-2026-11-12 11:30:21.135996  4862 Aaa                  6 Copying /etc/skel/.dircolors to /home/qual01/.dircolors
-2026-11-12 11:30:21.136070  4862 Aaa                  6 Skipping .bash_logout.Eos
-2026-11-12 11:30:21.136082  4862 Aaa                  6 Copying /etc/skel/.bash_logout to <LONG>
-2026-11-12 11:30:21.230182  4871 Aaa                  9 getPwEnt name: qual01 uid: None force True
-2026-11-12 11:30:21.230234  4871 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:21.231032  4872 Aaa                  9 getPwEnt name: qual01 uid: None force True
-2026-11-12 11:30:21.231079  4872 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:21.233043  4874 Aaa                  9 getPwEnt name: qual01 uid: None force True
-2026-11-12 11:30:21.233086  4874 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:21.233704  4875 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
-2026-11-12 11:30:21.233839  4875 Aaa                  6 service is: sshd
-2026-11-12 11:30:21.233884  4875 Aaa                  6 method list is: group port49,local
-2026-11-12 11:30:21.233938  4875 Aaa                  6 In _startNewAuthenticator
-2026-11-12 11:30:21.233978  4875 Aaa                  6 find next plugin starting 0 total 2
-2026-11-12 11:30:21.234058  4875 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:21.234097  4875 AaaPlugin::TacacsAaa 2 Tacacs Authenticator service sshd remoteHost 172.100.100.1 remoteUser  tty ssh user qual01 privLevel 0
-2026-11-12 11:30:21.234435  4875 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.234601  4875 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.234700  4875 Tacacs               2 tac_send_authen returned 261 status: 5 noecho: True
-2026-11-12 11:30:21.234852  4875 Aaa                  2 authenticator returned status inProgress user qual01
-2026-11-12 11:30:21.234883  4875 Aaa                  1 maybeLogFailure inProgress
-2026-11-12 11:30:21.235938   963 Aaa                  6 plugin found by name for method local
-2026-11-12 11:30:21.235986   963 Aaa                  6 plugin found by name for method local
-2026-11-12 11:30:21.236361  4862 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 15 session data: None
-2026-11-12 11:30:21.236700  4862 Aaa                  1 maybeLogFailure success
-2026-11-12 11:30:21.238264  4875 Aaa                  2 continueAuthenticate for authenStateId 16
-2026-11-12 11:30:21.238500  4875 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.238853  4875 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:21.238960  4875 Tacacs               2 tac_send_authen returned 1 status: 1 noecho: False
-2026-11-12 11:30:21.238995  4875 Tacacs               6 cur server 0
-2026-11-12 11:30:21.239076  4875 Aaa                  2 authenticator returned status success user qual01
-2026-11-12 11:30:21.239091  4875 Aaa                  6 handleUser qual01 via group port49
-2026-11-12 11:30:21.239136  4875 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 16 session data: None
-2026-11-12 11:30:21.239269  4875 Aaa                  1 maybeLogFailure success
-2026-11-12 11:30:24.125826  4989 Aaa                  5 openSession for id 15
-2026-11-12 11:30:24.126033  4989 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = start
-2026-11-12 11:30:24.126796  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.127111  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:24.127558  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.127847  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.127937  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:24.127995  1020 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
-2026-11-12 11:30:24.214953  4998 Aaa                  3 authorizeShell for user qual01 sessionId 15 sessionPid 4856 shellPid 4992 tty vty10
-2026-11-12 11:30:24.215202  4998 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.215366  4998 Tacacs               6 cur server 0
-2026-11-12 11:30:24.215473  4998 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:24.215715  4998 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.216164  4998 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.216256  4998 Tacacs               3 tac_send_author returned 513 , status: 1 msg  av_count: 2
-2026-11-12 11:30:24.216390  4998 Tacacs               6 av pair 0 : priv-lvl=15
-2026-11-12 11:30:24.216403  4998 Tacacs               6 av pair 1 : roles=network-admin
-2026-11-12 11:30:24.216461  4998 Aaa                  3 authorizeShell 0 privilegeLevel 15
-2026-11-12 11:30:24.216484  4998 Aaa                  3 authorizeShell 1 roles ['network-admin']
-2026-11-12 11:30:24.228111  5000 Aaa                  5 openSession for id 16
-2026-11-12 11:30:24.228268  5000 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = start
-2026-11-12 11:30:24.228600  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.228788  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:24.228995  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.229157  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.229210  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:24.229255  1020 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
-2026-11-12 11:30:24.317964  5009 Aaa                  3 authorizeShell for user qual01 sessionId 16 sessionPid 4869 shellPid 5006 tty vty12
-2026-11-12 11:30:24.318216  5009 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.318324  5009 Tacacs               6 cur server 0
-2026-11-12 11:30:24.318399  5009 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:24.318552  5009 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.318986  5009 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.319061  5009 Tacacs               3 tac_send_author returned 513 , status: 1 msg  av_count: 2
-2026-11-12 11:30:24.319082  5009 Tacacs               6 av pair 0 : priv-lvl=15
-2026-11-12 11:30:24.319097  5009 Tacacs               6 av pair 1 : roles=network-admin
-2026-11-12 11:30:24.319175  5009 Aaa                  3 authorizeShell 0 privilegeLevel 15
-2026-11-12 11:30:24.319199  5009 Aaa                  3 authorizeShell 1 roles ['network-admin']
-2026-11-12 11:30:24.425669  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.425992  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:24.426089  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:24.426254  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.426918  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.427012  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:24.427995  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.428127  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:24.428336  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.428831  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.428907  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:24.428957  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:24.526216  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.526311  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:24.526378  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:24.526513  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.526920  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.526972  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:24.527432  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.527514  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:24.527671  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.527878  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.527924  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:24.527958  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:24.674983  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.675173  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:24.675298  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:24.675576  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.675908  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.675976  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:24.676051  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:24.676100  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:24.676237  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:24.776419  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.776703  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:24.776843  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:24.777020  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.777436  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.777556  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:24.777738  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:24.777799  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:24.778064  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:24.925604  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.925828  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:24.925953  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:24.926178  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.926672  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.926758  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:24.927565  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:24.927748  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:24.927947  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.928539  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:24.928593  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:24.928635  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:25.028201  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.028520  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:25.028690  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:25.028892  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.029371  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.029484  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:25.030888  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.031111  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:25.031356  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.031723  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.031831  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:25.031891  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:25.176613  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.176822  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:25.176948  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:25.177201  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.177606  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.177684  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:25.177792  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:25.177843  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:25.178037  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:25.278040  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.278317  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:25.278445  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:25.278639  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.279442  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.279586  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:25.279706  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:25.279771  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:25.280086  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:25.426708  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.426954  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:25.427063  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:25.427186  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.427562  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.427716  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:25.428478  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.428564  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:25.428717  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.428942  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.428992  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:25.429034  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:25.529539  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.529896  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:25.530040  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:25.530206  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.530832  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.531030  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:25.532031  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.532183  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:25.532452  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.532765  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.532860  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:25.532927  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:25.678992  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.679257  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:25.679441  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:25.679776  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.680464  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.680576  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:25.680717  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:25.680810  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:25.681127  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:25.778699  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.778894  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:25.779009  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:25.779216  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.779603  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.779719  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:25.779860  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:25.779904  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:25.780047  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:25.929424  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.929675  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:25.929848  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:25.930026  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.930580  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.930803  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:25.931981  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:25.932217  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:25.932452  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.932714  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:25.932802  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:25.932854  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:26.029993  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.030101  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:26.030171  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:26.030296  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.030642  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.030702  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:26.031365  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.031543  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:26.031852  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.032053  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.032099  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:26.032138  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:26.181008  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.181276  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:26.181441  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:26.181745  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.183076  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.183164  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:26.183254  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:26.183336  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:26.183609  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:26.280710  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.280834  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:26.280905  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:26.281022  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.281334  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.281404  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:26.281478  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:26.281525  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:26.281672  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:26.431035  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.431231  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:26.431299  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:26.431421  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.431823  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.431902  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:26.432429  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.432581  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:26.432769  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.432979  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.433031  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:26.433067  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:26.532781  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.532893  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:26.532962  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:26.533078  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.533460  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.533592  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:26.534579  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.534698  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:26.534909  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.535124  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.535189  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:26.535243  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:26.681943  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.682046  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:26.682117  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:26.682251  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.682721  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.682880  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:26.683032  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:26.683125  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:26.683402  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:26.782688  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.782802  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:26.782876  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:26.782990  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.783477  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.783529  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:26.783648  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:26.783682  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:26.783873  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:26.932123  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.932241  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:26.932312  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:26.932430  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.932786  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.932856  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:26.933431  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:26.933537  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:26.933720  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.934028  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:26.934087  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:26.934131  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:27.034925  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.035135  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:27.035229  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:27.035390  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.036019  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.036113  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:27.037233  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.037455  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:27.037676  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.038396  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.038478  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:27.038531  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:27.185200  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.185525  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:27.185719  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:27.186072  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.186845  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.186957  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:27.187136  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:27.187205  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:27.187595  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:27.284798  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.285070  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:27.285233  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:27.285546  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.286386  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.286475  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:27.286622  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:27.286687  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:27.287022  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:27.434291  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.434446  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:27.434536  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:27.434694  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.435153  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.435302  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:27.436269  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.436433  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:27.436657  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.437065  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.437149  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:27.437199  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:27.537304  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.537568  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:27.537736  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:27.537971  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.538655  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.538751  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:27.540134  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.540390  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:27.540859  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.541148  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.541301  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:27.541410  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:27.684681  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.684797  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:27.684875  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:27.684991  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.685541  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.685614  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:27.685790  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:27.685955  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:27.686236  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:27.787306  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.787461  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:27.787553  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:27.787714  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.788402  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.788500  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:27.788686  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:27.788740  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:27.789009  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:27.936040  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.936295  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:27.936389  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:27.936550  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.937371  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.937559  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:27.938965  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:27.939195  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:27.939650  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.940006  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:27.940087  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:27.940149  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:28.038355  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.038552  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:28.038677  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:28.038939  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.039383  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.039509  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:28.040141  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.040295  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:28.040585  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.040765  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.040817  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:28.040850  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:28.187425  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.187677  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:28.187885  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:28.188200  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.188642  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.188749  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:28.188965  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:28.189091  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:28.189316  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:28.289050  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.289185  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:28.289269  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:28.289414  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.290085  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.290184  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:28.290274  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:28.290356  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:28.290531  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:28.436844  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.437096  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:28.437262  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:28.437576  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.438015  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.438104  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:28.439126  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.439244  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:28.439459  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.439786  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.439877  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:28.439931  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:28.540071  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.540273  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:28.540399  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:28.540625  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.541163  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.541220  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:28.542160  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.542310  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:28.542456  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.542675  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.542719  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:28.542757  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:28.687374  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.687572  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:28.687717  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:28.688007  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.688315  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.688452  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:28.688604  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:28.688681  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:28.688843  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:28.790788  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.790934  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:28.791023  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:28.791179  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.791949  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.792031  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:28.792153  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:28.792192  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:28.792375  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:28.936788  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.936978  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:28.937082  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:28.937200  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.937693  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.937767  5015 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:28.938396  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:28.938562  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:28.938898  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.939208  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:28.939333  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:28.939415  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:29.042309  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:29.042432  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:29.042507  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:29.042646  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.043193  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.043346  5023 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
-2026-11-12 11:30:29.044269  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:29.044441  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:29.044783  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.045190  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.045242  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:29.045276  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:29.189990  5015 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:29.190296  5015 Tacacs               6 cur server 0
-2026-11-12 11:30:29.190425  5015 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:29.190616  5015 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.191672  5015 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.191804  5015 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:29.191913  5015 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:29.191985  5015 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:29.192256  5015 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:29.292222  5023 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:29.292347  5023 Tacacs               6 cur server 0
-2026-11-12 11:30:29.292416  5023 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
-2026-11-12 11:30:29.292531  5023 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.292823  5023 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.292885  5023 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
-2026-11-12 11:30:29.292943  5023 Aaa                  0 authorization from command15 denied
-2026-11-12 11:30:29.292984  5023 Aaa                  9 getPwEnt: found account group port49
-2026-11-12 11:30:29.293147  5023 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
-2026-11-12 11:30:29.438535  5251 Aaa                  5 closeSession for session id 15
-2026-11-12 11:30:29.438765  5251 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = stop
-2026-11-12 11:30:29.439016  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:29.439337  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:29.439592  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.439987  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.440044  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:29.440091  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:29.440186  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:29.440268  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:29.440414  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.440533  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.440593  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:29.440645  1020 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
-2026-11-12 11:30:29.543532  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:29.544077  5254 Aaa                  5 closeSession for session id 16
-2026-11-12 11:30:29.544104  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:29.544185  5254 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = stop
-2026-11-12 11:30:29.544573  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.544863  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.544912  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:29.544956  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
-2026-11-12 11:30:29.545050  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:29.545128  1020 Tacacs               6 cur server 0
-2026-11-12 11:30:29.545290  1020 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.545452  1020 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:29.545521  1020 Tacacs               4 tac_send_acct returned 1
-2026-11-12 11:30:29.545556  1020 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
-2026-11-12 11:30:49.909198  4725 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:49.909264  4725 AaaPlugin::TacacsAaa 3 authorizeShellCommand for method group port49 user breakglass mode ('Exec', None, None) privlevel 15 tokens ['show', 'agent', 'Aaa', 'logs']
-2026-11-12 11:30:49.909446  4725 Tacacs               3 tac_create_author: authenMethod: 5 authenType: 1 authenService: 1
-2026-11-12 11:30:49.909599  4725 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:49.909843  4725 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:49.909937  4725 Tacacs               0 tac_send_author failed: connect: Connection refused
-2026-11-12 11:30:49.909995  4725 Tacacs               0 closing tacacs+ connection
-2026-11-12 11:30:49.910070  4725 Aaa                  0 authorization from command15 authzUnavailable
-2026-11-12 11:30:49.910169  4725 Aaa                  6 plugin found by name for method local
-2026-11-12 11:30:49.910189  4725 AaaPlugin::LocalUser 3 authorizeShellCommand for method local user breakglass mode ('Exec', None, None) privlevel 15 tokens ['show', 'agent', 'Aaa', 'logs']
-2026-11-12 11:30:49.910251  4725 AaaPlugin::LocalUser 9 sessionData <entity('<LONG>') of type Aaa::SessionProperty (non-const)>
-2026-11-12 11:30:49.911081  1020 Aaa                  6 plugin found to handle method group port49
-2026-11-12 11:30:49.911426  1020 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:49.911747  1020 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:49.911950  1020 Tacacs               0 tac_send_acct failed: connect: Connection refused
-2026-11-12 11:30:49.912088  1020 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:49.912209  1020 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
-2026-11-12 11:30:49.912277  1020 Tacacs               0 tac_send_acct failed: connect: Connection refused
-2026-11-12 11:30:49.912307  1020 Tacacs               0 closing tacacs+ connection
-2026-11-12 11:30:49.912417  1020 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= False
+2026-11-12 12:09:26.682808  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:26.683289  1034 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:26.683614  1034 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:26.683694  1034 Tacacs               0 tac_send_acct failed: connect: Connection refused
+2026-11-12 12:09:26.683751  1034 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:26.683877  1034 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:26.683945  1034 Tacacs               0 tac_send_acct failed: connect: Connection refused
+2026-11-12 12:09:26.683978  1034 Tacacs               0 closing tacacs+ connection
+2026-11-12 12:09:26.684114  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= False
+2026-11-12 12:09:28.345129  5129 Aaa                  9 getPwEnt name: qual01 uid: None force True
+2026-11-12 12:09:28.345195  5129 Aaa                  6 plugin found by name for method local
+2026-11-12 12:09:28.345269  5129 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:28.345289  5129 Aaa                  6 plugin group port49 has unknown user
+2026-11-12 12:09:28.345335  5129 Aaa                  6 getPwEnt: unknown user qual01 ; generating bogus pwent
+2026-11-12 12:09:28.346267  5130 Aaa                  9 getPwEnt name: qual01 uid: None force True
+2026-11-12 12:09:28.346319  5130 Aaa                  6 plugin found by name for method local
+2026-11-12 12:09:28.346385  5130 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:28.346405  5130 Aaa                  6 plugin group port49 has unknown user
+2026-11-12 12:09:28.346441  5130 Aaa                  6 getPwEnt: unknown user qual01 ; generating bogus pwent
+2026-11-12 12:09:28.348733  5132 Aaa                  9 getPwEnt name: qual01 uid: None force True
+2026-11-12 12:09:28.348878  5132 Aaa                  6 plugin found by name for method local
+2026-11-12 12:09:28.348934  5132 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:28.348954  5132 Aaa                  6 plugin group port49 has unknown user
+2026-11-12 12:09:28.348989  5132 Aaa                  6 getPwEnt: unknown user qual01 ; generating bogus pwent
+2026-11-12 12:09:28.349672  5133 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+2026-11-12 12:09:28.349779  5133 Aaa                  6 service is: sshd
+2026-11-12 12:09:28.349811  5133 Aaa                  6 method list is: group port49,local
+2026-11-12 12:09:28.349864  5133 Aaa                  6 In _startNewAuthenticator
+2026-11-12 12:09:28.349900  5133 Aaa                  6 find next plugin starting 0 total 2
+2026-11-12 12:09:28.349961  5133 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:28.350002  5133 AaaPlugin::TacacsAaa 2 Tacacs Authenticator service sshd remoteHost 172.100.100.1 remoteUser  tty ssh user qual01 privLevel 0
+2026-11-12 12:09:28.350280  5133 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.352336  5133 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.353091  5133 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.353147  5133 Tacacs               2 tac_send_authen returned 261 status: 5 noecho: True
+2026-11-12 12:09:28.353232  5133 Aaa                  2 authenticator returned status inProgress user qual01
+2026-11-12 12:09:28.353255  5133 Aaa                  1 maybeLogFailure inProgress
+2026-11-12 12:09:28.355132  5133 Aaa                  2 continueAuthenticate for authenStateId 15
+2026-11-12 12:09:28.355291  5133 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.355742  5133 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.355971  5133 Tacacs               2 tac_send_authen returned 1 status: 1 noecho: False
+2026-11-12 12:09:28.356067  5133 Tacacs               6 cur server 0
+2026-11-12 12:09:28.356236  5133 Aaa                  2 authenticator returned status success user qual01
+2026-11-12 12:09:28.356266  5133 Aaa                  6 handleUser qual01 via group port49
+2026-11-12 12:09:28.356656  5133 Aaa                  2 Copying files in /etc/skel to home dir /home/qual01
+2026-11-12 12:09:28.356768  5133 Aaa                  6 Copying /etc/skel/.bashrc to /home/qual01/.bashrc
+2026-11-12 12:09:28.356899  5133 Aaa                  6 Copying /etc/skel/.bash_profile to <LONG>
+2026-11-12 12:09:28.356985  5133 Aaa                  6 Copying /etc/skel/.dircolors to /home/qual01/.dircolors
+2026-11-12 12:09:28.357057  5133 Aaa                  6 Skipping .bash_logout.Eos
+2026-11-12 12:09:28.357068  5133 Aaa                  6 Copying /etc/skel/.bash_logout to <LONG>
+2026-11-12 12:09:28.450185  5138 Aaa                  9 getPwEnt name: qual01 uid: None force True
+2026-11-12 12:09:28.450242  5138 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:28.451008  5139 Aaa                  9 getPwEnt name: qual01 uid: None force True
+2026-11-12 12:09:28.451053  5139 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:28.453245  5141 Aaa                  9 getPwEnt name: qual01 uid: None force True
+2026-11-12 12:09:28.453267  5141 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:28.453882  5142 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+2026-11-12 12:09:28.453985  5142 Aaa                  6 service is: sshd
+2026-11-12 12:09:28.454017  5142 Aaa                  6 method list is: group port49,local
+2026-11-12 12:09:28.454070  5142 Aaa                  6 In _startNewAuthenticator
+2026-11-12 12:09:28.454107  5142 Aaa                  6 find next plugin starting 0 total 2
+2026-11-12 12:09:28.454190  5142 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:28.454232  5142 AaaPlugin::TacacsAaa 2 Tacacs Authenticator service sshd remoteHost 172.100.100.1 remoteUser  tty ssh user qual01 privLevel 0
+2026-11-12 12:09:28.454597  5142 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.454771  5142 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.454837  5142 Tacacs               2 tac_send_authen returned 261 status: 5 noecho: True
+2026-11-12 12:09:28.454905  5142 Aaa                  2 authenticator returned status inProgress user qual01
+2026-11-12 12:09:28.454921  5142 Aaa                  1 maybeLogFailure inProgress
+2026-11-12 12:09:28.457125   970 Aaa                  6 plugin found by name for method local
+2026-11-12 12:09:28.457172   970 Aaa                  6 plugin found by name for method local
+2026-11-12 12:09:28.457524  5133 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 15 session data: None
+2026-11-12 12:09:28.457873  5133 Aaa                  1 maybeLogFailure success
+2026-11-12 12:09:28.459940  5142 Aaa                  2 continueAuthenticate for authenStateId 16
+2026-11-12 12:09:28.460230  5142 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.460683  5142 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:28.460794  5142 Tacacs               2 tac_send_authen returned 1 status: 1 noecho: False
+2026-11-12 12:09:28.460837  5142 Tacacs               6 cur server 0
+2026-11-12 12:09:28.460931  5142 Aaa                  2 authenticator returned status success user qual01
+2026-11-12 12:09:28.460947  5142 Aaa                  6 handleUser qual01 via group port49
+2026-11-12 12:09:28.461003  5142 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 16 session data: None
+2026-11-12 12:09:28.461165  5142 Aaa                  1 maybeLogFailure success
+2026-11-12 12:09:30.195419  5223 Aaa                  5 openSession for id 15
+2026-11-12 12:09:30.195556  5223 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = start
+2026-11-12 12:09:30.195982  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.196228  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:30.196479  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.196991  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.197077  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:30.197122  1034 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
+2026-11-12 12:09:30.286511  5228 Aaa                  3 authorizeShell for user qual01 sessionId 15 sessionPid 5127 shellPid 5225 tty vty10
+2026-11-12 12:09:30.286787  5228 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.287005  5228 Tacacs               6 cur server 0
+2026-11-12 12:09:30.287123  5228 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:30.287377  5228 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.287785  5228 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.287956  5228 Tacacs               3 tac_send_author returned 513 , status: 1 msg  av_count: 2
+2026-11-12 12:09:30.288238  5228 Tacacs               6 av pair 0 : priv-lvl=15
+2026-11-12 12:09:30.288269  5228 Tacacs               6 av pair 1 : roles=network-admin
+2026-11-12 12:09:30.288398  5228 Aaa                  3 authorizeShell 0 privilegeLevel 15
+2026-11-12 12:09:30.288443  5228 Aaa                  3 authorizeShell 1 roles ['network-admin']
+2026-11-12 12:09:30.298958  5231 Aaa                  5 openSession for id 16
+2026-11-12 12:09:30.299067  5231 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = start
+2026-11-12 12:09:30.299334  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.299529  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:30.299772  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.299994  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.300038  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:30.300076  1034 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
+2026-11-12 12:09:30.385636  5244 Aaa                  3 authorizeShell for user qual01 sessionId 16 sessionPid 5135 shellPid 5242 tty vty12
+2026-11-12 12:09:30.385900  5244 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.386091  5244 Tacacs               6 cur server 0
+2026-11-12 12:09:30.386205  5244 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:30.386471  5244 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.386921  5244 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.386988  5244 Tacacs               3 tac_send_author returned 513 , status: 1 msg  av_count: 2
+2026-11-12 12:09:30.387006  5244 Tacacs               6 av pair 0 : priv-lvl=15
+2026-11-12 12:09:30.387018  5244 Tacacs               6 av pair 1 : roles=network-admin
+2026-11-12 12:09:30.387077  5244 Aaa                  3 authorizeShell 0 privilegeLevel 15
+2026-11-12 12:09:30.387108  5244 Aaa                  3 authorizeShell 1 roles ['network-admin']
+2026-11-12 12:09:30.495078  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.495342  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:30.495510  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:30.495875  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.496413  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.496518  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:30.497567  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.497698  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:30.497922  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.498249  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.498322  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:30.498449  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:30.598798  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.599075  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:30.599235  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:30.599422  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.600102  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.600210  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:30.601259  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.601410  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:30.601667  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.601996  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.602082  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:30.602153  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:30.744838  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.745135  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:30.745298  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:30.745603  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.745994  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.746107  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:30.746370  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:30.746482  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:30.746849  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:30.847393  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.847659  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:30.847751  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:30.848155  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.848910  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.849015  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:30.849238  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:30.849311  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:30.849716  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:30.995986  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.996308  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:30.996502  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:30.996701  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.997342  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.997439  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:30.998723  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:30.998983  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:30.999422  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.999815  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:30.999974  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:31.000061  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:31.098396  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.098634  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:31.098808  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:31.099133  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.099875  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.099976  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:31.101358  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.101594  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:31.102060  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.102421  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.102508  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:31.102561  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:31.246903  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.247157  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:31.247304  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:31.247461  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.247941  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.248136  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:31.248289  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:31.248355  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:31.248709  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:31.349219  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.349504  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:31.349668  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:31.349993  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.350639  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.350737  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:31.350924  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:31.350985  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:31.351324  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:31.495463  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.495662  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:31.495730  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:31.495867  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.496371  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.496443  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:31.497036  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.497120  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:31.497278  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.497786  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.497856  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:31.497931  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:31.601206  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.601470  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:31.601661  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:31.601995  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.602741  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.602855  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:31.603829  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.603970  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:31.604190  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.604907  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.605015  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:31.605068  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:31.747368  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.747473  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:31.747540  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:31.747669  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.748188  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.748332  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:31.748500  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:31.748580  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:31.748893  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:31.850347  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.850499  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:31.850588  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:31.850749  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.851503  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.851598  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:31.851767  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:31.851838  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:31.852236  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:31.998225  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:31.998383  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:31.998478  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:31.998806  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.999589  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:31.999824  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:32.001311  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.001557  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:32.002028  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.002641  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.002729  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:32.002792  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:32.102423  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.102573  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:32.102665  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:32.102839  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.103415  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.103517  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:32.104397  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.104541  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:32.104811  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.105164  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.105253  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:32.105370  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:32.249762  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.249913  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:32.250005  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:32.250167  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.250925  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.251038  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:32.251179  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:32.251247  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:32.251579  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:32.352344  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.352520  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:32.352892  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:32.353220  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.353965  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.354061  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:32.354224  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:32.354300  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:32.354615  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:32.499711  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.499938  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:32.500063  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:32.500254  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.501201  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.501390  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:32.502794  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.503046  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:32.503503  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.503930  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.504065  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:32.504146  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:32.603988  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.604251  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:32.604414  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:32.604611  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.605322  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.605418  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:32.606649  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.606886  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:32.607102  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.607676  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.607781  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:32.607842  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:32.750597  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.750878  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:32.750982  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:32.751143  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.751860  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.751975  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:32.752117  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:32.752187  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:32.752542  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:32.853741  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:32.853907  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:32.853997  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:32.854157  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.854658  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:32.854775  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:32.854950  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:32.855003  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:32.855318  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:33.001167  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.001431  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:33.001592  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:33.001806  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.002531  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.002626  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:33.003999  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.004165  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:33.004380  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.005148  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.005244  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:33.005296  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:33.105674  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.106107  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:33.106287  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:33.106601  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.107353  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.107454  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:33.108620  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.108750  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:33.108985  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.109321  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.109403  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:33.109454  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:33.253094  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.253335  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:33.253485  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:33.253765  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.254281  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.254354  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:33.254642  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:33.254857  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:33.255186  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:33.355325  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.355591  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:33.355726  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:33.355904  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.356612  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.356704  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:33.356910  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:33.356962  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:33.357254  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:33.504077  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.504281  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:33.504407  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:33.504604  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.505381  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.505485  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:33.506630  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.506746  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:33.506987  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.507405  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.507486  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:33.507537  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:33.607188  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.607455  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:33.607620  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:33.607852  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.608295  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.608389  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:33.609735  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.610022  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:33.610273  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.610613  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.610712  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:33.610797  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:33.755625  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.756093  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:33.756270  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:33.756591  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.757369  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.757569  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:33.757773  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:33.757830  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:33.758012  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:33.856900  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:33.857169  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:33.857315  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:33.857498  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.857922  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:33.858021  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:33.858195  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:33.858277  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:33.858599  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:34.006024  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.006250  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:34.006376  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:34.006572  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.007366  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.007489  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:34.008776  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.008904  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:34.009127  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.009450  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.009518  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:34.009568  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:34.107987  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.108190  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:34.108352  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:34.108662  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.109096  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.109276  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:34.110341  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.110541  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:34.110765  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.111122  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.111213  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:34.111274  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:34.257048  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.257314  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:34.257476  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:34.257807  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.258530  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.258620  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:34.258783  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:34.258876  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:34.259124  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:34.358025  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.358189  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:34.358280  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:34.358441  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.359173  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.359266  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:34.359426  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:34.359489  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:34.359873  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:34.506459  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.506564  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:34.506636  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:34.506780  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.507082  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.507143  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:34.507705  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.507795  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:34.507952  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.508186  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.508239  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:34.508278  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:34.610610  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.611046  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:34.611233  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:34.611569  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.612249  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.612344  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:34.613604  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.613727  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:34.613959  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.614348  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.614430  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:34.614486  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:34.758970  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.759119  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:34.759210  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:34.759368  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.760134  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.760247  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:34.760339  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:34.760408  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:34.760674  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:34.860353  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:34.860616  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:34.860805  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:34.861112  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.861883  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:34.861985  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:34.862078  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:34.862172  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:34.862499  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:35.008881  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:35.009079  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:35.009199  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:35.009405  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.010144  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.010273  5255 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:35.011147  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:35.011418  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:35.011840  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.012072  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.012133  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:35.012173  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:35.111935  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:35.112128  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:35.112245  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:35.112462  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.113017  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.113181  5258 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-11-12 12:09:35.114222  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:35.114419  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:35.114635  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.115143  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.115246  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:35.115321  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-11-12 12:09:35.260863  5255 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:35.261123  5255 Tacacs               6 cur server 0
+2026-11-12 12:09:35.261285  5255 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:35.261466  5255 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.261953  5255 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.262116  5255 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:35.262225  5255 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:35.262355  5255 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:35.262606  5255 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  15  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:35.361364  5258 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:35.361559  5258 Tacacs               6 cur server 0
+2026-11-12 12:09:35.361675  5258 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-11-12 12:09:35.361910  5258 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.362649  5258 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.362880  5258 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-11-12 12:09:35.363130  5258 Aaa                  0 authorization from command15 denied
+2026-11-12 12:09:35.363350  5258 Aaa                  9 getPwEnt: found account group port49
+2026-11-12 12:09:35.363622  5258 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  16  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-11-12 12:09:35.511101  5463 Aaa                  5 closeSession for session id 15
+2026-11-12 12:09:35.511213  5463 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = stop
+2026-11-12 12:09:35.511834  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:35.512222  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:35.512513  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.512877  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.512960  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:35.513018  1034 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
+2026-11-12 12:09:35.611343  5472 Aaa                  5 closeSession for session id 16
+2026-11-12 12:09:35.611447  5472 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = stop
+2026-11-12 12:09:35.612305  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:35.612525  1034 Tacacs               6 cur server 0
+2026-11-12 12:09:35.612805  1034 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.613093  1034 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:35.613211  1034 Tacacs               4 tac_send_acct returned 1
+2026-11-12 12:09:35.613278  1034 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
+2026-11-12 12:09:55.974934  4984 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:55.974995  4984 AaaPlugin::TacacsAaa 3 authorizeShellCommand for method group port49 user breakglass mode ('Exec', None, None) privlevel 15 tokens ['show', 'agent', 'Aaa', 'logs']
+2026-11-12 12:09:55.975167  4984 Tacacs               3 tac_create_author: authenMethod: 5 authenType: 1 authenService: 1
+2026-11-12 12:09:55.975318  4984 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:55.975700  4984 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:55.975906  4984 Tacacs               0 tac_send_author failed: connect: Connection refused
+2026-11-12 12:09:55.975944  4984 Tacacs               0 closing tacacs+ connection
+2026-11-12 12:09:55.976014  4984 Aaa                  0 authorization from command15 authzUnavailable
+2026-11-12 12:09:55.976104  4984 Aaa                  6 plugin found by name for method local
+2026-11-12 12:09:55.976119  4984 AaaPlugin::LocalUser 3 authorizeShellCommand for method local user breakglass mode ('Exec', None, None) privlevel 15 tokens ['show', 'agent', 'Aaa', 'logs']
+2026-11-12 12:09:55.976170  4984 AaaPlugin::LocalUser 9 sessionData <entity('<LONG>') of type Aaa::SessionProperty (non-const)>
+2026-11-12 12:09:55.976889  1034 Aaa                  6 plugin found to handle method group port49
+2026-11-12 12:09:55.977251  1034 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:55.977588  1034 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:55.977820  1034 Tacacs               0 tac_send_acct failed: connect: Connection refused
+2026-11-12 12:09:55.977988  1034 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:55.978293  1034 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-11-12 12:09:55.978386  1034 Tacacs               0 tac_send_acct failed: connect: Connection refused
+2026-11-12 12:09:55.978427  1034 Tacacs               0 closing tacacs+ connection
+2026-11-12 12:09:55.978589  1034 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= False

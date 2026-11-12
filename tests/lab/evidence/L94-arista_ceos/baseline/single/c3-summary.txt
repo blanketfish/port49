@@ -1,0 +1,152 @@
+L94, arm baseline, cell c3, mode single, ceos436 (cEOS-lab 4.36.3M) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:55.223
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:55.474
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:55.725
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:55.976
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:56.227
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:56.477
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:56.728
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:56.979
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:57.230
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:57.481
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:57.732
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:57.983
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:58.234
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:58.485
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:58.735
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:58.986
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:59.236
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:59.487
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:59.738
+  s0 "show version"           took=0.25s denied=false err=false at=12:11:59.989
+  s0 "show version"           took=0.25s denied=false err=false at=12:12:00.240
+  s0 "show version"           took=0.25s denied=false err=false at=12:12:00.491
+  s0 "show version"           took=0.25s denied=false err=false at=12:12:00.743
+  s0 "show version"           took=0.25s denied=false err=false at=12:12:00.994
+debug: 6302 device log lines, kept 1235, suspect 52 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: 2026-11-12 12:09:28.349672  5133 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:09:28.453882  5142 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:09:28.457524  5133 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 15 session data: None
+  suspect: 2026-11-12 12:09:28.461003  5142 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 16 session data: None
+  suspect: 2026-11-12 12:09:30.195556  5223 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = start
+  suspect: 2026-11-12 12:09:30.286511  5228 Aaa                  3 authorizeShell for user qual01 sessionId 15 sessionPid 5127 shellPid 5225 tty vty10
+  suspect: 2026-11-12 12:09:30.299067  5231 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = start
+  suspect: 2026-11-12 12:09:30.385636  5244 Aaa                  3 authorizeShell for user qual01 sessionId 16 sessionPid 5135 shellPid 5242 tty vty12
+  suspect: 2026-11-12 12:09:35.511101  5463 Aaa                  5 closeSession for session id 15
+  suspect: 2026-11-12 12:09:35.511213  5463 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = stop
+  suspect: 2026-11-12 12:09:35.611343  5472 Aaa                  5 closeSession for session id 16
+  suspect: 2026-11-12 12:09:35.611447  5472 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = stop
+  suspect: 2026-11-12 12:10:36.607304  8016 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:10:36.614355  8016 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 18 session data: None
+  suspect: 2026-11-12 12:10:38.452668  8090 Aaa                  4 sendShellAcct user = qual01 sessionId = 18 action = start
+  suspect: 2026-11-12 12:10:38.543625  8095 Aaa                  3 authorizeShell for user qual01 sessionId 18 sessionPid 8013 shellPid 8092 tty vty10
+  suspect: 2026-11-12 12:10:38.774030  8109 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:10:39.159899  8122 Tacacs               6 addServer: 172.100.100.1 : 300 ns: default vrf: default srcIP:  srcIp6:  key: ***** timeout: 5 flags: 4 tls: True
+  suspect: 2026-11-12 12:10:42.708991  8258 Aaa                  5 closeSession for session id 18
+  suspect: 2026-11-12 12:10:42.709050  8258 Aaa                  4 sendShellAcct user = qual01 sessionId = 18 action = stop
+  suspect: 2026-11-12 12:11:53.082636 11083 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:11:53.089770 11083 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 21 session data: None
+  suspect: 2026-11-12 12:11:54.928240 11153 Aaa                  4 sendShellAcct user = qual01 sessionId = 21 action = start
+  suspect: 2026-11-12 12:11:55.019646 11160 Aaa                  3 authorizeShell for user qual01 sessionId 21 sessionPid 11080 shellPid 11158 tty vty10
+  suspect: 2026-11-12 12:11:55.249403 11189 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:11:55.250193 11190 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:11:55.250588 11191 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:11:55.256358 11191 Tacacs               6 addServer: 172.100.100.1 : 300 ns: default vrf: default srcIP:  srcIp6:  key: ***** timeout: 5 flags: 4 tls: True
+  suspect: 2026-11-12 12:11:55.486968 11181 Tacacs               6 addServer: 172.100.100.1 : 300 ns: default vrf: default srcIP:  srcIp6:  key: ***** timeout: 5 flags: 4 tls: True
+  suspect: 2026-11-12 12:12:01.247566 11447 Aaa                  5 closeSession for session id 21
+  suspect: 2026-11-12 12:12:01.247641 11447 Aaa                  4 sendShellAcct user = qual01 sessionId = 21 action = stop
+port49 read (authorize_command ts less typed):
+  s0 "show version"           +4ms permit
+  s0 "show version"           +14ms permit
+  s0 "show version"           +3ms permit
+  s0 "show version"           +3ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +3ms permit
+  s0 "show version"           +5ms permit
+  s0 "show version"           +3ms permit
+  s0 "show version"           +5ms permit
+  s0 "show version"           +7ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +5ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +3ms permit
+  s0 "show version"           +3ms permit
+  s0 "show version"           +3ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +4ms permit
+  s0 "show version"           +4ms permit
+tls connections: 5, most open at once: 4
+  conn port=42180 syn=12:11:53.083 hold=4.18s end=server-fin
+  conn port=42190 syn=12:11:55.256 hold=2.01s end=server-fin
+  conn port=42206 syn=12:11:55.256 hold=2.01s end=server-fin
+  conn port=42222 syn=12:11:55.487 hold=open end=open
+  conn port=58716 syn=12:11:57.486 hold=open end=open
+clean point (the capture started first, then the gauge read 0): 12:11:53.042
+<LONG> delta: 0
+refused-credential login 1: took=3.71s auth_failed=true logged_in=false err=""
+refused-credential login 2: took=3.71s auth_failed=true logged_in=false err=""
+refused-credential login 3: took=3.71s auth_failed=true logged_in=false err=""
+port49 records:
+  12:11:53.088 redeem permit
+  12:11:54.929 account
+  12:11:55.020 authorize_session permit
+  12:11:55.228 authorize_command permit "show version"
+  12:11:55.230 account
+  12:11:55.489 authorize_command permit "show version"
+  12:11:55.491 account
+  12:11:55.729 authorize_command permit "show version"
+  12:11:55.732 account
+  12:11:55.980 authorize_command permit "show version"
+  12:11:55.982 account
+  12:11:56.231 authorize_command permit "show version"
+  12:11:56.234 account
+  12:11:56.481 authorize_command permit "show version"
+  12:11:56.483 account
+  12:11:56.733 authorize_command permit "show version"
+  12:11:56.735 account
+  12:11:56.982 authorize_command permit "show version"
+  12:11:56.985 account
+  12:11:57.235 authorize_command permit "show version"
+  12:11:57.237 account
+  12:11:55.256 redeem deny
+  12:11:55.263 redeem deny
+  12:11:55.263 redeem deny
+  12:11:57.489 authorize_command permit "show version"
+  12:11:57.492 account
+  12:11:57.736 authorize_command permit "show version"
+  12:11:57.739 account
+  12:11:57.987 authorize_command permit "show version"
+  12:11:57.990 account
+  12:11:58.238 authorize_command permit "show version"
+  12:11:58.240 account
+  12:11:58.490 authorize_command permit "show version"
+  12:11:58.492 account
+  12:11:58.740 authorize_command permit "show version"
+  12:11:58.742 account
+  12:11:58.990 authorize_command permit "show version"
+  12:11:58.992 account
+  12:11:59.241 authorize_command permit "show version"
+  12:11:59.244 account
+  12:11:59.491 authorize_command permit "show version"
+  12:11:59.493 account
+  12:11:59.742 authorize_command permit "show version"
+  12:11:59.744 account
+  12:11:59.993 authorize_command permit "show version"
+  12:11:59.996 account
+  12:12:00.244 authorize_command permit "show version"
+  12:12:00.247 account
+  12:12:00.496 authorize_command permit "show version"
+  12:12:00.497 account
+  12:12:00.747 authorize_command permit "show version"
+  12:12:00.749 account
+  12:12:00.998 authorize_command permit "show version"
+  12:12:01.000 account
+  12:12:01.249 account
+FINDING: c3: device port 53280 sent a packet on a connection from before the capture at 12:11:55.251; the server reset it (no socket): the device carried a stale connection into the cell
+
