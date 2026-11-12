@@ -2711,6 +2711,9 @@ interface, not the primary address. A device that connects from an address the f
 <code>device_unknown</code>, and nothing in the message points back at the inventory. Pin the source interface in the device's
 AAA configuration (<code>ip tacacs source-interface</code> or the platform's equivalent) so the address cannot change under
 you.</p>
+<p>An address written as IPv4-mapped IPv6 (<code>::ffff:10.1.1.1</code>) is read as the IPv4 address (<code>10.1.1.1</code>), since that is
+the source a connection arrives from; listing both forms on two devices is the usual one-address-on-two-devices
+refusal. A key group <code>cidr</code> written in that mapped form is refused at load: write the IPv4 prefix.</p>
 <p><code>attributes:</code> are the free keys that policy scopes match on, such as <code>site</code> and <code>role</code>. A scope that matches on an
 attribute the device does not have is decided by the scope's <code>on_missing:</code> (<a href="../policy/">Policy</a>), which is why a
 connector's <code>map</code> is worth checking before the first sync.</p>
