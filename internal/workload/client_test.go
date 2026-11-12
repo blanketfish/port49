@@ -462,9 +462,9 @@ func TestARedirectOnALaterPageKeepsThePagesMinted(t *testing.T) {
 	}
 }
 
-// jitter is applied to the connection backoff and the 5s default, never to a
+// jitter is applied to the connection backoff, the 5s default and a
 // Retry-After the broker named.
-func TestJitterIsAppliedToComputedWaitsOnly(t *testing.T) {
+func TestJitterIsAppliedToEveryWait(t *testing.T) {
 	var got []time.Duration
 	record := func(d time.Duration) time.Duration { got = append(got, d); return d }
 	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
@@ -473,7 +473,7 @@ func TestJitterIsAppliedToComputedWaitsOnly(t *testing.T) {
 	h := newHarness(t, f, 24*time.Hour)
 	jitter = record
 	if _, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)}); err != nil ||
-		len(got) != 1 || got[0] != 5*time.Second {
+		len(got) != 2 || got[0] != 7*time.Second || got[1] != 5*time.Second {
 		t.Fatalf("%v; jitter saw %v", err, got)
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -760,5 +760,48 @@ func TestASweepPageRetriesWhileTheGateIsClosed(t *testing.T) {
 	if err != nil || len(resp.Results) != 1 || len(f.keys) != 2 || f.keys[0] != f.keys[1] ||
 		len(h.slept) != 1 || h.slept[0] != 3*time.Second {
 		t.Fatalf("err %v, %d results, keys %v, slept %v", err, len(resp.Results), f.keys, h.slept)
+	}
+}
+
+// A Retry-After is spread like the computed waits: a fleet refused together
+// must not retry in step. jittered is within 20% either side, and the one
+// minute cap holds after the spread.
+func TestRetryAfterIsJitteredWithinBoundsAndCapped(t *testing.T) {
+	hdr := func(v string) http.Header { return http.Header{"Retry-After": []string{v}} }
+	seen := map[time.Duration]bool{}
+	for range 500 {
+		d := retryAfter(hdr("30"))
+		if d < 24*time.Second || d > 36*time.Second {
+			t.Fatalf("a 30s Retry-After waited %v, outside 24s to 36s", d)
+		}
+		seen[d] = true
+	}
+	if len(seen) < 100 {
+		t.Fatalf("500 waits for one Retry-After took only %d distinct values", len(seen))
+	}
+	for range 500 {
+		if d := retryAfter(hdr("3600")); d > time.Minute || d < 48*time.Second {
+			t.Fatalf("a capped Retry-After waited %v, outside 48s to 1m", d)
+		}
+	}
+}
+
+// A Retry-After at the cap is spread downward only, so a fleet refused with
+// the broker's 60s does not pile on exactly 60s.
+func TestRetryAfterAtTheCapIsSpreadBelowIt(t *testing.T) {
+	h := http.Header{"Retry-After": []string{"60"}}
+	seen, atCap := map[time.Duration]bool{}, 0
+	for range 500 {
+		d := retryAfter(h)
+		if d < 48*time.Second || d > time.Minute {
+			t.Fatalf("a 60s Retry-After waited %v, outside 48s to 60s", d)
+		}
+		if d == time.Minute {
+			atCap++
+		}
+		seen[d] = true
+	}
+	if len(seen) < 100 || atCap > 5 {
+		t.Fatalf("%d distinct waits, %d of 500 exactly at the cap", len(seen), atCap)
 	}
 }
