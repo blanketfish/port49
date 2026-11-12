@@ -564,3 +564,26 @@ func TestDirectoryPasswordConfiguredStartsAtZero(t *testing.T) {
 		t.Fatalf("starts at %v, want 0", v)
 	}
 }
+
+// increase() over a series that first appears at 1 reads 0, so the first
+// address_moved of a process would never page: each security kind, and the
+// unadmitted_source diagnosis, exist at 0 from the first scrape.
+func TestTheAlarmedSeriesExistAtZeroFromTheFirstScrape(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	// Counted before any WithLabelValues, which would create the series.
+	if n := testutil.CollectAndCount(m.InventoryChanges); n != 9 {
+		t.Fatalf("%d inventory_changes series; every security kind from the first scrape", n)
+	}
+	if n := testutil.CollectAndCount(m.Unvalidated); n != 1 {
+		t.Fatalf("%d unvalidated series; unadmitted_source from the first scrape", n)
+	}
+	for _, k := range []string{"address_moved", "address_added", "device_added", "admission_changed", "key_ref_changed",
+		"transport_changed", "platform_changed", "scope_joined", "scope_left"} {
+		if v := testutil.ToFloat64(m.InventoryChanges.WithLabelValues(k)); v != 0 {
+			t.Errorf("%s: %v", k, v)
+		}
+	}
+	if v := testutil.ToFloat64(m.Unvalidated.WithLabelValues("unadmitted_source")); v != 0 {
+		t.Errorf("unadmitted_source: %v", v)
+	}
+}

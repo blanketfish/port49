@@ -186,6 +186,20 @@ sum by (instance) (port49_connections{state="open"}) / on(instance) port49_conne
 
 **Why this threshold:** Ten minutes at 80% is a trend, not a burst; the page above covers the cap itself.
 
+### port49_unadmitted_source {#port49_unadmitted_source}
+
+**Severity:** ticket. **For:** none.
+
+A connection came from a source address that is not in the inventory; a device whose source address changed (an unpinned source-interface, an uplink failover, a renumbered loopback, the wrong VRF) looks exactly like this. The unvalidated record's unvalidated.source names the address.
+
+```promql
+increase(port49_unvalidated_packets_total{diagnosis="unadmitted_source"}[10m]) > 0
+```
+
+**Source:** Connections from a source address not in the inventory: `increase(port49_unvalidated_packets_total{diagnosis="unadmitted_source"}[10m]) > 0`
+
+**Why this threshold:** A device whose source address changed (an unpinned source-interface, an uplink failover, a renumbered loopback, the wrong VRF) looks exactly like this: its token logins fail and break-glass works. The `unvalidated` records carry the address in `unvalidated.source`.
+
 ### port49_token_clock_skew {#port49_token_clock_skew}
 
 **Severity:** ticket. **For:** none.
@@ -1151,6 +1165,20 @@ increase(port49_inventory_changes_total{kind=~"key_ref_changed|platform_changed|
 **Source:** Source-of-truth edits that move privilege: `port49_inventory_changes_total{kind}`
 
 **Why this threshold:** Every kind but transport_changed, which has its own alert. A device_added during onboarding raises it too: expected, and it is the only place a new capture target shows.
+
+### port49_inventory_address_moved {#port49_inventory_address_moved}
+
+**Severity:** page. **For:** none.
+
+An address moved from one device to another in a source-of-truth edit. On an RFC 8907 device with a shared CIDR or attribute key, that lets the new name's grants be used from hardware that held another's; the inventory_change record names both devices. A move across two swaps is not seen, and neither is one applied by a restart (including a Helm upgrade that rolls the pods), which is not a swap.
+
+```promql
+increase(port49_inventory_changes_total{kind="address_moved"}[15m]) > 0
+```
+
+**Source:** An address moved from one device to another in one swap: `increase(port49_inventory_changes_total{kind="address_moved"}[15m]) > 0`
+
+**Why this threshold:** On an RFC 8907 device with a shared CIDR or attribute key, the move lets the new name's grants be used from hardware that held another's. Onboarding never raises it (a new device on a fresh address is `device_added`). The same swap also raises `port49_inventory_privilege_changes` through the `address_added` it writes, or the `device_added` for a new name (no ticket if that device is refused or quarantined, since that `device_added` is not a security change). A move across two swaps, removed in one and added in the next, is not seen; nor is a restart, including a Helm upgrade that rolls the pods onto a changed inventory, which is not a swap.
 
 ### etcd_no_leader {#etcd_no_leader}
 
