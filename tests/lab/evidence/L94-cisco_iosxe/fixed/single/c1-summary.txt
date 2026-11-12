@@ -1,0 +1,32 @@
+L94, arm fixed, cell c1, mode single, iosxe1718 (Catalyst 8000V 17.18.02) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+debug: 395 device log lines, kept 183, suspect 20 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: *Nov 12 11:01:04.513: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:04.513: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:04.754: TAC+: Handle TACACS+ secure message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:04.754: TAC+: Handle TACACS+ secure message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:04.771: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:04.771: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:04.771: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:04.771: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:05.003: TAC+: Handle TACACS+ secure message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:05.003: TAC+: Handle TACACS+ secure message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:05.010: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:05.010: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:05.010: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:05.010: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:05.254: TAC+: Handle TACACS+ secure message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:05.254: TAC+: Handle TACACS+ secure message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:05.259: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:05.259: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+  suspect: *Nov 12 11:01:05.259: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+  suspect: *Nov 12 11:01:05.259: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+port49 read (authorize_command ts less typed):
+tls connections: 1, most open at once: 1
+  conn port=38142 syn=11:01:20.011 hold=open end=open
+<LONG> delta: 0
+port49 records:
+  11:01:20.086 account
+STOP: c1: 0 accounting START record(s), want at least 2 (one per session)
+STOP: c1: 1 accounting STOP record(s), want at least 2 (one per session)
+
