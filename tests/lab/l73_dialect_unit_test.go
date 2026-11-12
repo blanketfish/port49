@@ -481,6 +481,34 @@ func TestL73EOSMissing(t *testing.T) {
 	}
 }
 
+// EOS's running config shows a TLS host at port 300, the RFC 9887 default,
+// without its port: L73 on cEOS 4.36.3M dialed 300 with none typed, and its
+// `show running-config section tacacs` reads `tacacs-server host
+// 172.100.100.1 tls` while `show tacacs` lists 172.100.100.1/300 TLS
+// (tests/lab/evidence/L73-arista_ceos/device-config.txt:3,21). L94 types
+// `port 300`, so the host line is found without it; `show tacacs` still
+// checks the port (l73EOSGroupMissing). Any other port is still required.
+func TestL73EOSMissingTakesTheDefaultTLSPortUnshown(t *testing.T) {
+	d := l73DeviceTLS{Server: "172.100.100.1", Port: 300, SingleConnection: true}
+	shown := "tacacs-server tls ssl-profile l73-tls\r\ntacacs-server host 172.100.100.1 single-connection tls\r\n"
+	if got := l73EOSMissing(shown, d); len(got) != 0 {
+		t.Errorf("port 300 typed, EOS shows it unshown: missing %q", got)
+	}
+	d.SingleConnection = false
+	if got := l73EOSMissing("tacacs-server tls ssl-profile l73-tls\r\ntacacs-server host 172.100.100.1 tls\r\n", d); len(got) != 0 {
+		t.Errorf("per-request, port 300 unshown: missing %q", got)
+	}
+	d.Port = 301
+	if got := l73EOSMissing("tacacs-server tls ssl-profile l73-tls\r\ntacacs-server host 172.100.100.1 tls\r\n", d); len(got) != 1 {
+		t.Errorf("port 301 typed and not shown: missing %q, want the host line", got)
+	}
+	d = l73DeviceTLS{Server: "172.100.100.1", Port: 300, Second: "172.100.100.2", SecondPort: 300}
+	if got := l73EOSMissing("tacacs-server tls ssl-profile l73-tls\r\ntacacs-server host 172.100.100.1 tls\r\n"+
+		"tacacs-server host 172.100.100.2\r\n", d); len(got) != 1 {
+		t.Errorf("a plain second host at port 300 not shown with it: missing %q, want it named", got)
+	}
+}
+
 // The EOS INVALID evidence is the device's own TACACS+ view, and the group
 // member's help is recorded as a Want, never a Need.
 func TestL73EOSInvalidEvidenceAndMemberAsk(t *testing.T) {

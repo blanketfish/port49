@@ -1,0 +1,14 @@
+L94, arm baseline, cell c1, mode single, xrd261 (XRd control plane 26.1.1) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+debug: 219 device log lines, kept 162, suspect 5 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: RP/0/RP0/CPU0:Nov 12 11:07:35.103 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+  suspect: RP/0/RP0/CPU0:Nov 12 11:07:35.110 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+  suspect: RP/0/RP0/CPU0:Nov 12 11:07:36.492 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe thread failed in socket connect (errno=110) Connection timed out, sleeping for 20 seconds
+  suspect: RP/0/RP0/CPU0:Nov 12 11:07:37.110 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+  suspect: RP/0/RP0/CPU0:Nov 12 11:07:37.118 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+port49 read (authorize_command ts less typed):
+tls connections: 1, most open at once: 1
+  conn port=22281 syn=11:07:56.545 hold=0.01s end=device-fin
+<LONG> delta: 0
+port49 records:
+

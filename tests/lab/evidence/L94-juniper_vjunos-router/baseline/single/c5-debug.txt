@@ -1,0 +1,173 @@
+Nov 12 09:20:35 srx1 clear-log[36675]: logfile cleared
+Nov 12 09:20:38.367698 authd process starting, pid 37280 mode 2
+Nov 12 09:20:38.367991 <LONG>
+Nov 12 09:20:38.368001 enter <LONG>
+Nov 12 09:20:38.368006 radius-server-name config init successful
+Nov 12 09:20:38.368009 <LONG>: result=SUCCESS
+Nov 12 09:20:38.368011 created authd_radius_module
+Nov 12 09:20:38.387636 gx-plus: diameter-app initial config: success
+Nov 12 09:20:38.387657 gx-plus: engine created
+Nov 12 09:20:38.387663 LDAP:AUTH: create LDAP module
+Nov 12 09:20:38.387669 LDAP:CONFIG: result=SUCCESS
+Nov 12 09:20:38.387673 Local : enter <LONG>
+Nov 12 09:20:38.387676 Local : start <LONG>
+Nov 12 09:20:38.387678 Local : created authd local module
+Nov 12 09:20:38.387698 clearStats nas5g clear nas5g stats
+Nov 12 09:20:38.387705 Nas5gEngine Nas5gEngine instantiated nas5g total sessions 0
+Nov 12 09:20:38.387707 Nas5gModulenas5g Nas5gModule instantiated
+Nov 12 09:20:38.387768 createPeriodTimer nas5g timer period 1 sec
+Nov 12 09:20:38.387776 <LONG>: nas5g module created 0x6030820 nas5g instance 0x7a95908 authd running mode 2
+Nov 12 09:20:38.387780 SECURID:AUTH: create ACE module
+Nov 12 09:20:38.387801 Entering AceInitializeEx()
+Nov 12 09:20:38.547442 Leaving AceInitializeEx()
+Nov 12 09:20:38.547537 Framework : enter authd_state_timer_init
+Nov 12 09:20:38.547976 authd_config_read: old seq 0 and new one 62
+Nov 12 09:20:38.548042  Termintate-code: no configuration
+Nov 12 09:20:38.548072 host-name changed in system config
+Nov 12 09:20:38.548097 Extensible Services mode turned OFF
+Nov 12 09:20:38.548129 DTCP Only CLI is OFF
+Nov 12 09:20:38.548134 Radius flow-tap policy name is cleared
+Nov 12 09:20:38.548138  <LONG>: no configuration
+Nov 12 09:20:38.548140 <LONG>: action 0
+Nov 12 09:20:38.548142 AaaService::configRead
+Nov 12 09:20:38.548144 readChassisApmConfig: aggregated mode, check = 0
+Nov 12 09:20:38.548329 AaaService::configReadAccess
+Nov 12 09:20:38.548400 sendAcctOffRequests: Dont send ACCT-OFF as Gres recovery is not complete.
+Nov 12 09:20:38.548406 AaaService::RoutingContextConfig::ctor
+Nov 12 09:20:38.548410 AaaService::RoutingContextConfig::ctor
+Nov 12 09:20:38.548413 AaaService::RoutingContextConfig::ctor
+Nov 12 09:20:38.548417 AaaService::RoutingContextConfig::ctor
+Nov 12 09:20:38.548419 AaaService::RoutingContextConfig::ctor
+Nov 12 09:20:38.548422 <LONG>: no tunnel-switch profiles configured
+Nov 12 09:20:38.548427 configReadAaaOptions: no aaa options configured
+Nov 12 09:20:38.548432 clearAllAaaOptionEntry
+Nov 12 09:20:38.548435 AaaService::configReadAaaAttachment
+Nov 12 09:20:38.548442 AaaService::configReadAaaAttachment: check 0
+Nov 12 09:20:38.548445 <LONG>:7070: deleting vrf table
+Nov 12 09:20:38.548467 RoutingContextConfig::ctor
+Nov 12 09:20:38.548470 RoutingContextConfig::ctor
+Nov 12 09:20:38.548509 AaaService::RoutingContext::ctor/dax, ls null, ri mgmt_junos, tn null
+Nov 12 09:20:38.548515 RoutingContextConfig::itemChanged: lr default, ri mgmt_junos
+Nov 12 09:20:38.548695 <LONG>:7000 Added VRF to table mgmt_junos; 36738
+Nov 12 09:20:38.548700 <LONG>:7010 Added VRF to index table 36738; 36738
+Nov 12 09:20:38.548704 <LONG>::configChanged: Config changed for AAA routing context default:mgmt_junos
+Nov 12 09:20:38.548710  <LONG>::routingContextCreate: Creating routing context default:mgmt_junos
+Nov 12 09:20:38.548712  <LONG>::routingContextCreate: Creating routing context default:mgmt_junos
+Nov 12 09:20:38.548715 AaaService::RoutingContext::ctor/ls-ri, ls default, ri mgmt_junos, tn null
+Nov 12 09:20:38.548896 Next routing instance index is 3
+Nov 12 09:20:38.548901 Reusing already assigned index 2 for routing instance mgmt_junos
+Nov 12 09:20:38.548915 RoutingContextConfig::ctor
+Nov 12 09:20:38.548920 RoutingContextConfig::ctor
+Nov 12 09:20:38.548946 <LONG>:7000 Added VRF to table default; 0
+Nov 12 09:20:38.548949 <LONG>:7010 Added VRF to index table 0; 0
+Nov 12 09:20:38.548951 <LONG>::<LONG>: check 0
+Nov 12 09:20:38.548954  <LONG>::routingContextCreate: Creating routing context default:default
+Nov 12 09:20:38.548956 AaaService::RoutingContext::ctor/ls-ri, ls default, ri default, tn null
+Nov 12 09:20:38.548959 Reusing already assigned index 1 for routing instance default
+Nov 12 09:20:38.548965 <LONG>: dax_get_object_by_path returned FALSE
+Nov 12 09:20:38.548968 <LONG>: action 0
+Nov 12 09:20:38.548979 <LONG>: empty auth_profile_tree
+Nov 12 09:20:38.548981 <LONG>: no access profiles, clean up
+Nov 12 09:20:38.548984 <LONG>
+Nov 12 09:20:38.548991 authd_cfg_interfaces_cb: Interface  not interested
+Nov 12 09:20:38.548998 authd_cfg_interfaces_cb: Interface fxp0 not interested
+Nov 12 09:20:38.549001 <LONG>: Radius-Options dax_query (interface) ret 0
+Nov 12 09:20:38.549002 <LONG>: check 0, retVal 1
+Nov 12 09:20:38.549138 configDone not initializing APM
+Nov 12 09:20:38.549299 === Configuration load succeeded ===
+Nov 12 09:20:38.579791 Framework : : SNMP Mib Tables init
+Nov 12 09:20:38.586880 client quota jdhcpd-client 8192 32768 32768 16384 16384
+Nov 12 09:20:38.586898 client quota autoconfd-client 8192 16384 0 16384 16384
+Nov 12 09:20:38.586907 client quota dvlan-client 8192 16384 0 16384 16384
+Nov 12 09:20:38.586909 client quota jpppd-client 8192 32768 32768 16384 16384
+Nov 12 09:20:38.586915 client quota essmd-client 8192 16384 0 16384 16384
+Nov 12 09:20:38.586926 client quota rpd-client 8192 32768 32768 16384 16384
+Nov 12 09:20:38.586933 client quota hag-client 8192 32768 32768 16384 16384
+Nov 12 09:20:38.586935 client quota rdmd-client 8192 16384 0 16384 16384
+Nov 12 09:20:38.586941 client quota bbe-fwsd-client 8192 32768 32768 16384 16384
+Nov 12 09:20:38.586949 client quota authdTester-client 8192 32768 32768 16384 16384
+Nov 12 09:20:38.586955 client quota cpcdd-client 8192 32768 32768 16384 16384
+Nov 12 09:20:38.592493 <LONG> opened
+Nov 12 09:20:38.592504 Read persistent Address Reservations  encodeType 3
+Nov 12 09:20:38.592540 <LONG> opened
+Nov 12 09:20:38.592543 Read persistent Address Reservations  encodeType 1
+Nov 12 09:20:38.592553 <LONG> opened
+Nov 12 09:20:38.592555 Read persistent Address Reservations  encodeType 2
+Nov 12 09:20:38.592561 <LONG> opened
+Nov 12 09:20:38.592563 Read persistent Address Reservations  encodeType 4
+Nov 12 09:20:38.592570 <LONG> opened
+Nov 12 09:20:38.592572 Read persistent Address Reservations  encodeType 10
+Nov 12 09:20:38.592578 <LONG> opened
+Nov 12 09:20:38.592580 Read persistent Address Reservations  encodeType 8
+Nov 12 09:20:38.592588 <LONG> opened
+Nov 12 09:20:38.592589 Read persistent Address Reservations  encodeType 9
+Nov 12 09:20:38.592596 <LONG> opened
+Nov 12 09:20:38.592598 Read persistent Address Reservations  encodeType 11
+Nov 12 09:20:38.592622 Startup: ISSU State is IDLE
+Nov 12 09:20:38.594364 <LONG>: 0 server names garbage collected
+Nov 12 09:20:38.597810 Framework : : SNMP trap (jnxAccessAuthServiceUp) result: <<LONG> xmlns="http:<LONG>">
+<<LONG>>trap sent successfully<<LONG>>
+<<LONG>>
+Nov 12 09:20:38.744636 ### GRES: recovery-done: prev-run-mode:other-backup run-mode:legacy-proto-master
+Nov 12 09:20:38.744647 <LONG> prev_mode=other-backup <LONG>
+Nov 12 09:20:38.754922 AaaService::RoutingContext::ctor/default, ls default, ri default, tn null
+Nov 12 09:20:38.755008 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:38.755018 <LONG>:6198: JSRC connect()
+Nov 12 09:20:38.755021 gx-plus: recovery: process restart
+Nov 12 09:20:38.755031 gx-plus: sync-event: warm-boot: activated
+Nov 12 09:20:38.755043 <LONG>: restore-complete
+Nov 12 09:20:38.755065 NasreqRw:connectFailCb CONNECT FAIL CALLBACK
+Nov 12 09:20:38.755094 NASREQ connect()
+Nov 12 09:20:38.755096 S6a: recovery complete
+Nov 12 09:20:38.755099 nas5gRestoreComplete nas5g: restore complete: connection state is disabled
+Nov 12 09:20:38.755106 Enter <LONG>
+Nov 12 09:20:38.755160 authd_unix_ipc_setup: ipc done sockfd is 68
+Nov 12 09:20:38.755196 <LONG>:Authd forcely add jipc-conn jdhcpd-client
+Nov 12 09:20:38.755218 <LONG>:Authd forcely add jipc-conn autoconfd-client
+Nov 12 09:20:38.755230 <LONG>:Authd forcely add jipc-conn dvlan-client
+Nov 12 09:20:38.755245 <LONG>:Authd forcely add jipc-conn jpppd-client
+Nov 12 09:20:38.755257 <LONG>:Authd forcely add jipc-conn essmd-client
+Nov 12 09:20:38.755269 <LONG>:Authd forcely add jipc-conn jsscd-client
+Nov 12 09:20:38.755281 <LONG>:Authd forcely add jipc-conn rpd-client
+Nov 12 09:20:38.755305 <LONG>:Authd forcely add jipc-conn hag-client
+Nov 12 09:20:38.755319 <LONG>:Authd forcely add jipc-conn rdmd-client
+Nov 12 09:20:38.755330 <LONG>:Authd forcely add jipc-conn bbe-fwsd-client
+Nov 12 09:20:38.755343 <LONG>:Authd forcely add jipc-conn authdTester-client
+Nov 12 09:20:38.755354 <LONG>:Authd forcely add jipc-conn cpcdd-client
+Nov 12 09:20:38.755366 <LONG>:Authd forcely add jipc-conn jdhcpd-test-client
+Nov 12 09:20:38.755377 <LONG>:Authd forcely add jipc-conn jpppd-test-client
+Nov 12 09:20:38.755389 <LONG>:Authd forcely add jipc-conn jl2tp-test-client
+Nov 12 09:20:38.755401 <LONG>:Authd forcely add jipc-conn nat-client
+Nov 12 09:20:38.755438 authd_unix_ipc_setup: jipc-enable-client-io done
+Nov 12 09:20:38.755457 authd_tcp_ipc_setup: TCP ipc init is done, sockfd is 70
+Nov 12 09:20:38.767487 ### GRES: done:
+Nov 12 09:20:40.368598 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:42.422938 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:44.423795 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:46.424873 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:48.425846 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:50.426959 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:52.427834 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:54.429182 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:56.429532 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:58.429923 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:21:00.430448 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:21:02.430832 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:21:04.431430 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:21:06.432092 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:21:08.432895 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:21:10.433652 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:21:12.434554 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:21:14.435587 <LONG>:398: CONNECT FAIL CALLBACK
+Nov 12 09:20:38  srx1 authd[37280]: <LONG>: <LONG>: registering 11 rows
+Nov 12 09:20:38  srx1 authd[37280]: Startup: ISSU State is IDLE
+Nov 12 09:20:38  srx1 authd[37280]: LIBJSNMP_NS_LOG_INFO: INFO: <LONG>: NET-SNMP version 5.3.1 AgentX subagent Open-Sent!
+Nov 12 09:20:38  srx1 authd[37280]: LIBDFCD client registered.
+Nov 12 09:20:42  srx1 auditd[20324]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message
+Nov 12 09:20:47  srx1 auditd[20324]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message
+Nov 12 09:20:52  srx1 auditd[20324]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message
+Nov 12 09:20:57  srx1 auditd[20324]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message
+Nov 12 09:20:57  srx1 auditd[20324]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message
+Nov 12 09:21:15  srx1 mgd[36673]: UI_CMDLINE_READ_LINE: User 'breakglass', command 'show log tacacs-traceoptions '
+Nov 12 09:21:17  srx1 auditd[20324]: <LONG>: Discarded Accounting-Request message; no positive response from TACACS+ servers
+Nov 12 09:21:17  srx1 auditd[20324]: AUDITD_TACPLUS_FAIL: TACACS+ failure: TACACS+ server returned status as 'error' in the accounting reply

@@ -29,6 +29,10 @@ import (
 // session_ids until the daemon runs out of memory.
 const maxLiveSessions = 64
 
+// maxInFlight bounds the packets one single-connect connection answers at
+// once (spec §13 decision 59).
+const maxInFlight = 16
+
 // unadmittedHeaderDeadline bounds how long a source that is not in the
 // inventory may hold a connection before sending its first header. An
 // admitted device gets the configured idle timeout; an unadmitted one has no
@@ -55,19 +59,29 @@ type conn struct {
 	// wmu is held around each reply write, and by a shutdown's close, so the
 	// close never lands inside a Write: crypto/tls skips close_notify then and
 	// sends a bare FIN. The shutdown bounds a stuck write by a write deadline
-	// first (closeTLSAtShutdown).
-	wmu      sync.Mutex
+	// first (closeTLSAtShutdown). It also guards c and dropped against the
+	// lanes' writes.
+	wmu sync.Mutex
+	// dropped is set when the connection is to end without another byte
+	// written: a reset, a protocol error, a lane's panic. A lane's reply
+	// after it is not written: over TLS c is by then the TCP connection
+	// beneath, and a reply on it would be cleartext.
+	dropped  bool
 	src      netip.Addr
 	dev      admission.Resolved
 	admitted bool
 	refused  bool // in inventory, and admission refused it (spec §10)
 	keys     keyring.Set
 
-	version  int  // 0 until the first packet validates; then the only version this connection uses
-	single   bool // the first packet asked to keep the connection open, or port49 offered it (ruling 20)
-	offered  bool // port49 alone opened it single-connect; counted in offers while it is open
-	offers   *offers
+	version int  // 0 until the first packet validates; then the only version this connection uses
+	single  bool // the first packet asked to keep the connection open, or port49 offered it (ruling 20)
+	offered bool // port49 alone opened it single-connect; counted in offers while it is open
+	offers  *offers
+	// smu guards sessions: on a single-connect connection the lanes of
+	// different sessions run at once (lanes.go).
+	smu      sync.Mutex
 	sessions map[uint32]*authen.Session
+	lanes    *lanes
 }
 
 // unvalidated records a packet no accepted key validated. It carries the
@@ -232,9 +246,27 @@ func reset(c net.Conn) {
 // abandoned, not closed: no close_notify goes out before the reset (L73 has
 // not measured what a device does with one).
 func (s *conn) reset() {
-	s.tlsc.Store(nil)
-	s.c = s.raw
+	s.drop()
 	reset(s.raw)
+}
+
+// drop marks the connection to end without another byte written and
+// abandons a TLS connection for the TCP one beneath, so the close sends no
+// close_notify. Only the read loop calls it: it alone reads c unlocked.
+func (s *conn) drop() {
+	s.tlsc.Store(nil)
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	s.dropped = true
+	s.c = s.raw
+}
+
+// halt stops every later reply write without touching c: a lane's way to
+// drop the connection, since the read loop may be reading c.
+func (s *conn) halt() {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	s.dropped = true
 }
 
 // keyMiss closes a connection whose packet no accepted key validates — a
@@ -289,9 +321,9 @@ func (s *conn) decline() {
 func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 	// A TLS connection is dropped without close_notify, as a reset's is,
 	// and that holds for a shutdown during the backoff too: the handle is
-	// cleared before the record and the hold, not after them.
-	s.tlsc.Store(nil)
-	s.c = s.raw
+	// cleared before the record and the hold, not after them. No lane writes
+	// a reply after it either.
+	s.drop()
 	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
 	s.backoff(ctx, "malformed_backoff")
 }
@@ -301,8 +333,7 @@ func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 // protocolError, the TLS handle is dropped before the hold, so a shutdown
 // during it sends no close_notify either.
 func (s *conn) badTLSHeader(ctx context.Context, h wire.Header) {
-	s.tlsc.Store(nil)
-	s.c = s.raw
+	s.drop()
 	s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
 	s.backoff(ctx, "malformed_backoff")
 }
@@ -311,13 +342,15 @@ func (s *conn) serve(ctx context.Context) {
 	// s.c becomes the TLS connection after a handshake: Close it as it is
 	// then, so a TLS peer gets close_notify. An offer is released first, so
 	// a device that reconnects the moment it sees the close is not counted
-	// against the connection it just lost (decision 50 ruling 20).
+	// against the connection it just lost (decision 50 ruling 20). Every
+	// session's lane has ended by the time serve returns (endLanes).
+	s.lanes = newLanes()
 	defer func() {
 		if s.offered {
 			s.offered = false
 			s.offers.close(s.src)
 		}
-		s.c.Close()
+		s.endLanes()
 	}()
 	if s.d.TLS != nil && !s.startTLS(ctx) {
 		return
@@ -332,9 +365,22 @@ func (s *conn) serve(ctx context.Context) {
 		if err := s.c.SetReadDeadline(time.Now().Add(deadline)); err != nil {
 			return
 		}
+		// Asked after the deadline is set: a lane's abort sets one in the
+		// past, and this must not miss an abort that came before it.
+		if s.aborted(ctx) {
+			return
+		}
 		hb := make([]byte, wire.HeaderLen)
-		if _, err := io.ReadFull(s.c, hb); err != nil {
+		if n, err := io.ReadFull(s.c, hb); err != nil {
+			if s.aborted(ctx) {
+				return
+			}
 			if errors.Is(err, os.ErrDeadlineExceeded) {
+				// A connection still owing a reply is not idle: a session in
+				// its failure delay may outlast a short idle_timeout.
+				if n == 0 && s.lanes.busy() {
+					continue
+				}
 				s.d.Metrics.ConnectionEvents.WithLabelValues("idle_closed").Inc()
 			}
 			return
@@ -424,6 +470,9 @@ func (s *conn) serve(ctx context.Context) {
 
 		raw := make([]byte, h.Length) // a Validate has already bounded Length at wire.MaxBodyLen
 		if _, err := io.ReadFull(s.c, raw); err != nil {
+			if s.aborted(ctx) {
+				return
+			}
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				s.d.Metrics.ConnectionEvents.WithLabelValues("idle_closed").Inc()
 			}
@@ -460,12 +509,32 @@ func (s *conn) serve(ctx context.Context) {
 			// RFC 8907: seq_no wraps after 255, and the reply would need
 			// seq_no 256, which does not fit a uint8. The session must be
 			// restarted, not continued, so this sends nothing and closes.
+			s.smu.Lock()
 			delete(s.sessions, h.SessionID)
+			s.smu.Unlock()
 			s.protocolError(ctx, h)
 			return
 		}
 
-		reply, done, protoErr := s.dispatch(ctx, h, body)
+		// The reply is obfuscated with the version that validated the
+		// request, read now: the key set is read again at the next packet.
+		var secret []byte
+		if s.tls == nil {
+			secret = s.keys.Secret(s.version)
+		}
+		arrived := time.Now()
+		if s.single {
+			// Sessions on one connection are answered at once, each in its
+			// own lane, so one session's failure delay or slow store does not
+			// hold another's reply past the device's timeout (decision 59).
+			if !s.enqueue(ctx, job{h: h, body: body, secret: secret, arrived: arrived}) {
+				s.aborted(ctx)
+				return
+			}
+			continue
+		}
+
+		reply, done, protoErr := s.dispatch(ctx, h, body, arrived)
 		if protoErr {
 			// The key validated, so this is a real device speaking a sequence
 			// port49 cannot answer. There is no reply that would help it; count
@@ -473,7 +542,7 @@ func (s *conn) serve(ctx context.Context) {
 			s.protocolError(ctx, h)
 			return
 		}
-		if reply != nil && !s.write(h, reply) {
+		if reply != nil && !s.write(h, reply, secret) {
 			return
 		}
 		if done && !s.single {
@@ -590,8 +659,11 @@ func (s *conn) pastDate(now time.Time) bool {
 // While the connection is single-connect every reply carries the flag, an
 // offered one's too: that is the form NX-OS's reuse was measured under, and
 // RFC 8907 §4.3 has both sides ignore the flag after the second packet
-// (decision 50 ruling 20).
-func (s *conn) write(h wire.Header, body []byte) bool {
+// (decision 50 ruling 20). secret is the request's key version's, read when
+// the request was; nil over TLS. A lane calls it too: the whole reply goes out
+// in one Write under wmu, so replies of sessions answered at once never
+// interleave, and none is written once the connection is dropped.
+func (s *conn) write(h wire.Header, body, secret []byte) bool {
 	flags := uint8(0)
 	if s.single {
 		flags = wire.FlagSingleConnect
@@ -603,26 +675,36 @@ func (s *conn) write(h wire.Header, body []byte) bool {
 	rh := wire.Header{MajorVersion: h.MajorVersion, MinorVersion: h.MinorVersion, Type: h.Type, SeqNo: h.SeqNo + 1,
 		Flags: flags, SessionID: h.SessionID, Length: uint32(len(body))}
 	if s.tls == nil {
-		out = wire.Obfuscate(rh, s.keys.Secret(s.version), body)
+		out = wire.Obfuscate(rh, secret, body)
 	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
+	if s.dropped {
 		return false
 	}
-	_, err := s.c.Write(append(rh.Encode(), out...))
-	return err == nil
+	// A write that fails drops the connection: part of this frame may be on
+	// the wire, so a later reply would be misframed, and a peer that stopped
+	// reading must cost one write timeout, not one per lane owing a reply.
+	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
+		s.dropped = true
+		return false
+	}
+	if _, err := s.c.Write(append(rh.Encode(), out...)); err != nil {
+		s.dropped = true
+		return false
+	}
+	return true
 }
 
 // dispatch runs one packet through the right handler and returns the reply
 // body. done reports whether the session on this connection has finished;
 // protoErr reports a packet this connection cannot answer at all, which closes
-// it without a reply.
-func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte) (reply []byte, done, protoErr bool) {
-	// The failure delay keeps the server's context and counts from now,
-	// the packet's arrival (authen.DelayContext): the deadline is for the
-	// store, never the brute-force delay (re-check N1).
-	delay, arrived := ctx, time.Now()
+// it without a reply. arrived is when the packet's body was read.
+func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte, arrived time.Time) (reply []byte, done, protoErr bool) {
+	// The failure delay keeps the server's context and counts from the
+	// packet's arrival (authen.DelayContext), even if it waited for a lane:
+	// the deadline is for the store, never the brute-force delay (re-check N1).
+	delay := ctx
 	if s.d.PacketDeadline > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.d.PacketDeadline)
@@ -674,15 +756,20 @@ func (s *conn) authenticate(ctx context.Context, h wire.Header, body []byte, pee
 		if err != nil {
 			return nil, true, true
 		}
+		s.smu.Lock()
 		if len(s.sessions) >= maxLiveSessions {
+			s.smu.Unlock()
 			return nil, true, true
 		}
 		sess := s.d.Authen.NewSession(peer)
 		s.sessions[h.SessionID] = sess // a START on a live session_id starts it over
+		s.smu.Unlock()
 		r, fin := sess.Start(ctx, p)
 		return s.finish(h, r, fin)
 	}
+	s.smu.Lock()
 	sess, ok := s.sessions[h.SessionID]
+	s.smu.Unlock()
 	if !ok {
 		// A CONTINUE for a session_id this connection never started, or one that
 		// already finished: there is nothing to continue.
@@ -701,7 +788,9 @@ func (s *conn) authenticate(ctx context.Context, h wire.Header, body []byte, pee
 // done set, which is how the session layer reports a client ABORT).
 func (s *conn) finish(h wire.Header, r wire.AuthenReply, done bool) (reply []byte, fin, protoErr bool) {
 	if done {
+		s.smu.Lock()
 		delete(s.sessions, h.SessionID)
+		s.smu.Unlock()
 	}
 	if done && r.Status == 0 {
 		return nil, true, false

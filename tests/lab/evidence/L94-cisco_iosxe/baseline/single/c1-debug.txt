@@ -1,0 +1,183 @@
+*Nov 12 10:04:20.398: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:20.647: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:20.649: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:20.899: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:20.901: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:21.405: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:21.410: TPLUS: Queuing AAA Accounting request 4023 for processing
+*Nov 12 10:04:21.410: TPLUS: processing accounting request id 4023
+*Nov 12 10:04:21.410: TPLUS: Sending AV task_id=4063
+*Nov 12 10:04:21.410: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.410: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.410: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.410: TPLUS: Sending AV cmd=debug tacacs <cr>
+*Nov 12 10:04:21.410: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.410: TPLUS: Using server 172.100.100.1
+*Nov 12 10:04:21.411: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:21.411: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+*Nov 12 10:04:21.411: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:21.411: TPLUS: Sending AV task_id=4063
+*Nov 12 10:04:21.411: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.411: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.411: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.411: TPLUS: Sending AV cmd=debug tacacs <cr>
+*Nov 12 10:04:21.411: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.551: TAC+: Using default tacacs server-group "port49" list.
+*Nov 12 10:04:21.551: % TAC+: Index :1 | Count : 0
+*Nov 12 10:04:21.551: % TAC+:server name   : l73-tls
+*Nov 12 10:04:21.551: % TAC+:server addr   : 172.100.100.1
+*Nov 12 10:04:21.652: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:21.652: TAC+: Handle TACACS+ secure message: Received message type: Conn-Timeout
+*Nov 12 10:04:21.652: TAC+: Handle TACACS+ secure message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:21.652: TAC+: Using default tacacs server-group "port49" list.
+*Nov 12 10:04:21.655: TPLUS: Queuing AAA Accounting request 4023 for processing
+*Nov 12 10:04:21.655: TPLUS: processing accounting request id 4023
+*Nov 12 10:04:21.655: TPLUS: Sending AV task_id=4064
+*Nov 12 10:04:21.655: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.655: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.655: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.655: TPLUS: Sending AV cmd=debug aaa authentication <cr>
+*Nov 12 10:04:21.655: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.655: TPLUS: Using server 172.100.100.1
+*Nov 12 10:04:21.667: TPLUS: Queuing AAA Accounting request 4023 for processing
+*Nov 12 10:04:21.667: TPLUS: processing accounting request id 4023
+*Nov 12 10:04:21.667: TPLUS: Sending AV task_id=4065
+*Nov 12 10:04:21.667: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.667: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.667: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.667: TPLUS: Sending AV cmd=set platform software trace smd R0 aaa-authen debug <cr>
+*Nov 12 10:04:21.667: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.667: TPLUS: using previously set server 172.100.100.1 from group port49
+*Nov 12 10:04:21.669: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:21.669: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+*Nov 12 10:04:21.669: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:21.669: TPLUS: Sending AV task_id=4064
+*Nov 12 10:04:21.669: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.669: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.669: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.669: TPLUS: Sending AV cmd=debug aaa authentication <cr>
+*Nov 12 10:04:21.669: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.669: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+*Nov 12 10:04:21.669: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:21.669: TPLUS: Sending AV task_id=4065
+*Nov 12 10:04:21.669: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.669: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.669: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.669: TPLUS: Sending AV cmd=set platform software trace smd R0 aaa-authen debug <cr>
+*Nov 12 10:04:21.669: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.802: TAC+: Using default tacacs server-group "port49" list.
+*Nov 12 10:04:21.802: % TAC+: Index :1 | Count : 0
+*Nov 12 10:04:21.802: % TAC+:server name   : l73-tls
+*Nov 12 10:04:21.802: % TAC+:server addr   : 172.100.100.1
+*Nov 12 10:04:21.904: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:21.904: TAC+: Handle TACACS+ secure message: Received message type: Conn-Timeout
+*Nov 12 10:04:21.904: TAC+: Handle TACACS+ secure message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:21.904: TAC+: Using default tacacs server-group "port49" list.
+*Nov 12 10:04:21.904: TPLUS: Queuing AAA Accounting request 4023 for processing
+*Nov 12 10:04:21.904: TPLUS: processing accounting request id 4023
+*Nov 12 10:04:21.904: TPLUS: Sending AV task_id=4066
+*Nov 12 10:04:21.904: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.904: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.904: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.904: TPLUS: Sending AV cmd=debug aaa authorization <cr>
+*Nov 12 10:04:21.904: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.904: TPLUS: Using server 172.100.100.1
+*Nov 12 10:04:21.905: TPLUS: Queuing AAA Accounting request 4023 for processing
+*Nov 12 10:04:21.905: TPLUS: processing accounting request id 4023
+*Nov 12 10:04:21.905: TPLUS: Sending AV task_id=4067
+*Nov 12 10:04:21.905: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.905: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.905: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.905: TPLUS: Sending AV cmd=set platform software trace smd R0 aaa-author debug <cr>
+*Nov 12 10:04:21.905: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.905: TPLUS: using previously set server 172.100.100.1 from group port49
+*Nov 12 10:04:21.907: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:21.907: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+*Nov 12 10:04:21.907: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:21.907: TPLUS: Sending AV task_id=4066
+*Nov 12 10:04:21.907: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.907: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.907: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.907: TPLUS: Sending AV cmd=debug aaa authorization <cr>
+*Nov 12 10:04:21.907: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:21.907: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+*Nov 12 10:04:21.907: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:21.907: TPLUS: Sending AV task_id=4067
+*Nov 12 10:04:21.907: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:21.907: TPLUS: Sending AV service=shell
+*Nov 12 10:04:21.907: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:21.907: TPLUS: Sending AV cmd=set platform software trace smd R0 aaa-author debug <cr>
+*Nov 12 10:04:21.907: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:22.052: TAC+: Using default tacacs server-group "port49" list.
+*Nov 12 10:04:22.052: % TAC+: Index :1 | Count : 0
+*Nov 12 10:04:22.052: % TAC+:server name   : l73-tls
+*Nov 12 10:04:22.052: % TAC+:server addr   : 172.100.100.1
+*Nov 12 10:04:22.153: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:22.153: TAC+: Handle TACACS+ secure message: Received message type: Conn-Timeout
+*Nov 12 10:04:22.153: TAC+: Handle TACACS+ secure message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:22.153: TAC+: Using default tacacs server-group "port49" list.
+*Nov 12 10:04:22.153: TPLUS: Queuing AAA Accounting request 4023 for processing
+*Nov 12 10:04:22.153: TPLUS: processing accounting request id 4023
+*Nov 12 10:04:22.153: TPLUS: Sending AV task_id=4068
+*Nov 12 10:04:22.153: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:22.153: TPLUS: Sending AV service=shell
+*Nov 12 10:04:22.153: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:22.153: TPLUS: Sending AV cmd=debug aaa accounting <cr>
+*Nov 12 10:04:22.153: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:22.153: TPLUS: Using server 172.100.100.1
+*Nov 12 10:04:22.156: TPLUS: Queuing AAA Accounting request 4023 for processing
+*Nov 12 10:04:22.156: TPLUS: processing accounting request id 4023
+*Nov 12 10:04:22.156: TPLUS: Sending AV task_id=4069
+*Nov 12 10:04:22.156: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:22.156: TPLUS: Sending AV service=shell
+*Nov 12 10:04:22.156: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:22.156: TPLUS: Sending AV cmd=set platform software trace smd R0 aaa-acct debug <cr>
+*Nov 12 10:04:22.156: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:22.156: TPLUS: using previously set server 172.100.100.1 from group port49
+*Nov 12 10:04:22.158: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:22.158: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+*Nov 12 10:04:22.158: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:22.158: TPLUS: Sending AV task_id=4068
+*Nov 12 10:04:22.158: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:22.158: TPLUS: Sending AV service=shell
+*Nov 12 10:04:22.158: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:22.158: TPLUS: Sending AV cmd=debug aaa accounting <cr>
+*Nov 12 10:04:22.158: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:22.158: TAC+: Handle TACACS+ Secure Message: Received message type: Conn-Timeout
+*Nov 12 10:04:22.158: TAC+: Handle TACACS+ Secure Message: Timeout occurred: Conn-Timeout
+*Nov 12 10:04:22.158: TPLUS: Sending AV task_id=4069
+*Nov 12 10:04:22.158: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:22.158: TPLUS: Sending AV service=shell
+*Nov 12 10:04:22.158: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:22.158: TPLUS: Sending AV cmd=set platform software trace smd R0 aaa-acct debug <cr>
+*Nov 12 10:04:22.158: TPLUS: Accounting request created for 4023(breakglass)
+*Nov 12 10:04:23.704: TPLUS: Queuing AAA Authentication request 4024 for processing
+*Nov 12 10:04:23.704: TPLUS: processing authentication start request id 4024
+*Nov 12 10:04:23.704: TPLUS: Authentication start packet created for 4024(qual01)
+*Nov 12 10:04:23.790: TPLUS: Queuing AAA Authentication request 4025 for processing
+*Nov 12 10:04:23.790: TPLUS: processing authentication start request id 4025
+*Nov 12 10:04:23.790: TPLUS: Authentication start packet created for 4025(qual01)
+*Nov 12 10:04:25.705: TPLUS: Queuing AAA Authentication request 4024 for processing
+*Nov 12 10:04:25.705: TPLUS: processing authentication start request id 4024
+*Nov 12 10:04:25.705: TPLUS: Authentication start packet created for 4024(qual01)
+*Nov 12 10:04:25.791: TPLUS: Queuing AAA Authentication request 4025 for processing
+*Nov 12 10:04:25.791: TPLUS: processing authentication start request id 4025
+*Nov 12 10:04:25.791: TPLUS: Authentication start packet created for 4025(qual01)
+TPLUS Proc:SOCKET IO CLEANUP EVENT
+TPLUS Proc:SOCKET IO CLEANUP EVENT
+*Nov 12 10:04:36.336: TPLUS: Queuing AAA Accounting request 11 for processing
+*Nov 12 10:04:36.336: TPLUS: processing accounting request id 11
+*Nov 12 10:04:36.336: TPLUS: Sending AV task_id=4001
+*Nov 12 10:04:36.336: TPLUS: Sending AV timezone=UTC
+*Nov 12 10:04:36.336: TPLUS: Sending AV service=shell
+*Nov 12 10:04:36.336: TPLUS: Sending AV priv-lvl=15
+*Nov 12 10:04:36.336: TPLUS: Sending AV cmd=show running-config yang brief <cr>
+*Nov 12 10:04:36.336: TPLUS: Accounting request created for 11(yang_mgmt_infra)
+*Nov 12 10:04:36.336: TPLUS: Using server 172.100.100.1
+*Nov 12 10:04:36.414: %<LONG>: TACACS SECURE connection established with peer 172.100.100.1
+*Nov 12 10:04:36.414: TAC+: Handle TACACS+ Secure Message: Received message type: Resp-Pass
+*Nov 12 10:04:36.414: TAC+: Handle TACACS+ Secure Message: Response received: Resp-Pass
+*Nov 12 10:04:36.414: TPLUS: Received accounting response with status PASS
+*Nov 12 10:04:48.069: %<LONG>: TACACS SECURE connection closed with peer 172.100.100.1
+*Nov 12 10:04:48.078: TAC+: Using default tacacs server-group "port49" list.
+*Nov 12 10:04:48.078: % TAC+: Index :1 | Count : 0

@@ -79,6 +79,18 @@ func TestL80Remeasure(t *testing.T) {
 	if dirty, err := qualTreeDirty(root); err != nil || dirty != "" {
 		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
 	}
+	sel, _, err := platformSelection()
+	if err != nil || len(sel) != 1 || sel[0].sel != "nxos106" {
+		t.Fatalf("PORT49_LAB_PLATFORMS=nxos106 only: %v", err)
+	}
+	// The lab is taken before the build: it replaces bin/port49d, which
+	// another run holding the lab may be running.
+	if err := labOccupyForRun(labLockPath, fmt.Sprintf("l80 %s pid %d", arm, os.Getpid())); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	// The harness builds the port49d the arm runs (fix round 4): the
 	// baseline from l80BaselineCommit, the fixed arm from HEAD, each in a
 	// private clone so the stamp is right, then checks it (review I2).
@@ -96,16 +108,6 @@ func TestL80Remeasure(t *testing.T) {
 	}
 	if err := l80ArmCheck(arm, vcs, gitHead(root), func(rev string) (bool, error) { return l80HasFix(root, rev) }); err != nil {
 		t.Fatal(err)
-	}
-	sel, _, err := platformSelection()
-	if err != nil || len(sel) != 1 || sel[0].sel != "nxos106" {
-		t.Fatalf("PORT49_LAB_PLATFORMS=nxos106 only: %v", err)
-	}
-	if err := labOccupyForRun(labLockPath, fmt.Sprintf("l80 %s pid %d", arm, os.Getpid())); err != nil {
-		t.Fatalf("INVALID: %v", err)
-	}
-	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
-		t.Fatalf("INVALID: %v", err)
 	}
 	out := filepath.Join(root, "tests/lab/evidence/L80-cisco_nxos", arm)
 	if err := os.MkdirAll(out, 0o755); err != nil {
@@ -199,6 +201,7 @@ func TestL80Remeasure(t *testing.T) {
 		e.settle()
 		e.cli(func(c *cliConn) error {
 			adm := func(ln string) { c.sendExpect(ln, 120*time.Second, c.prompt) }
+			defer l80DebugOff(e.l, c, label)
 			adm("terminal length 0")
 			adm("debug logfile " + label)
 			for _, ln := range l80Debug {
@@ -359,7 +362,6 @@ func TestL80Remeasure(t *testing.T) {
 			c.sendExpect("show debug logfile "+label, 180*time.Second, c.prompt)
 			keptText, keepErr := filter.Keep(c.transcript()[at:])
 			if keepErr != nil {
-				c.sendExpect("undebug all", 60*time.Second, c.prompt)
 				t.Fatalf("INVALID: %s's debug capture was discarded (%v); nothing written", cell.Name, keepErr)
 			}
 			kept := string(keptText)
@@ -421,7 +423,6 @@ func TestL80Remeasure(t *testing.T) {
 				cell.Name + ".tls.json":    string(e.evidence["l80_"+cell.Name+".tls.json"]),
 				cell.Name + "-typed.json":  string(tj),
 			})
-			c.sendExpect("undebug all", 60*time.Second, c.prompt)
 			stops = append(stops, cellStops...)
 			return nil
 		})
@@ -429,6 +430,19 @@ func TestL80Remeasure(t *testing.T) {
 			t.Fatalf("STOP (report before shipping; evidence for %s is written):\n%s", cell.Name, strings.Join(stops, "\n"))
 		}
 	}
+}
+
+// l80DebugOff undoes what a cell's held NX-OS break-glass session turned on:
+// port49d stopped first (with it up the device sends this session's commands
+// to it, and refuses them), then debug off, the logfile removed, the session
+// closed. It is deferred, so a Fatal in the cell (Goexit) still runs it; on
+// the normal path the collection has already stopped port49d, and a second
+// Close is safe.
+func l80DebugOff(l *lab, c *cliConn, label string) {
+	l.stopDaemon()
+	c.sendExpect("undebug all", 60*time.Second, c.prompt)
+	c.sendExpect("no debug logfile "+label, 60*time.Second, c.prompt)
+	c.Close()
 }
 
 // l80Clock is a time as the summary keeps it, or "never".

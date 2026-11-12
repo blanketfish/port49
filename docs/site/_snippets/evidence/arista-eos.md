@@ -49,3 +49,4 @@
 | [L88 (closed)](../../reference/lab-register.md#l88) | arista_ceos | cEOS-lab 4.36.3M | 2026-11-04 | [L88-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_ceos.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | arista_eos | vEOS-lab 4.31.2F (image tagged 4.32.2F) | 2026-11-04 | [L88-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_eos.md) |
 | [L90 (closed)](../../reference/lab-register.md#l90) | arista_eos | vEOS-lab 4.31.2F (image tagged 4.32.2F) | 2026-11-06 | [L90-oxidized-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L90-oxidized-arista_eos.md) |
+| [L94 (open)](../../reference/lab-register.md#l94) | arista_eos | cEOS-lab 4.36.3M | 2026-11-12 | [L94-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-arista_ceos.md) |

@@ -1,0 +1,89 @@
+L94, arm fixed, cell c3, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version | no-more" took=1.00s denied=false err=false at=10:44:55.380
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:56.393
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:56.644
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:56.895
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:57.145
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:57.396
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:57.647
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:57.897
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:58.148
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:58.399
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:58.650
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:58.900
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:59.151
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:59.402
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:59.653
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:44:59.905
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:45:00.156
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:45:00.407
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:45:00.658
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:45:00.909
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:45:01.160
+debug: 455 device log lines, kept 169, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 10:44:53.217472 authd_config_read: old seq 0 and new one 60
+port49 read (authorize_command ts less typed):
+tls connections: 9, most open at once: 5
+  conn port=43256 syn=10:44:55.112 hold=0.01s end=server-fin
+  conn port=43258 syn=10:44:55.468 hold=2.02s end=server-fin
+  conn port=43260 syn=10:44:55.480 hold=2.02s end=server-fin
+  conn port=43276 syn=10:44:55.488 hold=2.04s end=server-fin
+  conn port=43290 syn=10:44:56.362 hold=open end=open
+  conn port=43302 syn=10:44:56.424 hold=0.01s end=server-fin
+  conn port=46158 syn=10:44:58.391 hold=2.02s end=server-fin
+  conn port=46164 syn=10:44:58.398 hold=2.01s end=server-fin
+  conn port=46176 syn=10:44:58.411 hold=2.01s end=server-fin
+<LONG> delta: 0
+refused-credential login 1: took=10.06s auth_failed=true logged_in=false err=""
+refused-credential login 2: took=10.03s auth_failed=true logged_in=false err=""
+refused-credential login 3: took=10.03s auth_failed=true logged_in=false err=""
+port49 records:
+  10:44:55.119 redeem permit
+  10:44:55.120 authorize_session permit
+  10:44:56.374 account
+  10:44:56.375 account
+  10:44:56.376 account
+  10:44:56.377 account
+  10:44:56.378 account
+  10:44:56.379 account
+  10:44:56.380 account
+  10:44:56.380 account
+  10:44:56.381 account
+  10:44:56.433 redeem permit
+  10:44:56.434 authorize_session permit
+  10:44:55.490 redeem deny
+  10:44:55.496 redeem deny
+  10:44:55.523 redeem deny
+  10:44:58.404 redeem deny
+  10:44:58.410 redeem deny
+  10:44:58.423 redeem deny
+  10:45:01.404 account
+  10:45:01.405 account
+  10:45:01.407 account
+  10:45:01.408 account
+  10:45:01.409 account
+  10:45:01.410 account
+  10:45:01.411 account
+  10:45:01.412 account
+  10:45:01.412 account
+  10:45:01.413 account
+  10:45:01.414 account
+  10:45:01.415 account
+  10:45:01.416 account
+  10:45:01.417 account
+  10:45:01.418 account
+  10:45:01.418 account
+  10:45:01.419 account
+  10:45:01.420 account
+  10:45:01.420 account
+  10:45:01.421 account
+  10:45:01.422 account
+  10:45:01.423 account
+  10:45:01.423 account
+  10:45:01.424 account
+  10:45:01.425 account
+  10:45:01.425 account
+  10:45:06.445 account
+FINDING: c3: device opens a connection per login (baseline 9, fixed 9)
+

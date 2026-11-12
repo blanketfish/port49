@@ -67,7 +67,7 @@ func TestShutdownIsNotHeldByAWriteToAPeerThatStoppedReading(t *testing.T) {
 	written := make(chan bool, 1)
 	go func() { // the real reply write: it holds wmu while it blocks on the full buffer
 		close(writing)
-		written <- s.write(wire.Header{MajorVersion: 0xc, Type: wire.TypeAuthen}, make([]byte, 64<<20))
+		written <- s.write(wire.Header{MajorVersion: 0xc, Type: wire.TypeAuthen}, make([]byte, 64<<20), nil)
 	}()
 	<-writing
 	// conn.write holds the lock for as long as its Write blocks: seen held

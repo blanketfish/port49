@@ -234,20 +234,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			defer wg.Done()
 			defer release()
 			defer d.Metrics.Connections.WithLabelValues("open").Dec()
-			// A panic in one connection must never take the daemon down with it,
-			// or every other admitted device loses service at once. Never log the
-			// packet itself: only the source, the recovered value, and the stack.
-			// The stack is function names, files and line numbers — port49's own
-			// code, no packet bytes and no arguments — and without it a panic
-			// counter tells an operator that something broke and nothing about
-			// where.
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("conn %s: panic: %v\n%s", src, r, debug.Stack())
-					d.Metrics.ConnectionEvents.WithLabelValues("panic").Inc()
-					c.Close()
-				}
-			}()
+			defer recoverConn(src, d.Metrics, func() { c.Close() })
 			// Close the connection on shutdown rather than waiting out its idle
 			// timeout; serve's own defer closes it on the normal path. A store
 			// gone resets at once (L28). Otherwise a TLS connection is closed
@@ -276,6 +263,22 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			defer close(done)
 			cc.serve(ctx)
 		}()
+	}
+}
+
+// recoverConn is deferred by every goroutine serving a connection: its read
+// loop, and each session's lane on a single-connect one (lanes.go). A panic
+// in one connection must never take the daemon down with it, or every other
+// admitted device loses service at once. Never log the packet itself: only
+// the source, the recovered value, and the stack. The stack is function
+// names, files and line numbers — port49's own code, no packet bytes and no
+// arguments — and without it a panic counter tells an operator that
+// something broke and nothing about where. closeConn ends the connection.
+func recoverConn(src netip.Addr, m *metrics.Metrics, closeConn func()) {
+	if r := recover(); r != nil {
+		log.Printf("conn %s: panic: %v\n%s", src, r, debug.Stack())
+		m.ConnectionEvents.WithLabelValues("panic").Inc()
+		closeConn()
 	}
 }
 

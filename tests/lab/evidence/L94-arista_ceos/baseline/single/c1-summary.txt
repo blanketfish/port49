@@ -1,0 +1,170 @@
+L94, arm baseline, cell c1, mode single, ceos436 (cEOS-lab 4.36.3M) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:30.491
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:30.593
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:30.741
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:30.843
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:30.992
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:31.094
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:31.243
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:31.345
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:31.493
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:31.596
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:31.744
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:31.847
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:31.995
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:32.098
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:32.246
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:32.349
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:32.496
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:32.600
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:32.747
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:32.851
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:32.998
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:33.102
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:33.249
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:33.352
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:33.501
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:33.603
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:33.751
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:33.853
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:34.002
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:34.104
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:34.253
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:34.355
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:34.504
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:34.606
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:34.755
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:34.857
+  s0 "show version"           took=0.25s denied=false err=false at=12:09:35.006
+  s1 "show version"           took=0.25s denied=false err=false at=12:09:35.108
+  s0 "show users"             took=0.25s denied=true err=false at=12:09:35.257
+  s1 "show users"             took=0.25s denied=true err=false at=12:09:35.358
+debug: 2606 device log lines, kept 579, suspect 32 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: 2026-11-12 12:09:28.349672  5133 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:09:28.453882  5142 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:09:28.457524  5133 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 15 session data: None
+  suspect: 2026-11-12 12:09:28.461003  5142 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 16 session data: None
+  suspect: 2026-11-12 12:09:30.195556  5223 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = start
+  suspect: 2026-11-12 12:09:30.286511  5228 Aaa                  3 authorizeShell for user qual01 sessionId 15 sessionPid 5127 shellPid 5225 tty vty10
+  suspect: 2026-11-12 12:09:30.299067  5231 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = start
+  suspect: 2026-11-12 12:09:30.385636  5244 Aaa                  3 authorizeShell for user qual01 sessionId 16 sessionPid 5135 shellPid 5242 tty vty12
+  suspect: 2026-11-12 12:09:35.511101  5463 Aaa                  5 closeSession for session id 15
+  suspect: 2026-11-12 12:09:35.511213  5463 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = stop
+  suspect: 2026-11-12 12:09:35.611343  5472 Aaa                  5 closeSession for session id 16
+  suspect: 2026-11-12 12:09:35.611447  5472 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = stop
+port49 read (authorize_command ts less typed):
+  s0 "show version"           +4ms permit
+  s1 "show version"           +5ms permit
+  s0 "show users"             +3ms deny
+  s1 "show users"             +4ms deny
+  s0 "show version"           +3ms permit
+  s1 "show version"           +4ms permit
+  s0 "show users"             +4ms deny
+  s1 "show users"             +4ms deny
+  s0 "show version"           +1ms permit
+  s1 "show version"           +5ms permit
+  s0 "show users"             +2ms deny
+  s1 "show users"             +2ms deny
+  s0 "show version"           +2ms permit
+  s1 "show version"           +3ms permit
+  s0 "show users"             +4ms deny
+  s1 "show users"             +4ms deny
+  s0 "show version"           +3ms permit
+  s1 "show version"           +4ms permit
+  s0 "show users"             +4ms deny
+  s1 "show users"             +3ms deny
+  s0 "show version"           +3ms permit
+  s1 "show version"           +4ms permit
+  s0 "show users"             +3ms deny
+  s1 "show users"             +2ms deny
+  s0 "show version"           +3ms permit
+  s1 "show version"           +4ms permit
+  s0 "show users"             +4ms deny
+  s1 "show users"             +3ms deny
+  s0 "show version"           +4ms permit
+  s1 "show version"           +3ms permit
+  s0 "show users"             +3ms deny
+  s1 "show users"             +2ms deny
+  s0 "show version"           +1ms permit
+  s1 "show version"           +4ms permit
+  s0 "show users"             +4ms deny
+  s1 "show users"             +4ms deny
+  s0 "show version"           +3ms permit
+  s1 "show version"           +4ms permit
+  s0 "show users"             +4ms deny
+  s1 "show users"             +2ms deny
+tls connections: 1, most open at once: 1
+  conn port=34386 syn=12:09:28.350 hold=open end=open
+clean point (the capture started first, then the gauge read 0): 12:09:28.312
+<LONG> delta: 0
+port49 records:
+  12:09:28.355 redeem permit
+  12:09:28.460 redeem permit
+  12:09:30.196 account
+  12:09:30.287 authorize_session permit
+  12:09:30.299 account
+  12:09:30.386 authorize_session permit
+  12:09:30.495 authorize_command permit "show version"
+  12:09:30.497 account
+  12:09:30.599 authorize_command permit "show version"
+  12:09:30.601 account
+  12:09:30.745 authorize_command deny "show users"
+  12:09:30.848 authorize_command deny "show users"
+  12:09:30.996 authorize_command permit "show version"
+  12:09:30.999 account
+  12:09:31.099 authorize_command permit "show version"
+  12:09:31.102 account
+  12:09:31.247 authorize_command deny "show users"
+  12:09:31.350 authorize_command deny "show users"
+  12:09:31.495 authorize_command permit "show version"
+  12:09:31.497 account
+  12:09:31.602 authorize_command permit "show version"
+  12:09:31.604 account
+  12:09:31.747 authorize_command deny "show users"
+  12:09:31.850 authorize_command deny "show users"
+  12:09:31.998 authorize_command permit "show version"
+  12:09:32.002 account
+  12:09:32.102 authorize_command permit "show version"
+  12:09:32.104 account
+  12:09:32.250 authorize_command deny "show users"
+  12:09:32.353 authorize_command deny "show users"
+  12:09:32.500 authorize_command permit "show version"
+  12:09:32.503 account
+  12:09:32.604 authorize_command permit "show version"
+  12:09:32.607 account
+  12:09:32.751 authorize_command deny "show users"
+  12:09:32.854 authorize_command deny "show users"
+  12:09:33.001 authorize_command permit "show version"
+  12:09:33.004 account
+  12:09:33.106 authorize_command permit "show version"
+  12:09:33.109 account
+  12:09:33.253 authorize_command deny "show users"
+  12:09:33.355 authorize_command deny "show users"
+  12:09:33.504 authorize_command permit "show version"
+  12:09:33.507 account
+  12:09:33.607 authorize_command permit "show version"
+  12:09:33.610 account
+  12:09:33.756 authorize_command deny "show users"
+  12:09:33.857 authorize_command deny "show users"
+  12:09:34.006 authorize_command permit "show version"
+  12:09:34.009 account
+  12:09:34.108 authorize_command permit "show version"
+  12:09:34.110 account
+  12:09:34.257 authorize_command deny "show users"
+  12:09:34.358 authorize_command deny "show users"
+  12:09:34.506 authorize_command permit "show version"
+  12:09:34.507 account
+  12:09:34.611 authorize_command permit "show version"
+  12:09:34.614 account
+  12:09:34.759 authorize_command deny "show users"
+  12:09:34.861 authorize_command deny "show users"
+  12:09:35.009 authorize_command permit "show version"
+  12:09:35.011 account
+  12:09:35.112 authorize_command permit "show version"
+  12:09:35.114 account
+  12:09:35.261 authorize_command deny "show users"
+  12:09:35.361 authorize_command deny "show users"
+  12:09:35.512 account
+  12:09:35.612 account
+

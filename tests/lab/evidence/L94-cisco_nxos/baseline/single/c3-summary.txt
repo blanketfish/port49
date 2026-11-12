@@ -1,0 +1,33 @@
+L94, arm baseline, cell c3, mode single, nxos106 (Nexus 9300v 10.6(2)F) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=1.00s denied=false err=false at=04:16:16.333
+  s0 "show version"           took=6.51s denied=false err=false at=04:16:17.335
+debug counts: ssl_read_failed=0 mark_server_dead=7 fallbacks=1 request_authen=7 request_author=3 request_acct=9 window_unmeasured=0
+tls connections: 2, most open at once: 1
+  conn port=45098 syn=04:16:11.010 hold=11.46s end=device-fin
+  conn port=49858 syn=04:16:22.949 hold=open end=open
+<LONG> delta: 0
+refused-credential login 1: took=13.36s auth_failed=true logged_in=false err=""
+refused-credential login 2: took=13.64s auth_failed=true logged_in=false err=""
+refused-credential login 3: took=15.65s auth_failed=true logged_in=false err=""
+port49 records:
+  04:16:16.018 redeem permit
+  04:16:16.042 authorize_session permit
+  04:16:16.185 account
+  04:16:16.356 authorize_command permit "show version"
+  04:16:16.463 redeem deny
+  04:16:18.464 redeem deny
+  04:16:20.465 redeem deny
+  04:16:22.466 authorize_command permit "show version"
+  04:16:22.466 account
+  04:16:22.467 redeem deny
+  04:16:24.468 account
+  04:16:27.958 account
+  04:16:27.972 redeem deny
+  04:16:29.973 redeem deny
+  04:16:31.973 account
+  04:16:31.974 account
+  04:16:32.001 account
+  04:16:32.018 account
+  04:16:32.035 account
+

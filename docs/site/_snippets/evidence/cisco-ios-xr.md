@@ -7,3 +7,4 @@
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_xrd | XRd control plane 26.1.1 | 2026-11-04 | [L88-cisco_xrd-named-vrf.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd-named-vrf.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_xrd | XRd control plane 26.1.1 | 2026-11-04 | [L88-cisco_xrd-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd-tls.md) |
 | [L88 (closed)](../../reference/lab-register.md#l88) | cisco_xrd | XRd control plane 26.1.1 | 2026-11-04 | [L88-cisco_xrd.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-cisco_xrd.md) |
+| [L94 (open)](../../reference/lab-register.md#l94) | cisco_xrd | XRd control plane 26.1.1 | — | [L94-cisco_xrd.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-cisco_xrd.md) |

@@ -1,0 +1,93 @@
+L94, arm fixed, cell c1, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version | no-more" took=1.50s denied=false err=false at=10:43:18.771
+  s1 "show version | no-more" took=1.50s denied=false err=false at=10:43:18.869
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:20.276
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:20.372
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:43:20.527
+  s1 "show version | no-more" took=0.25s denied=false err=false at=10:43:20.624
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:20.778
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:20.874
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:43:21.029
+  s1 "show version | no-more" took=0.25s denied=false err=false at=10:43:21.124
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:21.280
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:21.375
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:43:21.531
+  s1 "show version | no-more" took=0.25s denied=false err=false at=10:43:21.626
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:21.782
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:21.877
+  s1 "show version | no-more" took=0.50s denied=false err=false at=10:43:22.127
+  s0 "show version | no-more" took=0.75s denied=false err=false at=10:43:22.033
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:22.629
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:22.784
+  s1 "show version | no-more" took=0.25s denied=false err=false at=10:43:22.879
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:43:23.035
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:23.129
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:23.286
+  s1 "show version | no-more" took=0.25s denied=false err=false at=10:43:23.380
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:43:23.538
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:23.630
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:23.789
+  s1 "show version | no-more" took=0.25s denied=false err=false at=10:43:23.881
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:43:24.040
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:24.131
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:24.291
+  s1 "show version | no-more" took=0.25s denied=false err=false at=10:43:24.382
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:43:24.542
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:24.632
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:24.792
+  s1 "show version | no-more" took=0.25s denied=false err=false at=10:43:24.883
+  s0 "show version | no-more" took=0.25s denied=false err=false at=10:43:25.043
+  s1 "show system users"      took=0.25s denied=true err=false at=10:43:25.134
+  s0 "show system users"      took=0.25s denied=true err=false at=10:43:25.294
+debug: 383 device log lines, kept 164, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 10:43:22.066538 authd_config_read: old seq 0 and new one 56
+port49 read (authorize_command ts less typed):
+tls connections: 3, most open at once: 1
+  conn port=59670 syn=10:43:18.499 hold=0.01s end=server-fin
+  conn port=59674 syn=10:43:18.593 hold=0.01s end=server-fin
+  conn port=59682 syn=10:43:20.853 hold=open end=open
+<LONG> delta: 0
+port49 records:
+  10:43:18.506 redeem permit
+  10:43:18.507 authorize_session permit
+  10:43:18.602 redeem permit
+  10:43:18.602 authorize_session permit
+  10:43:20.865 account
+  10:43:20.866 account
+  10:43:20.866 account
+  10:43:20.867 account
+  10:43:20.868 account
+  10:43:20.868 account
+  10:43:20.869 account
+  10:43:20.869 account
+  10:43:20.870 account
+  10:43:20.871 account
+  10:43:20.871 account
+  10:43:20.872 account
+  10:43:25.892 account
+  10:43:25.894 account
+  10:43:25.895 account
+  10:43:25.896 account
+  10:43:25.897 account
+  10:43:25.898 account
+  10:43:25.899 account
+  10:43:25.900 account
+  10:43:25.901 account
+  10:43:25.902 account
+  10:43:25.903 account
+  10:43:25.904 account
+  10:43:25.904 account
+  10:43:25.905 account
+  10:43:25.905 account
+  10:43:25.906 account
+  10:43:25.907 account
+  10:43:25.907 account
+  10:43:35.948 account
+  10:43:35.949 account
+  10:43:35.950 account
+  10:43:35.951 account
+  10:43:35.952 account
+  10:43:35.954 account
+FINDING: c1: device opens a connection per login (baseline 3, fixed 3)
+

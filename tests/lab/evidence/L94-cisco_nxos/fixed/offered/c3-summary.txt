@@ -1,0 +1,53 @@
+L94, arm fixed, cell c3, mode offered, nxos106 (Nexus 9300v 10.6(2)F) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=1.00s denied=false err=false at=06:43:13.023
+  s0 "show version"           took=0.75s denied=false err=false at=06:43:14.025
+  s0 "show version"           took=0.75s denied=false err=false at=06:43:14.777
+  s0 "show version"           took=0.75s denied=false err=false at=06:43:15.529
+  s0 "show version"           took=0.75s denied=false err=false at=06:43:16.281
+  s0 "show version"           took=0.75s denied=false err=false at=06:43:17.033
+  s0 "show version"           took=0.75s denied=false err=false at=06:43:17.785
+  s0 "show version"           took=0.75s denied=false err=false at=06:43:18.536
+debug counts: ssl_read_failed=0 mark_server_dead=0 fallbacks=0 request_authen=7 request_author=9 request_acct=9 window_unmeasured=0
+port49 read (authorize_command ts less typed):
+  s0 "show version"           +22ms permit
+  s0 "show version"           +19ms permit
+  s0 "show version"           +18ms permit
+  s0 "show version"           +20ms permit
+  s0 "show version"           +18ms permit
+  s0 "show version"           +19ms permit
+  s0 "show version"           +21ms permit
+  s0 "show version"           +19ms permit
+tls connections: 1, most open at once: 1
+  conn port=60854 syn=06:43:07.697 hold=open end=open
+<LONG> delta: 0
+refused-credential login 1: took=5.04s auth_failed=true logged_in=false err=""
+refused-credential login 2: took=5.06s auth_failed=true logged_in=false err=""
+refused-credential login 3: took=5.02s auth_failed=true logged_in=false err=""
+port49 records:
+  06:43:12.706 redeem permit
+  06:43:12.730 authorize_session permit
+  06:43:12.878 account
+  06:43:13.046 authorize_command permit "show version"
+  06:43:14.045 authorize_command permit "show version"
+  06:43:14.796 authorize_command permit "show version"
+  06:43:13.159 redeem deny
+  06:43:13.175 redeem deny
+  06:43:15.179 account
+  06:43:13.192 redeem deny
+  06:43:15.197 account
+  06:43:15.216 account
+  06:43:15.549 authorize_command permit "show version"
+  06:43:16.300 authorize_command permit "show version"
+  06:43:17.053 authorize_command permit "show version"
+  06:43:17.806 authorize_command permit "show version"
+  06:43:16.041 redeem deny
+  06:43:16.057 redeem deny
+  06:43:18.061 account
+  06:43:16.073 redeem deny
+  06:43:18.081 account
+  06:43:18.100 account
+  06:43:18.556 authorize_command permit "show version"
+  06:43:19.310 account
+  06:43:19.327 account
+

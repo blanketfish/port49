@@ -1,0 +1,1 @@
+[{"session":0,"command":"show version","took_s":1.001905285,"denied":false,"asked":true,"at":"2026-11-12T04:16:16.333446176Z","done":"2026-11-12T04:16:17.335351892Z"},{"session":0,"command":"show version","took_s":6.514199137,"denied":false,"asked":true,"at":"2026-11-12T04:16:17.335370596Z","done":"2026-11-12T04:16:23.849570536Z"}]

@@ -70,6 +70,11 @@ const l80FixCommit = "bf71174d"
 // clean build that does not hold the fix. hasFix answers for a revision,
 // and its error (an unknown revision) is INVALID too.
 func l80ArmCheck(arm string, v buildVCS, head string, hasFix func(rev string) (bool, error)) error {
+	return armCheckFor(arm, v, head, l80FixCommit, hasFix)
+}
+
+// armCheckFor is l80ArmCheck for the fix named fix (L80's, or L94's).
+func armCheckFor(arm string, v buildVCS, head, fix string, hasFix func(rev string) (bool, error)) error {
 	if v.Modified {
 		return fmt.Errorf("INVALID: bin/port49d was built from a modified tree (%s) for arm %s: commit or remove what "+
 			"git status shows (evidence included), and rebuild after committing (make build)", v.Revision, arm)
@@ -81,12 +86,12 @@ func l80ArmCheck(arm string, v buildVCS, head string, hasFix func(rev string) (b
 				"evidence moves HEAD, so rebuild after committing (make build)", head, v.Revision)
 		}
 	case "baseline":
-		fix, err := hasFix(v.Revision)
+		has, err := hasFix(v.Revision)
 		if err != nil {
 			return fmt.Errorf("INVALID: cannot tell whether %s holds the fix: %v", v.Revision, err)
 		}
-		if fix {
-			return fmt.Errorf("INVALID: arm baseline ran bin/port49d built from %s, which holds the fix (%s)", v.Revision, l80FixCommit)
+		if has {
+			return fmt.Errorf("INVALID: arm baseline ran bin/port49d built from %s, which holds the fix (%s)", v.Revision, fix)
 		}
 	default:
 		return fmt.Errorf("INVALID: arm %q", arm)
@@ -101,6 +106,11 @@ func l80HasFix(dir, rev string) (bool, error) { return l80HasFixAt(dir, l80FixCo
 // a rebase made fix unreachable from it, rev carries the fix's table file.
 // Either is enough; an unknown revision or commit is an error.
 func l80HasFixAt(dir, fix, rev string) (bool, error) {
+	return hasFixAt(dir, fix, "internal/platform/tlsoffer.go", rev)
+}
+
+// hasFixAt is l80HasFixAt for a fix whose sign, after a rebase, is file.
+func hasFixAt(dir, fix, file, rev string) (bool, error) {
 	err := exec.Command("git", "-C", dir, "merge-base", "--is-ancestor", fix, rev).Run()
 	var ee *exec.ExitError
 	switch {
@@ -110,7 +120,7 @@ func l80HasFixAt(dir, fix, rev string) (bool, error) {
 	default:
 		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %v", fix, rev, err)
 	}
-	return exec.Command("git", "-C", dir, "cat-file", "-e", rev+":internal/platform/tlsoffer.go").Run() == nil, nil
+	return exec.Command("git", "-C", dir, "cat-file", "-e", rev+":"+file).Run() == nil, nil
 }
 
 // treeDirty is `git status --porcelain` over paths: tracked changes and
@@ -223,7 +233,7 @@ func qualStillClean(read func() (float64, bool)) error {
 // nothing. It builds in a private clone (git clone --shared, which has its
 // own .git directory) under tmpRoot, checked out at rev, and removes it on
 // every path. The stamp must be rev, unmodified, or nothing is installed.
-func buildPort49dAt(repo, rev, tmpRoot, dst string) (buildVCS, error) {
+func buildPort49dAt(repo, rev, tmpRoot, dst string, tags ...string) (buildVCS, error) {
 	out, err := exec.Command("git", "-C", repo, "rev-parse", "--verify", rev+"^{commit}").Output()
 	if err != nil {
 		return buildVCS{}, fmt.Errorf("INVALID: revision %s is not in %s: %w", rev, repo, err)
@@ -244,7 +254,11 @@ func buildPort49dAt(repo, rev, tmpRoot, dst string) (buildVCS, error) {
 		}
 	}
 	built := filepath.Join(dir, "port49d")
-	cmd := exec.Command("go", "build", "-o", built, "./cmd/port49d")
+	args := []string{"build"}
+	if len(tags) > 0 {
+		args = append(args, "-tags", strings.Join(tags, ","))
+	}
+	cmd := exec.Command("go", append(args, "-o", built, "./cmd/port49d")...)
 	cmd.Dir, cmd.Env = src, append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return buildVCS{}, fmt.Errorf("INVALID: go build at %s: %v %s", full, err, out)

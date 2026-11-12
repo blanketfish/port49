@@ -42,6 +42,7 @@ tacacs-server host <PORT49_1> tls vrf <MGMT_VRF> single-connection port <TLS_POR
 - Over RFC 9887 on cEOS 4.36.3M: break-glass in 2.3 s with port49d stopped and 2.4 s dark, and a token login through the second server in 2.9 s ([L88-arista_ceos-tls.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L88-arista_ceos-tls.md)).
 - Over RFC 9887 EOS sends no server name and offers a session ticket, which port49 accepted 11 of 11 times ([L73-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-arista_ceos.md), cells c and g).
 - Break-glass with single-connection on, after port49d reset a de-admitted device's connection, was closed with the fix: on every declined path it logged in within 0.5 s of the key miss ([L31-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L31-arista_eos.md)).
+- With `single-connection` set, cEOS 4.36.3M over RFC 9887 still opens a new connection for each login while another is in use, so a failing login never held up another session's command; commands answered in 0.25 s with three failing logins under way ([L94-arista_ceos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L94-arista_ceos.md)).
 
 ## Traps
 

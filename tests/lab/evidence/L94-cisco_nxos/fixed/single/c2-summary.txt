@@ -1,0 +1,26 @@
+L94, arm fixed, cell c2, mode single, nxos106 (Nexus 9300v 10.6(2)F) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=0.75s denied=false err=false at=07:06:36.141
+  s0 "show users"             took=0.25s denied=true err=false at=07:06:36.893
+try 1: lead=400ms fail_recorded=true timing=ok gaps=[290ms 1.04s]
+  s0 "show version"           took=0.75s denied=false err=false at=07:06:40.763
+debug counts: ssl_read_failed=0 mark_server_dead=0 fallbacks=0 request_authen=3 request_author=4 request_acct=5 window_unmeasured=0
+port49 read (authorize_command ts less typed):
+  s0 "show version"           +22ms permit
+  s0 "show users"             +19ms deny
+  s0 "show version"           +35ms permit
+tls connections: 1, most open at once: 1
+  conn port=54218 syn=07:06:30.412 hold=open end=open
+<LONG> delta: 0
+refused-credential login 1: took=5.02s auth_failed=true logged_in=false err=""
+port49 records:
+  07:06:36.163 authorize_command permit "show version"
+  07:06:36.913 authorize_command deny "show users"
+  07:06:35.873 redeem deny
+  07:06:37.894 account
+  07:06:38.756 redeem deny
+  07:06:40.779 account
+  07:06:40.798 authorize_command permit "show version"
+  07:06:41.534 account
+  07:06:41.551 account
+

@@ -72,6 +72,9 @@ func flagsName(f uint8) string {
 }
 
 func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctRequest) wire.AcctReply {
+	if labAcctHold > 0 && labHoldOn() {
+		defer holdReply(ctx)
+	}
 	_, cmd, cmdArgs, raw := author.ParseArgs(req.Args)
 	port := string(req.Port)
 	// The vector keeps ParseArgs' untrimmed command and arguments: it is the
@@ -315,6 +318,18 @@ func avOf(raw []string, key string) string {
 		}
 	}
 	return ""
+}
+
+// holdReply holds an accounting reply for labAcctHold, or until ctx ends.
+// Only a lab build holds anything, and only while its control file exists
+// (hold.go, hold_lab.go).
+func holdReply(ctx context.Context) {
+	t := time.NewTimer(labAcctHold)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // storeOutcome maps a store error to the StoreOps metric's outcome label.

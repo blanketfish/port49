@@ -1,0 +1,903 @@
+//go:build lab
+
+package lab
+
+// L94 (spec §15 L94; §13 decision 59, provisional on it): whether a device
+// takes port49's replies to the sessions it multiplexes on one single-connect
+// RFC 9887 connection out of request order. One arm per run, as L80's:
+//
+//	PORT49_L94_ARM=baseline  port49d built from l94BaselineCommit (one reply at a time)
+//	PORT49_L94_ARM=fixed     port49d built from HEAD (decision 59's lanes)
+//
+// PORT49_L94_CELLS (optional, comma-separated) runs only the named cells
+// (l94CellNames). c4 is NX-OS's and Junos's, on the fixed arm alone, and runs on its own
+// build (-tags port49_lab_acct_hold), so it runs alone: PORT49_L94_CELLS=c4.
+// PORT49_LAB_PLATFORMS names one platform of l94Platforms. The harness builds
+// bin/port49d for the arm itself, in a private clone, and checks the build.
+//
+// Both failure-delay knobs are 2s (as L13's writeDelayConfig sets them). The
+// device runs its single-connection reference configuration; NX-OS runs each
+// cell twice, offered (per-request, port49 offers single-connect, L80) and
+// with single-connection configured.
+//
+// Device debug is on in a break-glass session held across each cell and is
+// read only through the device-debug filter, so nothing reaches disk
+// unfiltered. Order is graded from port49's record ts, never from the wire:
+// the wire evidence is the header-only *.tls.json; no body is decoded and no
+// key is logged. Evidence goes to tests/lab/evidence/L94-<platform>/<arm>/<mode>/.
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/testpki"
+)
+
+// l94MetricsText is port49d's /metrics page. Without it the refusal guard
+// (l94Refusals) cannot be read, and an orphan could not be called stale.
+func l94MetricsText(t *testing.T) string {
+	t.Helper()
+	s, err := l94MetricsRead()
+	if err != nil {
+		t.Fatalf("INVALID: metrics for the refusal guard: %v", err)
+	}
+	return s
+}
+
+// l94MetricsRead is l94MetricsText without the test, for a goroutine.
+func l94MetricsRead() (string, error) {
+	r, err := http.Get("http://" + metricsAddr + "/metrics")
+	if err != nil {
+		return "", err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("metrics: %s", r.Status)
+	}
+	b, err := io.ReadAll(r.Body)
+	return string(b), err
+}
+
+// l94Prompts are the prompts a token session's command can end at: the
+// node's exec prompts, and Junos's operational prompt.
+func l94Prompts(l *lab) []string {
+	return []string{l.p.node + "#", l.p.node + ">", junosOpPrompt}
+}
+
+// l94Type types cmd on session i and reads what came of it: the first line
+// after the echo, masked, says whether the device refused it (qualRan).
+func l94Type(l *lab, qc *cliConn, i int, cmd string) l80Typed {
+	at := len(qc.transcript())
+	b0 := time.Now()
+	_, err := qc.sendExpect(cmd, 120*time.Second, l94Prompts(l)...)
+	lines := strings.Split(strings.ReplaceAll(qc.transcript()[at:], "\r", ""), "\n")
+	rest := ""
+	if len(lines) > 1 {
+		rest = strings.Join(lines[1:], "\n")
+	}
+	ran, _ := qualRan(rest)
+	return l80Typed{Session: i, Command: cmd, Took: time.Since(b0).Seconds(), Denied: !ran && err == nil,
+		At: b0, Done: time.Now(), Err: err != nil}
+}
+
+func TestL94(t *testing.T) {
+	arm := os.Getenv("PORT49_L94_ARM")
+	if arm != "baseline" && arm != "fixed" {
+		t.Skip("PORT49_L94_ARM=baseline or fixed")
+	}
+	only := strings.FieldsFunc(os.Getenv("PORT49_L94_CELLS"), func(r rune) bool { return r == ',' })
+	if root == "" {
+		r, err := repoRoot()
+		if err != nil {
+			t.Fatalf("INVALID: repo root: %v", err)
+		}
+		root = r
+	}
+	if dirty, err := qualTreeDirty(root); err != nil || dirty != "" {
+		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
+	}
+	sel, _, err := platformSelection()
+	if err != nil || len(sel) != 1 {
+		t.Fatalf("PORT49_LAB_PLATFORMS names one of L94's platforms: %v", err)
+	}
+	p, err := l94PlatformFor(sel[0].sel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells, err := l94Select(p.Family, arm, only)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The lab is taken before anything is built: a build replaces
+	// bin/port49d, which another run holding the lab may be running.
+	if err := labOccupyForRun(labLockPath, fmt.Sprintf("l94 %s pid %d", arm, os.Getpid())); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	// The harness builds the arm's port49d: the baseline from
+	// l94BaselineCommit, the fixed arm from HEAD, to bin/port49d. c4 runs a
+	// second build of the same revision with the hold tag, at l94HoldBin and
+	// never at bin/port49d (initGlobal refuses a held bin/port49d).
+	rev := "HEAD"
+	if arm == "baseline" {
+		rev = l94BaselineCommit
+	}
+	armCheck := func(v buildVCS) {
+		t.Helper()
+		if err := armCheckFor(arm, v, gitHead(root), l94FixCommit, func(rev string) (bool, error) {
+			return hasFixAt(root, l94FixCommit, l94FixFile, rev)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(root, "bin", "port49d")
+	vcs, err := buildPort49dAt(root, rev, os.TempDir(), bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := labSetcap(bin); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	armCheck(vcs)
+	if err := l94StandardBin(bin); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	run := bin
+	if slices.Contains(cells, "c4") {
+		run = filepath.Join(root, l94HoldBin)
+		hv, err := buildPort49dAt(root, rev, os.TempDir(), run, l94HoldTag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := labSetcap(run); err != nil {
+			t.Fatalf("INVALID: %v", err)
+		}
+		armCheck(hv)
+	}
+	built, err := binaryTags(run)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	for _, c := range cells {
+		if err := l94TagCheck(c, built); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evRoot := filepath.Join(root, "tests/lab/evidence", "L94-"+p.Name)
+
+	l := labFor(t, sel[0])
+	q := newQualEnv(t, l)
+	q.guard()
+	if err := testpki.WriteLab(filepath.Join(root, slicePKIDir), sliceEmail, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	q.cfg = q.config()
+	if err := l.stopDaemon(); err != nil {
+		t.Fatal(err)
+	}
+	q.startDaemon(q.cfg)
+	defer q.restoreDaemon()
+	q.start = l.mark()
+	q.login()
+	defer q.stopAgent()
+	e := newL73Env(t, l, l73Dialects[p.Name])
+	q.e = e
+	if !e.helpProbe() {
+		t.Fatal("INVALID: no RFC 9887 client")
+	}
+	q.guard()
+	e.enrol()
+	e.port = l73TLSPort
+	// Both failure-delay knobs at l94Delay on every TLS daemon of the run.
+	delayed, err := l94DelayConfig(q.cfgText, l94Delay)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	q.cfgText = delayed
+	// c4's TLS daemons run the held build. Set here, after restoreDaemon is
+	// deferred, so the reset (deferred later, run earlier) comes first and
+	// the standing daemon is restored on bin/port49d.
+	// Its hold applies only while holdPath exists, from the cell's clean
+	// point to its end (l94CleanThenHold), so the backlog the device drains
+	// after each login is answered unheld.
+	var holdPath string
+	if run != bin {
+		holdDir, err := os.MkdirTemp("", "l94-hold-")
+		if err != nil {
+			t.Fatalf("INVALID: %v", err)
+		}
+		defer os.RemoveAll(holdDir)
+		holdPath = filepath.Join(holdDir, "hold")
+		daemonBin, daemonEnv = run, []string{l94HoldEnv + "=" + holdPath}
+		defer func() { daemonBin, daemonEnv = "", nil }()
+	}
+	daemon := l73Daemon{Intermediates: e.files["inter.pem"], DefaultIdle: true}
+	q.tlsDaemon(e, "l94", daemon)
+	q.guard()
+
+	var minted []string
+	var mintMu sync.Mutex
+	mint := func() string {
+		mintMu.Lock()
+		defer mintMu.Unlock()
+		tok := q.mint()
+		minted = append(minted, tok)
+		return tok
+	}
+	secrets := func() []string {
+		mintMu.Lock()
+		defer mintMu.Unlock()
+		return append(q.ddSecrets(), minted...)
+	}
+	// Every file is checked against every minted credential before any is
+	// written; a hit writes nothing.
+	write := func(dir string, files map[string]string) {
+		for name, body := range files {
+			for _, tok := range secrets() {
+				if tok != "" && strings.Contains(body, tok) {
+					t.Fatalf("INVALID: %s holds a credential; nothing written", name)
+				}
+			}
+		}
+		for name, body := range files {
+			if strings.HasSuffix(name, "-debug.txt") {
+				if bad := qualGate(map[string][]byte{name: []byte(body)}, secrets()); len(bad) > 0 {
+					t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
+				}
+			}
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	dialFor := e.d.LoginDial
+	if dialFor == 0 {
+		dialFor = 60 * time.Second
+	}
+	// refused is a credential for A that port49 refuses, token_not_found
+	// after the full delay (l94RefusedCredential), and its credential_sha256
+	// for l94AValid. It is never minted, so no receipt can replay it, and it
+	// joins minted so every file and the device debug are checked for it.
+	refused := func() (cred, sha string) {
+		cred = l94RefusedCredential()
+		mintMu.Lock()
+		minted = append(minted, cred)
+		mintMu.Unlock()
+		return cred, decision.CredentialHash([]byte(cred))
+	}
+	// failLogin is one A login with a refused credential.
+	failLogin := func(cred string) l94Outcome {
+		b0 := time.Now()
+		c, err := l.dial(qualUser, cred, dialFor)
+		if c != nil {
+			c.Close()
+		}
+		return l94OutcomeOf(time.Since(b0), err)
+	}
+	// tryB logs a token session in; openB is it on the test goroutine.
+	tryB := func(i int) (*cliConn, error) {
+		qc, err := l.sshCLI(qualUser, mint())
+		if err != nil {
+			return nil, fmt.Errorf("INVALID: session %d did not log in", i)
+		}
+		if _, err := qc.expect(120*time.Second, l94Prompts(l)...); err != nil {
+			qc.Close()
+			return nil, fmt.Errorf("INVALID: session %d gave no prompt", i)
+		}
+		return qc, nil
+	}
+	openB := func(i int) *cliConn {
+		qc, err := tryB(i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return qc
+	}
+	permitted, _ := l94Commands(q.run.Platform)
+
+	modes := []string{"single"}
+	if p.Family == "nxos" {
+		modes = []string{"offered", "single"}
+	}
+	var stops, findings []string
+	for _, mode := range modes {
+		dev := e.base()
+		dev.SingleConnection = mode == "single"
+		e.configure(dev)
+		if dev.SingleConnection {
+			// The device goes back to per-request whatever the run's end.
+			defer e.configure(e.base())
+		}
+		q.login()
+		e.ready("l94_" + mode)
+		out := filepath.Join(evRoot, arm, mode)
+
+		for _, cell := range cells {
+			name := "l94_" + mode + "_" + cell
+			label := "l94" + arm[:1] + mode[:1] + cell
+			e.guard()
+			e.settle()
+
+			var (
+				sum       strings.Builder
+				mu        sync.Mutex
+				typed     []l80Typed
+				outcomes  []l94Outcome
+				gaps      []time.Duration
+				recs      []map[string]any
+				conns     []l73Conn
+				pre       []l73Conn // closed before the clean point (l94SinceClean)
+				cleanAt   time.Time
+				hold      l94HoldWindow // c4's
+				stale     []string      // l94OlderThanCapture's stale flows
+				second    float64
+				upAt      time.Time
+				restartAt time.Time
+				bLogin    *l94Outcome
+				bSHA      string
+			)
+			// startBLogin starts c2's and c3's B token login, where the
+			// device asks port49 about no command; nil elsewhere. bSHA is
+			// its token's credential_sha256, the one redeem that is B's
+			// login (never printed).
+			startBLogin := func() chan l94Outcome {
+				if l94Commanded(q.run.Platform) {
+					return nil
+				}
+				ch := make(chan l94Outcome, 1)
+				tok := mint()
+				bSHA = decision.CredentialHash([]byte(tok))
+				go func() {
+					b0 := time.Now()
+					c, err := l.dial(qualUser, tok, dialFor)
+					if c != nil {
+						c.Close()
+					}
+					ch <- l94OutcomeOf(time.Since(b0), err)
+				}()
+				return ch
+			}
+			waitBLogin := func(ch chan l94Outcome) *l94Outcome {
+				if ch == nil {
+					return nil
+				}
+				o := <-ch
+				return &o
+			}
+			fmt.Fprintf(&sum, "L94, arm %s, cell %s, mode %s, %s (%s) over RFC 9887, reference %s, failure delay %s\n",
+				arm, cell, mode, p.Sel, l.p.version, p.Ref, l94Delay)
+			fmt.Fprintf(&sum, "port49d: %s vcs.revision=%s vcs.modified=%v tags=%q\n", filepath.Base(run), vcs.recorded().Revision, vcs.Modified, built)
+			add := func(x l80Typed) {
+				mu.Lock()
+				defer mu.Unlock()
+				typed = append(typed, x)
+				fmt.Fprintf(&sum, "  s%d %-24q took=%.2fs denied=%v err=%v at=%s\n", x.Session, x.Command, x.Took, x.Denied, x.Err, l80Clock(x.At))
+			}
+
+			// body plays the cell with port49d up on the TLS config and debug
+			// on; it ends with port49d stopped, for the collection.
+			body := func() {
+				q.tlsDaemon(e, "l94", daemon)
+				q.login()
+				read := func() (float64, bool) { return e.metric(qualConnectionsOpen) }
+				// The capture starts first, then the wait for no connection
+				// open: a connection the device opens on its own schedule in
+				// between is captured, and l94SinceClean sets it aside only if
+				// it closed before the clean point.
+				q.cell(name)
+				// port49's refusal counters over the capture (l94Refusals),
+				// read before it starts so the window has no gap; c5 reads
+				// the old daemon's once more just before its restart.
+				refBefore := l94Refusals(l94MetricsText(t))
+				var refPre map[string]float64
+				var refPreErr error
+				stop := e.capture(name)
+				// c4's hold goes on at the clean point and off when body
+				// returns, on every path: deferred before it goes on, a
+				// Fatal anywhere in the cell still removes the file.
+				var holdOn func() (time.Time, error)
+				if cell == "c4" {
+					hold = l94HoldWindow{}
+					defer func() {
+						var err error
+						if hold.Held, hold.Off, err = l94HoldOff(holdPath); err != nil {
+							hold.Err = err.Error()
+						}
+					}()
+					holdOn = func() (time.Time, error) { return l94HoldOn(holdPath) }
+				}
+				wait := func() (time.Time, error) { return l94WaitClean(read, l80CleanPolls, time.Sleep, time.Now) }
+				var err error
+				if cleanAt, hold.On, err = l94CleanThenHold(wait, holdOn); err != nil {
+					stop()
+					t.Fatal(err)
+				}
+				// A's refused credentials, one per A login, each its own so
+				// l94AValid grades every one.
+				var aCreds, aSHAs []string
+				n := 0
+				switch cell {
+				case "c2", "c5":
+					n = 1
+				case "c3":
+					n = l94C3Fails
+				}
+				for range n {
+					c, h := refused()
+					aCreds, aSHAs = append(aCreds, c), append(aSHAs, h)
+				}
+				off := l.mark()
+				before := l80Events()
+				switch cell {
+				case "c1", "c4":
+					var wg sync.WaitGroup
+					for i := range 2 {
+						wg.Add(1)
+						go func(i int) {
+							defer wg.Done()
+							time.Sleep(time.Duration(i) * l94C1Stagger)
+							qc, err := tryB(i)
+							if err != nil {
+								t.Error(err)
+								return
+							}
+							defer qc.Close()
+							for _, cmd := range l94Loop(q.run.Platform, l94C1Commands) {
+								add(l94Type(l, qc, i, cmd))
+							}
+							qc.send("exit")
+						}(i)
+					}
+					wg.Wait()
+				case "c2":
+					qc := openB(0)
+					lead := l94C2Lead
+					timing, tries := "", 0
+					for try := 1; try <= l94C2Tries; try++ {
+						tries = try
+						off = l.mark()
+						mu.Lock()
+						typed, outcomes = nil, nil
+						mu.Unlock()
+						done := make(chan l94Outcome, 1)
+						go func() { done <- failLogin(aCreds[0]) }()
+						time.Sleep(lead)
+						// Where no command is asked, B's token login is the
+						// request port49 must answer inside A's delay.
+						bDone := startBLogin()
+						_, d := l94Commands(q.run.Platform)
+						add(l94Type(l, qc, 0, permitted))
+						add(l94Type(l, qc, 0, d))
+						outcomes = append(outcomes, <-done)
+						bLogin = waitBLogin(bDone)
+						// Any redeem for A's credential ends the wait (a permit
+						// is graded, l94C2Verdict, not waited out), with B's
+						// login where no command is asked (l94C2Recorded).
+						recs = l.waitForRecords(off, l94Delay+30*time.Second, func(rs []map[string]any) bool {
+							return l94C2Recorded(q.run.Platform, l94Events(rs), aSHAs[0], bSHA)
+						})
+						var ok bool
+						gaps, ok = l94Gaps(q.run.Platform, l94Events(recs), []string{permitted, d}, bSHA)
+						timing = l94C2Timing(gaps)
+						fmt.Fprintf(&sum, "try %d: lead=%s fail_recorded=%v timing=%s gaps=%v\n", try, lead, ok, timing, gaps)
+						if timing != "early" {
+							break
+						}
+						lead += 400 * time.Millisecond
+					}
+					// A c2 whose A was not refused, or that never put B inside
+					// A's delay, measured nothing.
+					if err := l94C2Verdict(l94Events(recs), aSHAs, timing, tries); err != nil {
+						qc.Close()
+						t.Fatal(err)
+					}
+					// B's next command, on the same connection.
+					add(l94Type(l, qc, 0, permitted))
+					qc.send("exit")
+					qc.Close()
+				case "c3":
+					qc := openB(0)
+					var wg sync.WaitGroup
+					outs := make([]l94Outcome, len(aCreds))
+					for i, cred := range aCreds {
+						wg.Add(1)
+						go func(i int, cred string) {
+							defer wg.Done()
+							outs[i] = failLogin(cred)
+						}(i, cred)
+					}
+					start := time.Now()
+					var bDone chan l94Outcome
+					for next := start; time.Since(start) < l94C3For; next = next.Add(l94C3Every) {
+						time.Sleep(time.Until(next))
+						if bDone == nil && time.Since(start) >= l94C3Every {
+							bDone = startBLogin() // inside the three FAILs' delay
+						}
+						add(l94Type(l, qc, 0, permitted))
+					}
+					wg.Wait()
+					outcomes = outs
+					bLogin = waitBLogin(bDone)
+					qc.send("exit")
+					qc.Close()
+				case "c5":
+					qc := openB(0)
+					_, d := l94Commands(q.run.Platform)
+					var aw, rw sync.WaitGroup
+					var restartErr error
+					for i := 1; i <= 16; i++ {
+						time.Sleep(500 * time.Millisecond)
+						cmd := permitted
+						if i%4 == 0 {
+							cmd = d
+						}
+						add(l94Type(l, qc, 0, cmd))
+						if i == 8 {
+							// A's FAIL is inside its delay when port49d restarts.
+							aw.Add(1)
+							go func() {
+								defer aw.Done()
+								o := failLogin(aCreds[0])
+								mu.Lock()
+								outcomes = append(outcomes, o)
+								mu.Unlock()
+							}()
+							time.Sleep(500 * time.Millisecond)
+							rw.Add(1)
+							go func() {
+								defer rw.Done()
+								// The old daemon's refusals, read while it is
+								// still up: the new one counts from 0. A refusal
+								// between this read and the stop is uncounted;
+								// unreachable for a stale-shaped orphan, whose
+								// pre-capture SYN is Accepted (and any refusal
+								// counted) milliseconds after the clean point,
+								// seconds before this restart.
+								text, err := l94MetricsRead()
+								mu.Lock()
+								refPre, refPreErr = l94Refusals(text), err
+								restartAt = time.Now()
+								mu.Unlock()
+								err = l80RestartDaemon(e, l)
+								mu.Lock()
+								defer mu.Unlock()
+								restartErr = err
+								if err == nil {
+									upAt = time.Now()
+								}
+							}()
+						}
+					}
+					aw.Wait()
+					rw.Wait()
+					if refPreErr != nil {
+						t.Fatalf("INVALID: the old daemon's refusal counters before c5's restart: %v", refPreErr)
+					}
+					if restartErr != nil {
+						sum.WriteString("restart: port49d did not come back\n")
+					}
+					qc.send("exit")
+					qc.Close()
+				}
+				time.Sleep(10 * time.Second)
+				// Every cell's records are collected here, after its last
+				// command. c2's loop read its last try's only as far as A's
+				// redeem, before B's trailing command; its gaps stay those
+				// of the loop, and off is still that try's mark.
+				recs = l.waitForRecords(off, 10*time.Second, func([]map[string]any) bool { return false })
+				if cell == "c4" && !l94Commanded(q.run.Platform) {
+					// Each accounting reply is held 1.5s and its record is
+					// written before the hold: a device that sends the next
+					// record only after a reply drains a burst slowly, and a
+					// record still to come is not a lost one.
+					mu.Lock()
+					tc := slices.Clone(typed)
+					mu.Unlock()
+					recs = l.waitForRecords(off, l94AcctWait, func(rs []map[string]any) bool {
+						return l94AcctComplete(q.run.Platform, l94Events(rs), tc, 2)
+					})
+				}
+				after := l80Events()
+				second = after["single_connect_second_connection"] - before["single_connect_second_connection"]
+				if cell == "c5" {
+					second = 0 // the restart reset port49d's counters
+				}
+				conns = stop()
+				refAfter := l94Refusals(l94MetricsText(t))
+				if conns, pre, err = l94SinceClean(conns, cleanAt); err != nil {
+					t.Fatal(err)
+				}
+				// A connection whose SYN came before tcpdump was live is no
+				// l73Conn: the same savefile, headers only, is scanned for it.
+				raw, err := os.ReadFile(filepath.Join(e.capDir, name+".pcap"))
+				if err != nil {
+					t.Fatalf("INVALID: %v", err)
+				}
+				// A stale device socket the server reset is a finding; the
+				// cell grades on, so whatever it cost the device is graded.
+				// It is stale only if port49 refused nothing over the
+				// capture: a refusal at Accept is a bare RST too.
+				mu.Lock()
+				refused := l94RefusalMovesAcross(refBefore, refPre, refAfter)
+				mu.Unlock()
+				if stale, err = l94OlderThanCapture(raw, e.l.p.addr, l73TLSPort, cleanAt, refused); err != nil {
+					t.Fatal(err)
+				}
+				// The cell's wire evidence is the cell's connections alone, so
+				// its count is the graded one and the baseline's (l94Baseline).
+				js, _ := json.MarshalIndent(append([]l73Conn{}, conns...), "", "  ")
+				if hits := l73SummaryLeaks(string(js)); len(hits) > 0 {
+					t.Fatalf("INVALID: the %s summary holds %v; nothing written", cell, hits)
+				}
+				e.evidence[name+".tls.json"] = js
+				if err := e.l.stopDaemon(); err != nil {
+					t.Errorf("stopping port49d after %s: %v", cell, err)
+				}
+				// c2 checked its own A in its loop. c5's restart may drop A's
+				// request before its record, so c5 needs none, only no permit.
+				if cell == "c3" || cell == "c5" {
+					if err := l94AValid(cell, l94Events(recs), aSHAs, cell == "c3"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			// Debug on, the cell, port49d stopped, the collection.
+			var kept string
+			deadOrSSL, suspect := 0, false
+			if p.Family == "nxos" {
+				filter := deviceDebugFilter{Platform: "nxos", Secrets: secrets}
+				e.cli(func(c *cliConn) error {
+					adm := func(ln string) { c.sendExpect(ln, 120*time.Second, c.prompt) }
+					// A Fatal in body() still stops port49d, turns debug off and
+					// closes the session.
+					defer l80DebugOff(e.l, c, label)
+					adm("terminal length 0")
+					adm("debug logfile " + label)
+					for _, ln := range l80Debug {
+						adm(ln)
+					}
+					body()
+					time.Sleep(15 * time.Second)
+					at := len(c.transcript())
+					c.sendExpect("show debug logfile "+label, 180*time.Second, c.prompt)
+					k, keepErr := filter.Keep(c.transcript()[at:])
+					if keepErr != nil {
+						t.Fatalf("INVALID: %s's debug capture was discarded (%v); nothing written", cell, keepErr)
+					}
+					kept = string(k)
+					return nil
+				})
+				cnt := nxosWindowedCounts(kept)
+				_, cellText, _ := nxosCellWindow(kept)
+				fb := len(nxosFallbacks(cellText))
+				fmt.Fprintf(&sum, "debug counts: ssl_read_failed=%d mark_server_dead=%d fallbacks=%d request_authen=%d request_author=%d request_acct=%d window_unmeasured=%d\n",
+					cnt["ssl_read_failed"], cnt["mark_server_dead"], fb, cnt["request_authen"], cnt["request_author"], cnt["request_acct"], cnt["window_unmeasured"])
+				deadOrSSL = cnt["ssl_read_failed"] + cnt["mark_server_dead"] + fb
+			} else {
+				platform, _ := ddArmPlatform(p.Family)
+				drops := &ddDropCounts{}
+				filter := deviceDebugFilter{Platform: platform, Secrets: secrets, Drops: drops}
+				var (
+					rawLines              int
+					sample, answers, flgs []string
+					authd                 [2]int
+					capErr                error
+					ran                   bool
+				)
+				e.cli(func(c *cliConn) error {
+					run := ddArmRun(c, filter, secrets, platform, &rawLines, &sample, &answers, &flgs, &authd)
+					var k deviceDebugKept
+					k, capErr = captureDeviceDebug(filter, run, func() error {
+						ran = true
+						finished := false
+						defer func() {
+							if !finished { // a Fatal in the body: debug must still go off
+								e.l.stopDaemon()
+								disableDeviceDebug(deviceDebugCmds[platform], run)
+							}
+						}()
+						body()
+						finished = true
+						return nil
+					})
+					kept = string(k)
+					return nil
+				})
+				if !ran {
+					t.Fatalf("INVALID: device debug would not go on for %s (%v)", cell, capErr)
+				}
+				if capErr != nil {
+					fmt.Fprintf(&sum, "debug capture error: %v\n", capErr)
+				}
+				lines := l94SuspectLines(kept)
+				fmt.Fprintf(&sum, "debug: %d device log lines, kept %d, suspect %d (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)\n",
+					rawLines, ddArmLineCount(deviceDebugKept(kept)), len(lines))
+				// The matched lines are the kept (filtered) debug's own, gated
+				// once more before they go into the summary.
+				if bad := qualGate(map[string][]byte{"suspect": []byte(strings.Join(lines, "\n"))}, secrets()); len(bad) > 0 {
+					sum.WriteString("suspect lines withheld: the leak gate refused them\n")
+				} else {
+					for _, ln := range lines {
+						sum.WriteString("  suspect: " + ln + "\n")
+					}
+				}
+				deadOrSSL = len(lines)
+				suspect = true
+			}
+			if cell == "c5" {
+				// A restart closes the connection under the device: TLS errors
+				// and a reconnect are the cell's subject, not a stop.
+				deadOrSSL = 0
+			}
+			q.login()
+
+			evs := l94Events(recs)
+			var recorded []string
+			for _, r := range recs {
+				if r["event"] == "authorize_command" {
+					recorded = append(recorded, qualVector(r))
+				}
+			}
+			l80Ask(typed, recorded)
+			l80Reasons(typed, recs)
+			// When port49 read each command (l94Match): what c1/c4/c3 grade
+			// where commands are asked; took= above is the prompt.
+			sum.WriteString("port49 read (authorize_command ts less typed):\n")
+			for i, m := range l94Match(typed, evs) {
+				if m != nil {
+					fmt.Fprintf(&sum, "  s%d %-24q +%s %s\n", typed[i].Session, typed[i].Command, m.TS.Sub(typed[i].At).Round(time.Millisecond), m.Verdict)
+				}
+			}
+			most := l80MostOpen(conns)
+			fmt.Fprintf(&sum, "tls connections: %d, most open at once: %d\n", len(conns), most)
+			for _, cn := range conns {
+				sum.WriteString("  " + l80ConnLine(cn) + "\n")
+			}
+			fmt.Fprintf(&sum, "clean point (the capture started first, then the gauge read 0): %s\n", l80Clock(cleanAt))
+			for _, cn := range pre {
+				sum.WriteString("  excluded: closed before the clean point " + l80Clock(cleanAt) + ": " + l80ConnLine(cn) + "\n")
+			}
+			if cell == "c4" {
+				fmt.Fprintf(&sum, "accounting hold: on %s, off %s, %d replies held, error %q\n",
+					l80Clock(hold.On), l80Clock(hold.Off), hold.Held, hold.Err)
+			}
+			fmt.Fprintf(&sum, "single_connect_second_connection delta: %v\n", second)
+			for i, o := range outcomes {
+				fmt.Fprintf(&sum, "refused-credential login %d: took=%.2fs auth_failed=%v logged_in=%v err=%q\n", i+1, o.Took, o.AuthFailed, o.LoggedIn, o.Err)
+			}
+			if cell == "c5" {
+				fmt.Fprintf(&sum, "restart window: stop=%s up=%s\n", l80Clock(restartAt), l80Clock(upAt))
+			}
+			sum.WriteString("port49 records:\n")
+			for _, ln := range l80Timeline(recs) {
+				sum.WriteString("  " + ln + "\n")
+			}
+			var ends []string
+			for _, cn := range conns {
+				ends = append(ends, cn.End)
+			}
+			g := l94Grade{Arm: arm, Cell: cell, Platform: q.run.Platform, P: p, Typed: typed, Events: evs,
+				Conns: len(conns), MostOpen: most, Ends: ends, Second: second, DeadOrSSL: deadOrSSL, Outcomes: outcomes,
+				Gaps: gaps, RestartAt: restartAt, UpAt: upAt, BLogin: bLogin, BSHA: bSHA, Hold: hold}
+			if bLogin != nil {
+				fmt.Fprintf(&sum, "B token login during A's FAILs: took=%.2fs logged_in=%v auth_failed=%v err=%q inside_delay=%v\n",
+					bLogin.Took, bLogin.LoggedIn, bLogin.AuthFailed, bLogin.Err, l94LoginInsideDelay(evs, bSHA))
+			}
+			g.Suspect = suspect
+			if arm == "fixed" {
+				g.Baseline = l94ReadBaseline(t, filepath.Join(evRoot, "baseline", mode), l94BaselineCell(cell))
+				if cell == "c4" {
+					sum.WriteString("baseline: c4 is compared to the baseline arm's c1 (the same loop, no hold)\n")
+				}
+				if g.Baseline == nil {
+					sum.WriteString("baseline: no baseline evidence for this cell and mode; the fixed arm is graded on its own and on L13's timeout\n")
+				}
+			}
+			suspectJSON, _ := json.Marshal(map[string]any{"suspect": deadOrSSL, "pattern": suspect})
+			cellStops := l94Stops(g)
+			for _, s := range cellStops {
+				sum.WriteString("STOP: " + s + "\n")
+			}
+			// On either arm: a stale device socket is no grade of the fix.
+			cellFindings := append(l94Findings(g), prefixAll(cell+": ", stale)...)
+			for _, f := range cellFindings {
+				sum.WriteString("FINDING: " + f + "\n")
+			}
+			findings = append(findings, prefixAll(mode+" ", cellFindings)...)
+			tj, _ := json.Marshal(typed)
+			aj, _ := json.Marshal(outcomes)
+			files := map[string]string{
+				cell + "-summary.txt":  l80Filter(sum.String()),
+				cell + "-debug.txt":    kept,
+				cell + ".tls.json":     string(e.evidence[name+".tls.json"]),
+				cell + "-typed.json":   string(tj),
+				cell + "-a.json":       string(aj),
+				cell + "-suspect.json": string(suspectJSON),
+			}
+			if len(pre) > 0 {
+				// The connections set aside, kept for audit; the same leak
+				// gate as the cell's own.
+				pj, _ := json.MarshalIndent(pre, "", "  ")
+				if hits := l73SummaryLeaks(string(pj)); len(hits) > 0 {
+					t.Fatalf("INVALID: the %s pre-clean summary holds %v; nothing written", cell, hits)
+				}
+				files[cell+"-preclean.tls.json"] = string(pj)
+			} else if err := os.Remove(filepath.Join(out, cell+"-preclean.tls.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err) // an earlier run's would speak for this one
+			}
+			write(out, files)
+			if p.Blocks {
+				stops = append(stops, prefixAll(mode+" ", cellStops)...)
+			} else {
+				findings = append(findings, prefixAll(mode+" ", cellStops)...)
+			}
+		}
+	}
+	if len(findings) > 0 {
+		t.Logf("FINDINGS on %s (not blocking: the platform page keeps its warning and L94 stays open for it):\n%s", p.Sel, strings.Join(findings, "\n"))
+	}
+	if len(stops) > 0 {
+		t.Fatalf("STOP (report before merging; evidence is written):\n%s", strings.Join(stops, "\n"))
+	}
+}
+
+// l94ReadBaseline is the baseline arm's evidence for cell under dir, or nil
+// when the baseline was not run.
+func l94ReadBaseline(t *testing.T, dir, cell string) *l94Baseline {
+	t.Helper()
+	tb, err := os.ReadFile(filepath.Join(dir, cell+"-typed.json"))
+	if err != nil {
+		return nil
+	}
+	ab, err := os.ReadFile(filepath.Join(dir, cell+"-a.json"))
+	if err != nil {
+		return nil
+	}
+	var typed []l80Typed
+	var b l94Baseline
+	if json.Unmarshal(tb, &typed) != nil || json.Unmarshal(ab, &b.Outcomes) != nil {
+		t.Fatalf("INVALID: the baseline evidence under %s does not parse", dir)
+	}
+	for _, x := range typed {
+		b.MaxTook = max(b.MaxTook, x.Took)
+	}
+	// The connection count, from the capture's committed connection list.
+	if cb, err := os.ReadFile(filepath.Join(dir, cell+".tls.json")); err == nil {
+		var conns []json.RawMessage
+		if json.Unmarshal(cb, &conns) != nil {
+			t.Fatalf("INVALID: %s.tls.json under %s does not parse", cell, dir)
+		}
+		b.Conns, b.HasConns = len(conns), true
+	}
+	// The suspect count, where the baseline recorded one by the same pattern.
+	if sb, err := os.ReadFile(filepath.Join(dir, cell+"-suspect.json")); err == nil {
+		var s struct {
+			Suspect int  `json:"suspect"`
+			Pattern bool `json:"pattern"`
+		}
+		if json.Unmarshal(sb, &s) != nil {
+			t.Fatalf("INVALID: %s-suspect.json under %s does not parse", cell, dir)
+		}
+		b.Suspect, b.HasSuspect = s.Suspect, s.Pattern
+	}
+	return &b
+}

@@ -193,6 +193,14 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.A
 // that needs one field the others do not.
 func newTestServerWith(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer, adjust func(*Deps)) *testServer {
 	t.Helper()
+	return newTestServerOn(t, log, st, authz, adjust, nil)
+}
+
+// newTestServerOn is newTestServerWith with the listener wrapped by wrap,
+// for a test that must shape the accepted sockets; nil wraps nothing.
+func newTestServerOn(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer, adjust func(*Deps),
+	wrap func(net.Listener) net.Listener) *testServer {
+	t.Helper()
 	if authz == nil {
 		authz = &author.Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
 	}
@@ -235,9 +243,13 @@ func newTestServerWith(t *testing.T, log *syncBuffer, st store.Store, authz auth
 	if err != nil {
 		t.Fatal(err)
 	}
+	addr := ln.Addr().String()
+	if wrap != nil {
+		ln = wrap(ln)
+	}
 	served := make(chan struct{})
 	go func() { defer close(served); Serve(ctx, ln, d) }()
-	ts := &testServer{addr: ln.Addr().String(), metrics: m, limits: d.Limits, spool: sp, cancel: cancel, stopSpool: stopSpool, served: served, spoolDone: spoolDone}
+	ts := &testServer{addr: addr, metrics: m, limits: d.Limits, spool: sp, cancel: cancel, stopSpool: stopSpool, served: served, spoolDone: spoolDone}
 	t.Cleanup(ts.shutdown)
 	return ts
 }

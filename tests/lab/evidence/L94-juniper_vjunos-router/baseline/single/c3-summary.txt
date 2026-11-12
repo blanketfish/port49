@@ -1,0 +1,90 @@
+L94, arm baseline, cell c3, mode single, vjunos26 (vJunos-router 26.2R1.7) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version | no-more" took=1.00s denied=false err=false at=09:19:47.677
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:48.692
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:48.943
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:49.193
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:49.444
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:49.695
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:49.946
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:50.197
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:50.447
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:50.697
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:50.948
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:51.199
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:51.451
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:51.702
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:51.952
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:52.203
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:52.455
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:52.705
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:52.956
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:53.207
+  s0 "show version | no-more" took=0.25s denied=false err=false at=09:19:53.458
+debug: 458 device log lines, kept 172, suspect 1 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: Nov 12 09:19:44.776375 authd_config_read: old seq 0 and new one 60
+port49 read (authorize_command ts less typed):
+tls connections: 9, most open at once: 4
+  conn port=34828 syn=09:19:47.400 hold=0.01s end=server-fin
+  conn port=34830 syn=09:19:47.766 hold=2.07s end=server-fin
+  conn port=34842 syn=09:19:47.801 hold=open end=open
+  conn port=34844 syn=09:19:47.833 hold=2.01s end=server-fin
+  conn port=34852 syn=09:19:48.723 hold=0.01s end=server-fin
+  conn port=34856 syn=09:19:48.764 hold=2.01s end=server-fin
+  conn port=34858 syn=09:19:51.057 hold=2.01s end=server-fin
+  conn port=34860 syn=09:19:51.124 hold=2.01s end=server-fin
+  conn port=34862 syn=09:19:52.059 hold=2.01s end=server-fin
+<LONG> delta: 0
+refused-credential login 1: took=11.40s auth_failed=true logged_in=false err=""
+refused-credential login 2: took=10.47s auth_failed=true logged_in=false err=""
+refused-credential login 3: took=10.40s auth_failed=true logged_in=false err=""
+port49 records:
+  09:19:47.408 redeem permit
+  09:19:47.409 authorize_session permit
+  09:19:47.809 account
+  09:19:47.810 account
+  09:19:47.811 account
+  09:19:47.812 account
+  09:19:47.813 account
+  09:19:47.813 account
+  09:19:47.814 account
+  09:19:47.815 account
+  09:19:47.816 account
+  09:19:47.817 account
+  09:19:48.733 redeem permit
+  09:19:48.734 authorize_session permit
+  09:19:47.835 redeem deny
+  09:19:47.841 redeem deny
+  09:19:48.772 redeem deny
+  09:19:52.826 account
+  09:19:52.827 account
+  09:19:52.827 account
+  09:19:52.828 account
+  09:19:52.829 account
+  09:19:52.829 account
+  09:19:52.830 account
+  09:19:52.831 account
+  09:19:52.831 account
+  09:19:52.832 account
+  09:19:52.832 account
+  09:19:52.833 account
+  09:19:52.833 account
+  09:19:52.834 account
+  09:19:52.835 account
+  09:19:52.835 account
+  09:19:52.836 account
+  09:19:52.836 account
+  09:19:52.837 account
+  09:19:52.837 account
+  09:19:52.838 account
+  09:19:52.838 account
+  09:19:52.839 account
+  09:19:52.840 account
+  09:19:51.070 redeem deny
+  09:19:51.136 redeem deny
+  09:19:52.071 redeem deny
+  09:19:57.855 account
+  09:19:57.856 account
+  09:19:57.857 account
+  09:20:02.890 account
+

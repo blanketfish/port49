@@ -1,0 +1,47 @@
+L94, arm baseline, cell c2, mode single, ceos436 (cEOS-lab 4.36.3M) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=0.25s denied=false err=false at=12:10:39.148
+  s0 "show users"             took=0.25s denied=true err=false at=12:10:39.399
+try 1: lead=400ms fail_recorded=true timing=ok gaps=[382ms 624ms]
+  s0 "show version"           took=0.25s denied=false err=false at=12:10:42.455
+debug: 3650 device log lines, kept 754, suspect 41 (l94SuspectMarks, a broad pattern; compared to the baseline arm's count)
+  suspect: 2026-11-12 12:09:28.349672  5133 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:09:28.453882  5142 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:09:28.457524  5133 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 15 session data: None
+  suspect: 2026-11-12 12:09:28.461003  5142 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 16 session data: None
+  suspect: 2026-11-12 12:09:30.195556  5223 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = start
+  suspect: 2026-11-12 12:09:30.286511  5228 Aaa                  3 authorizeShell for user qual01 sessionId 15 sessionPid 5127 shellPid 5225 tty vty10
+  suspect: 2026-11-12 12:09:30.299067  5231 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = start
+  suspect: 2026-11-12 12:09:30.385636  5244 Aaa                  3 authorizeShell for user qual01 sessionId 16 sessionPid 5135 shellPid 5242 tty vty12
+  suspect: 2026-11-12 12:09:35.511101  5463 Aaa                  5 closeSession for session id 15
+  suspect: 2026-11-12 12:09:35.511213  5463 Aaa                  4 sendShellAcct user = qual01 sessionId = 15 action = stop
+  suspect: 2026-11-12 12:09:35.611343  5472 Aaa                  5 closeSession for session id 16
+  suspect: 2026-11-12 12:09:35.611447  5472 Aaa                  4 sendShellAcct user = qual01 sessionId = 16 action = stop
+  suspect: 2026-11-12 12:10:36.607304  8016 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:10:36.614355  8016 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 18 session data: None
+  suspect: 2026-11-12 12:10:38.452668  8090 Aaa                  4 sendShellAcct user = qual01 sessionId = 18 action = start
+  suspect: 2026-11-12 12:10:38.543625  8095 Aaa                  3 authorizeShell for user qual01 sessionId 18 sessionPid 8013 shellPid 8092 tty vty10
+  suspect: 2026-11-12 12:10:38.774030  8109 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+  suspect: 2026-11-12 12:10:39.159899  8122 Tacacs               6 addServer: 172.100.100.1 : 300 ns: default vrf: default srcIP:  srcIp6:  key: ***** timeout: 5 flags: 4 tls: True
+  suspect: 2026-11-12 12:10:42.708991  8258 Aaa                  5 closeSession for session id 18
+  suspect: 2026-11-12 12:10:42.709050  8258 Aaa                  4 sendShellAcct user = qual01 sessionId = 18 action = stop
+port49 read (authorize_command ts less typed):
+  s0 "show version"           +13ms permit
+  s0 "show users"             +5ms deny
+  s0 "show version"           +7ms permit
+tls connections: 3, most open at once: 2
+  conn port=54432 syn=12:10:36.608 hold=4.17s end=server-fin
+  conn port=53280 syn=12:10:39.160 hold=open end=open
+  conn port=53286 syn=12:10:42.458 hold=open end=open
+clean point (the capture started first, then the gauge read 0): 12:10:36.566
+<LONG> delta: 0
+refused-credential login 1: took=3.71s auth_failed=true logged_in=false err=""
+port49 records:
+  12:10:39.162 authorize_command permit "show version"
+  12:10:39.163 account
+  12:10:39.404 authorize_command deny "show users"
+  12:10:38.780 redeem deny
+  12:10:42.462 authorize_command permit "show version"
+  12:10:42.463 account
+  12:10:42.710 account
+
