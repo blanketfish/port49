@@ -20,7 +20,7 @@ not on the server.
 
 ## What every shape needs
 
-Each shape page states these four again, in its own terms.
+Each shape page states the first four again, in its own terms.
 
 1. **The device's source address reaches `port49d` unrewritten.** `port49d` admits a device by the
    address it sees, so a NAT or a proxy in front of port 49 breaks admission.
@@ -36,6 +36,14 @@ Each shape page states these four again, in its own terms.
    under 10 ms, and a member at etcd 3.4.24, 3.5.8 or 3.6 or later: `port49d` refuses an older one and
    says which. A slow disk pushes port49's store calls past their timeout in bursts, and the
    `etcd_disk_slow` alert fires after ten minutes of it.
+5. **Every broker host and every port49d host keeps its clock on NTP.** A token's expiry is the broker's
+   clock plus the TTL, read against `port49d`'s clock, and a subject's `token_ttl` may be 30 seconds. A
+   broker 30 seconds behind a `port49d` mints tokens that are dead on arrival: every login with one fails
+   `token_not_found`, the same as a typo, and nothing else points at the clock. A broker that runs ahead
+   lengthens every token by the skew, and `port49d` says so (`clock: a token was minted ... ahead of this
+   host's clock`, `port49_token_minted_ahead_total`, the `port49_token_clock_skew` ticket). A session
+   ceiling and a context's staleness are broker-clock times too, so skew moves them by the skew. In
+   Kubernetes this is the nodes' clocks; in a container, the host's.
 
 ## Install the binaries with mode 0755
 

@@ -51,8 +51,14 @@ deleting a token ends it at once.
   must hold it recoverably. Tokens and contexts are therefore sealed with a key held by the broker and
   port49d, not by the store. A store dump alone yields no credential. See
   [Secrets](../operate/secrets.md) for where the key lives.
-- **Expiry is the store's.** The broker writes a relative TTL; presence means valid, absence means
-  expired or spent. No clock comparison between broker and port49d decides a login.
+- **Expiry is the record's, read on port49d's clock.** The broker writes the token with its expiry
+  (its own time of minting plus the TTL), and port49d honours a token only before that time on its own
+  clock; the store's leases only clean up later. On etcd the broker's clock and port49d's therefore
+  decide a login together: a broker 20 seconds behind turns a 30-second token into a 10-second one,
+  and one 30 seconds behind mints tokens that are dead on arrival and fail `token_not_found`. Keep every
+  broker host and every port49d host on NTP, so they disagree by far less than the shortest
+  `token_ttl`. A broker clock that runs ahead is counted (`port49_token_minted_ahead_total`) and
+  raises the `port49_token_clock_skew` ticket. The memory store is one process and has one clock.
 
 An `enable` login has no principal to type a name for, so the broker mints a **pair**: a login token
 and an enable token, both bound to the device, both single use, sharing a TTL. Tools that already have an
