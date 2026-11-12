@@ -12006,8 +12006,14 @@ named twice ride together. Each caller gets its own device's item or its own ref
 request (a refused session, an outage) is every caller's. A batch is one request under one Idempotency-Key
 whose body does not change across its retries, and the broker keeps one record per device under a key, so a
 lost answer replays what was minted and no device is minted twice. The wire is given back while a batch
-waits on `idempotency_in_progress`, so a revocation never waits behind a sleeping mint, and it waits behind at
-most the exchange in flight and one batch. Mint is bounded by one deadline of `socketTimeout` minus 10 seconds
+waits on `idempotency_in_progress`, so a revocation never waits behind a sleeping mint. Queued mints are served
+first-come, so a revocation sent behind them waits for the exchange in flight and the ⌈queued / `batch_max`⌉
+batches ahead of it (31 queued with `batch_max` 10: four batches), and no longer than the one-at-a-time
+agent made it wait. When a batch answer carries `per_login_mfa_required` for several devices, the broker's one
+challenge goes to the first such caller and the others are sent again alone, each to be given its own. A device
+name the broker would refuse is refused for its own caller before queuing. A device whose caller has left
+(cancelled or past its deadline) is still minted if its batch was already sent, for the others' sake; that
+token goes unused and the person can revoke it. Mint is bounded by one deadline of `socketTimeout` minus 10 seconds
 (85 s), covering the wait for the connection, every post and every `idempotency_in_progress` wait; its error
 names the wait it was in and is an outage the caller may retry, so the socket client's generic timeout is
 never what a person sees. No new setting, reason code or log kind.
