@@ -52,7 +52,7 @@ If a device's packet breaks the protocol (a CONTINUE for a session it never star
 
 With sessions answered at once, a reply can leave before the reply to a request the device sent earlier, on another session. RFC 8907 lets a device share one connection among sessions and says nothing about the order of replies. What the lab measured ([L94](../../reference/lab-register.md#l94)):
 
-- **NX-OS 10.6(2)F** takes replies out of request order, offered and with `single-connection`. With three failing logins on one connection, a command answered in under 1 s; before, it waited up to 16.4 s and the device marked port49 dead.
+- **NX-OS 10.6(2)F** takes replies out of request order, offered and with `single-connection`. With three failing logins on one connection, a command answered in under 1 s; before, it waited up to 7.3 s and the device marked port49 dead.
 - **EOS 4.36.3M and vJunos-router 26.2R1.7** open a new connection for each login even with `single-connection` set, and never have two requests outstanding on one, so a failing login there never held up another session's command on either build. Their out-of-order handling is not exercised.
 
 !!! warning "Unmeasured: replies out of order on other platforms"
