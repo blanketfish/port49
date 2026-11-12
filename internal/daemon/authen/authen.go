@@ -1018,10 +1018,11 @@ func DelayContext(ctx context.Context) (context.Context, time.Time) {
 // fail replies FAIL after the per-(nas, username) failure delay. The sleep is
 // cancellable, but by the server's context, not the connection's: a device
 // that hangs up mid-delay does not shorten it, and only shutdown does. The
-// delay therefore holds the connection's single read goroutine for its
-// duration, which on a single-connect connection is head-of-line blocking for
-// every other session on it. That cost is still an open question for the
-// project owner.
+// delay holds this session only: on a single-connect connection each session
+// is answered in its own lane, so other sessions' replies on the connection
+// are not queued behind it (the project owner's ruling of 2026-11-11, spec
+// §13 decision 59, audit F2-1). On a connection that is not single-connect
+// there is one session, and the delay holds the connection as before.
 //
 // The ceiling is no longer one. L13 measured device reply timeouts — about 3s
 // on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, above 12s on

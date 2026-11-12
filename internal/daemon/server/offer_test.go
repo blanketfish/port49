@@ -114,14 +114,19 @@ func TestTLSOffersSingleConnectToNXOS(t *testing.T) {
 	if err := cl.send(wire.TypeAuthor, showUsers, wire.FlagUnencrypted); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []wire.Type{wire.TypeAcct, wire.TypeAuthor} {
+	// The two are different sessions, answered at once (decision 59), so
+	// either reply may come first; each comes once, for its own session.
+	want := map[uint32]wire.Type{0x101: wire.TypeAcct, 0x102: wire.TypeAuthor}
+	for range 2 {
 		h, _, err := cl.recv()
 		if err != nil {
-			t.Fatalf("the pipelined %d request was never answered: %v", want, err)
+			t.Fatalf("a pipelined request was never answered: %v", err)
 		}
-		if h.Type != want {
-			t.Fatalf("reply type %d, want %d", h.Type, want)
+		if typ, ok := want[h.SessionID]; !ok || h.Type != typ {
+			t.Fatalf("reply type %d for session %#x: want one acct reply for 0x101 and one author reply for 0x102",
+				h.Type, h.SessionID)
 		}
+		delete(want, h.SessionID)
 	}
 	if !waitFor(t, func() bool { return log.contains(`"event":"authorize_command"`) }) {
 		t.Fatalf("the pipelined command was never decided: %s", log.String())
