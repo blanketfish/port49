@@ -60,6 +60,10 @@ func (p *Policy) buildKeyGroups(f file) error {
 			if err != nil {
 				return fmt.Errorf("%s: match.cidr is not a CIDR prefix", at)
 			}
+			if pfx.Addr().Is4In6() {
+				return fmt.Errorf("%s: match.cidr is an IPv4-mapped IPv6 prefix, which never matches a source; "+
+					"write the IPv4 form", at)
+			}
 			if pfx != pfx.Masked() {
 				return fmt.Errorf("%s: cidr %s has host bits set; write %s", at, pfx, pfx.Masked())
 			}

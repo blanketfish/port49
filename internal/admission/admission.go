@@ -526,7 +526,15 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 				return Inventory{}, fmt.Errorf("admission: %sdevices[%d]: addresses[%d] is not an IP address", at,
 					n, i)
 			}
-			dev.Addresses = append(dev.Addresses, a)
+			// Unmap drops a zone, so a zoned mapped entry would quietly admit
+			// the plain IPv4. Zones on other addresses are left as they were.
+			if a.Is4In6() && a.Zone() != "" {
+				return Inventory{}, fmt.Errorf("admission: %sdevices[%d]: addresses[%d] is an IPv4-mapped IPv6 address "+
+					"with a zone; write the IPv4 form", at, n, i)
+			}
+			// The accepted source is unmapped, so a mapped entry is read as
+			// the IPv4 it is; written mapped it would never match.
+			dev.Addresses = append(dev.Addresses, a.Unmap())
 		}
 		inv.Devices = append(inv.Devices, dev)
 	}
@@ -541,6 +549,12 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 			if err != nil {
 				return Inventory{}, fmt.Errorf("admission: %skey_groups[%d] (%s): match.cidr is not a CIDR prefix",
 					at, i, g.KeyRef)
+			}
+			// A source is unmapped before it is looked up, so a prefix in
+			// ::ffff:0:0/96 could never match one.
+			if p.Addr().Is4In6() {
+				return Inventory{}, fmt.Errorf("admission: %skey_groups[%d] (%s): match.cidr is an IPv4-mapped IPv6 prefix, "+
+					"which never matches a source; write the IPv4 form", at, i, g.KeyRef)
 			}
 			kg.CIDR = p
 		}

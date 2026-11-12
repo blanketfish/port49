@@ -23,6 +23,7 @@ const (
 	AttributesChanged = "attributes_changed"
 	AddressAdded      = "address_added"
 	AddressRemoved    = "address_removed"
+	AddressMoved      = "address_moved"
 	KeyRefChanged     = "key_ref_changed"
 	TransportChanged  = "transport_changed"
 	AdmissionChanged  = "admission_changed"
@@ -45,7 +46,8 @@ type Change struct {
 	// hands it to an SSH client, so a rogue one is a credential-capture path —
 	// a device joining or leaving a scope with security_log: true (spec §5.5,
 	// §10) or one that delivers a deny, a platform change, a device's key_ref
-	// changing, and a device becoming admitted.
+	// changing, a device becoming admitted, and an address moving from one
+	// device to another in the one swap (decision 61).
 	Security bool `json:"security"`
 }
 
@@ -70,6 +72,8 @@ func (c Change) Line(addresses string) string {
 		return fmt.Sprintf("%s address added %s: %s", mark, c.Device, c.Address)
 	case AddressRemoved:
 		return fmt.Sprintf("%s address removed %s: %s", mark, c.Device, c.Address)
+	case AddressMoved:
+		return fmt.Sprintf("%s address moved %s: %s → %s", mark, c.Address, c.From, c.To)
 	case ScopeJoined, ScopeLeft:
 		verb, tag := "joined", ""
 		if c.Kind == ScopeLeft {
@@ -156,6 +160,29 @@ func Diff(old, new *policy.Policy, now time.Time) Report {
 			if so, sn := admissionState(old, name, now), admissionState(new, name, now); so != sn {
 				add(Change{Kind: AdmissionChanged, Device: name, Platform: n.Platform, From: so, To: sn,
 					Security: sn == "admitted"})
+			}
+		}
+	}
+	// An address that left one device and landed on another in this swap: the
+	// new name's grants are now used from hardware that held another's. Each
+	// address has one holder (Parse refuses a shared one), so the old holder
+	// is unique. The address_added and address_removed of the two devices are
+	// still written: each is true of its device.
+	holder := map[netip.Addr]string{}
+	for _, d := range old.Devices() {
+		for _, a := range d.Addresses {
+			holder[a] = d.Name
+		}
+	}
+	for _, name := range names {
+		n, inNew := after[name]
+		if !inNew {
+			continue
+		}
+		for _, a := range slices.SortedFunc(slices.Values(n.Addresses), func(x, y netip.Addr) int { return x.Compare(y) }) {
+			if from, held := holder[a]; held && from != name {
+				add(Change{Kind: AddressMoved, Device: name, Platform: n.Platform, Address: a.String(), From: from,
+					To: name, Security: true})
 			}
 		}
 	}

@@ -500,3 +500,55 @@ func TestKeyRefRefusal(t *testing.T) {
 		}
 	}
 }
+
+// An accepted source is unmapped (server.go), so a v4-mapped address written
+// in the file must be read as the IPv4 it is, or it never admits.
+func TestAMappedFileAddressIsReadAsIPv4(t *testing.T) {
+	inv, err := ParseFile([]byte("devices:\n  - {name: leaf-01, platform: arista_eos, addresses: ['::ffff:10.1.1.1']}\n"+
+		"key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: prod_key}\n"), "inv.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inv.Devices[0].Addresses[0]; !got.Is4() {
+		t.Fatalf("the mapped address stayed mapped: is4=%v", got.Is4())
+	}
+	tr, err := Build(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := tr.Lookup(netip.MustParseAddr("10.1.1.1")); !ok || r.Device.Name != "leaf-01" {
+		t.Fatalf("a connection from 10.1.1.1 did not admit leaf-01: %+v %v", r, ok)
+	}
+}
+
+func TestAMappedKeyGroupCIDRIsRefusedAtLoad(t *testing.T) {
+	_, err := ParseFile([]byte("devices:\n  - {name: leaf-01, addresses: [10.1.1.1]}\n"+
+		"key_groups:\n  - {match: {cidr: '::ffff:10.0.0.0/104'}, key_ref: prod_key}\n"), "inv.yaml")
+	if err == nil || !strings.Contains(err.Error(), "key_groups[0]") || !strings.Contains(err.Error(), "IPv4 form") ||
+		strings.Contains(err.Error(), "ffff") {
+		t.Fatalf("want a refusal naming the entry and the IPv4 form, quoting nothing: %v", err)
+	}
+}
+
+func TestAMappedAndAPlainAddressOnTwoDevicesCollide(t *testing.T) {
+	inv, err := ParseFile([]byte("devices:\n  - {name: a, addresses: [10.1.1.1]}\n  - {name: b, addresses: ['::ffff:10.1.1.1']}\n"), "inv.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(inv.Devices); err == nil || !strings.Contains(err.Error(), "claimed by both") {
+		t.Fatalf("want the one-address-on-two-devices refusal, got %v", err)
+	}
+}
+
+// Unmap drops a zone, so a zoned mapped address would silently admit the
+// IPv4: refused. A zone on any other address is not this change's business.
+func TestAZonedMappedFileAddressIsRefusedAndOtherZonesStillLoad(t *testing.T) {
+	_, err := ParseFile([]byte("devices:\n  - {name: leaf-01, addresses: ['::ffff:10.1.1.1%eth0']}\n"), "inv.yaml")
+	if err == nil || !strings.Contains(err.Error(), "devices[0]: addresses[0]") || !strings.Contains(err.Error(), "IPv4 form") ||
+		strings.Contains(err.Error(), "10.1.1.1") || strings.Contains(err.Error(), "eth0") {
+		t.Fatalf("want a refusal naming the position and the IPv4 form, quoting nothing: %v", err)
+	}
+	if _, err := ParseFile([]byte("devices:\n  - {name: leaf-01, addresses: ['fe80::1%eth0']}\n"), "inv.yaml"); err != nil {
+		t.Fatalf("a zone on a link-local address must still load: %v", err)
+	}
+}

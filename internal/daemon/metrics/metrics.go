@@ -543,7 +543,9 @@ type Metrics struct {
 	InventorySnapshotAge prometheus.GaugeFunc
 	// port49_inventory_changes_total{kind}: security-relevant changes a bundle
 	// swap made (spec §10) — "address_added" (an address on a device already
-	// in inventory, which a mint hands to an SSH client), "scope_joined" and
+	// in inventory, which a mint hands to an SSH client), "address_moved"
+	// (an address that left one device and landed on another in one swap;
+	// decision 61), "scope_joined" and
 	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
 	// device moved onto another key), "transport_changed" (a device moved
 	// between tcp and tls), "platform_changed" (a device moved to another
@@ -1097,6 +1099,15 @@ func New(reg prometheus.Registerer) *Metrics {
 	for _, o := range append([]devicecert.Outcome{devicecert.OK, devicecert.Resumed}, devicecert.Outcomes...) {
 		m.TLSHandshakes.WithLabelValues(string(o))
 	}
+	// increase() over a series that first appears at 1 reads 0, so an alarm on
+	// a counter's first event needs the series at 0 before it: every security
+	// kind of inventory_change (bundle.Report.Security) and the
+	// unadmitted_source diagnosis.
+	for _, k := range []string{"device_added", "admission_changed", "address_added", "address_moved", "key_ref_changed",
+		"transport_changed", "platform_changed", "scope_joined", "scope_left"} {
+		m.InventoryChanges.WithLabelValues(k)
+	}
+	m.Unvalidated.WithLabelValues("unadmitted_source")
 	m.ConnectionsShed.WithLabelValues("global_cap") // the alarm's series exists before the first shed
 	reg.MustRegister(m.ConnectionsMax, m.ConnectionsShed)
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
