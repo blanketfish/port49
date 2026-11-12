@@ -565,7 +565,12 @@ func TestL94(t *testing.T) {
 							go func() {
 								defer rw.Done()
 								// The old daemon's refusals, read while it is
-								// still up: the new one counts from 0.
+								// still up: the new one counts from 0. A refusal
+								// between this read and the stop is uncounted;
+								// unreachable for a stale-shaped orphan, whose
+								// pre-capture SYN is Accepted (and any refusal
+								// counted) milliseconds after the clean point,
+								// seconds before this restart.
 								text, err := l94MetricsRead()
 								mu.Lock()
 								refPre, refPreErr = l94Refusals(text), err
