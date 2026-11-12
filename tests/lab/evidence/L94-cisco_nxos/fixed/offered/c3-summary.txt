@@ -1,0 +1,46 @@
+L94, arm fixed, cell c3, mode offered, nxos106 (Nexus 9300v 10.6(2)F) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=1.00s denied=false err=false at=05:00:48.511
+  s0 "show version"           took=0.75s denied=false err=false at=05:00:49.514
+  s0 "show version"           took=0.75s denied=false err=false at=05:00:50.266
+  s0 "show version"           took=0.75s denied=false err=false at=05:00:51.017
+  s0 "show version"           took=0.75s denied=false err=false at=05:00:51.769
+  s0 "show version"           took=0.75s denied=false err=false at=05:00:52.521
+  s0 "show version"           took=0.75s denied=false err=false at=05:00:53.273
+  s0 "show version"           took=0.75s denied=false err=false at=05:00:54.025
+debug counts: ssl_read_failed=0 mark_server_dead=0 fallbacks=0 request_authen=5 request_author=9 request_acct=9 window_unmeasured=0
+tls connections: 1, most open at once: 1
+  conn port=47482 syn=05:00:43.184 hold=open end=open
+<LONG> delta: 0
+refused-credential login 1: took=6.20s auth_failed=true logged_in=false err=""
+refused-credential login 2: took=6.22s auth_failed=true logged_in=false err=""
+refused-credential login 3: took=4.22s auth_failed=true logged_in=false err=""
+port49 records:
+  05:00:48.193 redeem permit
+  05:00:48.217 authorize_session permit
+  05:00:48.361 account
+  05:00:48.535 authorize_command permit "show version"
+  05:00:49.535 authorize_command permit "show version"
+  05:00:50.289 authorize_command permit "show version"
+  05:00:48.642 redeem deny
+  05:00:48.657 redeem deny
+  05:00:50.662 account
+  05:00:48.673 redeem deny
+  05:00:50.680 account
+  05:00:50.714 account
+  05:00:51.037 authorize_command permit "show version"
+  05:00:51.788 authorize_command permit "show version"
+  05:00:52.542 authorize_command permit "show version"
+  05:00:50.696 redeem deny
+  05:00:52.744 account
+  05:00:53.293 authorize_command permit "show version"
+  05:00:54.046 authorize_command permit "show version"
+  05:00:52.709 redeem deny
+  05:00:52.726 redeem deny
+  05:00:54.728 account
+  05:00:54.748 account
+  05:00:54.799 account
+  05:00:54.816 account
+STOP: c3: account flags/task_id stop/172.100.100.1@pts/4 recorded 2 times: a duplicate or retransmitted accounting record
+STOP: c3: B's "show version" took 1.00s, over the row's 1s
+

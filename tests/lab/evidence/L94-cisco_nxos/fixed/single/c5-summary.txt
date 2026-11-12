@@ -1,0 +1,59 @@
+L94, arm fixed, cell c5, mode single, nxos106 (Nexus 9300v 10.6(2)F) over RFC 9887, reference <LONG>, failure delay 2s
+port49d: port49d <LONG> vcs.modified=false tags=""
+  s0 "show version"           took=0.75s denied=false err=false at=05:32:20.034
+  s0 "show version"           took=0.75s denied=false err=false at=05:32:21.286
+  s0 "show version"           took=0.75s denied=false err=false at=05:32:22.538
+  s0 "show users"             took=0.25s denied=true err=false at=05:32:23.791
+  s0 "show version"           took=0.75s denied=false err=false at=05:32:24.543
+  s0 "show version"           took=0.75s denied=false err=false at=05:32:25.795
+  s0 "show version"           took=0.75s denied=false err=false at=05:32:27.048
+  s0 "show users"             took=0.25s denied=true err=false at=05:32:28.300
+  s0 "show version"           took=6.76s denied=true err=false at=05:32:29.553
+  s0 "show version"           took=0.25s denied=true err=false at=05:32:36.817
+  s0 "show version"           took=0.25s denied=true err=false at=05:32:37.568
+  s0 "show users"             took=0.25s denied=true err=false at=05:32:38.320
+  s0 "show version"           took=0.25s denied=true err=false at=05:32:39.071
+  s0 "show version"           took=0.25s denied=true err=false at=05:32:39.822
+  s0 "show version"           took=0.25s denied=true err=false at=05:32:40.574
+  s0 "show users"             took=0.25s denied=true err=false at=05:32:41.326
+debug counts: ssl_read_failed=1 mark_server_dead=2 fallbacks=0 request_authen=3 request_author=17 request_acct=5 window_unmeasured=0
+tls connections: 2, most open at once: 1
+  conn port=49798 syn=05:32:14.203 hold=14.85s end=server-fin
+  conn port=45524 syn=05:32:31.175 hold=open end=open
+<LONG> delta: 0
+refused-credential login 1: took=9.67s auth_failed=true logged_in=false err=""
+restart window: stop=05:32:29.053 up=05:32:29.308
+port49 records:
+  05:32:19.212 redeem permit
+  05:32:19.237 authorize_session permit
+  05:32:19.384 account
+  05:32:20.054 authorize_command permit "show version"
+  05:32:21.306 authorize_command permit "show version"
+  05:32:22.560 authorize_command permit "show version"
+  05:32:23.812 authorize_command deny "show users"
+  05:32:24.565 authorize_command permit "show version"
+  05:32:25.818 authorize_command permit "show version"
+  05:32:27.069 authorize_command permit "show version"
+  05:32:28.322 authorize_command deny "show users"
+  05:32:28.683 redeem deny
+  05:32:36.184 account
+  05:32:36.198 authorize_command deny "show version"
+  05:32:36.840 authorize_command deny "show version"
+  05:32:37.588 authorize_command deny "show version"
+  05:32:36.216 redeem deny
+  05:32:38.237 account
+  05:32:38.341 authorize_command deny "show users"
+  05:32:39.091 authorize_command deny "show version"
+  05:32:39.844 authorize_command deny "show version"
+  05:32:40.593 authorize_command deny "show version"
+  05:32:41.346 authorize_command deny "show users"
+  05:32:41.600 account
+  05:32:41.616 account
+STOP: c5: session 0 "show version": a permitted command was refused
+STOP: c5: session 0 "show version": a permitted command was refused
+STOP: c5: session 0 "show version": a permitted command was refused
+STOP: c5: session 0 "show version": a permitted command was refused
+STOP: c5: session 0 "show version": a permitted command was refused
+STOP: c5: session 0 "show version": a permitted command was refused
+STOP: c5: account flags/task_id stop/172.100.100.1@pts/4 recorded 2 times: a duplicate or retransmitted accounting record
+
