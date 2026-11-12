@@ -475,6 +475,9 @@ func TestL94(t *testing.T) {
 				filter := deviceDebugFilter{Platform: "nxos", Secrets: secrets}
 				e.cli(func(c *cliConn) error {
 					adm := func(ln string) { c.sendExpect(ln, 120*time.Second, c.prompt) }
+					// A Fatal in body() still stops port49d, turns debug off and
+					// closes the session.
+					defer l80DebugOff(e.l, c, label)
 					adm("terminal length 0")
 					adm("debug logfile " + label)
 					for _, ln := range l80Debug {
@@ -485,7 +488,6 @@ func TestL94(t *testing.T) {
 					at := len(c.transcript())
 					c.sendExpect("show debug logfile "+label, 180*time.Second, c.prompt)
 					k, keepErr := filter.Keep(c.transcript()[at:])
-					c.sendExpect("undebug all", 60*time.Second, c.prompt)
 					if keepErr != nil {
 						t.Fatalf("INVALID: %s's debug capture was discarded (%v); nothing written", cell, keepErr)
 					}
