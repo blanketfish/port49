@@ -787,9 +787,17 @@ func TestASwapThatMovesAnAddressBetweenDevicesIsLoggedAsAMove(t *testing.T) {
 	if n := strings.Count(got, `"kind":"address_moved"`); n != 1 {
 		t.Fatalf("%d address_moved records: %s", n, got)
 	}
+	// Match on the address_moved record itself: leaf1's address_added also
+	// names leaf1 and the address.
+	var rec string
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, `"kind":"address_moved"`) {
+			rec = line
+		}
+	}
 	for _, want := range []string{`"address":"10.0.0.2"`, `"from":"leaf2"`, `"to":"leaf1"`, `"name":"leaf1"`} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %s in %s", want, got)
+		if !strings.Contains(rec, want) {
+			t.Errorf("missing %s in the address_moved record %s", want, rec)
 		}
 	}
 	if n := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("address_moved")); n != 1 {

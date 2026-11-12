@@ -763,7 +763,7 @@ func TestTwoAddressesSwappedBetweenDevicesAreTwoMoves(t *testing.T) {
 	old := mustBundle(t, dev("leaf-01", "10.0.1.1", nil), dev("leaf-02", "10.0.1.2", nil))
 	new := mustBundle(t, dev("leaf-01", "10.0.1.2", nil), dev("leaf-02", "10.0.1.1", nil))
 	got := moves(Diff(old, new, time.Now()))
-	if len(got) != 2 {
+	if len(got) != 2 || !slices.Contains(got, "10.0.1.2 leaf-02>leaf-01") || !slices.Contains(got, "10.0.1.1 leaf-01>leaf-02") {
 		t.Fatalf("moves = %v", got)
 	}
 }
