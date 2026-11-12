@@ -628,6 +628,26 @@ func l94TagCheck(cell, tags string) error {
 	return nil
 }
 
+// l94HoldBin is where c4's held port49d is built, relative to the repo
+// root: its own path, never bin/port49d, so no other test can start it.
+const l94HoldBin = "bin/port49d-l94-acct-hold"
+
+// l94StandardBin is the harness's check of the binary at its standard path
+// (bin/port49d, initGlobal): one built with the hold tag holds every
+// accounting reply 1.5s, and every other test would measure that hold.
+// A binary that cannot be read is refused too.
+func l94StandardBin(path string) error {
+	tags, err := binaryTags(path)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(strings.Split(tags, ","), l94HoldTag) {
+		return fmt.Errorf("%s was built with the lab-only -tags %s, which holds every accounting reply: rebuild it (make build); "+
+			"L94's c4 builds its own to %s", path, l94HoldTag, l94HoldBin)
+	}
+	return nil
+}
+
 // binaryTags is `go version -m path`'s -tags.
 func binaryTags(path string) (string, error) {
 	out, err := exec.Command("go", "version", "-m", path).Output()

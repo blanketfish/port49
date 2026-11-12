@@ -4,6 +4,9 @@ package lab
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -397,6 +400,49 @@ func TestL94DelayConfigSetsBothKnobs(t *testing.T) {
 }
 
 // c4's build carries the hold tag and no other cell's does.
+// H4: the harness's standard daemon path refuses a binary built with the
+// hold tag, read from the binary itself (go version -m), and takes one
+// built without it. Two throwaway binaries are built to show it.
+func TestTheStandardDaemonPathRefusesTheHoldBuild(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"go.mod":  "module holdprobe\n\ngo 1.26\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := func(out string, tags ...string) string {
+		args := []string{"build", "-o", filepath.Join(dir, out)}
+		if len(tags) > 0 {
+			args = append(args, "-tags", strings.Join(tags, ","))
+		}
+		cmd := exec.Command("go", append(args, ".")...)
+		cmd.Dir, cmd.Env = dir, append(os.Environ(), "CGO_ENABLED=0", "GOWORK=off", "GOFLAGS=")
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go build %v: %v %s", tags, err, b)
+		}
+		return filepath.Join(dir, out)
+	}
+	if err := l94StandardBin(build("plain")); err != nil {
+		t.Errorf("a plain build was refused: %v", err)
+	}
+	if err := l94StandardBin(build("other", "hwkey_dlopen")); err != nil {
+		t.Errorf("a build with another tag was refused: %v", err)
+	}
+	err := l94StandardBin(build("held", "hwkey_dlopen", l94HoldTag))
+	if err == nil || !strings.Contains(err.Error(), l94HoldTag) {
+		t.Errorf("the hold build was taken: %v", err)
+	}
+	if l94StandardBin(filepath.Join(dir, "missing")) == nil {
+		t.Error("a binary that cannot be read was taken")
+	}
+	if l94HoldBin == "bin/port49d" || !strings.HasPrefix(l94HoldBin, "bin/") {
+		t.Errorf("c4's build goes to %q: its own path under bin/, never bin/port49d", l94HoldBin)
+	}
+}
+
 func TestL94BuildTags(t *testing.T) {
 	out := "port49d: go1.26.0\n\tpath\tgithub.com/blanketfish/port49/cmd/port49d\n\tbuild\t-tags=port49_lab_acct_hold\n\tbuild\tvcs.revision=abc\n"
 	if got := parseBuildTags(out); got != l94HoldTag {

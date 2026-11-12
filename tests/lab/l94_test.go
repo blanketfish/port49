@@ -90,30 +90,55 @@ func TestL94(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The lab is taken before anything is built: a build replaces
+	// bin/port49d, which another run holding the lab may be running.
+	if err := labOccupyForRun(labLockPath, fmt.Sprintf("l94 %s pid %d", arm, os.Getpid())); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	// The harness builds the arm's port49d: the baseline from
-	// l94BaselineCommit, the fixed arm from HEAD; c4's with the hold tag.
+	// l94BaselineCommit, the fixed arm from HEAD, to bin/port49d. c4 runs a
+	// second build of the same revision with the hold tag, at l94HoldBin and
+	// never at bin/port49d (initGlobal refuses a held bin/port49d).
 	rev := "HEAD"
 	if arm == "baseline" {
 		rev = l94BaselineCommit
 	}
-	var tags []string
-	if slices.Contains(cells, "c4") {
-		tags = []string{l94HoldTag}
+	armCheck := func(v buildVCS) {
+		t.Helper()
+		if err := armCheckFor(arm, v, gitHead(root), l94FixCommit, func(rev string) (bool, error) {
+			return hasFixAt(root, l94FixCommit, l94FixFile, rev)
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	bin := filepath.Join(root, "bin", "port49d")
-	vcs, err := buildPort49dAt(root, rev, os.TempDir(), bin, tags...)
+	vcs, err := buildPort49dAt(root, rev, os.TempDir(), bin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := labSetcap(bin); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	if err := armCheckFor(arm, vcs, gitHead(root), l94FixCommit, func(rev string) (bool, error) {
-		return hasFixAt(root, l94FixCommit, l94FixFile, rev)
-	}); err != nil {
-		t.Fatal(err)
+	armCheck(vcs)
+	if err := l94StandardBin(bin); err != nil {
+		t.Fatalf("INVALID: %v", err)
 	}
-	built, err := binaryTags(bin)
+	run := bin
+	if slices.Contains(cells, "c4") {
+		run = filepath.Join(root, l94HoldBin)
+		hv, err := buildPort49dAt(root, rev, os.TempDir(), run, l94HoldTag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := labSetcap(run); err != nil {
+			t.Fatalf("INVALID: %v", err)
+		}
+		armCheck(hv)
+	}
+	built, err := binaryTags(run)
 	if err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
@@ -121,12 +146,6 @@ func TestL94(t *testing.T) {
 		if err := l94TagCheck(c, built); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := labOccupyForRun(labLockPath, fmt.Sprintf("l94 %s pid %d", arm, os.Getpid())); err != nil {
-		t.Fatalf("INVALID: %v", err)
-	}
-	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
-		t.Fatalf("INVALID: %v", err)
 	}
 	evRoot := filepath.Join(root, "tests/lab/evidence", "L94-"+p.Name)
 
@@ -159,6 +178,13 @@ func TestL94(t *testing.T) {
 		t.Fatalf("INVALID: %v", err)
 	}
 	q.cfgText = delayed
+	// c4's TLS daemons run the held build. Set here, after restoreDaemon is
+	// deferred, so the reset (deferred later, run earlier) comes first and
+	// the standing daemon is restored on bin/port49d.
+	if run != bin {
+		daemonBin = run
+		defer func() { daemonBin = "" }()
+	}
 	daemon := l73Daemon{Intermediates: e.files["inter.pem"], DefaultIdle: true}
 	q.tlsDaemon(e, "l94", daemon)
 	q.guard()
@@ -290,7 +316,7 @@ func TestL94(t *testing.T) {
 			)
 			fmt.Fprintf(&sum, "L94, arm %s, cell %s, mode %s, %s (%s) over RFC 9887, reference %s, failure delay %s\n",
 				arm, cell, mode, p.Sel, l.p.version, p.Ref, l94Delay)
-			fmt.Fprintf(&sum, "bin/port49d: vcs.revision=%s vcs.modified=%v tags=%q\n", vcs.recorded().Revision, vcs.Modified, built)
+			fmt.Fprintf(&sum, "port49d: %s vcs.revision=%s vcs.modified=%v tags=%q\n", filepath.Base(run), vcs.recorded().Revision, vcs.Modified, built)
 			add := func(x l80Typed) {
 				mu.Lock()
 				defer mu.Unlock()

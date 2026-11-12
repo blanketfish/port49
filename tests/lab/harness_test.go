@@ -428,6 +428,19 @@ func writeEvidence() error {
 	return nil
 }
 
+// daemonBin, when set, is the port49d the harness starts in place of
+// bin/port49d: L94's c4 sets it to its held build (l94HoldBin) for its run
+// alone, and resets it when the run ends.
+var daemonBin string
+
+// port49dBin is the port49d binary startDaemonWith runs.
+func port49dBin() string {
+	if daemonBin != "" {
+		return daemonBin
+	}
+	return filepath.Join(root, "bin", "port49d")
+}
+
 // initGlobal does the once-per-run work that every platform needs: find the
 // repository root, read the daemon config the tests check their seeds against,
 // and give the built binary the capability to bind port 49 unprivileged.
@@ -447,6 +460,10 @@ func initGlobal() error {
 	bin := filepath.Join(root, "bin", "port49d")
 	if _, err := os.Stat(bin); err != nil {
 		return fmt.Errorf("%s is not built; run `make build` first: %w", bin, err)
+	}
+	// Never L94 c4's held build (it delays every accounting reply 1.5s).
+	if err := l94StandardBin(bin); err != nil {
+		return err
 	}
 	// Port 49 is privileged and the daemon runs unprivileged, so the binary
 	// needs the capability. Say the exact command if this fails; a harness that
@@ -1137,7 +1154,7 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	if key == "" {
 		key = labKeyDefault
 	}
-	l.daemon = exec.Command(filepath.Join(root, "bin", "port49d"), "-config", cfgPath)
+	l.daemon = exec.Command(port49dBin(), "-config", cfgPath)
 	l.daemon.Dir = root
 	l.daemon.Stdout = l.logFile
 	l.daemon.Stderr = io.MultiWriter(l.errFile, os.Stderr)

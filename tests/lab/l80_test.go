@@ -79,6 +79,18 @@ func TestL80Remeasure(t *testing.T) {
 	if dirty, err := qualTreeDirty(root); err != nil || dirty != "" {
 		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
 	}
+	sel, _, err := platformSelection()
+	if err != nil || len(sel) != 1 || sel[0].sel != "nxos106" {
+		t.Fatalf("PORT49_LAB_PLATFORMS=nxos106 only: %v", err)
+	}
+	// The lab is taken before the build: it replaces bin/port49d, which
+	// another run holding the lab may be running.
+	if err := labOccupyForRun(labLockPath, fmt.Sprintf("l80 %s pid %d", arm, os.Getpid())); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	// The harness builds the port49d the arm runs (fix round 4): the
 	// baseline from l80BaselineCommit, the fixed arm from HEAD, each in a
 	// private clone so the stamp is right, then checks it (review I2).
@@ -96,16 +108,6 @@ func TestL80Remeasure(t *testing.T) {
 	}
 	if err := l80ArmCheck(arm, vcs, gitHead(root), func(rev string) (bool, error) { return l80HasFix(root, rev) }); err != nil {
 		t.Fatal(err)
-	}
-	sel, _, err := platformSelection()
-	if err != nil || len(sel) != 1 || sel[0].sel != "nxos106" {
-		t.Fatalf("PORT49_LAB_PLATFORMS=nxos106 only: %v", err)
-	}
-	if err := labOccupyForRun(labLockPath, fmt.Sprintf("l80 %s pid %d", arm, os.Getpid())); err != nil {
-		t.Fatalf("INVALID: %v", err)
-	}
-	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
-		t.Fatalf("INVALID: %v", err)
 	}
 	out := filepath.Join(root, "tests/lab/evidence/L80-cisco_nxos", arm)
 	if err := os.MkdirAll(out, 0o755); err != nil {
