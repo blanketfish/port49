@@ -1,0 +1,364 @@
+//go:build lab
+
+package lab
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// The platforms run in L94's priority order: NX-OS, then Junos (vJunos-router,
+// vSRX), EOS, IOS-XE, XR; the first three block the merge.
+func TestL94PlatformsRunInPriorityOrder(t *testing.T) {
+	var sels []string
+	for _, p := range l94Platforms {
+		sels = append(sels, p.Sel)
+		if p.Blocks != (p.Family == "nxos" || p.Family == "junos" || p.Family == "eos") {
+			t.Errorf("%s: Blocks=%v", p.Sel, p.Blocks)
+		}
+		if p.Name != "" {
+			if _, ok := l73Dialects[p.Name]; !ok {
+				t.Errorf("%s: %s is no l73Dialects key", p.Sel, p.Name)
+			}
+		}
+		if !optInPlatforms[p.Sel] && p.Sel != "vsrx" {
+			t.Errorf("%s is not an opt-in TLS platform", p.Sel)
+		}
+	}
+	if want := []string{"nxos106", "vjunos26", "vsrx", "ceos436", "iosxe1718", "xrd261"}; !slices.Equal(sels, want) {
+		t.Errorf("order %v, want %v", sels, want)
+	}
+	if _, err := l94PlatformFor("vsrx"); err == nil || !strings.Contains(err.Error(), "INVALID") {
+		t.Errorf("vsrx has no TLS dialect and must be INVALID, got %v", err)
+	}
+	if _, err := l94PlatformFor("srlinux"); err == nil {
+		t.Error("srlinux is not L94's")
+	}
+	if p, err := l94PlatformFor("nxos106"); err != nil || p.Timeout != 6*time.Second {
+		t.Errorf("nxos106: %+v %v", p, err)
+	}
+}
+
+// c4 is NX-OS's and the fixed arm's only, and runs alone on its own build.
+func TestL94CellSelection(t *testing.T) {
+	if got := l94CellNames("nxos", "fixed"); !slices.Equal(got, []string{"c1", "c2", "c3", "c4", "c5"}) {
+		t.Errorf("nxos fixed: %v", got)
+	}
+	for _, c := range [][2]string{{"nxos", "baseline"}, {"junos", "fixed"}, {"eos", "fixed"}} {
+		if slices.Contains(l94CellNames(c[0], c[1]), "c4") {
+			t.Errorf("%v plays c4", c)
+		}
+	}
+	if _, err := l94Select("nxos", "fixed", nil); err == nil {
+		t.Error("a fixed NX-OS run of every cell mixes c4's build with the others'")
+	}
+	if got, err := l94Select("junos", "fixed", nil); err != nil || len(got) != 4 {
+		t.Errorf("junos fixed: %v %v", got, err)
+	}
+	if _, err := l94Select("nxos", "fixed", []string{"c4", "c1"}); err == nil {
+		t.Error("c4 beside c1 must be refused")
+	}
+	if got, err := l94Select("nxos", "fixed", []string{"c4"}); err != nil || !slices.Equal(got, []string{"c4"}) {
+		t.Errorf("c4 alone: %v %v", got, err)
+	}
+	if _, err := l94Select("eos", "fixed", []string{"c4"}); err == nil {
+		t.Error("c4 on EOS must be refused")
+	}
+}
+
+// c1's loop alternates the permitted and the qual policy's denied command.
+func TestL94LoopAlternates(t *testing.T) {
+	got := l94Loop("cisco_nxos", l94C1Commands)
+	if len(got) != 20 || got[0] != "show version" || got[1] != "show users" || got[19] != "show users" {
+		t.Errorf("nxos loop %v", got)
+	}
+	if j := l94Loop("juniper_junos", 2); j[0] != "show version | no-more" || j[1] != "show system users" {
+		t.Errorf("junos loop %v", j)
+	}
+}
+
+func l94Rec(ts time.Time, ev, verdict, vec string) map[string]any {
+	r := map[string]any{"ts": ts.Format(time.RFC3339Nano), "event": ev, "verdict": verdict}
+	var words []any
+	for _, w := range strings.Fields(vec) {
+		words = append(words, w)
+	}
+	switch ev {
+	case "authorize_command":
+		r["request"] = map[string]any{"vector": words}
+	case "account":
+		r["record"] = map[string]any{"vector": words}
+	}
+	return r
+}
+
+// c2's order is read from the records' ts: B's authorize_command against A's
+// FAIL redeem, which is recorded once the delay has passed.
+func TestL94GapsAreReadFromRecordTimes(t *testing.T) {
+	t0 := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	recs := []map[string]any{
+		l94Rec(t0, "redeem", "permit", ""),
+		l94Rec(t0.Add(200*time.Millisecond), "authorize_command", "permit", "show version"),
+		l94Rec(t0.Add(300*time.Millisecond), "authorize_command", "deny", "show users"),
+		l94Rec(t0.Add(2100*time.Millisecond), "redeem", "deny", ""),
+		{"ts": "not a time", "event": "authorize_command"},
+		{"ts": t0.Format(time.RFC3339Nano), "event": "tls_refused"},
+	}
+	evs := l94Events(recs)
+	if len(evs) != 4 {
+		t.Fatalf("%d events, want 4 (the unparseable ts and the other event dropped)", len(evs))
+	}
+	gaps, ok := l94Gaps("cisco_nxos", evs, []string{"show version", "show users"})
+	if !ok || len(gaps) != 2 || gaps[0] != 1900*time.Millisecond || gaps[1] != 1800*time.Millisecond {
+		t.Fatalf("gaps %v ok=%v", gaps, ok)
+	}
+	if got := l94C2Timing(gaps, l94Delay); got != "ok" {
+		t.Errorf("timing %s", got)
+	}
+	if got := l94C2Timing([]time.Duration{2600 * time.Millisecond}, l94Delay); got != "early" {
+		t.Errorf("a B request before A's read: timing %s, want early", got)
+	}
+	if got := l94C2Timing(nil, l94Delay); got != "none" {
+		t.Errorf("no B request: %s", got)
+	}
+	if _, ok := l94Gaps("cisco_nxos", evs[:3], []string{"show version"}); ok {
+		t.Error("no FAIL redeem: ok must be false")
+	}
+	// Junos asks about no command: B's account records are what is ordered.
+	jrecs := []map[string]any{
+		l94Rec(t0.Add(200*time.Millisecond), "account", "", "show version"),
+		l94Rec(t0.Add(2100*time.Millisecond), "redeem", "deny", ""),
+	}
+	jg, ok := l94Gaps("juniper_junos", l94Events(jrecs), []string{"show version | no-more"})
+	if !ok || len(jg) != 1 || jg[0] != 1900*time.Millisecond {
+		t.Errorf("junos gaps %v ok=%v", jg, ok)
+	}
+}
+
+func TestL94OutcomeOfALogin(t *testing.T) {
+	if o := l94OutcomeOf(2*time.Second, errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]")); !o.AuthFailed || o.LoggedIn || o.Err != "" {
+		t.Errorf("auth failure: %+v", o)
+	}
+	if o := l94OutcomeOf(time.Second, nil); !o.LoggedIn {
+		t.Errorf("a login: %+v", o)
+	}
+	if o := l94OutcomeOf(time.Minute, errors.New("i/o timeout")); o.AuthFailed || o.Err == "" {
+		t.Errorf("a timeout: %+v", o)
+	}
+	if got := l94Regressed([]l94Outcome{{AuthFailed: true}}, []l94Outcome{{Err: "timeout"}}); len(got) != 1 {
+		t.Errorf("a FAIL become a timeout: %v", got)
+	}
+	if got := l94Regressed([]l94Outcome{{AuthFailed: true}}, []l94Outcome{{AuthFailed: true}}); len(got) != 0 {
+		t.Errorf("no regression: %v", got)
+	}
+}
+
+func TestL94DuplicatesAreFound(t *testing.T) {
+	typed := []l80Typed{{Command: "show version"}, {Command: "show users"}}
+	evs := []l94Event{{Event: "authorize_command", Vector: "show version"}, {Event: "authorize_command", Vector: "show users"},
+		{Event: "account", Flags: "start", TaskID: "7"}, {Event: "account", Flags: "stop", TaskID: "7"}}
+	if got := l94Dup(evs, typed); len(got) != 0 {
+		t.Errorf("no duplicate: %v", got)
+	}
+	evs = append(evs, l94Event{Event: "authorize_command", Vector: "show version"}, l94Event{Event: "account", Flags: "stop", TaskID: "7"})
+	if got := l94Dup(evs, typed); len(got) != 2 {
+		t.Errorf("a retransmitted authorization and accounting record: %v", got)
+	}
+}
+
+func l94Clean() l94Grade {
+	p, _ := l94PlatformFor("nxos106")
+	return l94Grade{Arm: "fixed", Cell: "c1", Platform: "cisco_nxos", P: p, Conns: 1, MostOpen: 1,
+		Typed:  []l80Typed{{Command: "show version", Asked: true}, {Command: "show users", Asked: true, Denied: true}},
+		Events: []l94Event{{Event: "authorize_command", Vector: "show version"}, {Event: "authorize_command", Vector: "show users"}}}
+}
+
+// The merge criteria, one at a time, on the fixed arm; the baseline stops on nothing.
+func TestL94StopsAreTheMergeCriteria(t *testing.T) {
+	if got := l94Stops(l94Clean()); len(got) != 0 {
+		t.Fatalf("a clean c1 stops: %v", got)
+	}
+	cases := map[string]func(*l94Grade){
+		"lost or run unasked":   func(g *l94Grade) { g.Typed[0].Asked = false },
+		"ran":                   func(g *l94Grade) { g.Typed[1].Denied = false },
+		"retransmitted":         func(g *l94Grade) { g.Events = append(g.Events, g.Events[0]) },
+		"must hold exactly one": func(g *l94Grade) { g.Conns = 2 },
+		"open at once":          func(g *l94Grade) { g.MostOpen = 2 },
+		"second_connection":     func(g *l94Grade) { g.Second = 1 },
+		"read the kept debug":   func(g *l94Grade) { g.DeadOrSSL = 1 },
+		"logged in":             func(g *l94Grade) { g.Outcomes = []l94Outcome{{LoggedIn: true}} },
+	}
+	for want, mut := range cases {
+		g := l94Clean()
+		g.Typed = slices.Clone(g.Typed)
+		mut(&g)
+		got := strings.Join(l94Stops(g), "\n")
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: stops %q", want, got)
+		}
+		g.Arm = "baseline"
+		if s := l94Stops(g); len(s) != 0 {
+			t.Errorf("%s: the baseline stops: %v", want, s)
+		}
+	}
+}
+
+func TestL94C2Stops(t *testing.T) {
+	g := l94Clean()
+	g.Cell = "c2"
+	g.Outcomes = []l94Outcome{{AuthFailed: true}}
+	g.Gaps = []time.Duration{1800 * time.Millisecond, 1700 * time.Millisecond}
+	g.Typed[0].Took, g.Typed[1].Took = 0.3, 0.4
+	if got := l94Stops(g); len(got) != 0 {
+		t.Fatalf("a clean c2 stops: %v", got)
+	}
+	g.Gaps[1] = -100 * time.Millisecond // answered after A's FAIL: it waited behind A
+	g.Typed[1].Took = 2.1
+	g.Outcomes[0] = l94Outcome{Err: "timeout"}
+	got := strings.Join(l94Stops(g), "\n")
+	for _, want := range []string{"waited behind A", "took 2.10s", "not refused as an authentication failure"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q in %q", want, got)
+		}
+	}
+	g.Outcomes[0] = l94Outcome{Err: "timeout"}
+	g.Baseline = &l94Baseline{Outcomes: []l94Outcome{{AuthFailed: true}}}
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "became a timeout") {
+		t.Errorf("a FAIL the baseline delivered: %q", got)
+	}
+}
+
+// c3: no B command over the baseline's slowest or the platform's L13
+// timeout, and all three FAILs delivered and recorded.
+func TestL94C3Stops(t *testing.T) {
+	g := l94Clean()
+	g.Cell = "c3"
+	g.Outcomes = []l94Outcome{{AuthFailed: true}, {AuthFailed: true}, {AuthFailed: true}}
+	g.Events = append(g.Events, l94Event{Event: "redeem", Verdict: "deny"}, l94Event{Event: "redeem", Verdict: "deny"}, l94Event{Event: "redeem", Verdict: "deny"})
+	g.Typed[0].Took, g.Typed[1].Took = 0.4, 5.5
+	if got := strings.Join(l94Stops(g), "\n"); strings.Contains(got, "took") {
+		t.Errorf("5.5s is under NX-OS's 6s with no baseline: %q", got)
+	}
+	g.Baseline = &l94Baseline{MaxTook: 4}
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "took 5.50s, above 4.00s") {
+		t.Errorf("above the baseline's slowest: %q", got)
+	}
+	g.Baseline = nil
+	g.Typed[1].Took = 6.5
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "above 6.00s") {
+		t.Errorf("above the L13 timeout: %q", got)
+	}
+	g.Typed[1].Took = 0.5
+	g.Outcomes = g.Outcomes[:2]
+	g.Events = g.Events[:3]
+	got := strings.Join(l94Stops(g), "\n")
+	if !strings.Contains(got, "2 of 3 FAILs") || !strings.Contains(got, "recorded 1 FAIL") {
+		t.Errorf("a FAIL lost: %q", got)
+	}
+}
+
+// c5: a command run unasked stops; one the device refused locally across the
+// restart does not; with no asked command after the restart the device did
+// not reconnect.
+func TestL94C5Stops(t *testing.T) {
+	t0 := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	g := l94Clean()
+	g.Cell, g.Conns, g.MostOpen = "c5", 2, 1
+	g.RestartAt, g.UpAt = t0, t0.Add(3*time.Second)
+	g.Typed = []l80Typed{{Command: "show version", Asked: true, At: t0.Add(-time.Second)},
+		{Command: "show version", Err: true, At: t0.Add(time.Second)},
+		{Command: "show version", Asked: true, At: t0.Add(5 * time.Second)}}
+	g.Events = []l94Event{{Event: "authorize_command", Vector: "show version"}, {Event: "authorize_command", Vector: "show version"}}
+	if got := l94Stops(g); len(got) != 0 {
+		t.Fatalf("a clean c5 stops: %v", got)
+	}
+	g.Typed[2].Asked = false
+	got := strings.Join(l94Stops(g), "\n")
+	if !strings.Contains(got, "run unasked") || !strings.Contains(got, "did not reconnect") {
+		t.Errorf("c5: %q", got)
+	}
+	g.UpAt = time.Time{}
+	if got := strings.Join(l94Stops(g), "\n"); !strings.Contains(got, "did not come back") {
+		t.Errorf("c5 no restart: %q", got)
+	}
+}
+
+// Junos asks about no command (decision 21): no "never asked" stop, and the
+// denied command is the policy's business at login, not this cell's.
+func TestL94JunosIsNotGradedOnAsking(t *testing.T) {
+	p, _ := l94PlatformFor("vjunos26")
+	g := l94Grade{Arm: "fixed", Cell: "c1", Platform: "juniper_junos", P: p, Conns: 1, MostOpen: 1,
+		Typed: []l80Typed{{Command: "show version | no-more"}, {Command: "show system users"}}}
+	if got := l94Stops(g); len(got) != 0 {
+		t.Errorf("junos c1: %v", got)
+	}
+	g.Typed[0].Err = true
+	if got := l94Stops(g); len(got) != 1 {
+		t.Errorf("a lost prompt on Junos: %v", got)
+	}
+}
+
+func TestL94DelayConfigSetsBothKnobs(t *testing.T) {
+	in := "listen: 0.0.0.0:49\nlimits:\n    idle_timeout: 5m\n    auth_failure_delay_max: 9s\n"
+	out, err := l94DelayConfig(in, l94Delay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Listen string            `yaml:"listen"`
+		Limits map[string]string `yaml:"limits"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen != "0.0.0.0:49" || cfg.Limits["idle_timeout"] != "5m" || cfg.Limits["auth_failure_delay_base"] != "2s" || cfg.Limits["auth_failure_delay_max"] != "2s" {
+		t.Errorf("config %+v", cfg)
+	}
+	out, err = l94DelayConfig("listen: x\n", l94Delay)
+	if err != nil || !strings.Contains(out, "auth_failure_delay_base: 2s") {
+		t.Errorf("no limits block: %q %v", out, err)
+	}
+	if _, err := l94DelayConfig("- a\n", l94Delay); err == nil {
+		t.Error("a list is no config")
+	}
+}
+
+// c4's build carries the hold tag and no other cell's does.
+func TestL94BuildTags(t *testing.T) {
+	out := "port49d: go1.26.0\n\tpath\tgithub.com/blanketfish/port49/cmd/port49d\n\tbuild\t-tags=port49_lab_acct_hold\n\tbuild\tvcs.revision=abc\n"
+	if got := parseBuildTags(out); got != l94HoldTag {
+		t.Fatalf("tags %q", got)
+	}
+	if parseBuildTags("\tbuild\tvcs.revision=abc\n") != "" {
+		t.Error("no -tags line")
+	}
+	if l94TagCheck("c4", l94HoldTag) != nil || l94TagCheck("c1", "") != nil || l94TagCheck("c1", "hwkey_dlopen") != nil {
+		t.Error("the right builds were refused")
+	}
+	if l94TagCheck("c4", "") == nil || l94TagCheck("c2", "x,"+l94HoldTag) == nil {
+		t.Error("the wrong builds were accepted")
+	}
+}
+
+// L94's arms are checked against decision 59's commit, not L80's.
+func TestL94ArmCheckNamesItsFix(t *testing.T) {
+	err := armCheckFor("baseline", buildVCS{Revision: "1111"}, "2222", l94FixCommit, func(string) (bool, error) { return true, nil })
+	if err == nil || !strings.Contains(err.Error(), l94FixCommit) {
+		t.Errorf("baseline holding the fix: %v", err)
+	}
+	if err := armCheckFor("baseline", buildVCS{Revision: "1111"}, "2222", l94FixCommit, func(string) (bool, error) { return false, nil }); err != nil {
+		t.Errorf("a clean baseline: %v", err)
+	}
+}
+
+func TestL94SuspectLinesAreCounted(t *testing.T) {
+	kept := "Nov 12 tacacs: server 10.0.0.1 marked dead\nNov 12 tacacs: request sent\nNov 12 tls: SSL read error\nNov 12 aaa: unexpected seq_no 4\n"
+	if got := l94Suspect(kept); got != 3 {
+		t.Errorf("suspect lines %d, want 3", got)
+	}
+}
