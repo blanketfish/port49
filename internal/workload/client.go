@@ -597,8 +597,9 @@ func unminted(err error, devices []string) error {
 // do sends one request, and again under the same key while the broker
 // cannot answer now: a 503 (but an uncovered certificate status), a 502, a
 // 504, a 429, a 409 idempotency_in_progress after its Retry-After (5s when
-// absent, 60s at most), a failed connection after 1s doubling to 30s (the
-// computed waits jittered by 20%); until deadline. Any other answer is final,
+// absent, 60s at most), a failed connection after 1s doubling to 30s; until
+// deadline. Every wait is jittered: below the 1m cap by 20% either way, then
+// capped at 1m; a Retry-After at or above the cap is spread over 48s to 60s. Any other answer is final,
 // as is a TLS verification failure either way (TLSError).
 func (c *Client) do(ctx context.Context, deadline time.Time, method, path string, body []byte, key string, out any) error {
 	wait := time.Second
@@ -700,7 +701,16 @@ func retriable(status int, e api.Error) bool {
 
 func retryAfter(h http.Header) time.Duration {
 	if s, err := strconv.Atoi(h.Get("Retry-After")); err == nil && s > 0 {
-		return min(time.Duration(s)*time.Second, time.Minute)
+		// Spread the broker's figure too: a fleet refused together by one
+		// blip would otherwise retry in step. The cap holds after the spread.
+		d := time.Duration(s) * time.Second
+		if d >= time.Minute {
+			// At the cap, spread downward only (uniform in 0.8x to 1x): the
+			// plus side would clamp, and half the fleet would land on 60s.
+			j := jitter(time.Minute)
+			return time.Minute - max(j-time.Minute, time.Minute-j)
+		}
+		return min(jitter(d), time.Minute)
 	}
 	return jitter(5 * time.Second)
 }
