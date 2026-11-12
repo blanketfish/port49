@@ -423,7 +423,7 @@ minutes, and `port49_token_minted_ahead_total` rising; the ticket
 
 **It means:** the broker that minted the token has a clock `N` ahead of this port49d's. A token's
 expiry is the broker's clock plus the TTL, read on port49d's clock, so every token from that broker
-lives `N` longer here, until its lease reclaims it: at most `lease_grace` (5 minutes) plus a minute past
+lives `N` longer here, until its lease reclaims it: at most `lease_grace` (5 minutes) plus two minutes past
 `token_ttl`. The other direction does not show: a broker `N` behind shortens each token by
 `N`, and past a `token_ttl` its tokens are dead on arrival, so every login with one fails
 `token_not_found` with no other sign. If logins from one broker fail `token_not_found` right after the
