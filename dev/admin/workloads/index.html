@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://blanketfish.github.io/port49/latest/admin/workloads/">
       
       
-        <link rel="prev" href="../identity-providers/">
+        <link rel="prev" href="../directory/">
       
       
-        <link rel="next" href="../inventory/">
+        <link rel="next" href="../workloads-oxidized/">
       
       
         
@@ -81,17 +81,16 @@
     </div>
     <div data-md-component="announce">
       
-        <aside class="md-banner">
-          <div class="md-banner__inner md-grid md-typeset">
-            
-            This site describes port49 as it is on main, not a release.
-          </div>
-          
-        </aside>
-      
     </div>
     
       <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              This is not the latest release's documentation. <a href="../../.."><strong>Go to the latest.</strong></a>
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL("../.."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
         
       </div>
     
@@ -492,19 +491,7 @@
     
       
         
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
+          
         
       
         
@@ -529,71 +516,8 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Operate
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Operate
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    
-    
-      
-        
-          
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-    
-    
-    
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
-        
-          
           <div class="md-nav__link md-nav__container">
-            <a href="../../operate/install/" class="md-nav__link ">
+            <a href="../../operate/deploy/" class="md-nav__link ">
               
   
   
@@ -611,14 +535,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_1">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -636,9 +560,30 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../operate/install/systemd/" class="md-nav__link">
+    
+    
+      
         
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -652,11 +597,19 @@
   
   
 
-      </a>
-    </li>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    systemd
   
 
-              
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -665,14 +618,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/container/" class="md-nav__link">
+      <a href="../../operate/systemd/install/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Containers
+    Install
   
 
     
@@ -693,14 +646,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/helm/" class="md-nav__link">
+      <a href="../../operate/systemd/upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Helm
+    Upgrade
   
 
     
@@ -721,14 +674,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/clients/" class="md-nav__link">
+      <a href="../../operate/systemd/troubleshoot/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Clients
+    Troubleshoot
   
 
     
@@ -756,15 +709,74 @@
   
   
   
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Containers
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
     <li class="md-nav__item">
-      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+      <a href="../../operate/containers/trial/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Broker and agent
+    Try it
   
 
     
@@ -785,14 +797,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/login/" class="md-nav__link">
+      <a href="../../operate/containers/install/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Signing in
+    Install
   
 
     
@@ -813,14 +825,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/hardware-keys/" class="md-nav__link">
+      <a href="../../operate/containers/upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Hardware keys
+    Upgrade
   
 
     
@@ -833,6 +845,305 @@
   
 
               
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/containers/troubleshoot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshoot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Helm
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/upgrade/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/troubleshoot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshoot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/velero/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Back up with Velero
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -876,7 +1187,7 @@
   <span class="md-ellipsis">
     
   
-    TLS
+    TLS (RFC 9887)
   
 
     
@@ -988,7 +1299,7 @@
   <span class="md-ellipsis">
     
   
-    Versions
+    Versions and upgrades
   
 
     
@@ -1003,7 +1314,16 @@
               
             
               
-                
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
   
   
   
@@ -1019,28 +1339,35 @@
       
         
       
+        
+      
+        
+      
     
     
     
       
+        
+        
+      
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+            <a href="../../use/" class="md-nav__link ">
               
   
   
   <span class="md-ellipsis">
     
   
-    Troubleshooting
+    Sign in
   
 
     
@@ -1051,18 +1378,18 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_11">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
-    Troubleshooting
+    Sign in
   
 
           </label>
@@ -1077,14 +1404,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+      <a href="../../use/install-client/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Failure matrix
+    Install the client
   
 
     
@@ -1105,14 +1432,70 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+      <a href="../../use/login/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    When it will not start
+    Log in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/connect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connect to a device
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
   
 
     
@@ -1132,14 +1515,6 @@
     </li>
   
 
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
     
       
       
@@ -1151,6 +1526,10 @@
   
     
     
+      
+        
+          
+        
       
         
       
@@ -1181,11 +1560,12 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
-            
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
@@ -1199,15 +1579,82 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
     Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_2" id="__nav_6_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sign-in backends
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Sign-in backends
   
 
           </label>
@@ -1220,14 +1667,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../policy/" class="md-nav__link">
+      <a href="../sign-in/oidc/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Policy
+    OIDC
   
 
     
@@ -1248,14 +1695,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../roles-and-grants/" class="md-nav__link">
+      <a href="../sign-in/x509/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Roles and grants
+    Client certificates (x509)
   
 
     
@@ -1276,14 +1723,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../key-rotation/" class="md-nav__link">
+      <a href="../sign-in/directory-password/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Key rotation
+    Directory password
   
 
     
@@ -1304,14 +1751,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../revocation/" class="md-nav__link">
+      <a href="../directory/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Revocation
+    The directory (LDAP)
   
 
     
@@ -1325,21 +1772,52 @@
 
               
             
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
               
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../identity-providers/" class="md-nav__link">
+  
+    
+    
+      
         
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6_3" id="__nav_6_3_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
     
   
-    Identity providers
+    Workloads
   
 
     
@@ -1347,11 +1825,19 @@
   
   
 
-      </a>
-    </li>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workloads
   
 
-              
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -1454,21 +1940,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#what-it-costs" class="md-nav__link">
+  <a href="#who-can-write-the-attribute" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What it costs
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#whoever-writes-attribute-chooses-the-groups" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Whoever writes attribute chooses the groups
+        Who can write the attribute
       
     </span>
   </a>
@@ -1491,229 +1966,73 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#the-guides-in-full" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The guides in full
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#1-what-runs-where" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. What runs where
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#2-enrollment-once" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Enrollment, once
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-the-workload-ca-is-the-trust-root" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. The workload CA is the trust root
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-renewal" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. Renewal
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-the-broker" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. The broker
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5a-what-port49-policy-test-says-about-this-snippet" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5a. What port49 policy test says about this snippet
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-check-before-cron" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        6. Check before cron
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-under-cron" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        7. Under cron
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7a-host-keys" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        7a. Host keys
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-on-a-bad-day" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        8. On a bad day
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#9-what-l49-measured-and-what-it-did-not" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        9. What L49 measured, and what it did not
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#1-what-it-is" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. What it is
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#2-the-cluster" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. The cluster
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-the-broker" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. The broker
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-the-workload" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. The workload
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-the-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. The policy
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-3am" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        6. 3am
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-stopping-a-workload" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        7. Stopping a workload
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-what-is-not-measured" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        8. What is not measured
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads-oxidized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Oxidized and step-ca
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads-kubernetes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes service accounts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
       
     </li>
   
@@ -1735,6 +2054,329 @@
     
   
     Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_5" id="__nav_6_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Policy
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rules and scopes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roles-and-grants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roles and grants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reviewing a change
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../platform-sets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform sets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../admin-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../revocation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Revoking access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../key-rotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Key rotation
   
 
     
@@ -1785,7 +2427,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_9" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1807,14 +2449,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_6_9" id="__nav_6_9_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_8">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2050,6 +2692,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -2063,17 +2709,17 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
     
   
-    AI agents
+    Automation
   
 
     
@@ -2084,16 +2730,72 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
   
-    AI agents
+    Automation
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automation/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automation/ansible/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible collection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2109,7 +2811,7 @@
   <span class="md-ellipsis">
     
   
-    Quick start
+    AI agents quick start
   
 
     
@@ -2137,7 +2839,7 @@
   <span class="md-ellipsis">
     
   
-    Setup runbook
+    AI agents setup runbook
   
 
     
@@ -2187,6 +2889,14 @@
       
         
       
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -2200,10 +2910,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
             
   
   
@@ -2221,8 +2931,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2231,6 +2941,118 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/requirements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/client-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/health-checks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Health checks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2536,6 +3358,8 @@
       
         
       
+        
+      
     
     
     
@@ -2549,7 +3373,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -2571,14 +3395,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_7">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2633,6 +3457,34 @@
     
   
     Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/deployment-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment design
   
 
     
@@ -2714,21 +3566,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#what-it-costs" class="md-nav__link">
+  <a href="#who-can-write-the-attribute" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What it costs
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#whoever-writes-attribute-chooses-the-groups" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Whoever writes attribute chooses the groups
+        Who can write the attribute
       
     </span>
   </a>
@@ -2745,226 +3586,6 @@
     <span class="md-ellipsis">
       
         Kubernetes service accounts
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-guides-in-full" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The guides in full
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#1-what-runs-where" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. What runs where
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#2-enrollment-once" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Enrollment, once
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-the-workload-ca-is-the-trust-root" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. The workload CA is the trust root
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-renewal" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. Renewal
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-the-broker" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. The broker
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5a-what-port49-policy-test-says-about-this-snippet" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5a. What port49 policy test says about this snippet
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-check-before-cron" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        6. Check before cron
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-under-cron" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        7. Under cron
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7a-host-keys" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        7a. Host keys
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-on-a-bad-day" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        8. On a bad day
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#9-what-l49-measured-and-what-it-did-not" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        9. What L49 measured, and what it did not
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#1-what-it-is" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. What it is
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#2-the-cluster" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. The cluster
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-the-broker" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. The broker
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-the-workload" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. The workload
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-the-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. The policy
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-3am" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        6. 3am
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-stopping-a-workload" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        7. Stopping a workload
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-what-is-not-measured" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        8. What is not measured
       
     </span>
   </a>
@@ -2993,8 +3614,7 @@
 
 <h1 id="workloads">Workloads<a class="headerlink" href="#workloads" title="Permanent link">&para;</a></h1>
 <p>A workload is a program that logs in to devices without a person: a configuration backup, a compliance check, a
-deployment job. It needs an identity of its own so that its access is granted, logged and revoked on its own, not
-borrowed from a person's. port49 knows two kinds:</p>
+deployment job. It has an identity of its own, so its access is granted, logged and revoked apart from any person's.</p>
 <table>
 <thead>
 <tr>
@@ -3002,6 +3622,7 @@ borrowed from a person's. port49 knows two kinds:</p>
 <th>Proof</th>
 <th>Principal</th>
 <th>Use it when</th>
+<th>Guide</th>
 </tr>
 </thead>
 <tbody>
@@ -3010,91 +3631,39 @@ borrowed from a person's. port49 knows two kinds:</p>
 <td>an x509 certificate with a SPIFFE ID in a URI SAN, from a CA you run</td>
 <td><code>spiffe://&lt;trust domain&gt;/&lt;path&gt;</code></td>
 <td>the job runs on a host you manage, such as a cron job or a backup server</td>
+<td><a href="../workloads-oxidized/">Oxidized and step-ca</a></td>
 </tr>
 <tr>
 <td>A <strong>Kubernetes service account token</strong></td>
 <td>the pod's projected token, checked against the cluster's published keys</td>
 <td><code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code></td>
 <td>the job runs in a cluster, and you want no CA and no secret at rest</td>
+<td><a href="../workloads-kubernetes/">Kubernetes service accounts</a></td>
 </tr>
 </tbody>
 </table>
-<p>Either is a peer of the other, and neither is required. The concepts are on <a href="../../concepts/identities/">Identities</a>
-and <a href="../../concepts/trust-domains/">Trust domains</a>; how a workload becomes a subject, and why it gets its own
-device login, is on <a href="../roles-and-grants/#machine_group">Roles and grants</a>.</p>
-<p>The workload anchor and the people's anchor must be in <strong>unrelated</strong> hierarchies, so that nothing a workload CA signs
-can be read as a person.</p>
+<p>Neither is required. The concepts are on <a href="../../concepts/identities/">Identities</a> and
+<a href="../../concepts/trust-domains/">Trust domains</a>. How a workload becomes a subject, and why it gets its own device login,
+is on <a href="../roles-and-grants/#machine_group">Roles and grants</a>. The workload anchor and the people's anchor must be in
+unrelated hierarchies, so that nothing a workload CA signs can be read as a person.</p>
 <h2 id="workload-certificates-and-step-ca">Workload certificates and step-ca<a class="headerlink" href="#workload-certificates-and-step-ca" title="Permanent link">&para;</a></h2>
-<p>The worked example is Oxidized, the configuration backup tool, with <a href="https://smallstep.com/docs/step-ca">step-ca</a>
-as the workload CA. The same shape fits any job on a host: the host holds a certificate valid for a few hours, a
-renewal timer replaces it, and the broker verifies it against the CA you name.</p>
-<p>Four rules carry the design:</p>
-<ol>
-<li><strong>The workload CA is the trust root, and it is yours.</strong> The broker's <code>broker.identity.machines</code> entry names the
-   CA's certificate (<code>trust_anchor_file</code>) and the SPIFFE trust domains it may speak for (<code>spiffe_trust_domains</code>).
-   Anyone who can get that CA to sign a certificate with a SPIFFE ID inside those domains is that workload.</li>
-<li><strong>Give each host its own provisioner</strong>, with the SPIFFE ID fixed in the provisioner's template (<code>uris</code>), so a
-   host can only ever obtain its own name. A shared provisioner lets any enrolled host ask for another's.</li>
-<li>
-<p><strong>The certificate must name the CA's CRL.</strong> port49 applies step-ca's CRL, which carries a critical issuing
-   distribution point, only to a certificate whose CRL distribution points name it exactly. A certificate without
-   that name is undecided, and the broker refuses it with <strong>503 <code>certificate_status_unavailable</code></strong> (under
-   <code>broker.certificate_status.on_unavailable: refuse</code>, the default; <code>allow</code> would admit it and say so).</p>
-<p>The template below adds the extension. Replace its URL with the name your CA's CRL carries (<code>crl.idpURL</code>
-when set, otherwise <code>https://&lt;the first of ca.json's dnsNames&gt;/1.0/crl</code>) and check it with
-<code>step crl inspect</code>. This was measured on step-ca (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md">L48</a>).</p>
-</li>
-<li>
-<p><strong>For an immediate stop, use <code>port49 revoke</code></strong> (<a href="../revocation/">Revocation</a>) rather than waiting for the CA's CRL
-   to be republished and read.</p>
-</li>
-</ol>
-<p>The provisioner's template, <code>step-ca-workload.tpl</code>, is step's default leaf with <code>clientAuth</code> alone and the one
-addition:</p>
-<div class="highlight"><pre><span></span><code>{{- /*
-  step-ca x509 template for workload certificates (the provisioner's
-  options.x509.templateFile). It is step's default leaf, with clientAuth alone
-  and one addition: a CRL distribution point naming the CA's CRL.
-
-  step-ca's CRL names its own distribution point in a critical issuing
-  distribution point extension, and port49 applies that CRL only to a
-  certificate whose CRL distribution points name it, byte for byte (RFC 5280
-  §5.2.5; L48). A certificate without the name is undecided, and the broker
-  refuses it (503 certificate_status_unavailable).
-
-  Replace the URL below with the name in your CA's CRL: crl.idpURL when it is
-  set, otherwise https://&lt;the first of ca.json's dnsNames&gt;/1.0/crl. Check it
-  with `step crl inspect` (Issuing Distribution Point, Full Name).
-*/ -}}
-{
-    "subject": {{ toJson .Subject }},
-    "sans": {{ toJson .SANs }},
-{{- if typeIs "*rsa.PublicKey" .Insecure.CR.PublicKey }}
-    "keyUsage": ["keyEncipherment", "digitalSignature"],
-{{- else }}
-    "keyUsage": ["digitalSignature"],
-{{- end }}
-    "extKeyUsage": ["clientAuth"],
-    "crlDistributionPoints": ["https://ca.corp.example.com/1.0/crl"]
-}
-</code></pre></div>
-<p>The broker side is the verifier below; its keys are in the
-<a href="../../reference/config/port49d/">port49d reference</a>. Nothing about the broker's TLS is special: workloads reach it
-over the same listener as everyone (<a href="../../operate/tls/">TLS</a>).</p>
-<div class="highlight"><pre><span></span><code><span class="nt">broker</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">identity</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">machines</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">x509</span>
-<span class="w">        </span><span class="nt">trust_anchor_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/workload-ca.pem</span>
-<span class="w">        </span><span class="nt">spiffe_trust_domains</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"example.com"</span><span class="p p-Indicator">]</span>
-</code></pre></div>
-<p>Enrolling, renewing, the broker policy snippet, what <code>port49 policy test</code> says about it and what to do on a bad
-day are in the Oxidized guide at the end of this page. Its section 7a covers host keys: they are OpenSSH's job, and
-the guide uses <code>accept-new</code> and <code>known_hosts</code>.</p>
+<p>The host holds a certificate valid for a few hours, a renewal timer replaces it, and the broker verifies it against the
+CA you name in <code>broker.identity.machines</code> (<a href="../../reference/config/port49d/">port49d reference</a>). The
+<a href="../workloads-oxidized/">Oxidized guide</a> uses <a href="https://smallstep.com/docs/step-ca">step-ca</a> and has the provisioner's
+<code>step-ca-workload.tpl</code>, the broker's verifier, enrolling, renewing and the bad-day table. Give each host its own
+provisioner, with the SPIFFE ID fixed in its template, so a host can only obtain its own name. For an immediate stop,
+use <code>port49 revoke</code> (<a href="../revocation/">Revocation</a>) instead of waiting for the CA's CRL.</p>
+<div class="admonition warning">
+<p class="admonition-title">The certificate must name the CA's CRL</p>
+<p>A certificate whose CRL distribution points do not name step-ca's CRL is refused
+<code>certificate_status_unavailable</code> (503) under the default <code>on_unavailable: refuse</code>; the guide's template adds the
+extension (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md">L48</a>).</p>
+</div>
 <h2 id="the-workload-directory">The workload directory<a class="headerlink" href="#the-workload-directory" title="Permanent link">&para;</a></h2>
-<p>By default a workload's groups come only from the policy: a subject names the SPIFFE ID in <code>identity:</code> and the
-grant follows. At fleet scale you may want the other thing, a <strong>directory group of workloads</strong>, so that adding a host
-to <code>cn=ci-runners</code> grants it what the group has, with no policy edit. That is the <code>machine_group:</code> subject:</p>
+<p>By default a workload's groups come only from the policy: a subject names the SPIFFE ID in <code>identity:</code>. At fleet
+scale you can use a directory group instead, so that adding a host to <code>cn=ci-runners</code> grants it what the group has,
+with no policy edit. That is the <code>machine_group:</code> subject. It matches workloads only, takes no <code>username:</code> (the name
+comes from the entry) and never sits beside <code>group:</code> or <code>identity:</code> in one subject.</p>
 <div class="highlight"><pre><span></span><code><span class="nt">subjects</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ci_runners</span>
 <span class="w">    </span><span class="nt">machine_group</span><span class="p">:</span><span class="w"> </span><span class="s">"cn=ci-runners,ou=groups,dc=example,dc=com"</span>
@@ -3102,15 +3671,12 @@ to <code>cn=ci-runners</code> grants it what the group has, with no policy edit.
 <span class="w">    </span><span class="nt">identity</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"spiffe://example.com/host/backup-01"</span><span class="p p-Indicator">]</span>
 <span class="w">    </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">svc-backup</span>
 </code></pre></div>
-<p>A <code>machine_group:</code> subject matches workloads only. It takes no <code>username:</code> (the name comes from the entry), and it
-never sits beside <code>group:</code> or <code>identity:</code> in one subject. <code>port49 policy test</code> says so when you write one (output
-re-run for the policy above, with a third subject, <code>svc_mapped</code>, that names a SPIFFE ID and no username):</p>
-<div class="highlight"><pre><span></span><code>report: group_subject: subject "ci_runners" is a machine_group: subject: it mints only with broker.identity.machines[].directory configured (a workload certificate's directory mapping), through which the broker matches a workload to the group; explain and policy tests evaluate it by name
-report: workload_no_username: subject "svc_mapped" declares no username: it mints only under broker.identity.machines[].directory, where its entry's username_attribute names it
-</code></pre></div>
+<p><code>port49 policy test</code> reports <code>group_subject</code> for the first and <code>workload_no_username</code> for a subject with no
+<code>username</code>, which then mints only under <code>broker.identity.machines[].directory</code>
+(<a href="../roles-and-grants/#machine_group">Roles and grants</a>).</p>
 <h3 id="opting-in">Opting in<a class="headerlink" href="#opting-in" title="Permanent link">&para;</a></h3>
-<p>The broker finds a workload's entry through a <code>directory:</code> block on the machine verifier. It is off until you write
-it, and all four keys are required:</p>
+<p>The broker finds a workload's entry through a <code>directory:</code> block on the machine verifier. It is off until you write it,
+and all four keys are required:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">broker</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">identity</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">machines</span><span class="p">:</span>
@@ -3125,22 +3691,16 @@ it, and all four keys are required:</p>
 </code></pre></div>
 <ul>
 <li><code>kind: spiffe_id</code> is the only kind. The entry holds the workload's SPIFFE ID in <code>attribute</code>.</li>
-<li><code>attribute</code> has <strong>no default</strong>, and it must not be the attribute <code>broker.directory</code> uses for <code>username_attribute</code> or
-  <code>principal_attribute</code>: the config refuses it. Use <code>uid</code> or <code>description</code>. <strong>Never <code>wWWHomePage</code> or <code>url</code> on Active
-  Directory:</strong> the entry itself can write those whatever the OU's ACL says, so a workload could put another
-  workload's SPIFFE ID on itself. This was measured on a service account's entry
-  (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L50-windows_ad.md">L50</a>), and port49d says it at
-  start if you choose one of them.</li>
-<li><code>allow_weak: true</code> acknowledges what the mapping is: a SPIFFE ID is matched by a lookup, not a signature, so it is
-  only as strong as who can write <code>attribute</code>. It is required, with <code>issuers</code>, the RFC 4514 DNs of the CAs whose
-  certificates this mapping accepts.</li>
+<li><code>attribute</code> has <strong>no default</strong>, and the config refuses the attribute <code>broker.directory</code> uses for <code>username_attribute</code>
+  or <code>principal_attribute</code>. Use <code>uid</code> or <code>description</code>. <strong>Never <code>wWWHomePage</code> or <code>url</code> on Active Directory:</strong> the
+  entry itself can write those whatever the OU's ACL says, so a workload could put another workload's SPIFFE ID on
+  itself (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L50-windows_ad.md">L50</a>). port49d says so
+  at start if you choose one.</li>
+<li><code>allow_weak: true</code> acknowledges that a SPIFFE ID is matched by a lookup, not a signature, so the mapping is only as
+  strong as who can write <code>attribute</code>. <code>issuers</code> are the RFC 4514 DNs of the CAs whose certificates it accepts.</li>
 </ul>
-<h3 id="what-it-costs">What it costs<a class="headerlink" href="#what-it-costs" title="Permanent link">&para;</a></h3>
 <p><strong>Every workload this verifier accepts then needs exactly one entry</strong>, those whose subject names them in <code>identity:</code>
-included. port49d prints it at start:</p>
-<div class="highlight"><pre><span></span><code>directory: workload certificates map by spiffe_id (weak, pinned to &lt;issuers&gt;) through &lt;attribute&gt; under &lt;filter&gt;; every workload this verifier accepts must have exactly one entry holding its SPIFFE ID: none is refused identity_unmapped, two or more identity_ambiguous, and while the directory is down past grace it is refused directory_unavailable
-</code></pre></div>
-<p>(Shortened here: the line goes on to name where the username comes from.) In the operator's terms:</p>
+included. port49d prints the rule at start.</p>
 <table>
 <thead>
 <tr>
@@ -3172,495 +3732,32 @@ included. port49d prints it at start:</p>
 </tr>
 </tbody>
 </table>
-<p>Keep pre-warm on, since it is what lets a mapped workload mint through a short directory outage. A workload whose
-entry changed identity (a host rebuilt with a new directory entry, say) is released from its pin with
-<code>port49 directory forget spiffe://example.com/host/backup-01</code>. It is run through your agent and needs the
-<code>forget_principals</code> right and a press of your security key.</p>
-<p>The workload's login name comes from the subject that lists its SPIFFE ID (<code>username:</code>), else from the entry's
-<code>username_attribute</code>. The entry needs a unique canonical one either way.</p>
-<h3 id="whoever-writes-attribute-chooses-the-groups">Whoever writes <code>attribute</code> chooses the groups<a class="headerlink" href="#whoever-writes-attribute-chooses-the-groups" title="Permanent link">&para;</a></h3>
-<p>Anyone who can write <code>attribute</code> on an entry decides which workload takes that entry's group memberships. So it must
-be writable <strong>only by directory administrators</strong>, and you should alert on writes to it: Windows event 5136 or 4662,
-and on Samba <code>dsdb_json_audit</code> at level 5. port49 prescribes no deny ACL; the measured behaviour is in the
+<p>Keep pre-warm on: it lets a mapped workload mint through a short directory outage. A workload whose entry changed
+identity (a host rebuilt with a new directory entry) is released from its pin with
+<code>port49 directory forget spiffe://example.com/host/backup-01</code>, run through your agent. It needs the <code>forget_principals</code>
+right and a press of your security key. The login name comes from the subject's <code>username:</code>, else from the entry's
+<code>username_attribute</code>; the entry needs a unique canonical one either way.</p>
+<h3 id="who-can-write-the-attribute">Who can write the attribute<a class="headerlink" href="#who-can-write-the-attribute" title="Permanent link">&para;</a></h3>
+<p>Whoever can write <code>attribute</code> on an entry decides which workload takes that entry's group memberships. Make it writable
+<strong>only by directory administrators</strong> and alert on writes to it: Windows event 5136 or 4662, and on Samba
+<code>dsdb_json_audit</code> at level 5. port49 prescribes no deny ACL; the measured behavior is in the
 <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L50-samba_ad.md">L50 note for Samba</a>.</p>
-<p><strong>A person's entry is never a workload.</strong> An entry that holds a SPIFFE ID in <code>attribute</code> is refused as a person, and
-the reverse.</p>
-<p>There is one window. Writing a SPIFFE ID onto a person's entry takes effect at the next directory refresh, whereas
-<code>port49 revoke --principal user:&lt;email&gt;</code> is immediate, so until the refresh the entry could serve both domains.
-Only a directory administrator can open that window, and that is the same person who could add the user to any
-group. If it happens, revoke the person, then fix the entry (<a href="../revocation/">Revocation</a>).</p>
-<p>The directory itself is configured under <code>broker.directory</code>; see
-<a href="../identity-providers/#the-directory">Identity providers</a>.</p>
+<p><strong>A person's entry is never a workload.</strong> An entry that holds a SPIFFE ID in <code>attribute</code> is refused as a person, and the
+reverse. One window remains: a SPIFFE ID written onto a person's entry takes effect at the next directory refresh,
+while <code>port49 revoke --principal user:&lt;email&gt;</code> is immediate, so until then the entry could serve both domains. Only a
+directory administrator can open it, the same person who could add the user to any group. If it happens, revoke the
+person, then fix the entry (<a href="../revocation/">Revocation</a>).</p>
+<p>The directory itself is configured under <code>broker.directory</code>; see <a href="../directory/">The directory</a>.</p>
 <h2 id="kubernetes-service-accounts">Kubernetes service accounts<a class="headerlink" href="#kubernetes-service-accounts" title="Permanent link">&para;</a></h2>
-<p>Nothing here makes a cluster necessary or preferred: it is the path for a job that already runs in one. The pod's
-projected token is the identity, with no CA to run and no secret at rest. The kubelet writes and rotates the token,
-and the broker verifies it against the cluster's published keys.</p>
+<p>The pod's projected token is the identity, with no CA to run and no secret at rest. The kubelet writes and rotates the
+token, and the broker verifies it against the cluster's published keys. The steps are in the
+<a href="../workloads-kubernetes/">Kubernetes guide</a>.</p>
 <div class="admonition warning">
 <p class="admonition-title">Unmeasured</p>
 <p>Managed Kubernetes services (GKE, EKS, AKS) are unmeasured: whether their token issuers, discovery and key
-endpoints behave as the kind cluster did is unknown until they are measured (lab register entry <a href="../../reference/lab-register/#l70">L70</a>, open).
-The Kubernetes guide below is measured on kind only; read each claim for the cell that backs it.</p>
+endpoints behave as the kind cluster did is unknown until they are measured (lab register entry
+<a href="../../reference/lab-register/#l70">L70</a>, open). The Kubernetes guide is measured on kind only.</p>
 </div>
-<h2 id="the-guides-in-full">The guides in full<a class="headerlink" href="#the-guides-in-full" title="Permanent link">&para;</a></h2>
-<p>Everything from here to the end of the page is two example READMEs verbatim, the Oxidized one first and the
-Kubernetes one after it. Each numbers its own sections from 1, so the second "1." below is the Kubernetes guide's
-"What it is". Section headings of the Oxidized guide run from "What runs where" to "What <a href="../../reference/lab-register/#l49">L49</a> measured, and what it
-did not".</p>
-<p>Oxidized backs up network devices over SSH with a username and password. port49 gives it a
-short-lived token per device as that password, so no standing credential exists on the Oxidized
-host. Three files fit together:</p>
-<ul>
-<li><code>port49-oxidized-run</code> runs <code>port49 workload token</code>, writes Oxidized's <code>router.db</code>, and asks
-  Oxidized to back each node up now.</li>
-<li><code>config</code> is Oxidized's configuration. It reads <code>router.db</code>, and its own interval is set a week
-  out so that its schedule tries as few nodes as possible with an expired token. A try with a
-  spent token cost one authentication, refused <code>token_spent</code>, on each of the five platforms (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l49">L49</a>,
-  phase B); how often Oxidized's own schedule still tries is not measured.</li>
-<li><code>policy.yaml</code> is the port49 policy: a <code>config_backup</code> role that confines the Oxidized host to
-  <code>show</code> commands where port49 authorizes commands (see §5a).</li>
-</ul>
-<h2 id="1-what-runs-where">1. What runs where<a class="headerlink" href="#1-what-runs-where" title="Permanent link">&para;</a></h2>
-<p>Oxidized and <code>port49-oxidized-run</code> run on one host, under one user. The workload certificate and
-its key are that user's files. Cron runs the wrapper once per backup window:</p>
-<div class="highlight"><pre><span></span><code>17 2 * * *  PORT49_BROKER=https://port49-broker.example.com:8443 PORT49_BROKER_CA=... \
-            PORT49_CERT=... PORT49_KEY=... /usr/local/bin/port49-oxidized-run
-</code></pre></div>
-<p>The wrapper's environment is documented at the top of the script. <code>OXIDIZED_NODES</code> is a file of
-device names, one a line. <code>PORT49_SCOPE</code> names a policy scope in its place: the wrapper then asks
-port49 for every device the scope selects that this host holds a grant on, page by page, and
-reads no nodes file (policy engine spec §13 decision 42). A scope that selects nothing for this
-host, and a scope name that does not exist, both exit 77 with one message. <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l49">L49</a> ran with a nodes
-file; a sweep was not part of it.</p>
-<h2 id="2-enrollment-once">2. Enrollment, once<a class="headerlink" href="#2-enrollment-once" title="Permanent link">&para;</a></h2>
-<p>Get a certificate whose one URI SAN is the host's SPIFFE ID (for example
-<code>spiffe://corp.example.com/host/oxidized-01</code>) from your workload CA. step-ca 0.30.2 is one such
-CA: a certificate requested with <code>--san spiffe://…</code> carries that ID as its one URI SAN, and a
-renewal keeps the ID and the key (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l48">L48</a>, cells 1 and 2). Any CA that puts one URI SAN on a client
-certificate works. Its key is readable by the Oxidized user alone. On step-ca, issue it under
-<code>step-ca-workload.tpl</code> (§3 and §5).</p>
-<h2 id="3-the-workload-ca-is-the-trust-root">3. The workload CA is the trust root<a class="headerlink" href="#3-the-workload-ca-is-the-trust-root" title="Permanent link">&para;</a></h2>
-<p>Whoever can get the workload CA to issue a certificate naming a SPIFFE ID <em>is</em> that workload to
-port49. <code>spiffe_trust_domains</code> does not stop one workload impersonating another within a domain.
-Restrict each provisioner to the host's own ID. On step-ca 0.30.2 a name policy cannot do it
-(<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l48">L48</a>, cell 6):</p>
-<ul>
-<li>an x509 <code>allow</code> on a URI in the provisioner's <code>options</code> was ignored: another trust domain's ID
-  was issued as asked;</li>
-<li>the authority's x509 <code>allow</code> takes a URI domain, not an ID: given the full SPIFFE ID, step-ca
-  refused to start ("contains scheme (not supported yet)").</li>
-</ul>
-<p>What does pin it is a provisioner x509 template with the ID fixed in <code>uris</code> in place of the
-requested <code>sans</code>. It does not refuse another request: it issues the pinned ID instead. So give
-each host its own provisioner, whose copy of <code>step-ca-workload.tpl</code> replaces the <code>sans</code> line with
-<code>"uris": ["spiffe://corp.example.com/host/oxidized-01"]</code>, and keep the provisioner's credential
-the host's alone. <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l48">L48</a> measured the fixed <code>uris</code> in a template without the CRL distribution point;
-the two in one template are not measured.</p>
-<h2 id="4-renewal">4. Renewal<a class="headerlink" href="#4-renewal" title="Permanent link">&para;</a></h2>
-<p>Renewal is your CA's renewer's job (step's <code>step ca renew --daemon</code>, or its systemd timer;
-<code>step ca renew --daemon</code> renewed a 15m certificate at 0.66 of its lifetime, <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l48">L48</a> cell 3). port49
-needs nothing at a renewal. With the CA down, once under a quarter of the lifetime is left the
-broker logs "its renewal is late" and <code>port49 workload</code> warns (first seen at 0.79 of it, polling
-every 30s), and minting stops at expiry with exit 77 (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l48">L48</a> cell 4). A late one shows in cron mail
-and in <code>port49_workload_certificates_renewal_late_total</code>, which each broker replica counts once
-per certificate a day. Alert on its increase.</p>
-<h2 id="5-the-broker">5. The broker<a class="headerlink" href="#5-the-broker" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="nt">broker</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">identity</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">machines</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">x509</span>
-<span class="w">        </span><span class="nt">trust_anchor_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/workload-ca.pem</span>
-<span class="w">        </span><span class="nt">spiffe_trust_domains</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">corp.example.com</span><span class="p p-Indicator">]</span>
-</code></pre></div>
-<p>The anchor is the CA that issues the workload certificates (on step-ca, its intermediate, <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l48">L48</a>).</p>
-<ul>
-<li><strong>Its hierarchy.</strong> The workload anchor and the human anchor must be in unrelated hierarchies.
-  The start refuses one that signs the other directly. One further down is refused at every
-  request whose chain shows it.</li>
-<li><strong>Its status.</strong> <code>certificate_status</code> must cover it: name the CA's CRL in <code>crls</code>. An https CRL
-  endpoint under a private root needs that root in the broker's trust store (<code>SSL_CERT_FILE</code>,
-  <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l48">L48</a>), or sync the CRL to a <code>file:</code> source. With no source,
-  every certificate is refused, and <code>port49 workload</code> exits 77, not 75. Turning status checking
-  off for everyone is not the fix.</li>
-<li><strong>step-ca's CRL names a distribution point.</strong> Its issuing distribution point names the CRL's
-  own URL (in the lab, <code>https://&lt;the CA's first DNS name&gt;/1.0/crl</code>; <code>step crl inspect</code> shows
-  yours), and port49 applies such
-  a list only to a certificate whose CRL distribution points name that URL (spec, "Certificate
-  status, as built"). step-ca's default leaf names none, so with the CRL configured it is refused
-  503 <code>certificate_status_unavailable</code> and <code>port49 workload</code> exits 77, the detail saying which
-  name it lacks. Issue workload certificates under <code>step-ca-workload.tpl</code>, with its
-  <code>crlDistributionPoints</code> set to the name <code>step crl inspect</code> shows. Measured: a default leaf was
-  refused; a templated one minted, and was refused <code>credential_revoked</code> 1m after
-  <code>step ca revoke</code> (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l48">L48</a> cell 5).</li>
-</ul>
-<h2 id="5a-what-port49-policy-test-says-about-this-snippet">5a. What <code>port49 policy test</code> says about this snippet<a class="headerlink" href="#5a-what-port49-policy-test-says-about-this-snippet" title="Permanent link">&para;</a></h2>
-<p>Merged as shipped, <code>port49 policy test</code> prints two reports. Neither fails the run, and both are
-true.</p>
-<ul>
-<li><strong><code>fallback_exposure</code> on <code>arista_eos</code> and <code>cisco_nxos</code>.</strong> <code>config_backup</code> is at <code>admin</code>, which
-  those platforms render as <code>network-admin</code>. port49's rules confine the session to the permits in
-  <code>policy.yaml</code>. But if port49 stops answering while a session is open, and the device's command
-  method list falls back to <code>local</code>, the device authorizes that session by its role alone. <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l22">L22</a>
-  measured that such a session could change the configuration on vEOS and the N9Kv
-  (<code>tests/lab/results/L22-arista_eos.md</code>, <code>L22-cisco_nxos.md</code>). <code>admin</code> is the level spec §2
-  gives a backup account so <code>show running-config</code> is reachable. Whether a lower level serves
-  each Oxidized model is unmeasured: <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l49">L49</a> ran at <code>admin</code>. Until it is, the exposure belongs to
-  whoever holds a session opened with this run's tokens. Keep <code>router.db</code> and the workload key the Oxidized
-  user's alone, and keep <code>PORT49_TTL</code> to one sweep.</li>
-<li><strong><code>unenforced_rules</code> on <code>juniper_junos</code>.</strong> A policy that pins no <code>platform_set</code> renders with
-  set 1.0.0. Under 1.0.0, Junos neither asks port49 about a command nor receives the role's rules
-  in its session reply, so on Junos the permits above decide nothing: the session gets what the
-  device's own login class gives the port49 username. Set 1.1.0 renders them into the session
-  reply (spec §8), but the permits here name no Junos command. <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l49">L49</a> measured it on vJunos-router
-  23.4R2-S2.1 and vSRX: a full backup under set 1.0.0 sent port49 no command at all, so the
-  device's login class for <code>svc-oxidized</code> is what limits a Junos backup. Which permits a Junos
-  backup would need under set 1.1.0 is not measured.</li>
-</ul>
-<h2 id="6-check-before-cron">6. Check before cron<a class="headerlink" href="#6-check-before-cron" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>port49 workload identity --broker https://port49-broker.example.com:8443 \
-  --broker-ca ca.pem --cert w.pem --key w-key.pem
-</code></pre></div>
-<p>prints the SPIFFE ID, the subject and the grants.</p>
-<h2 id="7-under-cron">7. Under cron<a class="headerlink" href="#7-under-cron" title="Permanent link">&para;</a></h2>
-<p>Always <code>--out</code>, as the wrapper does: cron mails a job's stdout, tokens included. The wrapper gives
-<code>--out</code> a fresh file each run, so a run that could not write it leaves the last <code>router.db</code> alone.
-Size <code>PORT49_TTL</code> to the whole sweep, since the wrapper queues every node at once. A fleet larger
-than one sweep's TTL mints in waves.</p>
-<p>The wrapper never prints a token. If you edit it, do not add <code>set -x</code> or an <code>echo</code> of one.</p>
-<h2 id="7a-host-keys">7a. Host keys<a class="headerlink" href="#7a-host-keys" title="Permanent link">&para;</a></h2>
-<p>Oxidized runs with <code>secure: true</code> and never <code>secure: false</code>. It has no accept-new of its own, and
-the one setting it reads, <code>secure</code>, is a boolean (lab <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l90">L90</a>, vEOS 4.31.2F, Oxidized 0.37.0): with
-<code>secure: true</code> and no <code>known_hosts</code> entry it raises <code>Net::SSH::HostKeyUnknown</code> and sends no token; with
-a changed key, <code>HostKeyMismatch</code> and no token; any other value of <code>secure</code>, <code>accept_new</code> included,
-turns verification off, so a changed key is accepted. An entry OpenSSH's accept-new wrote, hashed or
-not, is read and the backup runs.</p>
-<p>So the wrapper saves a key for each node absent from <code>known_hosts</code> (<code>~/.ssh/known_hosts</code> of the user
-Oxidized runs as; <code>OXIDIZED_KNOWN_HOSTS</code> moves it), once, with the line <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l90">L90</a> measured:
-<code>ssh -F /dev/null -o UserKnownHostsFile=&lt;known_hosts&gt; -o StrictHostKeyChecking=accept-new -o
-BatchMode=yes -o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o
-IdentitiesOnly=yes -o ConnectTimeout=15 -- &lt;address&gt; exit</code>. The key is saved at key exchange, before
-authentication, and the flags stop every method that would sign or send, so no credential leaves the
-host. <code>-F /dev/null</code> means the sweep <strong>does not read your ssh configuration</strong>: a device reached only
-through a jump host or a <code>ProxyCommand</code>, or one saved under a <code>HostKeyAlias</code>, is not reached by it. Add
-that device's key with your own tooling (<code>ssh-keyscan</code>, or ssh with your config); the wrapper then finds
-it listed and leaves it alone. Only IP literals are visited.</p>
-<ul>
-<li><strong>A listed node is never visited.</strong> A changed key stays refused until you remove its line
-  (<code>ssh-keygen -R &lt;address&gt;</code>) after checking the change. The wrapper stays green for it: the symptom is
-  one node whose backups stop, and Oxidized's log says <code>Net::SSH::HostKeyMismatch</code> for it. Look there.</li>
-<li><strong>The sweep is bounded.</strong> The visits run <code>OXIDIZED_HOSTKEY_JOBS</code> at a time (default 32) and none
-  starts after <code>OXIDIZED_HOSTKEY_BUDGET</code> seconds (default 600), nor runs past it. A node not reached is
-  named on stderr, the run exits 1, and the node is tried again at the next window; this window its
-  backup fails at the host key, with no token sent, and every node with a known key is backed up. A node
-  whose key could not be saved (unreachable, blackholed) is named the same way and costs up to the
-  budget each window until it is fixed.</li>
-<li><strong>Tokens do not age through it.</strong> The addresses come from the mint, so the sweep follows a first mint
-  and a run that visited any node mints again after it: the tokens Oxidized gets are minted after the
-  sweep. A window with nothing to visit mints once. The first mint's tokens are never used and lapse at
-  their TTL. A node that stays unreachable
-  makes every window mint the whole fleet twice, which doubles the broker's mint load and audit records
-  for that window: fix or remove the node. A node that first appears in the second mint is visited too.</li>
-<li><strong>Concurrency is unmeasured.</strong> <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l90">L90</a> swept one device; up to 32 visits append to <code>known_hosts</code> at once,
-  which OpenSSH does with one small append each. A lost line fails closed: the node is named and tried
-  again at the next window.</li>
-<li><strong>Needs</strong> <code>ssh</code>, <code>ssh-keygen</code> and <code>timeout</code> on the wrapper's host. A missing one is named and the run
-  exits 2 with <code>router.db</code> untouched.</li>
-<li><strong>Measured on vEOS only</strong> (Oxidized 0.37.0). That Oxidized reads what OpenSSH saved for the host-key
-  type it negotiated is unmeasured on NX-OS, IOS-XE and Junos.</li>
-</ul>
-<h2 id="8-on-a-bad-day">8. On a bad day<a class="headerlink" href="#8-on-a-bad-day" title="Permanent link">&para;</a></h2>
-<ul>
-<li>
-<p><strong>Exit 75</strong>: the broker or its store did not answer within the deadline, or the broker could not
-  establish the certificate's revocation status (a CRL past its next update, an OCSP responder
-  down: look at the CA, not the broker), the output could
-  not be written, files could not be made beside <code>router.db</code>, another run holds the lock
-  (<code>router.db.lock</code>), or Oxidized refused a request. The nodes minted before it are queued; with
-  none, Oxidized kept its last <code>router.db</code> and was not reloaded. Try the next window.</p>
-<ul>
-<li><strong>A partial run</strong> replaces <code>router.db</code> with the minted nodes alone, so the unminted nodes are
-  absent from Oxidized's list until a later run mints them. Their backup history in git is
-  untouched.</li>
-<li><strong>Oxidized refusing</strong> (each request has a 10 second limit): a failed node prints its name and
-  the rest are still queued. A failed reload prints that <code>router.db</code> was replaced but Oxidized
-  was not reloaded.</li>
-<li>
-<p><strong>Just after a broker start</strong>: a port49-broker's first start, or a start after a policy
-  edit, refuses every mint with a retryable <code>503 store_unavailable</code> until its runner's
-  takeover is done.</p>
-<p>How long that takes: up to the session store's <code>etcd.hold_ttl</code>/3
-(<code>stores.session.etcd.hold_ttl</code>, or <code>stores.directory.etcd.hold_ttl</code> when <code>stores.session</code>
-is omitted), which is 5s at the default 15s and 20s at 60s. Add the takeover itself, plus up
-to <code>hold_ttl</code> more when the last run's lease must expire first (a crash or a SIGKILL of the
-only broker: 80s or more at 60s).</p>
-<p>The takeover purges every unspent token, so the broker holds the mint rather than hand out a
-token that is about to be deleted. The cause is this start gate, not a store fault, so do not
-chase etcd.</p>
-<ul>
-<li><code>port49 workload</code> retries it within its deadline, so a run normally just takes longer; exit
-  75 means the window outlasted the deadline.</li>
-<li><code>port49 token</code>, through the agent, does not retry: it exits saying to retry in 5s, and
-  running it again is the answer.</li>
-</ul>
-<p>The broker's stderr says <code>mints wait for a takeover to judge bundle ...</code> and then
-<code>mints open: ...</code>, and <code>port49_broker_mint_gate_closed</code> reads 1 meanwhile. <code>/readyz</code> stays
-200. A rolling restart on the same policy is never held.</p>
-<p>A replica whose policy file differs from the runner's stays held until the files agree (its
-<code>port49_policy_bundle_matches_runner</code> is 0). When the runner's takeover could not judge
-every context (the directory or the IdP unreachable), the runner says <code>N live context(s)
-left unjudged at the takeover</code>. Its own broker mints, and the other replicas stay held
-until its settle pass records the bundle.
-- <strong>Exit 77</strong>: nothing was minted and running again will not change it: an expired certificate
-  (said before anything connects), a revoked principal, every node denied, a certificate
-  status nothing covers, or a TLS trust failure (the broker's certificate is not under
-  <code>--broker-ca</code>, or the broker refused the workload's certificate: wrong CA, a clock off). Oxidized kept its last <code>router.db</code>. The stderr line says which.
-- <strong>Exit 1</strong>: a node was not permitted, was not minted after a final refusal, or was left out
-  because its output line would hold a control character. Its line on stderr says why; the rest
-  are queued. A node whose platform has no Oxidized model in the script, or whose name is outside
-  <code>A-Z a-z 0-9 . _ -</code>, is skipped with a line and exits 1 the same way. A run that has both a
-  node of this kind (1) and a failed queue or reload (75) exits 75: 75 takes precedence over 1,
-  and the stderr lines name every node either way.
-- <strong>To stop the workload</strong>: <code>port49 revoke --principal spiffe://...</code>, and revoke the certificate
-  at the CA.</p>
-</li>
-</ul>
-</li>
-</ul>
-<p>The <code>config</code> sets <code>auth_methods</code> with <code>keyboard-interactive</code> for the <code>eos</code> model alone
-(<code>models: eos: vars</code>). Arista EOS offers only <code>publickey</code> and <code>keyboard-interactive</code> over SSH, and
-Oxidized's default list does not include the second, so without this line Oxidized never sends the
-token to an EOS device (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l49">L49</a>, <code>L49-oxidized-arista_eos.md</code>). Do not change the EOS side to suit
-it. It is not global: on NX-OS and IOS-XE, which also offer <code>password</code>, an <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l49">L49</a> run with it global
-(at 0a6d546, superseded and not kept as a note) measured a stale token costing two
-authentications (both denied as spent) instead of one, so those models keep Oxidized's default.
-After a refused token net-ssh's <code>keyboard-interactive</code> asks a tty for a second password; under a
-daemon or cron Oxidized logs <code>Errno::ENOTTY</code> for it (measured in the <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l49">L49</a> lab, which has no tty).
-Run from a terminal in the foreground, it may stop at a password prompt instead; not measured.</p>
-<h2 id="9-what-l49-measured-and-what-it-did-not">9. What <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l49">L49</a> measured, and what it did not<a class="headerlink" href="#9-what-l49-measured-and-what-it-did-not" title="Permanent link">&para;</a></h2>
-<p>Measured on all five platforms (<code>tests/lab/results/L49-oxidized-&lt;platform&gt;.md</code>):</p>
-<ul>
-<li>the wrapper's REST calls answered 200, and the models <code>eos</code>, <code>ios</code>, <code>nxos</code> and <code>junos</code> loaded
-  their nodes and backed them up;</li>
-<li>one authentication per run, and a stale token refused in one (<code>retries: 0</code>);</li>
-<li>the commands each model sends: <code>policy.yaml</code> permits every one port49 was asked about
-  (<code>show vtp status</code> on IOS-XE and <code>show inventory all</code> on NX-OS were added from it);</li>
-<li>no token in Oxidized's log.</li>
-</ul>
-<p>Not measured: whether a lower level than <code>admin</code> serves each model (§5a), how often Oxidized's own
-schedule tries a node with an expired token, and models other than these four.</p>
-<h2 id="1-what-it-is">1. What it is<a class="headerlink" href="#1-what-it-is" title="Permanent link">&para;</a></h2>
-<p>The pod's projected service account token is the workload's identity. No CA, no
-secret at rest: the kubelet writes and rotates the token, the broker verifies its signature
-against the cluster's published keys.</p>
-<h2 id="2-the-cluster">2. The cluster<a class="headerlink" href="#2-the-cluster" title="Permanent link">&para;</a></h2>
-<ul>
-<li>
-<p><strong>Set <code>--service-account-issuer</code> per cluster.</strong> kubeadm's default is the same everywhere, and
-  port49 refuses one issuer twice. This is the main onboarding cost for a self-managed fleet.</p>
-<p>The safe sequence when changing an issuer is below. It is not measured: it is reasoned from
-decision 49 of the
-<a href="https://github.com/blanketfish/port49/blob/main/docs/design/2026-08-23-policy-engine-spec.md">policy engine spec</a>
-(rulings 3 and 4), and the two-verifier config is unit-tested. No
-<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l69">L69</a> cell changed a real
-cluster's issuer; cell (d) rotated a signing key under one issuer.</p>
-<ol>
-<li>Add the new issuer as the <em>first</em> <code>--service-account-issuer</code> flag, and keep the old one as a
-   second. The API server signs with the first and accepts both.</li>
-<li>In port49, list both issuers as two <code>k8s</code> verifiers on the same <code>jwks</code>:
-   two verifiers with one <code>jwks</code> and different issuers are how one cluster's issuer
-   migration is written.</li>
-<li>Roll the pods.</li>
-<li>After the longest <code>expirationSeconds</code> in use has passed, remove the old flag and the old
-   verifier.</li>
-</ol>
-</li>
-<li>
-<p><strong>Apply <code>issuer-discovery.yaml</code>.</strong> Measured on kind
-  (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l69">L69</a> (c)); managed clusters
-  are unmeasured (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l70">L70</a>).</p>
-<p>Know what it exposes. The binding is to <code>system:unauthenticated</code>, so anyone who can reach the
-API server's address can read the issuer discovery document and the JWKS without
-authenticating. They are public keys only, no secret, and the binding grants no other anonymous
-access.</p>
-<p>Where that reach is too wide, use a narrower route instead of the binding:</p>
-<ul>
-<li>The API server's structured authentication configuration (1.32+), with
-  <code>AuthenticationConfiguration</code>'s <code>anonymous.conditions</code> limited to the two discovery paths,
-  <code>/.well-known/openid-configuration</code> and <code>/openid/v1/jwks</code>. The exact form is not measured:
-  <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l69">L69</a> (c) measured the
-  binding alone.</li>
-<li>Publish a mirror of the keys and point <code>jwks</code> at it, with no binding at all (see the <code>jwks</code>
-  item).</li>
-</ul>
-<p>Issuer discovery needs <code>--anonymous-auth</code> on (not measured; kind's default had it on). A
-CIS-hardened cluster turns it off.</p>
-</li>
-<li>
-<p><strong><code>jwks</code> is the API server's own address, not the issuer's host.</strong> Discovery's <code>jwks_uri</code>
-  names the issuer's host, which nothing outside the cluster may resolve. That is why decision 49
-  ruling 2 reads <code>jwks</code> directly:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">echo</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>kubectl<span class="w"> </span>config<span class="w"> </span>view<span class="w"> </span>--minify<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.clusters[0].cluster.server}'</span><span class="k">)</span><span class="s2">/openid/v1/jwks"</span>
-</code></pre></div>
-<p>It may be any https mirror of the keys (a bucket, a reverse proxy) for a cluster whose API
-server the broker must not reach.</p>
-</li>
-<li>
-<p><strong>The cluster CA for <code>ca_file</code>:</strong></p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>config<span class="w"> </span>view<span class="w"> </span>--raw<span class="w"> </span>--minify<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.clusters[0].cluster.certificate-authority-data}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d
-</code></pre></div>
-</li>
-</ul>
-<h2 id="3-the-broker">3. The broker<a class="headerlink" href="#3-the-broker" title="Permanent link">&para;</a></h2>
-<p><code>port49d-identity.yaml</code> is a fragment for <code>port49-broker.yaml</code>. Per verifier:</p>
-<table>
-<thead>
-<tr>
-<th>Key</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>type: k8s</code></td>
-<td>a machine verifier; a cluster's service accounts are workloads, not humans</td>
-</tr>
-<tr>
-<td><code>cluster</code></td>
-<td>port49's name for the cluster, in records and log lines; the cluster's manifests do not change</td>
-</tr>
-<tr>
-<td><code>issuer</code></td>
-<td>the cluster's <code>--service-account-issuer</code>, as its tokens carry it in <code>iss</code></td>
-</tr>
-<tr>
-<td><code>jwks</code></td>
-<td>where the broker reads the keys (section 2)</td>
-</tr>
-<tr>
-<td><code>ca_file</code></td>
-<td>the CA the broker trusts for <code>jwks</code></td>
-</tr>
-<tr>
-<td><code>audience</code></td>
-<td>what the pods' token volume asks for (<code>port49</code> here)</td>
-</tr>
-<tr>
-<td><code>namespaces</code></td>
-<td>the namespaces whose service accounts this cluster may name</td>
-</tr>
-</tbody>
-</table>
-<p>One verifier per cluster, each with its own <code>cluster</code> name.</p>
-<p><strong>Several clusters may list one namespace.</strong> The same CronJob deployed to
-every region is then one identity, <code>system:serviceaccount:netops:oxidized</code>, and one policy subject,
-with no per-cluster namespace or overlay.</p>
-<ul>
-<li>Each record's <code>auth.k8s.cluster</code> says which region minted.</li>
-<li>The start's line <code>identity: k8s namespaces: netops: eu_west, us_east</code> says which clusters vouch for
-  each namespace. Check it after adding a cluster.</li>
-<li>Where a namespace means different tenants in different clusters, list different namespaces per
-  verifier.</li>
-</ul>
-<p>The overlap is allowed because a compromised cluster already holds a genuine token for its own copy
-of the workload. Refusing the overlap would buy nothing.</p>
-<h2 id="4-the-workload">4. The workload<a class="headerlink" href="#4-the-workload" title="Permanent link">&para;</a></h2>
-<p><code>backup-cronjob.yaml</code>:</p>
-<ul>
-<li><code>automountServiceAccountToken: false</code>, on the ServiceAccount and the pod. The default API token's
-  <code>aud</code> is the API server's and port49 refuses it (measured on kind, <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l69">L69</a> (h)); only the projected
-  volume is mounted.</li>
-<li><code>expirationSeconds: 3600</code>. The kubelet refreshes a projected token at about 80% of its
-  lifetime (measured on kind, <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l69">L69</a> (b)), and the broker refuses a token issued longer ago than
-  <code>broker.identity.max_token_age</code> (2h by default), so keep it at or under 3600.</li>
-<li>Least privilege: the pod sets <code>runAsNonRoot: true</code> (the image runs as 65532) and
-  <code>seccompProfile: RuntimeDefault</code>; the container sets <code>allowPrivilegeEscalation: false</code>,
-  <code>readOnlyRootFilesystem: true</code> (<code>/work</code> is the writable <code>emptyDir</code>) and drops all capabilities.</li>
-<li><code>--token-file</code> is read at every request, so a rotated token is picked up without a restart.</li>
-<li>The example stops at the mint. <code>/work/tokens.tsv</code> is on an <code>emptyDir</code>; the consumer (your backup
-  tool) runs in the same pod after this container, sharing the work volume. It is not shown.</li>
-<li>The image is the repository's <code>Dockerfile</code> target <code>port49</code>:
-  <code>docker build --target port49 -t port49:local .</code>. The broker address and CA in the manifest, and
-  the <code>port49-backup</code> ConfigMap (<code>devices</code>, <code>broker-ca.pem</code>), are placeholders for your own.</li>
-</ul>
-<h2 id="5-the-policy">5. The policy<a class="headerlink" href="#5-the-policy" title="Permanent link">&para;</a></h2>
-<p><code>policy.yaml</code> maps the principal <code>system:serviceaccount:netops:oxidized</code> to the subject
-<code>svc_backup</code>. <code>username:</code> is required: a service account has no login name of its own.
-Check a policy offline with <code>port49 policy test --policy policy.yaml --inventory &lt;file&gt;</code>.</p>
-<h2 id="6-3am">6. 3am<a class="headerlink" href="#6-3am" title="Permanent link">&para;</a></h2>
-<p>What the operator sees. <code>&lt;cluster&gt;</code> is the verifier's <code>cluster</code> name with its issuer.</p>
-<table>
-<thead>
-<tr>
-<th>Case</th>
-<th>The workload's stderr</th>
-<th>The broker's log and metric</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>First start, JWKS unreachable</td>
-<td>503 <code>identity_provider_unavailable</code>; retries within <code>--deadline</code>, exits 75</td>
-<td><code>identity: &lt;cluster&gt;: no keys fetched yet (&lt;error&gt;)…</code>; <code>port49_oidc_keys_fetch_failures_total{issuer}</code> climbs; record <code>deny trust_domain_unresolved</code></td>
-</tr>
-<tr>
-<td>JWKS unreachable later</td>
-<td>mints go on with the keys held for <code>jwks_max_age</code> (24h); then as above</td>
-<td><code>keys not refreshed since &lt;t&gt;…</code>, hourly; alert on <code>time() - port49_oidc_keys_last_success_timestamp_seconds &gt; jwks_max_age/2</code></td>
-</tr>
-<tr>
-<td>Key rotated at the cluster</td>
-<td>none: one refetch finds the new key (measured on kind, <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l69">L69</a> (d))</td>
-<td>none; rotated wrongly: 401 "no one key of <cluster> matches its key id", exit 77</td>
-</tr>
-<tr>
-<td>Clock skew</td>
-<td>401 "issued at <t>, ahead of the broker's clock by more than clock_skew"</td>
-<td>fix the broker host's clock</td>
-</tr>
-<tr>
-<td>Token from an unlisted cluster</td>
-<td>401 "no configured verifier accepts its issuer", exit 77</td>
-<td>metric under <code>issuer="unknown"</code></td>
-</tr>
-<tr>
-<td>Unlisted namespace</td>
-<td>401 <code>identity_unmapped</code> "its namespace <ns> is not one <cluster> lists"</td>
-<td>record <code>auth.method: k8s</code></td>
-</tr>
-<tr>
-<td>Wrong audience, or the default API token</td>
-<td>401 "its aud is not exactly [port49]", exit 77</td>
-<td>fix the volume's <code>audience</code> (<a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l69">L69</a> (g), (h))</td>
-</tr>
-<tr>
-<td>Token past <code>max_token_age</code></td>
-<td>401 "issued <d> ago, past broker.identity.max_token_age"</td>
-<td>the kubelet stopped rotating, or <code>expirationSeconds</code> is too long</td>
-</tr>
-<tr>
-<td>Discovery names another issuer</td>
-<td>each token refused until <code>issuer</code> matches</td>
-<td><code>identity: &lt;cluster&gt;: the cluster's discovery … names issuer &lt;X&gt;</code>, once</td>
-</tr>
-</tbody>
-</table>
-<p>A deleted service account or pod is not a refusal: see section 7.</p>
-<h2 id="7-stopping-a-workload">7. Stopping a workload<a class="headerlink" href="#7-stopping-a-workload" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>port49<span class="w"> </span>revoke<span class="w"> </span>--principal<span class="w"> </span>system:serviceaccount:netops:oxidized
-</code></pre></div>
-<p>Deleting the service account alone is not immediate. The broker does not call the cluster's
-TokenReview: doing so would put every cluster's API server on the mint
-path, and needs a broker credential on each cluster. A token already in hand mints until its
-<code>exp</code> or <code>iat</code> plus <code>max_token_age</code>, at most 2h. <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l69">L69</a> (e) measured that TokenReview answers
-unauthenticated after the pod and then the service account are deleted and port49 still mints, and
-that <code>revoke</code> then refuses at once (the 2h bound is the configured limit, not measured). <code>revoke</code> closes the
-window at once; the mark also stands for a service account re-created under that name until
-<code>port49 revoke --lift</code>.</p>
-<h2 id="8-what-is-not-measured">8. What is not measured<a class="headerlink" href="#8-what-is-not-measured" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Managed clusters (EKS, GKE, AKS): <a href="https://blanketfish.github.io/port49/latest/reference/lab-register/#l70">L70</a>, open.</li>
-<li>A CronJob run in a cluster against a broker outside it: not measured.</li>
-<li>Changing a real cluster's <code>--service-account-issuer</code> (section 2): not measured.</li>
-</ul>
 
 
 
@@ -3713,7 +3810,7 @@ window at once; the mark also stands for a service account re-created under that
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "default": "latest", "provider": "mike"}}</script>
     
     
       <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>

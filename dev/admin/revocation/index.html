@@ -6,17 +6,17 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Revoking a person, a certificate or a session, closing what revocation cannot reach, and setting up the CRL and OCSP checks that mark certificates for you.">
+        <meta name="description" content="Revoke a person, a certificate or a session, close what revocation cannot reach, lift a revocation, and revoke with every broker down.">
       
       
       
         <link rel="canonical" href="https://blanketfish.github.io/port49/latest/admin/revocation/">
       
       
-        <link rel="prev" href="../key-rotation/">
+        <link rel="prev" href="../admin-access/">
       
       
-        <link rel="next" href="../identity-providers/">
+        <link rel="next" href="../key-rotation/">
       
       
         
@@ -81,17 +81,16 @@
     </div>
     <div data-md-component="announce">
       
-        <aside class="md-banner">
-          <div class="md-banner__inner md-grid md-typeset">
-            
-            This site describes port49 as it is on main, not a release.
-          </div>
-          
-        </aside>
-      
     </div>
     
       <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              This is not the latest release's documentation. <a href="../../.."><strong>Go to the latest.</strong></a>
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL("../.."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
         
       </div>
     
@@ -492,19 +491,7 @@
     
       
         
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
+          
         
       
         
@@ -529,71 +516,8 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Operate
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Operate
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    
-    
-      
-        
-          
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-    
-    
-    
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
-        
-          
           <div class="md-nav__link md-nav__container">
-            <a href="../../operate/install/" class="md-nav__link ">
+            <a href="../../operate/deploy/" class="md-nav__link ">
               
   
   
@@ -611,14 +535,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_1">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -636,9 +560,30 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../operate/install/systemd/" class="md-nav__link">
+    
+    
+      
         
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -652,11 +597,19 @@
   
   
 
-      </a>
-    </li>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    systemd
   
 
-              
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -665,14 +618,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/container/" class="md-nav__link">
+      <a href="../../operate/systemd/install/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Containers
+    Install
   
 
     
@@ -693,14 +646,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/helm/" class="md-nav__link">
+      <a href="../../operate/systemd/upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Helm
+    Upgrade
   
 
     
@@ -721,14 +674,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/clients/" class="md-nav__link">
+      <a href="../../operate/systemd/troubleshoot/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Clients
+    Troubleshoot
   
 
     
@@ -756,15 +709,74 @@
   
   
   
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Containers
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
     <li class="md-nav__item">
-      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+      <a href="../../operate/containers/trial/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Broker and agent
+    Try it
   
 
     
@@ -785,14 +797,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/login/" class="md-nav__link">
+      <a href="../../operate/containers/install/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Signing in
+    Install
   
 
     
@@ -813,14 +825,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/hardware-keys/" class="md-nav__link">
+      <a href="../../operate/containers/upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Hardware keys
+    Upgrade
   
 
     
@@ -833,6 +845,305 @@
   
 
               
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/containers/troubleshoot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshoot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Helm
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/upgrade/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/troubleshoot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshoot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/velero/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Back up with Velero
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -876,7 +1187,7 @@
   <span class="md-ellipsis">
     
   
-    TLS
+    TLS (RFC 9887)
   
 
     
@@ -988,7 +1299,7 @@
   <span class="md-ellipsis">
     
   
-    Versions
+    Versions and upgrades
   
 
     
@@ -1003,7 +1314,16 @@
               
             
               
-                
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
   
   
   
@@ -1019,28 +1339,35 @@
       
         
       
+        
+      
+        
+      
     
     
     
       
+        
+        
+      
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+            <a href="../../use/" class="md-nav__link ">
               
   
   
   <span class="md-ellipsis">
     
   
-    Troubleshooting
+    Sign in
   
 
     
@@ -1051,18 +1378,18 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_11">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
-    Troubleshooting
+    Sign in
   
 
           </label>
@@ -1077,14 +1404,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+      <a href="../../use/install-client/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Failure matrix
+    Install the client
   
 
     
@@ -1105,14 +1432,70 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+      <a href="../../use/login/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    When it will not start
+    Log in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/connect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connect to a device
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
   
 
     
@@ -1132,14 +1515,6 @@
     </li>
   
 
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
     
       
       
@@ -1151,6 +1526,10 @@
   
     
     
+      
+        
+          
+        
       
         
       
@@ -1181,11 +1560,12 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
-            
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
@@ -1199,15 +1579,442 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
     Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_2" id="__nav_6_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sign-in backends
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Sign-in backends
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sign-in/oidc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OIDC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sign-in/x509/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client certificates (x509)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sign-in/directory-password/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Directory password
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../directory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The directory (LDAP)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_3" id="__nav_6_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workloads
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads-oxidized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Oxidized and step-ca
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workloads-kubernetes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes service accounts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_5" id="__nav_6_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Policy
   
 
           </label>
@@ -1228,6 +2035,34 @@
     
   
     Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rules and scopes
   
 
     
@@ -1276,14 +2111,106 @@
   
   
     <li class="md-nav__item">
-      <a href="../key-rotation/" class="md-nav__link">
+      <a href="../policy-tests/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Key rotation
+    Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy-review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reviewing a change
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../platform-sets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform sets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../admin-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin access
   
 
     
@@ -1320,7 +2247,7 @@
   <span class="md-ellipsis">
     
   
-    Revocation
+    Revoking access
   
 
     
@@ -1338,7 +2265,7 @@
   <span class="md-ellipsis">
     
   
-    Revocation
+    Revoking access
   
 
     
@@ -1387,10 +2314,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#-cert-over-cert-serial" class="md-nav__link">
+  <a href="#name-a-certificate-by-file" class="md-nav__link">
     <span class="md-ellipsis">
       
-        --cert over --cert-serial
+        Name a certificate by file
       
     </span>
   </a>
@@ -1402,17 +2329,6 @@
     <span class="md-ellipsis">
       
         A stolen laptop
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#exit-codes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Exit codes
       
     </span>
   </a>
@@ -1447,41 +2363,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#checking-your-cas-revocation-lists" class="md-nav__link">
+  <a href="#break-glass" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checking your CA's revocation lists
+        Break-glass
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Checking your CA&#39;s revocation lists">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#issuer_file-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        issuer_file rules
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#on_unavailable-refuse" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        on_unavailable: refuse
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1501,70 +2389,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../identity-providers/" class="md-nav__link">
+      <a href="../key-rotation/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Identity providers
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../workloads/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Workloads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../inventory/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Inventory
+    Key rotation
   
 
     
@@ -1615,7 +2447,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_9" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1637,14 +2469,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_6_9" id="__nav_6_9_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_8">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1880,6 +2712,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1893,17 +2729,17 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
     
   
-    AI agents
+    Automation
   
 
     
@@ -1914,16 +2750,72 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
   
-    AI agents
+    Automation
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automation/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automation/ansible/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible collection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1939,7 +2831,7 @@
   <span class="md-ellipsis">
     
   
-    Quick start
+    AI agents quick start
   
 
     
@@ -1967,7 +2859,7 @@
   <span class="md-ellipsis">
     
   
-    Setup runbook
+    AI agents setup runbook
   
 
     
@@ -2017,6 +2909,14 @@
       
         
       
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -2030,10 +2930,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
             
   
   
@@ -2051,8 +2951,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2061,6 +2961,118 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/requirements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/client-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/health-checks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Health checks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2366,6 +3378,8 @@
       
         
       
+        
+      
     
     
     
@@ -2379,7 +3393,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -2401,14 +3415,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_7">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2463,6 +3477,34 @@
     
   
     Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/deployment-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment design
   
 
     
@@ -2533,10 +3575,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#-cert-over-cert-serial" class="md-nav__link">
+  <a href="#name-a-certificate-by-file" class="md-nav__link">
     <span class="md-ellipsis">
       
-        --cert over --cert-serial
+        Name a certificate by file
       
     </span>
   </a>
@@ -2548,17 +3590,6 @@
     <span class="md-ellipsis">
       
         A stolen laptop
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#exit-codes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Exit codes
       
     </span>
   </a>
@@ -2593,41 +3624,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#checking-your-cas-revocation-lists" class="md-nav__link">
+  <a href="#break-glass" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checking your CA's revocation lists
+        Break-glass
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Checking your CA&#39;s revocation lists">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#issuer_file-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        issuer_file rules
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#on_unavailable-refuse" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        on_unavailable: refuse
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -2652,20 +3655,11 @@
 
 
 <h1 id="revoking-access">Revoking access<a class="headerlink" href="#revoking-access" title="Permanent link">&para;</a></h1>
-<p><a href="../../concepts/revocation/">Revocation</a> explains what happens, in order, and what it cannot do. This page is
-the runbook: the commands, what each one needs, how to read the answer, and the broker settings that check
-your CA's revocation lists.</p>
+<p><a href="../../concepts/revocation/">Revocation</a> explains what happens and what it cannot do. Below are the commands and how to
+read the answer. Checking your CA's revocation lists is on <a href="../sign-in/x509/">Client certificate sign-in</a>.</p>
 <h2 id="what-you-need">What you need<a class="headerlink" href="#what-you-need" title="Permanent link">&para;</a></h2>
-<p><code>port49 revoke</code> talks to the broker through your own agent, so run <code>port49 login</code> first. It needs your subject
-to declare the right in the policy's <a href="../roles-and-grants/#api-rights"><code>api:</code> list</a>:</p>
-<ul>
-<li><code>revoke_others</code> to revoke another principal, a certificate, a <code>(device, username)</code> key or an OIDC session,
-  and to list what is in force;</li>
-<li><code>lift_revocations</code> to lift a revocation, and to list.</li>
-</ul>
-<p>Every write but <code>--mine</code> also asks for a press of your security key, bound to that one request. Without the
-right the call is refused before any key press, and the refusal is logged. Your own sessions, with
-<code>port49 revoke --mine</code>, need neither a right nor a touch.</p>
+<p>Run <code>port49 login</code> first. Revoking needs the <code>revoke_others</code> right, lifting needs <code>lift_revocations</code>, and every write
+but <code>--mine</code> needs a press of your security key (<a href="../admin-access/">Admin access</a>).</p>
 <h2 id="revoking">Revoking<a class="headerlink" href="#revoking" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -2703,221 +3697,107 @@ right the call is refused before any key press, and the refusal is logged. Your 
 </tr>
 </tbody>
 </table>
-<p>On a terminal, <code>--principal</code> asks <code>revoke &lt;principal&gt; everywhere? ... [y/N]</code> first. <code>--yes</code> skips the question, and
-a script with no terminal is not asked.</p>
-<p>The answer begins with a <code>target:</code> line naming the policy subject the principal belongs to. If it says
-<code>no subject in the policy in force names it</code>, check the spelling. The mark is written anyway, so a typo of a real
-colleague's address is a revocation of nobody. The broker spells principals this way:</p>
-<ul>
-<li>a certificate's principal: <code>user:&lt;lower-case email&gt;</code>;</li>
-<li>a workload's: its SPIFFE ID, verbatim;</li>
-<li>a service account's: <code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code>.</li>
-</ul>
-<p><code>port49 revoke --list</code> shows what is in force, each with its origin (<code>api &lt;who&gt;</code> for an operator,
-<code>crl &lt;name&gt;</code> or <code>ocsp &lt;responder&gt;</code> for a CA's revocation). A <code>--mine</code>, <code>--device</code> or <code>--sid</code> revocation leaves no
-mark, so it is not listed; the decision log's <code>revoke</code> record names each, with <code>revocation.by</code> of <code>self</code>, <code>key</code>
-or a logout.</p>
-<p>A revocation does <strong>not expire</strong>. The agent reconnects with the same key on its own, so only a lift undoes it.</p>
-<h3 id="-cert-over-cert-serial"><code>--cert</code> over <code>--cert-serial</code><a class="headerlink" href="#-cert-over-cert-serial" title="Permanent link">&para;</a></h3>
-<p>Name a certificate by file:</p>
+<p>On a terminal, <code>--principal</code> asks <code>revoke &lt;principal&gt; everywhere? ... [y/N]</code> first; <code>--yes</code> skips it, and a script with
+no terminal is not asked. The answer begins with a <code>target:</code> line naming the policy subject the principal belongs to.
+If it says <code>no subject in the policy in force names it</code>, check the spelling: the mark is written anyway, so a typo of
+a colleague's address revokes nobody. The spellings are on <a href="../../concepts/identities/">Identities</a>.</p>
+<p><code>port49 revoke --list</code> shows what is in force, with each origin (<code>api &lt;who&gt;</code> for an operator, <code>crl &lt;name&gt;</code> or
+<code>ocsp &lt;responder&gt;</code> for a CA's revocation). A <code>--mine</code>, <code>--device</code> or <code>--sid</code> revocation leaves no mark, so it is not
+listed; the decision log's <code>revoke</code> record names each, with <code>revocation.by</code> of <code>self</code>, <code>key</code> or a logout. A revocation does not expire, and the agent reconnects with the same key on its own, so only a lift undoes it.
+Exit codes, and how to read exit 1 and 3: <a href="../../reference/client-commands/#port49-revoke">Client commands</a>.</p>
+<h3 id="name-a-certificate-by-file">Name a certificate by file<a class="headerlink" href="#name-a-certificate-by-file" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code>port49<span class="w"> </span>revoke<span class="w"> </span>--cert<span class="w"> </span>alice.pem
 </code></pre></div>
-<p><code>port49 revoke</code> reads the issuer and serial out of the file, and prints them before anything is sent, so you see
-whose certificate it is:</p>
+<p>It reads the issuer and serial out of the file and prints them before anything is sent:</p>
 <div class="highlight"><pre><span></span><code>port49 revoke: alice.pem: subject "CN=alice,O=Example", issuer "CN=Example Issuing CA,O=Example", serial 0x2a
 </code></pre></div>
-<p>The file must hold one certificate, PEM or DER. One that holds a private key, more than one certificate (a chain
-would revoke the CA's serial and say it did) or more than 1 MiB is refused. The command never prints a key or a
-block.</p>
-<p>The by-hand form is <code>--cert-issuer DN --cert-serial HEX</code>, both required, and it is the one to avoid. Use
-<code>--cert-serial</code> only when you have no file, for instance a serial copied from your CA's issuance log. Two things
-go wrong with it:</p>
-<ul>
-<li><strong>The issuer must be spelled as Go prints it</strong> (RFC 2253, <code>CN=Example Issuing CA,O=Example</code>). A differently
-  spelled issuer matches nothing, and the report says so (<code>nothing was found under this certificate; ... use --cert FILE</code>).</li>
-<li><strong>The serial is hexadecimal.</strong> Colons, a <code>0x</code> and leading zeros are dropped and a leading <code>-</code> is kept. A serial
-  of digits alone is read as hex, though <code>openssl</code> prints a small serial in decimal first (<code>4096 (0x1000)</code>). The
-  report warns when that may have happened: revoke again with <code>--cert FILE</code>, then lift the wrong one.</li>
-</ul>
-<p><code>--cert</code> sends the serial as explicit hex and cannot make that mistake.</p>
+<p>The file must hold one certificate, PEM or DER. A file with a private key, more than one certificate (a chain would
+revoke the CA's serial and say it did) or more than 1 MiB is refused. The by-hand form is <code>--cert-issuer DN
+--cert-serial HEX</code>, both required, for when you have no file. The issuer must be spelled as Go prints it (RFC 2253); a
+different spelling matches nothing, and the report says so. The serial is hexadecimal: colons, a <code>0x</code> and leading zeros
+are dropped, and digits alone are read as hex, though <code>openssl</code> prints a small serial in decimal first
+(<code>4096 (0x1000)</code>). The report warns when that may have happened: revoke again with <code>--cert FILE</code>, which sends the serial as explicit hex, then lift the
+wrong one.</p>
 <p>A certificate revocation closes that certificate's held connections, deletes unspent tokens and marks its live
-contexts. It leaves the principal's <strong>other</strong> certificates working, with one exception: unspent tokens are
-deleted by <code>(device, username)</code>, so the other certificates lose theirs on those devices and can mint again.</p>
-<p>A workload renews its certificate under a new serial the mark does not name. For a workload, revoke the
-principal too, and revoke the certificate at your CA so it cannot renew.</p>
+contexts. The principal's other certificates keep working, except that unspent tokens are deleted by <code>(device,
+username)</code>, so they lose theirs on those devices and can mint again. A workload renews under a new serial the mark does
+not name, so revoke the workload's principal too, and the certificate at your CA so it cannot renew.</p>
 <h3 id="a-stolen-laptop">A stolen laptop<a class="headerlink" href="#a-stolen-laptop" title="Permanent link">&para;</a></h3>
-<p>Revoke in this order:</p>
 <ol>
-<li><code>port49 revoke --principal user:alice@example.com</code> now. It stops every mint, closes the person's held
-   connections and refuses the agent's next request.</li>
+<li><code>port49 revoke --principal user:alice@example.com</code> now. It stops every mint, closes the person's held connections
+   and refuses the agent's next request.</li>
 <li>
-<p><strong>Close the device sessions.</strong> TACACS+ cannot disconnect a device's session, so a revocation takes effect at the
-   <em>next authorization request</em>. A platform that asks port49 only at login never asks again, so the revocation
-   reaches a context nobody reads. The report names those sessions:</p>
+<p>Close the device sessions the report names, with the device's own tools. Why TACACS+ cannot do it is on
+   <a href="../../concepts/revocation/">Revocation</a>; <a href="../devices/juniper-junos/">Junos</a> says what it does on its own:</p>
 <div class="highlight"><pre><span></span><code>not reached, on a platform that never asks port49 about a command (close these on the device): leaf1 (alice), srx2 (alice)
 </code></pre></div>
-<p>Close each on the device with the device's own tools, and see
-<a href="../devices/juniper-junos/">Junos</a> for what it does on its own.
-3. When your CA has issued the person a new certificate, revoke the <strong>old</strong> one by <code>--cert</code> (or revoke it at the
-   CA, below) and lift the principal.</p>
+</li>
+<li>
+<p>When your CA has issued the person a new certificate, revoke the old one by <code>--cert</code> (or at the CA) and lift the
+   principal.</p>
 </li>
 </ol>
-<p>Close a stranger's session too. <code>--mine</code> and <code>--device</code>/<code>--username</code> leave no mark, so the owner's next login on
-that device re-admits every session still open there under that username. The report says so.</p>
-<h3 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Exit</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>0</td>
-<td>done; <code>--list</code> printed</td>
-</tr>
-<tr>
-<td>1</td>
-<td>nothing was revoked, or it is unknown. Refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (<code>nothing was revoked</code>), an unreadable or refused <code>--cert</code> file, or a broker refusal that says nothing was done. <strong>Unknown whether it ran:</strong> the broker did not answer (<code>the broker did not answer ...</code>), it answered with no revocation named (<code>the broker's answer named no revocation; it may be in force</code>), it answered <code>503 revocation_unconfirmed</code> (<code>the broker could not confirm it: ...</code>), or a revoke got <code>503 store_unavailable</code> (<code>the broker says: ...</code>). The first two say to run <code>port49 revoke --list</code> and look at the decision log before you retry; for the last two, read the broker's words</td>
-</tr>
-<tr>
-<td>2</td>
-<td>the flags are wrong: no target, two targets, or a flag that does not go with the form</td>
-</tr>
-<tr>
-<td>3</td>
-<td>the revocation <strong>is in force</strong> but incomplete, or not saved to the revocations file, or a lift step did not finish: run the same command again, which repeats every step</td>
-</tr>
-</tbody>
-</table>
-<p>Exit 1 is two different things, so read the line. A refusal that says nothing was done means nothing happened;
-<code>it may be in force</code> means it may have. Two broker answers look like refusals and are not:</p>
-<ul>
-<li><code>the broker could not confirm it</code> (<code>503 revocation_unconfirmed</code>): the revocation may have gone through, and so
-  may a lift made meanwhile. Run <code>port49 revoke --list</code> to see what is in force, then repeat the command if the
-  mark is not what you wanted.</li>
-<li><code>the broker says: ...</code> on a revoke that got <code>503 store_unavailable</code>: the mark went nowhere but that one broker's
-  own process, so the credential is revoked on that broker and not, yet, on the others. Do what the broker's words
-  say to make the mark everywhere, and run the revoke again once the store is back.</li>
-</ul>
-<p>Exit 3 is never a failure to revoke: the mark stands and refuses every new mint, but
-until a run finishes, unspent tokens may still log in (up to their TTL) and unmarked contexts keep authorizing.
-<code>port49 revoke --lift</code> takes the same codes; an answer with no text exits 1 with <code>it may have run</code>.</p>
 <h2 id="lifting">Lifting<a class="headerlink" href="#lifting" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>port49<span class="w"> </span>revoke<span class="w"> </span>--lift<span class="w"> </span>--principal<span class="w"> </span>user:alice@example.com
 port49<span class="w"> </span>revoke<span class="w"> </span>--lift<span class="w"> </span>--cert<span class="w"> </span>alice.pem
 </code></pre></div>
-<p>A lift needs <code>lift_revocations</code> and a touch. It restores nothing: contexts the revocation marked stay revoked until
-a login with a token minted after the lift joins them. <code>--lift --principal</code> on a principal that is not revoked
-answers <code>no such revocation is in force</code>.</p>
-<p><strong>Lifting a mark a CA made.</strong> A mark whose origin is <code>crl &lt;name&gt;</code> or <code>ocsp &lt;responder&gt;</code> was written because the
-CA revoked the certificate. The person is told the certificate was revoked at its CA and to request a new
-one; no lift is offered. You can still run <code>--lift --cert</code>, but it is no fix: the next connection checks the CA
-again and is refused, or, with the list gone stale, answered <code>certificate_status_unavailable</code>, or admitted under
-<code>on_unavailable: allow</code>. Lift such a mark only after the CA has unrevoked the certificate, and expect it to be
-marked again if the CA's list still names it. A <code>certificateHold</code> entry is never marked.</p>
+<p>A lift needs <code>lift_revocations</code> and a touch. It restores nothing: contexts the revocation marked stay revoked until a
+login with a token minted after the lift joins them. On a principal that is not revoked it answers
+<code>no such revocation is in force</code>.</p>
+<p>A mark whose origin is <code>crl &lt;name&gt;</code> or <code>ocsp &lt;responder&gt;</code> was written because the CA revoked the certificate. The
+person is told to request a new one, and no lift is offered. <code>--lift --cert</code> is no fix: the next connection checks the
+CA again and is refused, or, with the list stale, answered <code>certificate_status_unavailable</code>, or admitted under
+<code>on_unavailable: allow</code>. Lift such a mark only after the CA has unrevoked the certificate. A <code>certificateHold</code> entry is
+never marked.</p>
 <h2 id="where-marks-are-kept">Where marks are kept<a class="headerlink" href="#where-marks-are-kept" title="Permanent link">&para;</a></h2>
-<p>A standing mark is in the session store and is read by every broker. How it survives a restart depends on the
-shape:</p>
+<p>A standing mark is in the session store and is read by every broker.</p>
 <ul>
-<li><strong>A broker on etcd</strong> (the normal split) keeps each mark in the store, and each broker keeps a copy in
-  <code>broker.state_dir</code>, which is what puts a mark back after a store restore. Back that directory up and follow
-  <a href="../../operate/backup-and-restore/">Backup and restore</a>; it also covers <code>port49-broker revoke --offline</code> for
-  revoking with every broker down.</li>
-<li><strong>A single-process port49d on the memory store</strong> also writes every mark to <code>broker.revocations_file</code>. port49d
-  never creates that file, so run <code>port49d init-revocations</code> once at install, as port49d's user
-  (see <a href="../../operate/install/#the-memory-store-trial-port49d-init-revocations">Install</a>); a missing file refuses
-  every start.</li>
+<li>A broker on etcd (the normal split) keeps each mark in the store and a copy in <code>broker.state_dir</code>, which puts a mark
+  back after a store restore. Back that directory up (<a href="../../operate/backup-and-restore/">Backup and restore</a>).</li>
+<li>A single-process port49d on the memory store also writes every mark to <code>broker.revocations_file</code>
+  (<a href="../../operate/stores/#the-memory-store">The memory store</a>).</li>
 </ul>
-<p>When a revocation was made but the file could not be written, the report says <code>NOT saved to
-broker.revocations_file</code>, <code>port49 revoke</code> exits 3, and <code>port49_revocations_file_failed</code> is 1. Run the revoke again
-once the disk is fixed, and see <a href="../../operate/troubleshooting/#revocations-file-failed">Revocations file failed</a>.</p>
-<h2 id="checking-your-cas-revocation-lists">Checking your CA's revocation lists<a class="headerlink" href="#checking-your-cas-revocation-lists" title="Permanent link">&para;</a></h2>
-<p>A revocation made at your CA reaches port49 only if the broker is told where to look.</p>
-<p><code>certificate_status</code> is <strong>required</strong> wherever a client certificate verifier is configured: in the broker block,
-and in the <code>tls_listener</code> block for devices on RFC 9887 TLS. Leaving it out refuses the config, so skipping the
-check is always a choice you wrote down.</p>
-<p>The device side is on <a href="../../operate/tls/#revocation">TLS</a>. The broker side, which covers the certificates people
-and workloads sign in with, looks like this:</p>
-<div class="highlight"><pre><span></span><code><span class="nt">broker</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">certificate_status</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">crls</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">corp_ca</span>
-<span class="w">        </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://crl.example.com/corp-ca.crl</span>
-<span class="w">        </span><span class="nt">issuer_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/port49/corp-ca.pem</span>
-<span class="w">    </span><span class="c1"># ocsp: {use_aia: true}</span>
-<span class="w">    </span><span class="nt">refresh_interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
-<span class="w">    </span><span class="nt">on_unavailable</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">refuse</span>
+<p>When the file could not be written, the report says <code>NOT saved to broker.revocations_file</code>, <code>port49 revoke</code> exits 3 and
+<code>port49_revocations_file_failed</code> is 1. Revoke again once the disk is fixed
+(<a href="../../operate/troubleshooting/#revocations-file-failed">Revocations file failed</a>).</p>
+<h2 id="break-glass">Break-glass<a class="headerlink" href="#break-glass" title="Permanent link">&para;</a></h2>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Offline revocation stops issuance fleet-wide while the brokers are down. Use it only when no admin can reach a
+running broker.</p>
+</div>
+<p>Run it with the broker stopped, as the broker's own user. As root it refuses, revokes nothing and names the <code>sudo -u</code>
+line to use, because the files it writes belong to that user.</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:3"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">systemd</label><label for="__tabbed_1_2">Containers</label><label for="__tabbed_1_3">Helm</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code>systemctl<span class="w"> </span>stop<span class="w"> </span>port49-broker<span class="w">              </span><span class="c1"># on every broker host</span>
+sudo<span class="w"> </span>-u<span class="w"> </span>port49-broker<span class="w"> </span>port49-broker<span class="w"> </span>revoke<span class="w"> </span>--offline<span class="w"> </span>--principal<span class="w"> </span>user:bob@example.com
+systemctl<span class="w"> </span>start<span class="w"> </span>port49-broker
 </code></pre></div>
-<p>To check nothing, write it out:</p>
-<div class="highlight"><pre><span></span><code><span class="nt">broker</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">certificate_status</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">disabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<p><code>port49-broker revoke --offline --list</code> shows the marks. It revokes through the store, so etcd must be up, and keeps
+the copy in <code>broker.state_dir</code>. A port49d that runs its
+broker in process has <code>port49d revoke --offline</code>, which writes <code>broker.revocations_file</code>.</p>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>port49-broker
+docker<span class="w"> </span>compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>--no-deps<span class="w"> </span>port49-broker<span class="w"> </span>revoke<span class="w"> </span>--offline<span class="w"> </span>--principal<span class="w"> </span>user:bob@example.com
+docker<span class="w"> </span>compose<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>--no-deps<span class="w"> </span>port49-broker<span class="w"> </span>revoke<span class="w"> </span>--offline<span class="w"> </span>--list
+docker<span class="w"> </span>compose<span class="w"> </span>start<span class="w"> </span>port49-broker
 </code></pre></div>
-<p><code>disabled: true</code> takes no other key, and port49d says so at every start: <code>certificate status checking is disabled
-(broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until</code>port49 revoke --cert<code>`.
-With it, only</code>port49 revoke` ends a certificate.</p>
-<p>Otherwise name at least one <code>crls</code> entry or an <code>ocsp</code> block. A CRL is a <code>file</code> or an <code>http(s)</code> <code>url</code> (exactly one), a
-unique <code>name</code> (lowercase letters, digits and <code>_</code>), and an <code>issuer_file</code>. The lists are fetched or re-read every
-<code>refresh_interval</code> (10 minutes by default, 1 minute to 24 hours). An OCSP block takes a fixed <code>responder</code> or
-<code>use_aia: true</code>, and <code>hash: sha1</code> for a responder that knows no SHA-256 CertID. All keys are in the
-<a href="../../reference/config/port49d/">port49d reference</a>.</p>
-<h3 id="issuer_file-rules"><code>issuer_file</code> rules<a class="headerlink" href="#issuer_file-rules" title="Permanent link">&para;</a></h3>
-<p><code>issuer_file</code> is <strong>required</strong> on every CRL, and it is the CA certificate that signs that list. A list is trusted
-for the issuer it names, so port49d checks the file at start and refuses to start, naming the source, unless:</p>
-<ul>
-<li>it holds exactly <strong>one</strong> PEM block, a certificate, and nothing else;</li>
-<li>it is a <strong>CA</strong> certificate, since only a CA signs a list;</li>
-<li>it is the trust anchor (<code>client_ca_file</code>, or the x509 trust anchor of a workload verifier) or a certificate that
-  anchor signed, since a list for an issuer the broker does not already trust would vouch for certificates
-  it never trusted.</li>
-</ul>
-<p>A list is then used only if it verifies against that certificate: signed by it, with an issuer name encoded exactly
-as the certificate's subject is, an authority key identifier that matches, not dated in the future and not signed
-with a weak algorithm. A delta CRL, a list with a critical extension port49 does not understand, or one scoped in a
-way its certificates do not name is refused, and counted at <code>port49_crl_loads_total{outcome="refused"}</code>; the log
-says why.</p>
-<p><strong>An intermediate CA needs the root's list too.</strong> Name the root's CRL (<code>issuer_file</code> is your <code>client_ca_file</code>
-anchor), or every certificate under the intermediate is refused: port49d checks each CA in the chain, and nothing
-else says whether the intermediate itself was revoked. An OCSP responder the root signs for covers it as well. At
-start port49d says which CA nothing covers, as <code>certificates issued by &lt;CA&gt; will be refused ...: nothing covers
-&lt;CA&gt; itself; name the root CA's CRL</code>, and never refuses to start over it. That is the <code>on_unavailable: refuse</code>
-line; under <code>allow</code> it reads <code>certificates issued by &lt;CA&gt; will be admitted with their revocation status unchecked
-(on_unavailable: allow): nothing covers &lt;CA&gt; itself; name the root CA's CRL</code>, and those certificates are let in.</p>
-<p>Each verified list is kept as <code>crl-&lt;name&gt;.der</code> in <code>broker.state_dir</code> (beside <code>broker.revocations_file</code> for a
-single-process port49d), so a restart during a publisher outage keeps serving it until its next update. Back these
-up with the rest of the state.</p>
-<h3 id="on_unavailable-refuse"><code>on_unavailable: refuse</code><a class="headerlink" href="#on_unavailable-refuse" title="Permanent link">&para;</a></h3>
-<p>When a certificate's status cannot be established, because a CRL is past its next update or an OCSP responder is
-down, <code>on_unavailable</code> decides:</p>
-<ul>
-<li><code>refuse</code> (the default): the broker answers <code>503 certificate_status_unavailable</code> with <code>Retry-After: 60</code>, the
-  reason <code>trust_domain_unresolved</code>. The agent is told to try again, and nothing is minted for that certificate
-  until the status is known.</li>
-<li><code>allow</code> (fail-open): the connection is admitted and the broker says so (<code>admitting a certificate whose revocation status
-  cannot be established</code>). It keeps logins working through an outage, and lets a certificate revoked during the
-  outage in until the list returns. It is the reviewed escape, not a setting to leave on.</li>
-</ul>
-<p>An uncovered status, with no CRL or OCSP source for that issuer, follows the same setting. Under <code>refuse</code> it is
-refused too, and it holds until a source covers it, so retrying does not help; add the CRL. <strong>Under <code>allow</code>, a
-certificate from an issuer nothing covers is admitted with its revocation status unchecked</strong>, like any other
-unavailable status: that is a fail-open case, and the start line quoted under the <code>issuer_file</code> rules is the warning.</p>
-<p>What the broker refuses and what it marks:</p>
-<ul>
-<li>A certificate a CRL or OCSP lists as revoked, or one under a revoked issuing CA, is refused with
-  <code>credential_revoked</code> at login and at every mint.</li>
-<li>If the certificate holds anything (a connection, a device session, an unspent token), port49d also marks it as
-  <code>port49 revoke --cert</code> would, with origin <code>crl &lt;name&gt;</code> or <code>ocsp &lt;responder&gt;</code>, so its live contexts are
-  revoked and its tokens deleted. A revoked issuing CA is refused and not marked.</li>
-<li>Freshness follows the broker's clock, so an NTP step forward can make a fresh list stale. Keep time
-  synchronized on every broker host.</li>
-</ul>
-<p>Watch <code>port49_crl_next_update_timestamp_seconds</code> (an hour before a list passes its next update, at
-<code>time() - port49_crl_next_update_timestamp_seconds &gt; -3600</code>), <code>port49_cert_status_unavailable_total</code> and
-<code>port49_crl_loads_total</code>; they carry a <code>component</code> label of <code>broker</code> or <code>tls_listener</code>. They are in the
-<a href="../../reference/metrics/">metrics reference</a>, and the TLS alerts on the
-<a href="../../reference/alerts/#port49_crl_next_update_passed">alerts reference</a>.</p>
+<p><code>--lift</code> instead of the principal's revoke lifts it. <code>port49 store status --metrics 127.0.0.1:9050</code> reads the
+broker's stores on the metrics port.</p>
+</div>
+<div class="tabbed-block">
+<p>When no broker is reachable:</p>
+<div class="highlight"><pre><span></span><code>scripts/revoke-offline.sh<span class="w"> </span>&lt;ns&gt;<span class="w"> </span>&lt;release&gt;<span class="w"> </span>--<span class="w"> </span>--principal<span class="w"> </span>&lt;name&gt;<span class="w"> </span><span class="o">[</span>--lift<span class="p">|</span>--list<span class="o">]</span>
+</code></pre></div>
+<p>It scales the brokers to 0, runs <code>port49-broker revoke --offline</code> against broker-0's volume, and scales back on
+every exit. The chart is on etcd, which keeps the marks (with a copy in <code>broker.state_dir</code>), so it has no
+<code>init-revocations</code> step.</p>
+</div>
+</div>
+</div>
 
 
 
@@ -2970,7 +3850,7 @@ unavailable status: that is a fail-open case, and the start line quoted under th
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "default": "latest", "provider": "mike"}}</script>
     
     
       <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>

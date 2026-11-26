@@ -81,17 +81,16 @@
     </div>
     <div data-md-component="announce">
       
-        <aside class="md-banner">
-          <div class="md-banner__inner md-grid md-typeset">
-            
-            This site describes port49 as it is on main, not a release.
-          </div>
-          
-        </aside>
-      
     </div>
     
       <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              This is not the latest release's documentation. <a href="../../.."><strong>Go to the latest.</strong></a>
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL("../.."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
         
       </div>
     
@@ -504,17 +503,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#extending-a-session" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Extending a session
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -532,10 +520,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#which-one-should-i-use" class="md-nav__link">
+  <a href="#which-one-to-use" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Which one should I use
+        Which one to use
       
     </span>
   </a>
@@ -624,19 +612,7 @@
     
       
         
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
+          
         
       
         
@@ -661,71 +637,8 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Operate
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Operate
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    
-    
-      
-        
-          
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-    
-    
-    
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
-        
-          
           <div class="md-nav__link md-nav__container">
-            <a href="../../operate/install/" class="md-nav__link ">
+            <a href="../../operate/deploy/" class="md-nav__link ">
               
   
   
@@ -743,14 +656,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_1">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -768,9 +681,30 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../operate/install/systemd/" class="md-nav__link">
+    
+    
+      
         
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -784,11 +718,19 @@
   
   
 
-      </a>
-    </li>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    systemd
   
 
-              
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -797,14 +739,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/container/" class="md-nav__link">
+      <a href="../../operate/systemd/install/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Containers
+    Install
   
 
     
@@ -825,14 +767,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/helm/" class="md-nav__link">
+      <a href="../../operate/systemd/upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Helm
+    Upgrade
   
 
     
@@ -853,14 +795,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/clients/" class="md-nav__link">
+      <a href="../../operate/systemd/troubleshoot/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Clients
+    Troubleshoot
   
 
     
@@ -888,15 +830,74 @@
   
   
   
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Containers
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
     <li class="md-nav__item">
-      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+      <a href="../../operate/containers/trial/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Broker and agent
+    Try it
   
 
     
@@ -917,14 +918,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/login/" class="md-nav__link">
+      <a href="../../operate/containers/install/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Signing in
+    Install
   
 
     
@@ -945,14 +946,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/hardware-keys/" class="md-nav__link">
+      <a href="../../operate/containers/upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Hardware keys
+    Upgrade
   
 
     
@@ -965,6 +966,305 @@
   
 
               
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/containers/troubleshoot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshoot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Helm
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/upgrade/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/troubleshoot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshoot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/velero/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Back up with Velero
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -1008,7 +1308,7 @@
   <span class="md-ellipsis">
     
   
-    TLS
+    TLS (RFC 9887)
   
 
     
@@ -1120,7 +1420,7 @@
   <span class="md-ellipsis">
     
   
-    Versions
+    Versions and upgrades
   
 
     
@@ -1135,7 +1435,16 @@
               
             
               
-                
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
   
   
   
@@ -1151,28 +1460,35 @@
       
         
       
+        
+      
+        
+      
     
     
     
       
+        
+        
+      
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+            <a href="../../use/" class="md-nav__link ">
               
   
   
   <span class="md-ellipsis">
     
   
-    Troubleshooting
+    Sign in
   
 
     
@@ -1183,18 +1499,18 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_11">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
-    Troubleshooting
+    Sign in
   
 
           </label>
@@ -1209,14 +1525,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+      <a href="../../use/install-client/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Failure matrix
+    Install the client
   
 
     
@@ -1237,14 +1553,70 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+      <a href="../../use/login/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    When it will not start
+    Log in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/connect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connect to a device
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
   
 
     
@@ -1264,14 +1636,6 @@
     </li>
   
 
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
     
       
       
@@ -1281,6 +1645,10 @@
   
     
     
+      
+        
+          
+        
       
         
       
@@ -1311,11 +1679,12 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
-            
+          <div class="md-nav__link md-nav__container">
+            <a href="../../admin/" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
@@ -1329,15 +1698,442 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
     Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_2" id="__nav_6_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sign-in backends
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Sign-in backends
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/sign-in/oidc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OIDC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/sign-in/x509/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client certificates (x509)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/sign-in/directory-password/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Directory password
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/directory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The directory (LDAP)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_3" id="__nav_6_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workloads
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads-oxidized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Oxidized and step-ca
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads-kubernetes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes service accounts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_5" id="__nav_6_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Policy
   
 
           </label>
@@ -1358,6 +2154,34 @@
     
   
     Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rules and scopes
   
 
     
@@ -1406,14 +2230,106 @@
   
   
     <li class="md-nav__item">
-      <a href="../../admin/key-rotation/" class="md-nav__link">
+      <a href="../../admin/policy-tests/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Key rotation
+    Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy-review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reviewing a change
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/platform-sets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform sets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/admin-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin access
   
 
     
@@ -1441,7 +2357,7 @@
   <span class="md-ellipsis">
     
   
-    Revocation
+    Revoking access
   
 
     
@@ -1462,70 +2378,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../admin/identity-providers/" class="md-nav__link">
+      <a href="../../admin/key-rotation/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Identity providers
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../admin/workloads/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Workloads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../admin/inventory/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Inventory
+    Key rotation
   
 
     
@@ -1576,7 +2436,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_9" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1598,14 +2458,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_6_9" id="__nav_6_9_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_8">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1841,6 +2701,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1854,17 +2718,17 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
     
   
-    AI agents
+    Automation
   
 
     
@@ -1875,16 +2739,72 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
   
-    AI agents
+    Automation
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automation/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automation/ansible/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible collection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1900,7 +2820,7 @@
   <span class="md-ellipsis">
     
   
-    Quick start
+    AI agents quick start
   
 
     
@@ -1928,7 +2848,7 @@
   <span class="md-ellipsis">
     
   
-    Setup runbook
+    AI agents setup runbook
   
 
     
@@ -1978,6 +2898,14 @@
       
         
       
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -1991,10 +2919,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
             
   
   
@@ -2012,8 +2940,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2022,6 +2950,118 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/requirements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/client-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/health-checks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Health checks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2327,6 +3367,8 @@
       
         
       
+        
+      
     
     
     
@@ -2340,7 +3382,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -2362,14 +3404,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_7">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2424,6 +3466,34 @@
     
   
     Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/deployment-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment design
   
 
     
@@ -2515,17 +3585,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#extending-a-session" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Extending a session
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -2543,10 +3602,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#which-one-should-i-use" class="md-nav__link">
+  <a href="#which-one-to-use" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Which one should I use
+        Which one to use
       
     </span>
   </a>
@@ -2574,119 +3633,64 @@
 
 
 <h1 id="identities">Identities<a class="headerlink" href="#identities" title="Permanent link">&para;</a></h1>
-<p>port49 does not keep users. It checks a credential that something else issued. From there on every
-path looks the same: a principal (the identity port49 derived from the credential), groups from the
-directory, and a session.</p>
-<p>Which verifiers a broker trusts is configuration: <code>broker.identity.humans</code> and <code>broker.identity.machines</code>
-in the <a href="../../reference/config/port49d/">port49d reference</a>. What a verifier accepts decides the principal's
+<p>port49 does not keep users. It checks a credential that something else issued, and from there every path
+looks the same: a principal, groups from the directory, and a session. The verifiers a broker trusts are
+<code>broker.identity.humans</code> and <code>broker.identity.machines</code> in the
+<a href="../../reference/config/port49d/">port49d reference</a>, and what a verifier accepts decides the principal's
 <a href="../trust-domains/">trust domain</a>.</p>
-<p><strong>Groups never come from a credential.</strong> They are read from the directory when a token is minted. So an
-OIDC deployment with no directory can name people in policy only by literal identity. That is workable for
-a small team, and it is the point at which a directory earns its place.</p>
+<p>Groups never come from a credential. They are read from the directory when a token is minted, so an OIDC
+deployment with no directory can name people in policy only by literal identity.</p>
 <h2 id="people">People<a class="headerlink" href="#people" title="Permanent link">&para;</a></h2>
-<p>There are three ways to sign in. They differ in how a person proves identity, and in nothing
-downstream.</p>
+<p>There are three ways to sign in. They differ in how a person proves identity, and in nothing downstream.</p>
 <h3 id="an-x509-client-certificate">An x509 client certificate<a class="headerlink" href="#an-x509-client-certificate" title="Permanent link">&para;</a></h3>
-<p><code>port49 login</code> presents a client certificate in a mutual-TLS handshake to the broker. The broker
-validates the chain, expiry, revocation status and the client-authentication usage. The handshake itself
-is the proof that the person holds the key.</p>
-<p>The agent's session <em>is</em> that held connection. Every token for the rest of the day is minted over it, with
-no further key use. The connection carries one request at a time. <code>port49 token</code> asks for one device
-per call, so a run that asks for hundreds of devices at once, such as Ansible with <code>forks: 20</code>, queues
-in the agent. The agent sends what is queued as one request of up to the broker's <code>batch_max</code> devices
-and gives each caller its own device's token or its own refusal. The cost: the first mint goes alone, and
-a mint that waits longer than 30 seconds for the connection fails with "busy" and nothing minted. A
-mint that does not finish within about 85 seconds of being asked fails with the wait it was in. If the
-connection drops, and the key is on a hardware token, the next sign-in costs one more PIN or touch. See
-<a href="../../operate/hardware-keys/">Hardware keys</a>.</p>
-<p>The certificate must map to exactly one directory entry. Zero matches deny; more than one denies loudly
-rather than picking the first. The mapping kind is <code>broker.directory.certificate_mapping</code>:</p>
-<ul>
-<li><strong>Strong</strong> kinds bind to a key: <code>issuer_serial</code>, <code>sid</code>.</li>
-<li><strong>Weak</strong> kinds bind to a name: <code>san_upn</code>, <code>san_email</code>, <code>subject_dn</code>, <code>cn</code>. They are refused at load
-  without <code>allow_weak: true</code> and an issuer pin, because any other trusted CA could otherwise issue a
-  certificate bearing the same name.</li>
-</ul>
+<p><code>port49 login</code> presents a client certificate in a mutual-TLS handshake to the broker, which validates the
+chain, expiry, revocation status and the client-authentication usage. The handshake is the proof that the
+person holds the key, and the agent keeps that connection for
+<a href="../tokens-receipts-contexts/#the-session">the session</a>.</p>
+<p>The certificate must map to exactly one directory entry. Zero matches deny, and more than one denies loudly
+rather than picking the first. <code>broker.directory.certificate_mapping</code> picks the kind. Strong kinds
+(<code>issuer_serial</code>, <code>sid</code>) bind to a key. Weak kinds (<code>san_upn</code>, <code>san_email</code>, <code>subject_dn</code>, <code>cn</code>) bind to a
+name, so they are refused at load without <code>allow_weak: true</code> and an issuer pin: any other trusted CA could
+issue a certificate bearing the same name.</p>
 <h3 id="oidc-with-a-certificate-port49-issues">OIDC, with a certificate port49 issues<a class="headerlink" href="#oidc-with-a-certificate-port49-issues" title="Permanent link">&para;</a></h3>
-<p>This is the path for a company with no PKI. <code>port49 login --oidc</code> signs in at the organization's identity
-provider with the authorization-code flow (PKCE). The broker validates the ID token against the provider's
-published keys. Then it issues the person a <strong>short-lived client certificate</strong> (12 hours by default) for a
-key generated on their own host. From then on the session is the certificate path's held connection, and
-the agent holds no token.</p>
-<p>Where the key lives is <code>issued_key_store</code> in the client configuration (<a href="../../reference/config/client/">client
-reference</a>). A key kept in a file is copyable, and whoever copies it holds
-the session until the certificate ends; a key in a TPM or hardware token is not.</p>
-<p>If the provider is down, people already holding a certificate keep working until it ends.</p>
+<p>This is the path for a company with no PKI. <code>port49 login --oidc</code> signs in at the identity provider with the
+authorization-code flow (PKCE), and the broker validates the ID token against the provider's published keys.
+It then issues a short-lived client certificate (12 hours by default) for a key generated on the person's
+own host, and the agent holds no token.</p>
+<p>The key lives where <code>issued_key_store</code> says (<a href="../../reference/config/client/">client reference</a>). A key in
+a file is copyable, and whoever copies it holds the session until the certificate ends. A key in a TPM or
+hardware token is not. If the provider is down, people already holding a certificate keep working until it
+ends.</p>
 <h3 id="a-directory-password-and-an-authenticator-code">A directory password and an authenticator code<a class="headerlink" href="#a-directory-password-and-an-authenticator-code" title="Permanent link">&para;</a></h3>
 <p><code>port49 login --directory</code> is for a company with neither a PKI nor an identity provider. The person's
 directory password and a TOTP code go to the broker over its TLS. The broker checks the code first, then
-the password, by a single bind as the person's own directory entry (LDAPS or StartTLS). Then it issues the
-same certificate as the OIDC path.</p>
-<p>The password is never stored, logged or given to a device. Attempts are limited per person and per source
-address, counted before they are judged. Service accounts do not sign in this way, and a workload's
-directory entry is refused.</p>
-<h3 id="extending-a-session">Extending a session<a class="headerlink" href="#extending-a-session" title="Permanent link">&para;</a></h3>
-<p>Extending a session at its ceiling needs a <em>fresh</em> authentication event, not a replay of the old
-one. On the certificate paths that is the key's signature over a nonce, so nothing secret crosses the
-wire again.</p>
+the password, by a single bind as the person's own directory entry (LDAPS or StartTLS), then issues the
+same certificate as the OIDC path. The password is never stored, logged or given to a device. Attempts are
+limited per person and per source address, counted before they are judged. A workload's directory entry is
+refused.</p>
+<p>Extending a session at its ceiling needs a fresh authentication event, which on the certificate paths is
+the key's signature over a nonce, so nothing secret crosses the wire again.</p>
 <h2 id="machines">Machines<a class="headerlink" href="#machines" title="Permanent link">&para;</a></h2>
-<p>A workload cannot sign in interactively and has no directory password. There are three mechanisms.</p>
-<p><strong>Kubernetes service account tokens</strong> are the first choice where the workload runs in a cluster. The
-pod requests a projected token with the audience <code>port49</code>; the kubelet writes and rotates it. The broker
-validates it against the cluster's published keys and derives the principal
-<code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code>. No certificate, no rotation to implement, and no secret at
-rest. The <code>k8s</code> verifier is configured once per cluster and names the namespaces it vouches for. A
-workload presents its token with <code>port49 workload token --token-file</code>.</p>
-<p>A deleted service account's token stays valid at port49 until its own expiry or the broker's
-<code>broker.identity.max_token_age</code>, whichever comes first. To stop it sooner, revoke the principal; see
-<a href="../revocation/">Revocation</a>.</p>
-<p><strong>Workload certificates</strong> are for hosts outside a cluster. The <code>x509</code> machine verifier has its own
-trust anchor, separate from any person's, and a list of the SPIFFE trust domains it may name. The
-principal is the certificate's one URI SAN, a SPIFFE ID. The workload enrolls and renews with the
-organization's CA; a renewal needs nothing from port49, and a late renewal is counted in
-<code>port49_workload_certificates_renewal_late_total</code> (see <a href="../../reference/metrics/">Metrics</a>).
-<code>port49 workload token</code> mints with no agent, reading the certificate and key on each run.</p>
-<p><strong>A machine OIDC client</strong> is for a workload that gets its token from your identity provider. The
-<code>oidc</code> machine verifier lists the client ids it accepts, each pinned to the subject the provider
-issues for it, and the principal is <code>app:&lt;client_id&gt;</code>. A token that names a client the verifier does
-not list, or whose subject is not the pinned one, is refused.</p>
-<p>In every case the workload's access is its own identity subject's in policy. A machine can be mapped to a
-directory entry for group membership, but only to a machine-scoped group, never to a person's.</p>
-<h2 id="which-one-should-i-use">Which one should I use<a class="headerlink" href="#which-one-should-i-use" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>If you have</th>
-<th>Use</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>a PKI and hardware keys</td>
-<td>an x509 client certificate</td>
-</tr>
-<tr>
-<td>an identity provider and no PKI</td>
-<td>OIDC (<code>port49 login --oidc</code>)</td>
-</tr>
-<tr>
-<td>neither</td>
-<td>a directory password and TOTP (<code>port49 login --directory</code>)</td>
-</tr>
-<tr>
-<td>automation in Kubernetes</td>
-<td>a service account token</td>
-</tr>
-<tr>
-<td>automation on static hosts</td>
-<td>a workload certificate</td>
-</tr>
-<tr>
-<td>automation with a client at your identity provider</td>
-<td>a machine OIDC client</td>
-</tr>
-</tbody>
-</table>
+<p>A workload cannot sign in interactively and has no directory password. Three mechanisms cover it,
+and <code>port49 workload token</code> mints with no agent for any of them. <a href="../../admin/workloads/">Workloads</a> sets each one up.</p>
+<ul>
+<li>Kubernetes service account tokens are the first choice inside a cluster. The broker validates a projected
+  token with the audience <code>port49</code> against the cluster's published keys, and the principal is
+  <code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code>. There is no secret at rest.</li>
+<li>Workload certificates are for hosts outside a cluster. The <code>x509</code> machine verifier has its own trust
+  anchor, and the principal is the certificate's one URI SAN, a SPIFFE ID.</li>
+<li>A machine OIDC client is for a workload that gets its token from your identity provider. The verifier
+  lists the client ids it accepts, each pinned to its subject, and the principal is <code>app:&lt;client_id&gt;</code>.</li>
+</ul>
+<p>A workload's access is its own identity subject's in policy. It can be mapped to a directory entry for group
+membership, but only to a machine-scoped group.</p>
+<p>A deleted service account's token stays valid until its own expiry or <code>broker.identity.max_token_age</code>,
+whichever comes first. To stop it sooner, <a href="../revocation/">revoke</a> the principal.</p>
+<h2 id="which-one-to-use">Which one to use<a class="headerlink" href="#which-one-to-use" title="Permanent link">&para;</a></h2>
+<p>With a PKI and hardware keys, use an x509 client certificate. With an identity provider and no PKI, use
+OIDC (<code>port49 login --oidc</code>). With neither, use a directory password and TOTP (<code>port49 login --directory</code>).
+For automation, use a service account token in Kubernetes, a workload certificate on static hosts, or a
+machine OIDC client when your identity provider issues the token.</p>
 
 
 
@@ -2739,7 +3743,7 @@ directory entry for group membership, but only to a machine-scoped group, never 
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "default": "latest", "provider": "mike"}}</script>
     
     
       <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>

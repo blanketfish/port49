@@ -81,17 +81,16 @@
     </div>
     <div data-md-component="announce">
       
-        <aside class="md-banner">
-          <div class="md-banner__inner md-grid md-typeset">
-            
-            This site describes port49 as it is on main, not a release.
-          </div>
-          
-        </aside>
-      
     </div>
     
       <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              This is not the latest release's documentation. <a href="../../.."><strong>Go to the latest.</strong></a>
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL("../.."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
         
       </div>
     
@@ -432,10 +431,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#two-credentials-two-lifetimes" class="md-nav__link">
+  <a href="#the-session" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Two credentials, two lifetimes
+        The session
       
     </span>
   </a>
@@ -585,19 +584,7 @@
     
       
         
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
+          
         
       
         
@@ -622,71 +609,8 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Operate
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Operate
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    
-    
-      
-        
-          
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-    
-    
-    
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
-        
-          
           <div class="md-nav__link md-nav__container">
-            <a href="../../operate/install/" class="md-nav__link ">
+            <a href="../../operate/deploy/" class="md-nav__link ">
               
   
   
@@ -704,14 +628,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_1">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -729,9 +653,30 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../operate/install/systemd/" class="md-nav__link">
+    
+    
+      
         
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -745,11 +690,19 @@
   
   
 
-      </a>
-    </li>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    systemd
   
 
-              
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -758,14 +711,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/container/" class="md-nav__link">
+      <a href="../../operate/systemd/install/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Containers
+    Install
   
 
     
@@ -786,14 +739,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/helm/" class="md-nav__link">
+      <a href="../../operate/systemd/upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Helm
+    Upgrade
   
 
     
@@ -814,14 +767,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/install/clients/" class="md-nav__link">
+      <a href="../../operate/systemd/troubleshoot/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Clients
+    Troubleshoot
   
 
     
@@ -849,15 +802,74 @@
   
   
   
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Containers
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Containers
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
     <li class="md-nav__item">
-      <a href="../../operate/broker-and-agent/" class="md-nav__link">
+      <a href="../../operate/containers/trial/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Broker and agent
+    Try it
   
 
     
@@ -878,14 +890,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/login/" class="md-nav__link">
+      <a href="../../operate/containers/install/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Signing in
+    Install
   
 
     
@@ -906,14 +918,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/hardware-keys/" class="md-nav__link">
+      <a href="../../operate/containers/upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Hardware keys
+    Upgrade
   
 
     
@@ -926,6 +938,305 @@
   
 
               
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/containers/troubleshoot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshoot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Helm
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/upgrade/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/troubleshoot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshoot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/helm/velero/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Back up with Velero
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -969,7 +1280,7 @@
   <span class="md-ellipsis">
     
   
-    TLS
+    TLS (RFC 9887)
   
 
     
@@ -1081,7 +1392,7 @@
   <span class="md-ellipsis">
     
   
-    Versions
+    Versions and upgrades
   
 
     
@@ -1096,7 +1407,16 @@
               
             
               
-                
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
   
   
   
@@ -1112,28 +1432,35 @@
       
         
       
+        
+      
+        
+      
     
     
     
       
+        
+        
+      
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../operate/troubleshooting/" class="md-nav__link ">
+            <a href="../../use/" class="md-nav__link ">
               
   
   
   <span class="md-ellipsis">
     
   
-    Troubleshooting
+    Sign in
   
 
     
@@ -1144,18 +1471,18 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3_11" id="__nav_3_11_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3_11">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
-    Troubleshooting
+    Sign in
   
 
           </label>
@@ -1170,14 +1497,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+      <a href="../../use/install-client/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Failure matrix
+    Install the client
   
 
     
@@ -1198,14 +1525,70 @@
   
   
     <li class="md-nav__item">
-      <a href="../../operate/troubleshooting/will-not-start/" class="md-nav__link">
+      <a href="../../use/login/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    When it will not start
+    Log in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/connect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connect to a device
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/hardware-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hardware keys
   
 
     
@@ -1225,14 +1608,6 @@
     </li>
   
 
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
     
       
       
@@ -1242,6 +1617,10 @@
   
     
     
+      
+        
+          
+        
       
         
       
@@ -1272,11 +1651,12 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
-            
+          <div class="md-nav__link md-nav__container">
+            <a href="../../admin/" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
@@ -1290,15 +1670,442 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
     Administer
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_2" id="__nav_6_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sign-in backends
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Sign-in backends
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/sign-in/oidc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OIDC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/sign-in/x509/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client certificates (x509)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/sign-in/directory-password/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Directory password
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/directory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The directory (LDAP)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_3" id="__nav_6_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workloads
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads-oxidized/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Oxidized and step-ca
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/workloads-kubernetes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes service accounts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_5" id="__nav_6_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Policy
   
 
           </label>
@@ -1319,6 +2126,34 @@
     
   
     Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rules and scopes
   
 
     
@@ -1367,14 +2202,106 @@
   
   
     <li class="md-nav__item">
-      <a href="../../admin/key-rotation/" class="md-nav__link">
+      <a href="../../admin/policy-tests/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Key rotation
+    Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/policy-review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reviewing a change
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/platform-sets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platform sets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/admin-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin access
   
 
     
@@ -1402,7 +2329,7 @@
   <span class="md-ellipsis">
     
   
-    Revocation
+    Revoking access
   
 
     
@@ -1423,70 +2350,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../admin/identity-providers/" class="md-nav__link">
+      <a href="../../admin/key-rotation/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Identity providers
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../admin/workloads/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Workloads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../admin/inventory/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Inventory
+    Key rotation
   
 
     
@@ -1537,7 +2408,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_9" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1559,14 +2430,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_6_9" id="__nav_6_9_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_8">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1802,6 +2673,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1815,17 +2690,17 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
     
   
-    AI agents
+    Automation
   
 
     
@@ -1836,16 +2711,72 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
   
-    AI agents
+    Automation
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automation/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../automation/ansible/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ansible collection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1861,7 +2792,7 @@
   <span class="md-ellipsis">
     
   
-    Quick start
+    AI agents quick start
   
 
     
@@ -1889,7 +2820,7 @@
   <span class="md-ellipsis">
     
   
-    Setup runbook
+    AI agents setup runbook
   
 
     
@@ -1939,6 +2870,14 @@
       
         
       
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -1952,10 +2891,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
             
   
   
@@ -1973,8 +2912,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1983,6 +2922,118 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/requirements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirements
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/client-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/health-checks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Health checks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/troubleshooting/failure-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failure matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2288,6 +3339,8 @@
       
         
       
+        
+      
     
     
     
@@ -2301,7 +3354,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -2323,14 +3376,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_7">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2398,6 +3451,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/deployment-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2432,10 +3513,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#two-credentials-two-lifetimes" class="md-nav__link">
+  <a href="#the-session" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Two credentials, two lifetimes
+        The session
       
     </span>
   </a>
@@ -2496,104 +3577,59 @@
 
 
 <h1 id="tokens-receipts-and-contexts">Tokens, receipts and contexts<a class="headerlink" href="#tokens-receipts-and-contexts" title="Permanent link">&para;</a></h1>
-<p>A device login touches three stored records. Each exists to answer one question.</p>
-<table>
-<thead>
-<tr>
-<th>Record</th>
-<th>Question it answers</th>
-<th>Written by</th>
-<th>Lives</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Token</strong></td>
-<td>May this one login on this one device proceed?</td>
-<td>the broker, at mint</td>
-<td>until spent or its <code>token_ttl</code> ends</td>
-</tr>
-<tr>
-<td><strong>Receipt</strong></td>
-<td>Is this a retransmission of a login already accepted?</td>
-<td>port49d, at redemption</td>
-<td>a sliding window, with a hard cap</td>
-</tr>
-<tr>
-<td><strong>Login context</strong></td>
-<td>Who is logged in here, and what may they do?</td>
-<td>port49d, at redemption</td>
-<td>until the session ends, is revoked or goes idle</td>
-</tr>
-</tbody>
-</table>
-<h2 id="two-credentials-two-lifetimes">Two credentials, two lifetimes<a class="headerlink" href="#two-credentials-two-lifetimes" title="Permanent link">&para;</a></h2>
-<p>A login uses two credentials:</p>
+<p>A device login touches three stored records. The broker writes the token at mint, and port49d writes the
+receipt and the login context at redemption.</p>
+<h2 id="the-session">The session<a class="headerlink" href="#the-session" title="Permanent link">&para;</a></h2>
+<p>The person's session lasts hours, stays with the agent and is never sent to a device. The device token is
+minted from it automatically, so no long-lived credential is ever pasted into a device. The agent holds one
+mutual-TLS connection to the broker while the network is up, and the broker does not close an authenticated
+connection for being idle.</p>
 <ul>
-<li>The person's <strong>session</strong> is the held connection described in <a href="../">Concepts</a>. It lasts hours, is
-  held by the agent, and is never sent to a device.</li>
-<li>The <strong>device token</strong> is minted from the session automatically. It lasts between 30 and 900 seconds and is
-  used once.</li>
+<li>The end time is fixed at login from <code>max_session_age</code>. Reconnects do not move it.</li>
+<li>A dropped connection does not end the session. The agent dials again at its next request with the same
+  certificate and key and its random session ID, so the broker sees one session.</li>
+<li>A reconnect is another use of the key, so a hardware key asks for its PIN or a touch again. The broker
+  turns TLS session resumption off.</li>
+<li>Each new connection gets a fresh <code>auth_time</code>, and a context's end is <code>auth_time</code> plus <code>max_session_age</code>.
+  A context minted after a reconnect can outlast the end the agent states, and so can a device-side ceiling
+  counted from it.</li>
+<li>The session ends at its end time, on a revocation, when the broker stops trusting the certificate, or when
+  the agent exits.</li>
 </ul>
-<p>Why two? A single long-lived credential pasted into devices would be a password with an expiry date. A
-session with no per-device token would need a certificate interaction for every device. Two credentials
-avoid both.</p>
 <h2 id="the-token">The token<a class="headerlink" href="#the-token" title="Permanent link">&para;</a></h2>
 <p>A token is an opaque handle: exactly 30 letters and digits, with no prefix and no separator, like
-<code>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</code> (a stand-in, not a value). It carries no claims. The identity, the groups resolved
-from the directory at mint time and the device it is valid for all live in the store, which is why
-deleting a token ends it at once.</p>
+<code>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</code> (a stand-in, not a value). It carries no claims. The identity, the groups
+and the device it is valid for live in the store, so deleting a token ends it at once.</p>
 <ul>
-<li><strong>One device.</strong> The token is stored under <code>(nas, username)</code>: the device (the NAS, in TACACS+ terms) and
-  the device-facing username. A token presented at another device is simply not there.
-  The first six characters are a keyed tag of the device, so port49d can tell a token cut for another
-  device from one that expired. That is <code>device_mismatch</code>, and it does not occur in normal operation,
-  so it is worth alerting on.</li>
-<li><strong>One use.</strong> Redemption is an atomic match-and-delete inside the set of tokens for that key. The
-  set holds only unspent, unexpired tokens, usually one. A cap on the set (<code>candidate_cap_reached</code>)
-  refuses a <em>mint</em>, never a redemption, so a runaway client is told to stop while every token it
-  already holds still works.</li>
-<li><strong>Short TTL, per subject.</strong> <code>token_ttl</code> is a subject's setting in policy
-  (<a href="../../reference/config/policy/">policy reference</a>), not a global. An interactive login needs about a
-  minute; a batch job walking thousands of devices needs a window matching its run. A longer TTL widens
-  replay only for an <em>unspent</em> token. But it also keeps that many recoverable secrets in the store for
-  that long, so size it to the sweep.</li>
-<li><strong>Encrypted at rest.</strong> CHAP makes port49d recompute a digest from the plaintext token, so the store
-  must hold it recoverably. Tokens and contexts are therefore sealed with a key held by the broker and
-  port49d, not by the store. A store dump alone yields no credential. See
-  <a href="../../operate/secrets/">Secrets</a> for where the key lives.</li>
-<li><strong>Expiry is the record's, read on port49d's clock.</strong> The broker writes the token with its expiry
-  (its own time of minting plus the TTL), and port49d honours a token only before that time on its own
-  clock; the store's leases only clean up later. On etcd the broker's clock and port49d's therefore
-  decide a login together: a broker 20 seconds behind turns a 30-second token into a 10-second one,
-  and one 30 seconds behind mints tokens that are dead on arrival and fail <code>token_not_found</code>. A broker
-  ahead lengthens each token by the skew, until its lease reclaims it: at most <code>lease_grace</code> (5 minutes)
-  plus two minutes past <code>token_ttl</code>. Skew never admits a token minted for another device or one already
-  spent; it widens an unspent token's window only up to that bound. Keep every
-  broker host and every port49d host on NTP, so they disagree by far less than the shortest
-  <code>token_ttl</code>. A broker clock that runs ahead is counted (<code>port49_token_minted_ahead_total</code>) and
-  raises the <code>port49_token_clock_skew</code> ticket. The memory store is one process and has one clock.</li>
+<li>One device. The token is stored under <code>(nas, username)</code>: the device (the NAS, in TACACS+ terms) and the
+  device-facing username. port49d names the device from the connection's source address, through the
+  inventory, never from anything the device sends. A token cut for another device is <code>device_mismatch</code>,
+  which does not occur in normal operation, so alert on it.</li>
+<li>One use. Redemption is an atomic match-and-delete. A cap on the set of tokens (<code>candidate_cap_reached</code>)
+  refuses a mint, never a redemption.</li>
+<li>Short TTL, per subject. <code>token_ttl</code> is 30 to 900 seconds, set per subject in
+  <a href="../../reference/config/policy/">policy</a>. A longer TTL widens replay for an unspent token, so size it to
+  the sweep.</li>
+<li>Encrypted at rest with a key held by the broker and port49d, so a store dump alone yields no credential.
+  See <a href="../../operate/secrets/">Secrets</a>.</li>
+<li>Expiry is read on port49d's clock. Keep every broker and port49d host on NTP; the
+  <a href="../../reference/requirements/#clocks">requirements</a> say what skew does.</li>
 </ul>
-<p>An <code>enable</code> login has no principal to type a name for, so the broker mints a <strong>pair</strong>: a login token
-and an enable token, both bound to the device, both single use, sharing a TTL. Tools that already have an
-enable or secret field take the pair unchanged.</p>
+<p>An <code>enable</code> login gets a pair: a login token and an enable token, both bound to the device, both single use,
+sharing a TTL.</p>
 <h2 id="the-receipt">The receipt<a class="headerlink" href="#the-receipt" title="Permanent link">&para;</a></h2>
-<p>Devices retry. A TCP reset between port49d's read and its reply, or a slow store, makes the device send
-the same login again. If redeeming deleted the token and nothing else, the retry would find nothing and
-the login would fail intermittently.</p>
-<p>So when port49d redeems a token it leaves a <strong>receipt</strong>: the decision it made and the context it
-created, keyed by <code>(nas, username, credential_sha256)</code>. The key holds a hash of what was <em>presented</em>.
-For PAP and ASCII that is the token; for CHAP it is the exchange, which proves possession without
-carrying it. A byte-identical retransmission finds its own receipt and gets the stored decision
-(<code>receipt_replayed</code>) and the same context, not a second one. A different password for the same user
-finds nothing and is judged on its own merits.</p>
-<p>A receipt is a sliding window, not a fixed one. Each presentation it answers extends it by
-<code>receipt_idle_ttl</code> (default 15 minutes), up to <code>receipt_max_age</code> (default 2 hours) from the first
-redemption. A presentation past either bound is a plain FAIL on the wire, exactly as a wrong password
-is, and the log says <code>token_spent</code>. Interactive logins present once and never slide; a client that
-re-presents the same credential does, with no flag to set. The keys are in the
-<a href="../../reference/config/port49d/">port49d configuration reference</a>.</p>
-<p>How many times a client library authenticates differs between libraries. On EOS, pyeapi authenticated once per task (10 <code>authorize_session</code> records for ten tasks, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-arista_eos.md">the arista_eos note</a>).
+<p>Devices retry, so port49d leaves a receipt when it redeems a token: the decision and the context it created,
+keyed by <code>(nas, username, credential_sha256)</code>. The key holds a hash of what was presented, the token for PAP
+and ASCII and the exchange for CHAP. A byte-identical retransmission gets the stored decision
+(<code>receipt_replayed</code>) and the same context. A different password for the same user is judged on its own.</p>
+<p>A receipt is a sliding window. Each presentation it answers extends it by <code>receipt_idle_ttl</code> (default
+15 minutes), up to <code>receipt_max_age</code> (default 2 hours) from the first redemption. A presentation past either
+bound is a plain FAIL on the wire, as a wrong password is, and the log says <code>token_spent</code>. Interactive logins
+present once and never slide. The receipt key does not include the line (<code>port</code>), so a spent token replays on
+that device over any transport until the window ends. The two keys, in the
+<a href="../../reference/config/port49d/">port49d configuration reference</a>, bound a leaked spent token, so keep them
+short. <a href="../../reference/reason-codes/">Reason codes</a> lists what else <code>token_spent</code> covers.</p>
+<p>Client libraries differ in how often they authenticate. On EOS, pyeapi authenticated once per task (10 <code>authorize_session</code> records for ten tasks, <a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-arista_eos.md">the arista_eos note</a>).
 On NX-OS, NAPALM's <code>nxos</code> driver made 23 for ten tasks, all in one context (<a href="https://github.com/blanketfish/port49/blob/main/tests/lab/results/L15-clients-cisco_nxos.md">the cisco_nxos note</a>).</p>
 <div class="admonition warning">
 <p class="admonition-title">Unmeasured</p>
@@ -2601,40 +3637,32 @@ On NX-OS, NAPALM's <code>nxos</code> driver made 23 for ten tasks, all in one co
 is unknown (<a href="../../reference/lab-register/#l15">L15</a>, open). Do not size <code>receipt_idle_ttl</code> on a count you have not measured for your
 own client.</p>
 </div>
-<p><code>token_spent</code> also covers a receipt whose context no longer exists (it was replaced or reclaimed), and
-a token brought back by a store restore. The device simply prompts again. See
-<a href="../../reference/reason-codes/">Reason codes</a> for each meaning.</p>
-<p>The receipt key does not include the line (the device's <code>port</code>), so a spent token replays on that device
-over any transport until the window ends. <code>receipt_idle_ttl</code> and <code>receipt_max_age</code> are therefore the bound
-on a leaked <em>spent</em> token. Keep them as short as your automation allows.</p>
 <h2 id="the-login-context">The login context<a class="headerlink" href="#the-login-context" title="Permanent link">&para;</a></h2>
-<p>A context is "this principal's authorization on this device". port49d creates it <strong>only</strong> on a
-successful redemption, keyed <code>(nas, username)</code>. A session port49 did not authenticate has no context, so
-it is denied: there is nothing to authorize it on.</p>
-<p>The context records the principal, the groups, the privilege, the compiled policy for this device, the
-credential that authorized it (certificate fingerprint, issuer and serial, or the OIDC <code>sid</code> and <code>sub</code>),
-the session clock and a revocation mark. Authorization requests carry only <code>user</code>, <code>port</code>, <code>rem_addr</code>
-and the privilege level; the device never sends the credential, so the context is the only place port49d
-can learn who it is talking to.</p>
+<p>A context is "this principal's authorization on this device". port49d creates it only on a successful
+redemption, keyed <code>(nas, username)</code>. A session port49 did not authenticate has no context, so it is denied.
+It records the principal, the groups, the privilege, the compiled policy for this device, the credential that
+authorized it, the session clock and a revocation mark. The device never sends the credential, so the context
+is the only place port49d can learn who it is talking to.</p>
 <ul>
-<li><strong>Keyed on the username, not the line.</strong> <code>port</code> and <code>rem_addr</code> are recorded for the log and for
-  accounting and are part of no key, because a device does not present the same <code>port</code> at login and at
-  authorization. A second login by the same principal under the same username on the same device
-  <strong>joins</strong> the live context rather than replacing it: it keeps the context, raises privilege only, and
-  never shortens a window already granted.</li>
-<li><strong>Another principal's login replaces it</strong>, and the replace is logged.</li>
+<li><strong>Keyed on the username, not the line.</strong> <code>port</code> and <code>rem_addr</code> are recorded for the log and accounting and
+  are part of no key, because a device does not present the same <code>port</code> at login and at authorization.</li>
+<li><strong>Logging in again joins it.</strong> A second login by the same principal under the same username on
+  the same device keeps the context, only raises privilege, and never shortens a window already
+  granted.</li>
+<li><strong>It belongs to one principal.</strong> A login by anyone else under that username starts a
+  fresh context and logs the replacement (<code>session.replaced_ctx_id</code>). Usernames are unique per
+  subject, so this happens only if that check was bypassed.</li>
 <li><strong>It ends</strong> when its session ceiling (a role's <code>max_session_age</code>, counted from the person's
-  authentication) passes, when it sits idle past <code>context_idle_ttl</code>, or when it is revoked. See
-  <a href="../revocation/">Revocation</a>. If the broker is unreachable past <code>session.staleness_ceiling</code>, port49d
-  denies <code>context_stale</code> and keeps the context, so recovery resumes it.</li>
-<li><strong>It is sealed.</strong> Every field the authorizer trusts is encrypted and bound to its <code>(nas, username)</code>
-  key, so a store write cannot raise a privilege, lift a revocation or move a record to another device.
-  What a writer to the store can still do is put back a record port49 sealed earlier. The design document
-  lists that residual replay exactly; treat store write access as a privilege to protect.</li>
+  authentication) passes, when it sits idle past <code>context_idle_ttl</code>, or when it is
+  <a href="../revocation/">revoked</a>. If the broker is unreachable past <code>session.staleness_ceiling</code>, port49d denies
+  <code>context_stale</code> and keeps the context, so recovery resumes it.</li>
+<li><strong>It is sealed.</strong> Every field the authorizer trusts is encrypted and bound to its <code>(nas, username)</code> key, so
+  a store write cannot raise a privilege, lift a revocation or move a record to another device. A writer to the store can still
+  put back a record port49 sealed earlier, so protect store write access.</li>
 </ul>
 <div class="admonition warning">
 <p class="admonition-title">Session control stops at the device</p>
-<p>TACACS+ has no server-to-device disconnect. Everything above stops port49 from <em>authorizing</em>; it
+<p>TACACS+ has no server-to-device disconnect. Everything above stops port49 from authorizing. It
 does not close a connection. A platform that asks port49 only at login never asks again, so a ceiling
 or a revocation reaches a context nobody reads there. Junos is one, unless its
 <code>authorization-time-interval</code> is set. <a href="../revocation/">Revocation</a> has what was measured.</p>
@@ -2691,7 +3719,7 @@ or a revocation reaches a context nobody reads there. Junos is one, unless its
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "content.code.copy", "search.highlight"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "default": "latest", "provider": "mike"}}</script>
     
     
       <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
