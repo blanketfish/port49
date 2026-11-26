@@ -214,64 +214,11 @@ Compose's own `secrets:` is not used for device keys: [Secrets](https://blanketf
 <!-- moved: docs/site/admin/revocation.md (Break-glass) -->
 Break-glass revoke with the broker unreachable: [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/).
 
-## Adding a key version
+<!-- moved: docs/site/admin/key-rotation.md (Adding a key version) -->
+Adding a device key version, and the order that avoids a crash-loop: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/#device-keys).
 
-A device key is a file named in the policy. Add a version by writing a new file and a new line;
-never rewrite a file in place (port49d reads each file once, and says so if one changes). Run this
-from the repository root, with `PORT49_COMPOSE_LOCAL` as for `up` if you set it, and the project
-name `port49` (`docker compose -p` changes the volume prefix):
-
-```sh
-docker run --rm -v port49_port49d-keys:/k --entrypoint port49d port49-setup:dev \
-  key device tacacs_v2 --dir /k --device-owner 0 --device-group 65532   # a new name for every version
-```
-
-It is `port49d key device` (`deploy/systemd/README.md`, "Adding a key version"), run in the volume
-with the owners this deployment needs (`0:65532`, 0440): a new file, a no-clobber link, a refusal of a name
-that exists, nothing left behind on a failure. Type the
-key into the device from the volume, and keep the new file's name for the policy. Then add
-`{version: 2, secret_ref: "file:/run/port49/keys/tacacs_v2"}` to the key set in `config/policy.yaml`, under `accept:` (moving the
-old version out of `current:` once each device carries the new key), and run `docker compose up -d`:
-`setup` copies the policy into both `-etc` volumes. port49d reads the policy at `policy.watch_interval` (5 s
-here) and the new version takes effect with no restart: `port49_key_secret_files_changed` stays 0.
-
-**Order matters.** Put the key file in place first, then add the policy line that names it. To remove a
-key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
-file that is not there makes port49d refuse its start (`lstat ...: no such file`), so on a restart it
-crash-loops until you restore the file in the `port49d-keys` volume or take the policy line out.
-
-## Rotating the `encryption:` key
-
-One key, in both components, from one secret, in three steps. A new key is a new file beside the old,
-never a rewrite.
-
-1. Make the new sealing key once, as `secrets/encryption-e2.key` in the `port49d-etc` volume and
-   `secrets/broker-encryption-e2.key` in `broker-etc` (`65532` 0400, the same 32 bytes), with this one
-   command from any directory (project `port49`; `docker compose -p` changes the volume prefix). It
-   refuses a name that exists, never replaces one, and leaves nothing behind on a failure.
-
-   ```sh
-   docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b --entrypoint port49d port49-setup:dev \
-     key sealing --id e2 --dir /e/secrets --broker-dir /b/secrets --daemon-user 65532 --broker-user 65532
-   ```
-
-   Add it to `config/port49d.yaml` as `previous: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}`
-   and to `config/port49-broker.yaml` as `previous: {id: c2, secret_ref:
-   file:/etc/port49/secrets/broker-encryption-e2.key}`, run `docker compose up -d` (setup copies the config
-   files) and `docker compose restart port49d port49-broker`. Both open what either key sealed.
-2. Swap: make `c2` `current:` and `c1` `previous:` in both files, and restart both.
-3. Remove `previous:` and the old file only after the scheduled directory pass (every `refresh_interval`)
-   has re-sealed the second-factor records under `c2`. A record that opens under neither key is never
-   "not enrolled": that sign-in is `503 store_unavailable`, and the broker's line names
-   `port49 directory reset-second-factor`. Remove the old key from `local/secrets/` **first**
-   (`encryption.key` and `broker-encryption.key` are the old key's), so an `up` in between cannot install it
-   again, and then from the volumes
-   (`docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b alpine:3.22 rm /e/secrets/encryption.key /b/secrets/broker-encryption.key`,
-   with the old file's name). Setup skips a sealing key that is in neither place; once the config no longer names the
-   old file, every later `up` starts clean and the old key stays gone.
-
-A process whose window lacks the directory's current key id refuses to start, naming the directory
-store and the id. Two store blocks reaching one etcd cluster at one prefix are refused too.
+<!-- moved: docs/site/admin/key-rotation.md (Rotating the `encryption:` key) -->
+Rotating the `encryption:` key: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/#the-encryption-key).
 
 <!-- --8<-- [start:upgrade] -->
 Read the [release notes](https://github.com/blanketfish/port49/releases) and

@@ -241,15 +241,15 @@ func TestTheComposeBrokerSealingKeyHasTheNameKeySealingWrites(t *testing.T) {
 		strings.Contains(s, "/vol/broker-etc/secrets/encryption.key") {
 		t.Error("setup.sh does not place the broker's key as broker-encryption.key alone")
 	}
-	r := read("../../deploy/compose/README.md")
+	r := read("../../docs/site/admin/key-rotation.md")
 	for _, want := range []string{"key sealing --id e2", "--broker-dir"} {
 		if !strings.Contains(r, want) {
-			t.Errorf("the README does not show %q", want)
+			t.Errorf("the key rotation page does not show %q", want)
 		}
 	}
 	for _, gone := range []string{"KEY_ID=", "/dev/urandom", "/b/secrets/encryption", "/b/secrets/$n"} {
 		if strings.Contains(r, gone) {
-			t.Errorf("the README still carries %q: the shell recipe or the old broker name", gone)
+			t.Errorf("the key rotation page still carries %q: the shell recipe or the old broker name", gone)
 		}
 	}
 }
