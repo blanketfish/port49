@@ -96,7 +96,7 @@ ssh host 'sudo port49d key sealing --import encryption.key && shred -u encryptio
 Then make a key for each device, one new name per version:
 
 ```sh
-sudo port49d key device core-v1
+sudo port49d key device example-v1     # the name the example policy's secret_ref uses
 ```
 
 It prints where the key is, never the key. Read it from the file to type into the device. To check, run:

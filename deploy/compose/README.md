@@ -82,11 +82,14 @@ To check, run `docker image ls --filter 'reference=port49*:dev'`. It lists `port
 Put them under `PORT49_COMPOSE_LOCAL`, in the layout `compose-pki` writes: `etcd/`, `broker/`,
 `keys/tacacs_v1` and `secrets/encryption.key` with `secrets/broker-encryption.key`. A device key is the
 shared secret you type into the device. The two sealing keys hold the same 32 bytes: make them once, with
-the setup image, and the command writes both files under those names:
+the setup image, and the command writes both files under those names. Make the device key the same way:
 
 ```sh
 docker run --rm -v "$PWD/local/secrets:/s" --entrypoint port49d port49-setup:dev \
   key sealing --dir /s --daemon-user 0 --broker-user 0
+
+docker run --rm -v "$PWD/local/keys:/k" --entrypoint port49d port49-setup:dev \
+  key device tacacs_v1 --dir /k --device-owner 0 --device-group 0
 ```
 
 To check, run `ls -l local/keys local/secrets`. The listing shows the device key and both sealing keys.

@@ -9,6 +9,14 @@ the release (the examples use `port49`).
 
 ## 1. Create the Secrets
 
+Make the device key and the sealing key as yourself, in the current directory. Neither needs root, and the
+sealing command also writes a `broker-encryption.key` that this chart does not use:
+
+```sh
+port49d key device core_v1 --dir . --device-owner "$(id -un)" --device-group "$(id -gn)"
+port49d key sealing --dir . --daemon-user "$(id -un)" --broker-user "$(id -un)"
+```
+
 Create each Secret with `--from-file`, never `--from-literal`, so no secret reaches a shell history or a
 process list:
 
