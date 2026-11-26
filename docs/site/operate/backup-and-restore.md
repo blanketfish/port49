@@ -101,25 +101,28 @@ does not hold is refused, and the message tells you to set that key as `encrypti
 An etcd restore can bring back a token that was redeemed after the snapshot. port49 refuses such a token
 in three places, and the runbook adds a fourth, the delete.
 
-1. **port49d's restore floor.** Every token records the store revision it was created at. port49d reads
-   `meta/witness` once a second. When the witness or the store's revision is lower than its own record
-   (`<accounting.spool_path>.restore.json`), the store was restored. The revision of that read becomes the
-   floor: a token at or below it is refused `FAIL` with reason `token_spent`, once, and the user mints
-   again. A token minted after the read is served. Each refusal adds one to
-   `port49_redemption_restored_refused_total`.
-2. **The runner's purge.** The broker that holds the keyspace compares `meta/witness` with its own
-   `broker.state_dir/witness.json`. A store below the record, or no record at all, makes it purge every
-   unspent token and every once-only record (sign-in challenges, proofs, nonces).
-3. **The mint gate.** While a purge is owed, that broker mints nothing, so a token is not minted into a
-   purge that would delete it.
-4. **The delete,** step 3 of the runbook, before any port49d or broker reaches the restored store.
+!!! warning
+    The delete is required in both cases where port49d cannot tell a restore: the restore also restored the
+    spool directory or `broker.state_dir` (Velero, a volume snapshot), or port49d's spool directory is new or
+    lost. A restored token is redeemed a second time with no line saying so.
 
-port49d tells a restore only from a record that is newer than the restored store, so it cannot tell when
-the restore also restored the spool directory or `broker.state_dir` (Velero, a volume snapshot), or when
-port49d's spool directory is new or lost. **The delete is required in both cases:** a restored token is
-redeemed a second time with no line saying so. A broker with no `witness.json` (an empty or new
-`broker.state_dir`) purges once at its first takeover, which costs every user one new token and is expected
-on a cold start of a whole fleet on new volumes.
+??? info "How port49 refuses a restored token"
+    1. **port49d's restore floor.** Every token records the store revision it was created at. port49d reads
+       `meta/witness` once a second. When the witness or the store's revision is lower than its own record
+       (`<accounting.spool_path>.restore.json`), the store was restored. The revision of that read becomes the
+       floor: a token at or below it is refused `FAIL` with reason `token_spent`, once, and the user mints
+       again. A token minted after the read is served. Each refusal adds one to
+       `port49_redemption_restored_refused_total`.
+    2. **The runner's purge.** The broker that holds the keyspace compares `meta/witness` with its own
+       `broker.state_dir/witness.json`. A store below the record, or no record at all, makes it purge every
+       unspent token and every once-only record (sign-in challenges, proofs, nonces).
+    3. **The mint gate.** While a purge is owed, that broker mints nothing, so a token is not minted into a
+       purge that would delete it.
+    4. **The delete,** step 3 of the runbook, before any port49d or broker reaches the restored store.
+
+    port49d tells a restore only from a record that is newer than the restored store. A broker with no
+    `witness.json` (an empty or new `broker.state_dir`) purges once at its first takeover, which costs every
+    user one new token and is expected on a cold start of a whole fleet on new volumes.
 
 ??? info "When port49 cannot tell"
     A new or lost spool has no `restore.json` and takes the restored witness as its first record. It logs
