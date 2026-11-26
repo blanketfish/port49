@@ -24,7 +24,7 @@ platforms:
       admin: ["priv-lvl=15"]
 ```
 
-Only `priv-lvl=15` was measured. Level 1 for `readonly` and `operator` can only grant less than the role says, and on XR that holds only with command authorization configured on the device. [Policy](../policy.md#platform-sets) says how platform sets work. The lines that matter, quoted from the files:
+Only `priv-lvl=15` was measured. Level 1 for `readonly` and `operator` can only grant less than the role says, and on XR that holds only with command authorization configured on the device. [Platform sets](../platform-sets.md) says how platform sets work. The lines that matter, quoted from the files:
 
 ```text
 tacacs source-interface <SOURCE_INTERFACE> vrf <MGMT_VRF>

@@ -27,7 +27,7 @@ Treat a nonzero count as a mapping to fix, not a state to live in: [Inventory](.
 ## What to do
 
 1. Check whether the device is one of the [qualified platforms](index.md#qualified-platforms) under another name. If it is, map its slug in the inventory and the count falls to zero.
-2. If it is not, define its adapter in your policy file's `platforms:` block, as [Nokia SR Linux](nokia-sr-linux.md) and [Cisco IOS XR](cisco-ios-xr.md) do for `priv-lvl` ([Policy](../policy.md#platform-sets) says how platform sets and blocks work).
+2. If it is not, define its adapter in your policy file's `platforms:` block, as [Nokia SR Linux](nokia-sr-linux.md) and [Cisco IOS XR](cisco-ios-xr.md) do for `priv-lvl` ([Platform sets](../platform-sets.md) says how platform sets and blocks work).
 3. Test a login and a denied command on the device before you rely on the policy, and read the device's own AAA debug if a login is refused.
 4. If you can measure the device, [qualification](../../contributing/qualification.md) says how to add it to the list.
 
