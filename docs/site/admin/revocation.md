@@ -10,14 +10,8 @@ read the answer. Checking your CA's revocation lists is on [Client certificate s
 
 ## What you need
 
-`port49 revoke` talks to the broker through your own agent, so run `port49 login` first. Your subject must declare the
-right in the policy's [`api:` list](roles-and-grants.md#api-rights): `revoke_others` to revoke another principal, a
-certificate, a `(device, username)` key or an OIDC session, and `lift_revocations` to lift one. Either lets you list
-what is in force. [Admin access](admin-access.md) sets up the rights and the attestation roots.
-
-Every write but `--mine` also asks for a press of your security key, bound to that one request. Without the right the
-call is refused before any key press, and the refusal is logged. Your own sessions, with `port49 revoke --mine`, need
-neither a right nor a touch.
+Run `port49 login` first. Revoking needs the `revoke_others` right, lifting needs `lift_revocations`, and every write
+but `--mine` needs a press of your security key ([Admin access](admin-access.md)).
 
 ## Revoking
 
@@ -32,11 +26,7 @@ neither a right nor a touch.
 On a terminal, `--principal` asks `revoke <principal> everywhere? ... [y/N]` first; `--yes` skips it, and a script with
 no terminal is not asked. The answer begins with a `target:` line naming the policy subject the principal belongs to.
 If it says `no subject in the policy in force names it`, check the spelling: the mark is written anyway, so a typo of
-a colleague's address revokes nobody. The broker spells principals this way:
-
-- a certificate's principal: `user:<lower-case email>`;
-- a workload's: its SPIFFE ID, verbatim;
-- a service account's: `system:serviceaccount:<namespace>:<name>`.
+a colleague's address revokes nobody. The spellings are on [Identities](../concepts/identities.md).
 
 `port49 revoke --list` shows what is in force, with each origin (`api <who>` for an operator, `crl <name>` or
 `ocsp <responder>` for a CA's revocation). A `--mine`, `--device` or `--sid` revocation leaves no mark, so it is not
@@ -72,19 +62,15 @@ not name, so revoke the workload's principal too, and the certificate at your CA
 
 1. `port49 revoke --principal user:alice@example.com` now. It stops every mint, closes the person's held connections
    and refuses the agent's next request.
-2. Close the device sessions. TACACS+ cannot disconnect a device's session, so a revocation takes effect at the next
-   authorization request. A platform that asks port49 only at login never asks again. The report names those sessions:
+2. Close the device sessions the report names, with the device's own tools. Why TACACS+ cannot do it is on
+   [Revocation](../concepts/revocation.md); [Junos](devices/juniper-junos.md) says what it does on its own:
 
     ```text
     not reached, on a platform that never asks port49 about a command (close these on the device): leaf1 (alice), srx2 (alice)
     ```
 
-    Close each with the device's own tools. [Junos](devices/juniper-junos.md) says what it does on its own.
 3. When your CA has issued the person a new certificate, revoke the old one by `--cert` (or at the CA) and lift the
    principal.
-
-Close a stranger's session too: `--mine` and `--device`/`--username` leave no mark, so the owner's next login on that
-device re-admits every session still open there under that username.
 
 ## Lifting
 
@@ -109,10 +95,8 @@ A standing mark is in the session store and is read by every broker.
 
 - A broker on etcd (the normal split) keeps each mark in the store and a copy in `broker.state_dir`, which puts a mark
   back after a store restore. Back that directory up ([Backup and restore](../operate/backup-and-restore.md)).
-- A single-process port49d on the memory store also writes every mark to `broker.revocations_file`. port49d never
-  creates it, so run `port49d init-revocations` once at install, as port49d's user (see
-  [Install](../operate/install/index.md#the-memory-store-trial-port49d-init-revocations)); it refuses when the file
-  exists, and a missing file refuses every start.
+- A single-process port49d on the memory store also writes every mark to `broker.revocations_file`
+  ([The memory store](../operate/stores.md#the-memory-store)).
 
 When the file could not be written, the report says `NOT saved to broker.revocations_file`, `port49 revoke` exits 3 and
 `port49_revocations_file_failed` is 1. Revoke again once the disk is fixed
@@ -135,7 +119,8 @@ line to use, because the files it writes belong to that user.
     systemctl start port49-broker
     ```
 
-    `port49-broker revoke --offline --list` shows the marks. It writes `broker.state_dir`. A port49d that runs its
+    `port49-broker revoke --offline --list` shows the marks. It revokes through the store, so etcd must be up, and keeps
+    the copy in `broker.state_dir`. A port49d that runs its
     broker in process has `port49d revoke --offline`, which writes `broker.revocations_file`.
 
 === "Containers"
@@ -152,10 +137,7 @@ line to use, because the files it writes belong to that user.
 
 === "Helm"
 
-    Admin commands (`port49 revoke`, `port49 directory ...`) are calls to the broker API and need a security-key press
-    from an admin whose key chains to `broker.attestationRootsConfigMap` (a ConfigMap holding
-    `attestation-roots.pem`). Without it every admin call is refused 503. Run them from a workstation that can reach
-    the `<release>-broker` Service. When no broker is reachable:
+    When no broker is reachable:
 
     ```sh
     scripts/revoke-offline.sh <ns> <release> -- --principal <name> [--lift|--list]
