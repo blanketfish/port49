@@ -38,10 +38,10 @@ on the machine, is a failed check.
 ### 1. Install the server
 
 Follow the page for the shape the human chose: [systemd](../operate/systemd/install.md),
-[containers](../operate/containers/install.md) or [Helm](../operate/install/helm.md). The
+[containers](../operate/containers/install.md) or [Helm](../operate/helm/install.md). The
 [Install page](../operate/install/index.md) lists what every shape needs, and the first-install steps in order.
 
-**Check:** the probes on [When it will not start](../operate/troubleshooting/will-not-start.md) pass, and
+**Check:** the probes on [Health checks](../reference/health-checks.md) pass, and
 the [troubleshooting index](../operate/troubleshooting/index.md) has nothing for any line the server printed.
 Secrets in this step are a human's: see [Stop and ask a human](#stop-and-ask-a-human).
 

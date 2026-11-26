@@ -25,7 +25,7 @@ and the revocations are re-issued before any broker starts.
 ## What each shape must keep
 
 All three shapes ([systemd](systemd/install.md), [container](containers/install.md),
-[Helm](install/helm.md)) keep the same things. Only the paths differ.
+[Helm](helm/install.md)) keep the same things. Only the paths differ.
 
 | What | Why it is in the backup | systemd | container (compose) | Helm |
 |---|---|---|---|---|
@@ -277,10 +277,88 @@ unchanged, and a mint and a login working; a restore with the StatefulSets at 0 
 restore order below, with the pods running and then scaled to 0, completed with `marks.json`, the CA and
 the spool intact.
 
-Everything from here to the end of the page is that README verbatim: what the backup holds, its
-requirements, how to pin the plugin, then the restore.
+The runbook is on [Back up with Velero](helm/velero.md): what the backup holds, its requirements, how to pin
+the plugin, then the restore.
 
---8<-- "deploy/helm/port49/examples/velero/README.md:5"
+<!-- from: deploy/helm/port49/README.md (Backups and Velero), for the Helm tab of "what to back up" and the Velero warnings
+Two CronJobs, one pattern (the etcd snapshot job runs in the kind smoke, the enrollments job in its own kind job against a directory, `make kind-enrollments`): `examples/backup-cronjob.yaml` (the etcd
+snapshot, which needs etcd's root certificate and is yours to adapt) and the chart's own, off by default:
+`--set backup.enrollments.enabled=true --set backup.enrollments.claimName=<your PVC>` (the sealed
+enrollment store, `port49-broker export-enrollments --out FILE`; it mounts what the broker does, from
+the same template). It exports the enrollment store of a `directory_password` verifier, so the chart refuses
+to render it unless `config.broker.broker.identity.humans` has one (otherwise the job would fail every night).
+The kind smoke runs the etcd snapshot job only: it has no directory, and a directory refuses the smoke's
+policy. The enrollments job reads the sealed enrollment store in etcd (not the directory; the directory is only what the verifier's config needs to load). `make kind-enrollments` runs it against an OpenLDAP pod: `init-enrollments` as the example Job, then the export twice (a dated, non-empty, 0600 file owned by 65532 each, and a log holding only the broker's certificate-validity warning), then once over a stale `enrollments.new` (the job fails and `stale-check`'s log names it). That run exported a freshly initialised store, the mark with no enrolled person: an export holding enrollments is unmeasured. Neither the etcd nor the port49 image has a shell, so:
+
+1. a `stale-check` init container fails the job when `<name>.new` is left from a run that did not
+   finish (the failed pod stays, and `kubectl logs` names the file); remove it and the next run goes;
+2. the writer init container (`etcdctl snapshot save`, or `export-enrollments --out`) creates
+   `<name>.new` 0600 and never replaces a file;
+3. an alpine `finish` container does `umask 077`, renames to a dated name and prunes after 14 days.
+
+Nothing sealed is written to a log. The snapshot holds sealed data but is still sensitive; give its
+PVC a restrictive access mode. Restore enrollments with `port49 directory import`.
+
+Velero (file-system backup of the volumes): `examples/velero/` is a Velero `Schedule` with the steps around it. **A Velero restore that includes
+`port49-etcd` is a store restore**: it loses the revocations and lifts made since the backup
+and brings back redeemed tokens, so follow the restore runbook,
+[Restoring etcd from a snapshot](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/#restoring-etcd-from-a-snapshot) (delete `v1/t/` and `meta/judged`/`meta/judged_bundle`
+before the members serve clients, re-issue revocations with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`), lift again). Prefer
+restoring etcd from the `etcdctl snapshot` CronJob with `--bump-revision`; a file-system copy of a live member
+is crash-consistent at best and unmeasured under load ([L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) measured one restore on an idle cluster). Measured on kind (Velero 1.18.4 with
+its node agent, an S3-compatible store in the cluster; `tests/lab/results/L89-kind.md`, 2026-11-04): after a
+backup, deleting the namespace and a restore, both StatefulSets became ready with no fence refusal, the
+issuing CA's fingerprint was unchanged, the owner, group and mode of `state/`, `issuing-ca.key` and the
+spool directory were unchanged (65532:65532, 0700 and 0600), and a mint and a login succeeded. The
+measurement used file-system backup because kind has no snapshot-capable CSI driver; CSI snapshots are
+not measured here.
+
+- **Restore with the pods running, never with the StatefulSets at 0 replicas.** Velero's file-system
+  restore copies a volume through the pod that mounts it; restored at 0 replicas, the restore stayed
+  `InProgress` past 8 minutes with every pod volume restore `New` and its pod absent ([L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) cell (c), run
+  42053716808). `examples/velero/README.md` has the order (etcd held down while the pods run, then both
+  StatefulSets scaled to 0) and the recovery from a restore at 0 replicas.
+- **The backup holds the issuing CA's private key** (`state/issuing-ca.key`), each broker's state and the
+  accounting spool. **The bucket alone also holds the namespaces' Secrets**, unencrypted by Velero: the
+  TACACS+ keys, the store's encryption key, the etcd CA and client identities and the TLS key. The
+  repository key protects only the volumes. Protect the bucket like the CA key: server-side encryption, and
+  access limited to the backup's own credentials.
+- **Set the repository key from your own Secret before installing Velero.** Velero's default repository
+  password is a well-known static value, and Velero writes it into `velero-repo-credentials` itself when
+  it finds no Secret (`examples/velero/README.md` has the order).
+- **Velero skips a hostPath volume with only a warning, and the backup still reads Completed.** The first
+  measured run backed up 4 of the namespace's 7 claims: etcd's volumes were hostPath (kind's default
+  class), and the backup said "Volume data in pod port49/etcd-0 is a hostPath volume which is not
+  supported for pod volume backup, skipping" (lab-kind run 41855911600). The restore then brought etcd back
+  empty and port49d never became ready. Put etcd on volumes the node agent can read: list the volumes
+  backed by hostPath (a claim and its path per line; no output means none), and move any that appear:
+
+  ```sh
+  kubectl get pv -o jsonpath='{range .items[*]}{.spec.claimRef.namespace}/{.spec.claimRef.name} {.spec.hostPath.path}{"\n"}{end}' \
+    | grep -E '^(port49|port49-etcd)/' | awk 'NF == 2'
+  ```
+
+  A claim that no pod mounts (a spool kept after a scale-down, say) is never copied: file-system backup
+  reads a volume through the pod that mounts it. So after every backup check each claim in both namespaces
+  by name, not by count. This prints every claim without a completed pod volume backup (it assumes
+  StatefulSet claim names, `<volume>-<pod>`, as the chart and the etcd example use), and nothing is the pass:
+
+  ```sh
+  backup=<the backup's name>
+  comm -23 \
+    <(kubectl get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' | grep -E '^(port49|port49-etcd)/' | sort) \
+    <(kubectl -n velero get podvolumebackups -l velero.io/backup-name=$backup \
+        -o jsonpath='{range .items[?(@.status.phase=="Completed")]}{.spec.pod.namespace}/{.spec.volume}-{.spec.pod.name}{"\n"}{end}' | sort)
+  ```
+
+  The l89 tests run these two commands verbatim in CI after their backup (lab-kind run 41870212174): each printed nothing on a good backup, and with a claim no pod mounts the second printed exactly that claim.
+
+  The backup's own warnings, which name a volume Velero skipped:
+
+  ```sh
+  velero backup describe <the backup's name> --details | grep -i -A6 warnings
+  ```
+-->
 
 <!-- from: deploy/systemd/README.md (Backups), for the systemd tab
 `examples/port49-etcd-snapshot.{service,timer}` take an hourly snapshot into

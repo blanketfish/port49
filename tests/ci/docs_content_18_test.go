@@ -22,9 +22,9 @@ func init() {
 		"cached directory membership", "the logout queue is full", "port49_revocations_file_failed", "store_unavailable",
 		"the session store was restored from a snapshot", "../../reference/alerts.md#port49_target_absent",
 	)
-	mustSay["operate/troubleshooting/will-not-start.md"] = append(mustSay["operate/troubleshooting/will-not-start.md"],
-		"--ready", "/healthz", "docker stack deploy", "service_healthy", "debug pod",
-		"start_timeout", "`retries` from 3 to 6",
+	mustSay["operate/helm/troubleshoot.md"] = append(mustSay["operate/helm/troubleshoot.md"], "debug pod")
+	mustSay["reference/health-checks.md"] = append(mustSay["reference/health-checks.md"],
+		"`retries` from 3 to 6",
 	)
 	mustSay["operate/monitoring.md"] = append(mustSay["operate/monitoring.md"],
 		"task_id", "global_cap", "10 ms", "etcd_disk_slow", "port49_accounting_spool_disk_slow",

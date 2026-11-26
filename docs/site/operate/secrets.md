@@ -183,7 +183,7 @@ Both were measured in [L84](https://github.com/blanketfish/port49/blob/main/test
 - Never leave a secret in `docker inspect` output or a unit's `Environment=` line.
 
 The install pages hold the exact commands for each shape: [systemd](systemd/install.md),
-[container](containers/install.md), [Helm](install/helm.md).
+[container](containers/install.md), [Helm](helm/install.md).
 
 <!-- from: deploy/systemd/README.md (LoadCredential= for the encryption key), for "systemd LoadCredential"
 Measured (lab [L84](https://blanketfish.github.io/port49/latest/reference/lab-register/#l84), `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
@@ -217,5 +217,37 @@ secret means `docker compose up -d`, which recreates port49d: a key version cann
 The `port49d-keys` volume is the way for device keys. `secrets:` may carry the encryption key, which is
 read at start and goes through the same file fence (the cell measured a device key's file; the encryption key
 was not measured on its own).
+-->
+
+<!-- from: deploy/helm/port49/README.md (Secrets and rotation), for the Kubernetes section and the secret agents table
+Every secret is a mounted file, never an environment variable. Mounts are whole-volume and never
+`subPath`, because the kubelet updates a whole mount in place and a `subPath` mount never sees the
+update. Files are mode 0440; the pod sets `fsGroup: 65532` with `fsGroupChangePolicy: OnRootMismatch`
+so the unprivileged user can read them and the state directories are not made group-writable at every
+start.
+
+A key is read under the secret-file rule, so two things are refused at the pod's start, each with a line
+naming the file. A key directory that is group- or world-writable (outside a read-only Secret mount, which
+is excused): `chmod 0755` or `0750` it. A group-readable key whose group is not the pod's (fsGroup 65532
+is): a Secret volume's files are, and a file an injector or a CSI driver writes as `root:root` 0440 is not.
+Never a looser rule. Two mechanisms were measured on kind ([L83](https://blanketfish.github.io/port49/latest/reference/lab-register/#l83), run 41155086403):
+
+- The Secrets Store CSI driver is not supported for device keys. Its files are `0:0 0644` (the world
+  bit: refused) and, with the provider's `filePermission: 0440`, `0:0 0440` (port49d, uid 65532, cannot read
+  them). The driver chart (secrets-store-csi-driver 1.6.1) sets no `fsGroupPolicy` and the provider has no
+  owner or group option, so `fsGroup` is not applied to the volume and no setting makes the file readable by
+  65532 without a world bit. `filePermission: 0400` does not help: a `root:root` 0400 file is unreadable too.
+- The Vault Agent injector is offered for the encryption key only, never for device keys. By default the
+  agent is uid 100 and owns the rendered file (`100:65532 0440`); port49d refuses a key whose owner is neither
+  itself nor root, because whoever owns a file can rewrite it. With
+  `vault.hashicorp.com/agent-run-as-same-user: "true"` the file is port49d's own and port49d starts. But adding
+  a version is a pod rollout, not a reload: the injector reads its annotations only when a pod is admitted, and
+  each file is its own annotation. A device key must reach a running process with no restart (spec decision 54
+  ruling 2), and the injector failed that cell ([L83](https://blanketfish.github.io/port49/latest/reference/lab-register/#l83) c), so device keys come from External Secrets or a Secret
+  volume ([L82](https://blanketfish.github.io/port49/latest/reference/lab-register/#l82)). The encryption key changes rarely and a rollout is acceptable for it.
+
+`examples/external-secret.yaml` syncs the device keys from Vault with External Secrets: one Secret key
+per key version (`core_v1`, `core_v2`), each from its own remote key. Adding a version is adding a
+remote key and an entry; nothing is overwritten, so a rollback is still a file on disk.
 -->
 

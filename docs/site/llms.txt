@@ -115,9 +115,7 @@
 ## Moving (temporary)
 
 - [Install](https://blanketfish.github.io/port49/latest/operate/install/): Choosing between the systemd, container and Helm shapes of a port49 deployment, and what every shape needs.
-- [Install with Helm](https://blanketfish.github.io/port49/latest/operate/install/helm/): Deploying port49 to Kubernetes with the Helm chart.
 - [Install the clients](https://blanketfish.github.io/port49/latest/operate/install/clients/): Installing the port49 command-line client, the Python library and the Ansible lookup.
 - [Broker and agent](https://blanketfish.github.io/port49/latest/operate/broker-and-agent/): What the broker and the agent each do, and where each runs.
 - [Signing in](https://blanketfish.github.io/port49/latest/operate/login/): How a person signs in to port49 and gets a token for a device login.
 - [Hardware keys](https://blanketfish.github.io/port49/latest/operate/hardware-keys/): Requiring a hardware key at sign-in and at each device login.
-- [When it will not start](https://blanketfish.github.io/port49/latest/operate/troubleshooting/will-not-start/): The refusals port49d prints at start, what each means and how to fix it.

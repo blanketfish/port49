@@ -13,7 +13,7 @@ team already operates.
 |---|---|---|
 | systemd | the `port49-server` package (`.deb` or `.rpm`) with two units | [Install with systemd](../systemd/install.md) |
 | Containers | `port49d`, `port49-broker` and a three-member etcd under Compose | [Install with containers](../containers/install.md) |
-| Helm | two StatefulSets and a PVC per replica | [Install with Helm](helm.md) |
+| Helm | two StatefulSets and a PVC per replica | [Install with Helm](../helm/install.md) |
 
 The people who sign in need the [clients](clients.md), which are installed on their own machines and
 not on the server.
@@ -27,7 +27,7 @@ Each shape page states the first four again, in its own terms.
     - On a host, this is the default.
     - In a container, follow the network notes on the [container page](../containers/install.md).
     - In Kubernetes, a `LoadBalancer` Service needs `externalTrafficPolicy: Local` (the chart's default);
-      the [Helm page](helm.md) has the measurement.
+      the [Helm page](../helm/install.md) has the measurement.
 2. **etcd, with two processes.** `port49d` and `port49-broker` run apart, each with its own etcd
    identity. The memory store is one process and is for a trial only.
 3. **`broker.state_dir` survives a restart.** It holds the revocation marks, the witness and the issuing

@@ -24,7 +24,7 @@ password — no changes to the devices.
 - **How it fits together:** [Concepts](concepts/index.md).
 - **Installing it:** [Install](operate/install/index.md) compares the three deployment shapes, which are
   peers: [systemd](operate/systemd/install.md), [containers](operate/containers/install.md) and
-  [Helm](operate/install/helm.md).
+  [Helm](operate/helm/install.md).
 - **How a person signs in:** [Signing in](operate/login.md).
 - **Who may do what:** [Policy](admin/policy.md).
 - **Contributing:** [Contributing](contributing/index.md).

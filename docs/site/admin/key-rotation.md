@@ -284,7 +284,7 @@ If a process starts without a key the store was last written under, what you see
 
 `port49d key sealing` makes the key files with the right owner and mode and never overwrites an old one
 (on systemd; the container and Helm shapes have their own steps). See each shape's install page: [systemd](../operate/systemd/install.md),
-[container](../operate/containers/install.md), [Helm](../operate/install/helm.md).
+[container](../operate/containers/install.md), [Helm](../operate/helm/install.md).
 See also [Stores](../operate/stores.md#one-set-of-encryption-keys-everywhere).
 
 ## The issuing CA
@@ -399,4 +399,24 @@ directory store and the id. Two store blocks reaching one etcd cluster at one pr
 refused too.
 -->
 <!-- from: deploy/systemd/README.md (Adding a key version) stays in the README until Task 15 moves it here -->
+<!-- from: deploy/helm/port49/README.md (Rotating the `encryption:` key), for the Helm tab of the encryption key steps
+One key everywhere, from one Secret, in three steps. The Secret holds each key as its own file, and the
+chart's `encryption.key` and `encryption.previous.key` name them (`encryption.key` by default).
+
+1. Add the new key to the Secret as a new file, `encryption-e2` (32 bytes, made as at install:
+   `--from-file`, never a literal), keeping the old `encryption.key`. Then upgrade with the new key as
+   `previous` while the old one stays current:
+   `--set encryption.previous.id=e2 --set encryption.previous.key=encryption-e2`.
+   Every pod now opens what either key sealed.
+2. Swap: `--set encryption.id=e2 --set encryption.key=encryption-e2 --set encryption.previous.id=c1
+   --set encryption.previous.key=encryption.key`. New records are sealed under `e2`.
+3. Remove `encryption.previous` and the old file only after the scheduled directory pass (every
+   `refresh_interval`) has re-sealed the second-factor records under `e2`. A record that opens under neither
+   key is never "not enrolled": that sign-in is `503 store_unavailable`, and the broker's line names
+   `port49 directory reset-second-factor`.
+
+A pod whose keys lack the id the directory store currently holds refuses to start, naming the store and the
+id. Never reuse an id; the chart refuses a `previous` with no file, the same id, or the same file as the
+current key.
+-->
 

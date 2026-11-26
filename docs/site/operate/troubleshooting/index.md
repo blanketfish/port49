@@ -13,7 +13,8 @@ Start from what you were told or what you can see. This index has three parts:
 
 Each entry gives **You see**, **It means**, **Do this** and **Don't**. Two pages go with it: the
 [failure matrix](failure-matrix.md) says what each device does when each part of port49 is down, and
-[When it will not start](will-not-start.md) covers a process that refuses to run.
+the troubleshoot page of your deployment ([systemd](../systemd/troubleshoot.md),
+[containers](../containers/troubleshoot.md), [Helm](../helm/troubleshoot.md)) covers a process that refuses to run.
 
 Two commands answer most first questions. `port49 explain --device <device>` asks the broker, through
 your agent, what port49 would do for you on that device. `port49 store status` (run on a host that
@@ -517,7 +518,8 @@ was in flight finishes the catch-up itself, but run the revoke anyway if the gau
 ## Related
 
 - [Failure matrix](failure-matrix.md): what each device does when each part is down.
-- [When it will not start](will-not-start.md): refusals at start, and which healthcheck to use where.
+- [Health checks](../../reference/health-checks.md): which healthcheck to use where.
+- Refusals at start: [systemd](../systemd/troubleshoot.md), [containers](../containers/troubleshoot.md), [Helm](../helm/troubleshoot.md).
 - [Monitoring](../monitoring.md): scraping, the disk etcd needs, shedding.
 - [Backup and restore](../backup-and-restore.md) and [key rotation](../../admin/key-rotation.md).
 

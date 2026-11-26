@@ -49,6 +49,19 @@ root init containers needs a volume root provisioned 3770 `root:65532` instead. 
 the pod sits in `Init:` and `kubectl describe pod` says why, so nothing starts half-fenced. That the
 key Secret volume is readable under `fsGroup` was measured in [L82](../reference/lab-register.md#l82).
 
+## Helm: the Service and the pod's ports
+
+The TLS listener's Service has the same traffic policy as the TACACS+ one. Its port was not dialled.
+The pod sets `net.ipv4.ip_unprivileged_port_start` to 0 so the non-root process can bind 49, and a cluster
+that forbids that sysctl needs a different arrangement, which the chart does not offer.
+
+Host networking passed in the lab, on a namespace relabelled `privileged`. The chart offers none, because
+its namespace runs at Pod Security `baseline`. Kubernetes also refuses a pod's
+`net.ipv4.ip_unprivileged_port_start` sysctl on the host network, so a host-network pod needs that sysctl
+removed. Binding port 49 as the non-root user then depends on the node's own value, which is 1024 on an
+ordinary host: set it to 0 there or give the container a capability to bind. A kind node's value is
+inferred to be 0, not read.
+
 ## Smoke tests
 
 Each deployment has a smoke test that CI runs.

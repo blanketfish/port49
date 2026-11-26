@@ -13,6 +13,9 @@ func init() {
 		"directory holding `broker.revocations_file`", "no bundle has been judged on this keyspace",
 		"Check `broker.policy_file` on every broker host", "suspend every GitOps controller",
 		"restart every port49d only after", "the key current at export time",
-		"L35-restore-arista_eos.md", "!!! warning \"Unmeasured\"", "--8<-- \"deploy/helm/port49/examples/velero/README.md",
+		"L35-restore-arista_eos.md", "!!! warning \"Unmeasured\"",
+	)
+	mustSay["operate/helm/velero.md"] = append(mustSay["operate/helm/velero.md"],
+		"--8<-- \"deploy/helm/port49/examples/velero/README.md",
 	)
 }

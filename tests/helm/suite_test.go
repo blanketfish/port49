@@ -781,7 +781,11 @@ func checkIssuanceExample(t *testing.T, r renderer) {
 		t.Error("examples/values-issuance.yaml dropped the x509 human anchor the chart renders")
 	}
 	readme := read(t, "deploy/helm/port49/README.md")
-	section := readme[strings.Index(readme, "## The issuing CA"):]
+	start := strings.Index(readme, ". The issuing CA")
+	if start < 0 {
+		t.Fatal("the README has no step headed \"The issuing CA\"")
+	}
+	section := readme[start:]
 	if end := strings.Index(section[3:], "\n## "); end >= 0 {
 		section = section[:end+3]
 	}
