@@ -10,7 +10,9 @@ func init() {
 		"per_login_mfa_weakened", "new or changed", "core_access", "Do not put the requirement on an `on_missing: exclude` scope",
 	)
 	mustSay["admin/revocation.md"] = append(mustSay["admin/revocation.md"],
-		"--cert-serial", "certificate_status_unavailable", "issuer_file", "disabled: true",
-		"revocation_unconfirmed", "store_unavailable", "admitted with its revocation status unchecked",
+		"--cert-serial", "revocation_unconfirmed", "store_unavailable",
+	)
+	mustSay["admin/sign-in/x509.md"] = append(mustSay["admin/sign-in/x509.md"],
+		"certificate_status_unavailable", "issuer_file", "disabled: true", "admitted with its revocation status unchecked",
 	)
 }
