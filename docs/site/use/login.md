@@ -79,8 +79,8 @@ The agent exits at whichever comes first:
 - The broker ending the session, for a revocation or a certificate it no longer trusts.
 - `SIGTERM` or `SIGINT`.
 
-When the agent is gone, every command says `no agent at <path>` and names `port49 login`. That is the whole
-recovery, and a token already minted is single use and short-lived whether or not an agent runs.
+When the agent is gone, every command says `no agent at <path>` and names `port49 login`. A token already
+minted is single use and short-lived whether or not an agent runs.
 
 `port49 refresh` re-authenticates the session and extends each live device session that policy still
 grants. It prints `this login lasts until <time>`, which is when the agent exits next, and one line per

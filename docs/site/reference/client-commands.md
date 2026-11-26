@@ -95,6 +95,14 @@ The attestation roots have their own messages, all exit 2, and each names the wa
 - `no attestation roots: the broker <host> serves none ...`. The broker does not verify
   `hardware_key_touch` at all, because `attestation_roots_file` is not set there.
 
+## port49 store status
+
+| Command | Code | Meaning |
+|---|---|---|
+| `port49 store status` | 0 | every store answers |
+| `port49 store status` | 3 | a store does not answer, or the stores are not open yet |
+| `port49 store status` | 1 | the metrics port did not answer, or a status is already running |
+
 ## port49 revoke
 
 | Command | Code | Meaning |

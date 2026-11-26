@@ -10,7 +10,7 @@ platforms:
 
 # Juniper Junos
 
-Set `authentication-order tacplus` alone, as the reference file does, so that no local password sits behind port49 (what listing `password` after it does is boxed under Unmeasured). The cost is paid at 3am: while port49 answers ERROR, the ERROR is final and break-glass waits until port49d closes its listener ([L4-error-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md)). This page covers vJunos-router, vSRX and SRX hardware. The lab measured nothing on hardware: what is unmeasured on SRX and on hardware is boxed under Unmeasured.
+Set `authentication-order tacplus` alone, as the reference file does, so that no local password sits behind port49 (what listing `password` after it does is boxed under Unmeasured). While port49 answers ERROR, the ERROR is final and break-glass waits until port49d closes its listener ([L4-error-juniper_vjunos-router.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md)). The platforms are vJunos-router, vSRX and SRX hardware. The lab measured nothing on hardware: what is unmeasured on SRX and on hardware is boxed under Unmeasured.
 
 ## Reference configuration
 

@@ -38,7 +38,7 @@ one your team already operates.
 
 ## First install
 
-On etcd, run these once, in this order. The Install guide for your deployment has each as a step.
+Run these once per etcd cluster, in this order. The Install guide for your deployment has each as a step.
 
 1. `port49d store-roles` prints the `etcdctl` commands that create port49's two etcd roles. Run them as etcd's root.
 2. `port49-broker init-issuer`, on one broker only, when the broker issues certificates.
