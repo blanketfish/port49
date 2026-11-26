@@ -87,50 +87,11 @@ at its defaults ([NetBox](https://github.com/blanketfish/port49/blob/main/tests/
 [Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L33-nautobot.md)). When a webhook is lost,
 a newly racked device cannot be admitted for up to one `interval`.
 
-### A NetBox source
+### A NetBox or Nautobot source
 
-```yaml
-listen: ":8443"
-tls_cert_file: /etc/port49-inventory/server.pem
-tls_key_file: /etc/port49-inventory/server-key.pem
-client_ca_file: /etc/port49-inventory/clients-ca.pem
-readers: ["spiffe://example.com/port49d"]
-syncers: ["user:alice@example.com"]
-signing_key_file: /etc/port49-inventory/signing.key
-policy_file: /etc/port49-inventory/policy.yaml
-state_dir: /var/lib/port49-inventory
-interval: 10m
-safety: {max_removed_percent: 10}
-sync:
-  - name: netbox_prod
-    type: netbox
-    url: https://netbox.example.com
-    ca_file: /etc/ssl/certs/ca-certificates.crt
-    token_secret_ref: env:PORT49_NETBOX_TOKEN
-    filter: {status: [active]}
-    map: {site: site.slug, role: role.slug}
-```
-
-Every fault in this file is a refusal at start, before a listener opens. With a placeholder token set, the service says:
-
-```text
-port49-inventory: sync[0] (netbox_prod): map must name platform: the path the device's platform is read from
-```
-
-Add `platform: platform.slug` to the `map`. The keys are in the [service reference](../reference/config/port49-inventory.md);
-the token and the webhook secret are [secret references](../operate/secrets.md), read at start and never printed.
-
-The connector reads the release first and picks a mapping profile: NetBox 3.7 and 4.x, Nautobot 1.6, 2.x and 3.x
-(the lab measured [NetBox](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-netbox.md) and
-[Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md)). **A release outside
-that list refuses every sync** until the source sets `profile:`, and new devices are not admitted meanwhile, so check
-the next sync after a NetBox or Nautobot major upgrade. Addresses are the primary IPs plus any interfaces you opt in,
-since every address listed admits its source. The service honors `HTTPS_PROXY` and `NO_PROXY` for each source. The
-refusal lines, paging, `filter`, `map` and the proxy's start lines are on the keys of the
-[service reference](../reference/config/port49-inventory.md).
-
-A platform slug the alias table and your `platform_aliases:` do not know is admitted and served by the generic
-adapter. `port49_inventory_generic_platform_devices` holds the count: treat a nonzero count as a mapping to fix.
+A `sync:` entry of `type: netbox` or `nautobot` takes a `url`, a `ca_file`, a `token_secret_ref` and a `map`
+that names `platform`. The service honors `HTTPS_PROXY` and `NO_PROXY` for each source. Every key, the refusal
+lines and the releases the lab measured are in the [service reference](../reference/config/port49-inventory.md).
 
 ### Pointing port49d at the service
 
