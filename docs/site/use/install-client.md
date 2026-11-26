@@ -9,16 +9,11 @@ The client runs on the machines where people sign in, not on the server. The Pyt
 Ansible lookup both drive the `port49` command, so install it first.
 
 The release has two builds of `port49`, and both are `/usr/bin/port49`, so no archive and no package holds
-both.
-
-| Build | Where you get it | Hardware keys |
-|---|---|---|
-| Client | the `port49` package and archive, for Linux and macOS (amd64 and arm64) | PKCS#11 keys (a YubiKey or a smartcard), the TPM (Linux) and file keys |
-| Static | the `port49-server` package and archive, and the container image | the TPM (Linux) and file keys only |
-
-If your key lives on a YubiKey or a smartcard, run `port49 login` from the client build, which loads the
-system's PKCS#11 library at run time. The static build suits a server or a container. It refuses a key
-store set to `pkcs11`, and `auto` passes over the key and says so.
+both. The client build (the `port49` package and archive, for Linux and macOS on amd64 and arm64) reads
+PKCS#11 keys such as a YubiKey or a smartcard, the TPM on Linux and file keys, and loads the system's PKCS#11
+library at run time. The static build (the `port49-server` package and archive, and the container image)
+suits a server and reads only the TPM and file keys: a key store set to `pkcs11` is refused, and `auto`
+passes over the key and says so. If your key is on a YubiKey or a smartcard, use the client build.
 
 ## 1. Download a release
 
@@ -36,9 +31,9 @@ tar -xzf "port49_${PORT49_VERSION}_linux_amd64.tar.gz" port49
 ```
 
 To check, the `sha256sum` line prints the archive's name followed by `: OK`. On macOS, use `darwin` in the
-archive name and `shasum -a 256 --ignore-missing -c SHA256SUMS`. With the GitHub CLI,
-`gh attestation verify port49_${PORT49_VERSION}_linux_amd64.tar.gz --repo blanketfish/port49` also checks
-that the release workflow built the archive.
+archive name and `shasum -a 256 --ignore-missing -c SHA256SUMS`. `gh attestation verify
+port49_${PORT49_VERSION}_linux_amd64.tar.gz --repo blanketfish/port49` checks that the release workflow
+built the archive.
 
 ## 2. Install it with mode 0755
 

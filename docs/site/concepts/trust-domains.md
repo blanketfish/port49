@@ -5,9 +5,8 @@ description: What a trust domain is and what port49 trusts inside and outside on
 
 # Trust domains
 
-A person and a workload must never be confusable. A workload that could present as a person, or
-inherit a person's grants, would turn a leaked service credential into an operator's access. port49
-makes the difference structural instead of checking a name.
+A workload that could present as a person, or inherit a person's grants, would turn a leaked service
+credential into an operator's access. port49 makes the difference structural instead of checking a name.
 
 ## The rule
 
@@ -54,16 +53,15 @@ proof.
 - A credential two verifiers accept is refused. There is no tie-break.
 - `principal_domains` bounds who an OIDC provider may name (`user:<name>@<domain>`), and has no default.
   `principal_claim` has no default either: set it to a claim only your provider's administrators can write.
-- One issuer may serve both lists with a different audience. `client_id` names the public client whose ID
-  token a person presents, and `audience` names the API in the access token a service obtains. The list the
-  token matched decides the domain.
-- Certificate anchors may not overlap. A chain that ends at both anchors is refused at the TLS handshake,
-  which leaves a log line and a count of `identity_refused` handshake failures, not a decision record. The
-  broker refuses to start if one anchor directly signs the other, and refuses a request whose chain shows a deeper overlap.
-- A workload never authenticates with a directory password, and the verifier's `filter` keeps a service
-  account that looks like a person out.
-- Directory groups reach a workload only as a machine group, opt in per verifier, and only a
-  `machine_group:` subject can use one. A workload cannot inherit a person's grants by any route.
+- One issuer may serve both lists with a different audience: `client_id` names the public client whose ID
+  token a person presents, `audience` the API in the access token a service obtains. The list the token
+  matched decides the domain.
+- Certificate anchors may not overlap. A chain that ends at both is refused at the TLS handshake, which
+  leaves a log line and an `identity_refused` count, not a decision record. The broker refuses to start if
+  one anchor directly signs the other, and refuses a request whose chain shows a deeper overlap.
+- A workload never authenticates with a directory password, and the verifier's `filter` keeps a person-like
+  service account out. Directory groups reach a workload only as a `machine_group:` subject, opt in per
+  verifier, so a workload cannot inherit a person's grants by any route.
 
 ## What is trusted, and what is not
 
@@ -73,14 +71,13 @@ proof.
 | the principal that verifier derived (a certificate's mapped entry, an OIDC principal claim, a SPIFFE ID, a service account name) | a group or role asserted by the credential |
 | a directory entry the principal maps to exactly once | a name that matches more than one entry, which denies |
 
-Policy identity strings carry the domain in their form, so a policy test can check the distinction in
-CI without any credential in hand. See [Policy](../admin/policy.md). Anyone who can write the
-[inventory](../admin/inventory.md) can change which devices a grant reaches, so protect that access as a
-privilege.
+Policy identity strings carry the domain, so a [policy](../admin/policy.md) test can check the distinction
+in CI without any credential. Anyone who can write the [inventory](../admin/inventory.md) can change which
+devices a grant reaches, so protect that access as a privilege.
 
 ## Your own trust domain
 
-port49 is a relying party, not a certificate authority, with one exception: the short-lived
-certificate it issues a person after an OIDC or directory-password sign-in. That is port49's own
-trust domain. Only the broker that issued it reads it, no device ever sees it, and its CA lives in the
-broker's state directory and rotates with overlap.
+port49 is a relying party, not a certificate authority, except for the short-lived certificate it issues a
+person after an OIDC or directory-password sign-in. That is port49's own trust domain: only the broker that
+issued it reads it, no device sees it, and its CA lives in the broker's state directory and rotates with
+overlap.
