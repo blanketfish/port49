@@ -158,7 +158,10 @@ deploy/helm/port49/scripts/copy-issuer.sh port49 port49 --from 1 --to 0
 
 !!! warning "Do not run forget-issuer"
     It removes the store's record of the CA, and every certificate issued under the old CA stops working.
-    It is for the case where every broker lost the CA and no copy exists.
+    It is for the case where every broker lost the CA and no copy exists. The command is
+    `port49-broker forget-issuer --current sha256:<fingerprint>`, with the fingerprint a broker's start line
+    prints, and a record that holds a different CA is kept. After it, run `init-issuer` on one broker and copy
+    the CA to the others. Stop every broker on the store before starting one on another CA.
 
 ## 6. Create the enrollment store
 

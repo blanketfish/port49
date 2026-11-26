@@ -308,6 +308,7 @@ etcd is down at boot comes back on its own when etcd does. journald rate-limits 
 | A key readable by a group the service is not in | `...is group-readable by gid N, which this process is not in (gid M); members of that group could read the secret too - chgrp it to the service's group ...` | same | `chgrp port49d` (or `port49-broker`) the file the line names. `chmod 0600` only if the service's user owns it: on the shipped `root:port49d 0440` file it leaves the key readable by root alone. A group such as Debian's `ssl-cert` is refused |
 | A secret file's POSIX ACL names someone else | `...carries the ACL entry user:N:r--, a user that is neither this process's (uid M) nor root; it could read the secret too - remove it with setfacl -x u:N on the file (setfacl -b clears every extended entry)` | same | run the `setfacl` the line prints (`-x u:N` or `g:N` for a named entry; `-m g::-` or `-m o::-` for a base one) on the file it names, or `setfacl -b` it. port49d reads the ACL, not the mode's group bits (which are the ACL mask): a file with `group::---` and only port49d named is accepted |
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `journalctl -u port49-broker -b` | copy `issuing-ca.pem` and `.key` from a broker that holds it |
+| Two brokers wrote the issuer record at once | `issuance: the store's issuing CA record kept changing under this start; start again` | `journalctl -u port49-broker -b` | start it again |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `journalctl -u port49d -b` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the unit restarts | `journalctl -u port49d -b` | nothing: it retries every ten seconds; start etcd |
 | A key file is missing after a restart | `lstat ...: no such file` | `journalctl -u port49d -b` | restore the file under `/etc/port49/keys`, or take the policy line that names it out |
@@ -316,9 +317,9 @@ etcd is down at boot comes back on its own when etcd does. journald rate-limits 
 
 | You see | Cause | Fix |
 |---|---|---|
-| `port49: admin operations need a security key press, and your session key is in the TPM: ...`; exit 1, nothing sent | The session key is not on a security key (TPM, Secure Enclave, file) | log in with a session key on the security key |
-| `401 admin_touch_refused: the touch slot's attestation does not verify: ...` | The attestation does not chain | add the root or intermediate to `attestation_roots_file`, then `sudo systemctl reload port49-broker` |
-| `503 admin_touch_unavailable: no attestation roots are configured ...` | No attestation roots | set `attestation_roots_file` and reload |
+| `port49 <cmd>: admin operations need a press of your security key, and <reason>; nothing was sent`; exit 1 | The session key is not on a security key (TPM, Secure Enclave, file) | log in with a session key on the security key |
+| `port49 <cmd>: the broker refused the touch: the touch slot's attestation does not verify: ...` | The attestation does not chain | add the root or intermediate to `attestation_roots_file`, then `sudo systemctl reload port49-broker` |
+| `port49 <cmd>: no attestation roots are configured ...; no admin call can run on this broker until its operator sets attestation_roots_file` | No attestation roots | set `attestation_roots_file` and reload |
 | `hwkey: no touch within 15s; touch the key when it blinks and try again` | No touch in time | run it again |
 | `port49 login --oidc` cannot sign in | Your certificate expired and the identity provider is down | another on-call admin revokes; break-glass only if none can |
 | `503 store_unavailable` | The store is down | `revoke --offline` once the store is back but the brokers are not |

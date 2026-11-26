@@ -279,6 +279,7 @@ A port49d whose etcd is down at boot comes back on its own when etcd does.
 | The fence refuses a directory | `...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...` | same | fix the mode the line names in the volume (`docker run --rm -v <volume>:/v alpine:3.22 chmod go-w /v/<dir>`) |
 | A key readable by a group the container is not in | `...is group-readable by gid N, which this process is not in (gid M); ...` | same | the container's group is 65532: `chgrp 65532` the file in the volume (`chmod 0600` only if the container's user owns the file: on a `root:65532` file it makes the key unreadable) |
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `docker compose logs port49-broker` | copy `issuing-ca.pem` and `.key` from a broker that holds it |
+| Two brokers wrote the issuer record at once | `issuance: the store's issuing CA record kept changing under this start; start again` | `docker compose logs port49-broker` | start it again |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `docker compose logs port49d` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the container restarts | `docker compose logs port49d` | nothing: it retries; start etcd |
 | `setup` stops the stack naming a key file | `keys are never replaced in place` | `docker compose logs setup` | the file in `local/` differs from the one in the volume: restore the original, or add a new version file |
@@ -288,9 +289,9 @@ A port49d whose etcd is down at boot comes back on its own when etcd does.
 
 | You see | Cause | Fix |
 |---|---|---|
-| `port49: admin operations need a security key press, and your session key is in the TPM: ...`; exit 1, nothing sent | The session key is not on a security key (TPM, Secure Enclave, file) | log in with a session key on the security key |
-| `401 admin_touch_refused: the touch slot's attestation does not verify: ...` | The attestation does not chain | add the root or intermediate to `attestation-roots.pem`, then `docker compose up -d` and `docker compose kill -s HUP port49-broker` |
-| `503 admin_touch_unavailable: no attestation roots are configured ...` | No attestation roots | put the file at `PORT49_COMPOSE_LOCAL/broker/attestation-roots.pem` and run the same two commands |
+| `port49 <cmd>: admin operations need a press of your security key, and <reason>; nothing was sent`; exit 1 | The session key is not on a security key (TPM, Secure Enclave, file) | log in with a session key on the security key |
+| `port49 <cmd>: the broker refused the touch: the touch slot's attestation does not verify: ...` | The attestation does not chain | add the root or intermediate to `attestation-roots.pem`, then `docker compose up -d` and `docker compose kill -s HUP port49-broker` |
+| `port49 <cmd>: no attestation roots are configured ...; no admin call can run on this broker until its operator sets attestation_roots_file` | No attestation roots | put the file at `PORT49_COMPOSE_LOCAL/broker/attestation-roots.pem` and run the same two commands |
 | `hwkey: no touch within 15s; touch the key when it blinks and try again` | No touch in time | run it again |
 | `port49 login --oidc` cannot sign in | Your certificate expired and the identity provider is down | another on-call admin revokes; break-glass only if none can |
 | `503 store_unavailable` | The store is down | break-glass once the store is back but the broker is not |
