@@ -15,8 +15,7 @@ a device is admitted under are in the policy's `key_groups:` ([Key rotation](key
 
 Write access to the inventory, or to the source of truth behind it, is privilege-granting. Scopes match on device
 attributes and names, the mint hands a device's addresses to SSH clients, and a record can pin a key. Whoever can edit
-those moves a device into or out of a scope, or onto another device's grants, with no policy change and no diff in the
-policy repository.
+those moves a device into or out of a scope with no policy change.
 
 - On an RFC 8907 device whose key comes from a shared CIDR or attribute key group, port49d names the connection by its
   source address alone. So a shared key plus inventory write access lets anyone who can add or move an address use any
@@ -27,9 +26,8 @@ policy repository.
   same writers can change.
 - Give a connector's token read access to devices and nothing more. A webhook's secret lets its holder trigger a sync
   and nothing else.
-- Review `port49 inventory diff` for every change: it shows scope changes and added addresses. port49d logs each as an
-  `inventory_change` record, and an address that moves from one device to another in one swap pages as
-  `port49_inventory_address_moved`.
+- Review `port49 inventory diff` for every change: it shows scope changes and added addresses, and an address that
+  moves between devices pages as `port49_inventory_address_moved`.
 - port49d refuses `inventory_file`, at start and at every reload, if anyone but its own user or root could have written
   the file or its directory.
 
@@ -122,41 +120,17 @@ port49-inventory: sync[0] (netbox_prod): map must name platform: the path the de
 Add `platform: platform.slug` to the `map`. The keys are in the [service reference](../reference/config/port49-inventory.md);
 the token and the webhook secret are [secret references](../operate/secrets.md), read at start and never printed.
 
-The connector reads the release first (`/api/status/`) and picks a mapping profile.
+The connector reads the release first and picks a mapping profile: NetBox 3.7 and 4.x, Nautobot 1.6, 2.x and 3.x
+(the lab measured [NetBox](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-netbox.md) and
+[Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md)). **A release outside
+that list refuses every sync** until the source sets `profile:`, and new devices are not admitted meanwhile, so check
+the next sync after a NetBox or Nautobot major upgrade. Addresses are the primary IPs plus any interfaces you opt in,
+since every address listed admits its source. The service honors `HTTPS_PROXY` and `NO_PROXY` for each source. The
+refusal lines, paging, `filter`, `map` and the proxy's start lines are on the keys of the
+[service reference](../reference/config/port49-inventory.md).
 
-- Accepted: NetBox 3.7 and 4.x, Nautobot 1.6, and Nautobot 2.x and 3.x. The lab measured NetBox 3.7 and 4.7 and
-  Nautobot 1.6, 2.4 and 3.2; another minor of an accepted major is read with that profile and noted as unmeasured.
-- **A release outside that list refuses every sync** until the source sets `profile:`, with
-  `<product> <version> is a release no lab run measured (spec §15 L27, L30: <measured list>); set profile to read it with a measured release's fields, at your own risk`.
-  The last good bundle keeps serving, but new devices are not admitted. After a NetBox or Nautobot major upgrade, check
-  that the next sync succeeds. What each release was measured to do is in the notes
-  ([NetBox](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-netbox.md),
-  [Nautobot](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L30-nautobot.md)).
-
-A device the last read kept and this read lacks is asked for by name before it counts as removed, so a list that shifts
-under paging never reads as a removal. `filter:` keeps `status: [active]` unless you say otherwise. `map:` must name
-`platform`; an attribute a device does not give is left unset, never invented, and `on_missing:` decides what that
-means. Addresses are the primary IPs plus any interfaces you opt in (`addresses.interfaces`, `all_interfaces`), since
-every address listed admits its source.
-
-A platform slug the alias table and your `platform_aliases:` do not know is kept, and the device is **admitted and
-served by the generic adapter**, which has no platform-specific handling. `port49_inventory_generic_platform_devices`
-holds the count. Treat a nonzero count as a mapping to fix.
-
-### Behind an egress proxy
-
-The service honors `HTTPS_PROXY` and `NO_PROXY` for each NetBox and Nautobot source, and says at start, per source,
-how it will fetch:
-
-```text
-port49-inventory: source netbox_prod is fetched directly (no HTTPS_PROXY)
-port49-inventory: source netbox_prod is fetched through the proxy <scheme>://<host> (with credentials) (HTTPS_PROXY)
-```
-
-An `HTTPS_PROXY` that does not parse as a proxy URL fails every sync of that source (percent-encode `#`, `/`, `?` and
-`%` in its password). A proxy that answers 407 fails it with `the egress proxy refused HTTPS_PROXY's credentials; the
-token was not sent`, and the API token is never sent to a proxy that refused. Set the variable on the service's unit or
-container.
+A platform slug the alias table and your `platform_aliases:` do not know is admitted and served by the generic
+adapter. `port49_inventory_generic_platform_devices` holds the count: treat a nonzero count as a mapping to fix.
 
 ### Pointing port49d at the service
 
@@ -171,10 +145,9 @@ inventory:
     state_dir: /var/lib/port49/inventory
 ```
 
-`state_dir` holds the last bundle port49d applied, so a restart needs no service. `mirror_dir` is an optional second
-copy the service writes, read at a cold start when `state_dir` has none. List two `verify_key_files` while the
-service's signing key rotates ([Key rotation](key-rotation.md#the-inventory-services-signing-key)). Every path under
-`inventory.service` is absolute, and `state_dir` and `mirror_dir` may not overlap.
+`state_dir` holds the last bundle port49d applied, so a restart needs no service
+([the other keys](../reference/config/port49d.md)). List two `verify_key_files` while the service's signing key
+rotates ([Key rotation](key-rotation.md#the-inventory-services-signing-key)).
 
 If the service is down, **nothing fails closed**: the fleet keeps authenticating on the bundle in force. The alerts
 ([Troubleshooting](../operate/troubleshooting/index.md#inventory)) say the service is failing, its bundle is refused or
@@ -240,18 +213,14 @@ every inventory change fleet-wide, so port49 **quarantines the device**: it is p
 - A mint for the device is refused `device_quarantined`, and its connection is **closed without a reply**, as for
   `device_unknown`.
 
-Silence is deliberate. The device sees a dead server and falls to its local method, so break-glass works on a
-quarantined device, where a FAIL would tell it AAA is healthy and refuses everyone. The close was measured on Arista,
-Cisco IOS XE, Cisco NX-OS and Juniper images (spec §10; spec §14 for a quarantine through a sync). How long break-glass
-takes with `single-connection` on is per platform, in the [device pages](devices/index.md).
-
-Quarantine means port49 cannot compute a correct policy for the device, not that the device is suspect. The way out is
-the change the cause names: a policy edit, an adapter or platform-set change, or a corrected attribute in the source.
-Do not weaken a ceiling to make the check pass.
+The silence is deliberate: the device falls to its local method, so break-glass works on a quarantined device
+([device pages](devices/index.md)). Quarantine means port49 cannot compute a correct policy for the device, not that
+the device is suspect. The way out is the change the cause names: a policy edit, an adapter or platform-set change,
+or a corrected attribute in the source. Do not weaken a ceiling to make the check pass.
 
 ## Verifying a change before it lands
 
-`port49 policy test --policy FILE --inventory FILE` reports quarantines and refusals. `port49 explain --policy FILE
---inventory FILE --subject NAME --device NAME` answers what a subject can do on a device, including one only in your
-candidate inventory. `port49 inventory export --service URL ... --verify-key FILE` writes a verified copy of the
-published bundle; without `--from` it accepts an older genuine bundle, so read the header's sequence first.
+`port49 policy test --policy FILE --inventory FILE` reports quarantines and refusals; the rest is in
+[Policy review](policy-review.md). `port49 inventory export --service URL ... --verify-key FILE` writes a verified
+copy of the published bundle; without `--from` it accepts an older genuine bundle, so read the header's sequence
+first.
