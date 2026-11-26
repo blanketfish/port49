@@ -26,9 +26,8 @@ scrape_configs:
       - targets: ["<broker-host>:9050"]
 ```
 
-On Helm, `prometheusRule.enabled: true` renders the rules as a `PrometheusRule` and a `PodMonitor` for each
-workload with `job` set to `port49d` and `port49-broker`. It needs the Prometheus Operator's CRDs, and
-`prometheusRule.labels` must be the labels your Prometheus selects on.
+On Helm, `prometheusRule.enabled: true` renders both with those job names
+([Chart options](https://github.com/blanketfish/port49/blob/main/deploy/helm/port49/README.md#chart-options)).
 
 The metrics ports listen on every address of the host or pod and need no credential. Restrict them to your
 Prometheus and, on Kubernetes, the kubelet, whose probes use the same port. The chart renders no
@@ -76,20 +75,8 @@ says where, and any rise pages
 
 port49d holds one pool of connection slots across both TACACS+ listeners, `limits.max_connections`, sized
 from the open-file limit at start when unset. When the pool is full a new connection is reset at once, so
-the device moves to its next server now instead of waiting out its own timeout. That is meant, and never
-silent. port49d logs when shedding begins:
-
-```text
-port49d: shedding: all <N> TACACS+ connection slots (limits.max_connections) are in use; each new connection is reset at Accept and the device tries its next server
-```
-
-and once a minute while it goes on:
-
-```text
-port49d: still shedding: <N> connections reset at Accept in the last minute; <N> of <N> slots in use
-```
-
-Each shed adds one to `port49_connections_shed_total{reason="global_cap"}`. The page alert is
+the device moves to its next server now instead of waiting out its own timeout. The log lines are in the
+[3am index](troubleshooting/index.md#shedding). Each shed adds one to `port49_connections_shed_total{reason="global_cap"}`. The page alert is
 [port49_global_cap_shedding](../reference/alerts.md#port49_global_cap_shedding), and its warning, the
 ticket [port49_connections_near_cap](../reference/alerts.md#port49_connections_near_cap), fires when a
 port49d holds more than 80% of `port49_connections_max` open for ten minutes. A shed device with no server

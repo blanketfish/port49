@@ -11,7 +11,7 @@ port49 uses [Semantic Versioning](https://semver.org/).
 |---|---|
 | `v0.1.0` | The beta. |
 | `0.x` | Configuration may break between releases. Every such change is called out loudly in the release notes. Read them before you upgrade. |
-| `1.0.0` | The compatibility promise. Before it, configuration may break between releases, always with a release note; from it, the SemVer rules hold. |
+| `1.0.0` | The compatibility promise. From it, the SemVer rules hold. |
 
 Release tags look like `v0.1.0`, with no pre-release suffix unless it maps to a valid Python (PEP 440)
 version, because the Python package is released from the same tag.

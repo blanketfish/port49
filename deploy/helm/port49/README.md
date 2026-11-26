@@ -84,9 +84,9 @@ Four values are required:
 3. `encryption.existingSecret` and `encryption.id`: mounted in both pods.
 4. `policy` and `inventory`, with `--set-file`. Without a policy port49d refuses to start.
 
-The release namespace must enforce Pod Security `baseline`. The volume setup is two init containers. The
-first runs as root with `CHOWN`, `FOWNER` and `FSETID` only, all in `baseline`'s list. A namespace
-enforcing `restricted` refuses it, so no pod is created. To label the namespace, run:
+The release namespace must enforce Pod Security `baseline`. The volume setup's root init container uses `CHOWN`,
+`FOWNER` and `FSETID` only, all in `baseline`'s list. A namespace enforcing `restricted` refuses it, so no pod is
+created. To label the namespace, run:
 
 ```sh
 kubectl label --overwrite ns port49 pod-security.kubernetes.io/enforce=baseline
@@ -110,10 +110,9 @@ Then pick the sign-in backend.
 
 === "Directory password"
 
-    Set `broker.site` (the same for every replica of a release) and, for a Kerberos bind,
-    `broker.directory.keytabSecret`: a Secret holding the keytab and `krb5.conf`, mounted at
-    `/etc/port49/directory`. [Directory password](https://blanketfish.github.io/port49/latest/admin/sign-in/directory-password/)
-    and [The directory](https://blanketfish.github.io/port49/latest/admin/directory/) have the blocks.
+    [Directory password](https://blanketfish.github.io/port49/latest/admin/sign-in/directory-password/)
+    and [The directory](https://blanketfish.github.io/port49/latest/admin/directory/) have the blocks and the
+    Helm values.
 
 To check, run:
 
