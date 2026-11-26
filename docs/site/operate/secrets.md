@@ -5,10 +5,10 @@ description: Where port49's secrets live, who may read them, and how they are mo
 
 # Secrets
 
-port49 holds three kinds of secret: the shared keys it shares with devices, the key that seals its stored
-records, and the keys it uses for etcd and TLS. No secret is written in a configuration file, the policy or
-a container's environment listing. Those carry only a name for the secret. The secret is a file that a
-mount, a package or a secret agent puts on disk. Rotation is on [Key rotation](../admin/key-rotation.md).
+port49 holds three kinds of secret: the device keys, the key that seals its stored records, and the keys it uses
+for etcd and TLS. No secret is written in a configuration file or the policy: they carry only its name. An `env:`
+secret shows in `docker inspect`, so prefer `file:`. The file is put on disk by a mount, a package or a secret
+agent. Rotation is on [Key rotation](../admin/key-rotation.md).
 
 ## The secret reference
 
@@ -28,8 +28,8 @@ keys:
 ```
 
 A reference that does not parse is refused without being printed, because the likeliest cause is the secret
-pasted where its name goes: rotate that secret. An empty secret is refused. Prefer `file:`: a file can be
-added while port49d runs, but an `env:` variable is read once, so a new one needs a restart.
+pasted where its name goes: rotate that secret. An empty secret is refused. A `file:` secret can be added
+while port49d runs, but an `env:` variable is read once, so a new one needs a restart.
 `encryption.current.secret_ref` and `encryption.previous.secret_ref` take the same forms and must be exactly
 32 bytes ([`encryption` reference](../reference/config/port49d.md#encryption)).
 
@@ -67,18 +67,9 @@ Every refusal names the file and the fix, and none prints a byte of the secret.
 
 ## When a key file is not there yet
 
-Put the key file in place first, then add the policy line. To remove a key, take the policy line out first.
-
-While port49d runs, a new policy that names a missing file is not put in force and the policy already
-serving stays. port49d retries every 30 seconds and says so on the first refusal, then at most every ten
-minutes. At a start, a missing file is not retried: the unit or pod crash-loops until the file is back or
-the policy line is out.
-
-Once read, a file is never read as a key again. If a held file is rewritten in place, port49d keeps the
-secret it holds and counts the version in `port49_key_secret_files_changed`
-([alert](../reference/alerts.md#port49_key_secret_files_changed)), because a restart would give one replica
-the new bytes. The cure is a new file under a new version
-([Key rotation](../admin/key-rotation.md#add-a-version-with-a-new-file)).
+File first, policy line second. A file rewritten in place is counted in `port49_key_secret_files_changed`
+([alert](../reference/alerts.md#port49_key_secret_files_changed)): put the new bytes in a new file, as
+[Key rotation](../admin/key-rotation.md#add-a-version-with-a-new-file) says.
 
 ## What each deployment does
 
@@ -118,8 +109,6 @@ so files are `root:65532` 0440. Measured on kind
 ([L82](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L82-kind.md), kind v0.29.0, node
 image v1.33.1):
 
-- A key added to the Secret appeared in a whole mount, and a login keyed with the new version passed with no
-  restart through External Secrets.
 - A `subPath` mount of the same Secret did not change after three minutes while the whole mount did, because
   the kubelet updates only a whole mount in place.
 
@@ -132,7 +121,5 @@ to pass the secret-file rule. Two agents were measured on kind
 | Mechanism | Device keys | Encryption key | Why |
 |---|---|---|---|
 | External Secrets into a Secret volume | Yes | Yes | A new version reaches a running process ([L82](../reference/lab-register.md#l82)). `examples/external-secret.yaml` has one Secret key per version. |
-| Vault Agent injector | No | Yes, with `vault.hashicorp.com/agent-run-as-same-user: "true"` | By default the agent is uid 100 and owns the file, and port49d refuses the owner. With the annotation the file is port49d's own. A new version is a pod rollout, not a reload, which fails a device key's no-restart need. |
+| Vault Agent injector | No | Yes, with `vault.hashicorp.com/agent-run-as-same-user: "true"` | By default the agent is uid 100 and owns the file, and port49d refuses the owner. With the annotation the file is port49d's own. A new version is a pod rollout, which fails a device key's no-restart need. |
 | Secrets Store CSI driver | No | No | Its files are `root` 0644 (a world bit: refused), or 0440, which the process's user cannot read. The driver sets no group for `fsGroup` to act on. |
-
-The encryption key changes rarely, so a rollout is acceptable for it.
