@@ -43,7 +43,7 @@ sudo install -m 0644 etcd@.service /etc/systemd/system/
 sudo install -m 0644 etcd-1.yaml /etc/etcd/          # etcd-2.yaml on the second host, and so on
 ```
 
-`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700, makes the data directory and `/etc/etcd/pki` for the certificates.
+`tmpfiles-etcd.conf` makes `/var/lib/etcd` (0700) and `/etc/etcd/pki`.
 Edit each member file for your names and put its certificates in `/etc/etcd/pki/`. The examples turn on
 TLS and client-certificate auth, periodic compaction every 10 minutes and an 8 GiB quota. Then start each
 member:
@@ -253,9 +253,9 @@ Break-glass revoke with every broker down ([Revoking access](https://blanketfish
 on a broker host, as the broker's user:
 
 ```sh
-systemctl stop port49-broker              # on every broker host
+sudo systemctl stop port49-broker         # on every broker host
 sudo -u port49-broker port49-broker revoke --offline --principal user:bob@example.com
-systemctl start port49-broker
+sudo systemctl start port49-broker
 ```
 
 What the backup units do: [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/).

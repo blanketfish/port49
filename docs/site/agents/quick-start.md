@@ -30,7 +30,8 @@ who sets that up and the agent that reads this before it acts are the readers.
     Never run `port49 token`, `port49 workload token` or `port49 ssh` in a shell: each uses a person's
     login or prints the token on standard output, which is the transcript. Never print, log or `cat` a
     token, a key file, a password, an ID token, or a dump of the environment. Keep `no_log: true` on every
-    Ansible task that holds one. The agent passes the key file's path to the tooling and never opens it.
+    Ansible task that holds one. The agent passes the key file's path to the tooling and never opens it. It never reads a file under
+    the secrets directories ([Secrets](../operate/secrets.md)).
 
 4. **A refusal arrives as a reason code.** The agent reads the code from its tooling and stops. It never
    retries a deny, and never tries another device, another identity or a person's login to get round it.

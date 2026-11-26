@@ -292,7 +292,8 @@ A broker that refuses to start on its CA names the fix in its `issuance: this br
     port49-broker forget-issuer --current sha256:<fingerprint>
     ```
 
-    The detail is in the [Helm install](../operate/helm/install.md) warning.
+    After it, every certificate the old CA issued stops working; stop every broker on the store before
+    starting one on another CA.
 
 ### `rotate-issuer`
 

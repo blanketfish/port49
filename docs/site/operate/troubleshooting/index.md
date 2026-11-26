@@ -157,8 +157,8 @@ reason.
 the policy's `api:` list (`revoke_others`, `lift_revocations`): see [Admin access](../../admin/admin-access.md).
 
 The other refusals (the key's attestation does not verify, no attestation roots, no touch in time) have a
-different fix for each deployment. The fix is on the troubleshoot page for [systemd](../systemd/troubleshoot.md) or
-[containers](../containers/troubleshoot.md), and for no roots on [Helm](../helm/troubleshoot.md). With every broker down, use the
+different fix for each deployment. The fix is on the troubleshoot page for [systemd](../systemd/troubleshoot.md),
+[containers](../containers/troubleshoot.md) or [Helm](../helm/troubleshoot.md). With every broker down, use the
 offline revoke in [Revoking access](../../admin/revocation.md).
 
 **Don't:** retry a refused touch in a loop: the alert
