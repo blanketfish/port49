@@ -37,6 +37,10 @@ who sets that up and the agent that reads this before it acts are the readers.
 5. **Every command is recorded under the agent's principal** ([what is recorded](#5-what-is-recorded)).
 6. **A device that asks for a person's second factor stays human: the agent's subject has no grant on it**
    ([per_login_mfa_required devices](#per_login_mfa_required-devices-stay-human)).
+7. **The agent never calls `Workload.tokens()` or prints its result:** `res.tokens` holds tokens.
+8. **The agent never changes its own access or a device.** It never widens its own policy, grant or role,
+   never runs a command that prints the device's configuration unsanitized, and never touches a device's AAA
+   configuration: that is a human's change ([Devices](../admin/devices/index.md)).
 
 ## How a refusal reaches the agent
 
@@ -292,16 +296,6 @@ Each command the device asks about is one `authorize_command` record
 (`spiffe://example.com/agent/netops-readonly`, never a person's), the command as `request.vector` and the
 matching subject as `policy.subject` (here `agent_readonly`). A query on the principal returns the agent's
 commands and nothing else.
-
-## What the agent never does
-
-- Never runs `port49 login`, `port49 ssh`, `port49 token` or `port49 workload token`, never constructs
-  `port49.Agent`, and never reads a file under the secrets directories ([Secrets](../operate/secrets.md)).
-- Never calls `Workload.tokens()` or prints its result: `res.tokens` holds tokens.
-- Never runs a command that prints the device's configuration unsanitized.
-- Never retries a deny, and never widens its own policy, grant or role.
-- Never touches a device's AAA configuration: that is a human's change
-  ([Devices](../admin/devices/index.md)).
 
 The steps that set all this up, in order, with the check after each, are in the
 [setup runbook](setup-runbook.md).
