@@ -136,13 +136,9 @@ A device that cannot log in after a rotation: `port49d keys-diagnose --device NA
 device's first packet, tries every version port49d holds, retired ones included, and says which validates. It prints no
 byte of the packet or of a key.
 
-??? info "single_device"
-    The key metrics are labelled by `key_ref`, and port49 puts no device identity in a metric label. A key held by
-    exactly one device (a pin, or a key group of one) is reported under `key_ref="single_device"` and `version="any"`.
-    `port49_key_version_devices` counts those keys on a version that has a `retire_after`, and
-    `port49_key_retirement_seconds` is the least time left among them. Which device is on which version is
-    `port49 keys status`'s answer. A key held by two or more devices keeps its own label. `single_device` is a
-    reserved name: a policy or inventory that names it as a `key_ref` is refused at load.
+A key held by exactly one device is reported under `key_ref="single_device"`, because a metric label never names a
+device: `port49 keys status` says which device is on which version. The name is reserved
+([inventory](../reference/config/inventory.md), [metrics](../reference/metrics.md)).
 
 ## The `encryption:` key
 
@@ -183,11 +179,11 @@ opens nothing a not-yet-swapped neighbor still seals under the old key.
 
     ```sh
     docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b --entrypoint port49d port49-setup:dev \
-      key sealing --id e2 --dir /e/secrets --broker-dir /b/secrets --daemon-user 65532 --broker-user 65532
+      key sealing --id c2 --dir /e/secrets --broker-dir /b/secrets --daemon-user 65532 --broker-user 65532
     ```
 
-    Add `previous: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}` to `config/port49d.yaml` and the
-    same with `file:/etc/port49/secrets/broker-encryption-e2.key` to `config/port49-broker.yaml`, run
+    Add `previous: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-c2.key}` to `config/port49d.yaml` and the
+    same with `file:/etc/port49/secrets/broker-encryption-c2.key` to `config/port49-broker.yaml`, run
     `docker compose up -d` (setup copies the config files), then `docker compose restart port49d port49-broker`. Step 2
     makes `c2` `current:` and `c1` `previous:` in both files. For step 3, remove the old key from `local/secrets/` **first** (`encryption.key` and
     `broker-encryption.key` are the old key's), so an `up` in between cannot install it again, then from the volumes:
@@ -254,42 +250,15 @@ re-sealed by the broker's scheduled directory pass (every `refresh_interval`); t
     - The gauges are absent until a runner completes its first pass after it starts, and on a single shared store,
       where a membership record has a lease and there is no pin to re-seal.
 
-    The runner lists pins in pages of 500, opens only those not under `current`, and writes each one still under
-    `previous` again under `current`, by a compare on the revision it read. A pin that `port49 directory forget`, a
-    re-pin or another region's runner changed in between is left as that writer wrote it, and the next pass reads it
-    again. Its budget is half `refresh_interval`, so a large fleet can take several intervals to finish its first pass.
-    While step 2 rolls out, expect `the re-seal sealed N pins` lines in every region, because regions on different
-    `current` keys move pins back and forth; finish step 2 promptly.
-
-    What the pass says:
-
-    - `directory store: the re-seal sealed N pins under the current key; M are left under encryption.previous`.
-    - If the directory store stops answering or refuses the broker's identity:
-      `directory store: the re-seal of pins stopped: <error>; the next pass starts again`, with no gauge change. A
-      cancel (shutdown, or the keyspace handed over) stops the pass silently, also with no gauge change.
-    - A write that fails any other way does not stop the pass. That pin is counted in
-      `port49_directory_pins_sealed_previous` and named once an hour as
-      `directory store: <principal>'s pin could not be written under the current key (...)`.
-    - A pass that runs out of budget says
-      `directory store: the re-seal of pins ran out of its <budget> budget after sealing N pins (M did not open); the next pass goes on from there`
-      once an hour, with no gauge change.
+    Its budget is half `refresh_interval`, so a large fleet can take several intervals to finish its first pass. While
+    step 2 rolls out, regions on different `current` keys move pins back and forth: finish step 2 promptly. The lines
+    the pass prints are in the
+    [3am index](../operate/troubleshooting/index.md#a-directory-pin-is-not-re-sealed-or-does-not-open).
 
 ??? info "A pin that opens under neither key"
-    `port49_directory_pins_unopenable` counts these (alert
-    [port49_directory_pins_unopenable](../reference/alerts.md#port49_directory_pins_unopenable), on the keyspace
-    holder). A key was retired while it still sealed pins, and reading the pin fails with `ErrUnknownKey`. Bind, mint and
-    refresh fail for that principal. From the code (not measured), sessions already open are denied `context_stale` once
-    `session.staleness_ceiling` has passed. Each pass opens the pin again, so
-    `port49_crypt_open_failures_total{record="membership"}` rises at least once per pass for each such pin.
-
-    The pass never deletes or rewrites such a pin. It says `directory store: <principal>'s pin does not open (...)` once
-    an hour, for at most 20 principals a pass (the first 20 in sorted order); the count's line says how many more are not
-    named. For an unknown key, the line says to put the retired key back as `previous` and restart, which deletes nothing
-    and lets the next pass re-seal the pin. For any other open error it says the record does not match its seal and to
-    run `port49 directory forget <principal>`, because the record was changed outside port49 and no key helps. If the key
-    is gone, `port49 directory forget <principal>` also frees the principal, and the person's next sign-in pins them
-    again. Any admin with `forget_principals` whose own pin opens can run it. Confirm that the person who signs in is the
-    same person, as on [Stores](../operate/stores.md). There is no offline forget on `port49-broker`.
+    A key was retired while it still sealed pins: `port49_directory_pins_unopenable` counts them, and bind, mint and
+    refresh fail for that principal. The fix is in the
+    [3am index](../operate/troubleshooting/index.md#a-directory-pin-is-not-re-sealed-or-does-not-open).
 
 ### Rotating again
 
@@ -299,16 +268,8 @@ last one's step 3. Only pins have a gauge; a second factor is under `current` on
 
 ### Backups and exports need every key that sealed their records
 
-**Keep every old key file, offline, as long as any backup that holds its records is kept.** Restoring without it loses
-the second factors and pins sealed under it, and each enrolled person must run `port49 directory reset-second-factor`.
-Velero also stores the encryption Secret in the bucket, so guard that bucket like the key.
-
-??? info "Why a backup needs the old keys"
-    An etcd snapshot and a Velero backup are the raw stores: each record keeps the key that was current when it was
-    written, so a backup taken between steps 2 and 3 needs both keys. An enrollment export
-    (`port49-broker export-enrollments`) keeps each record's seal and seals only its envelope under the key current at
-    export time. `port49 directory import` refuses a file sealed under a key the broker does not hold and tells you to
-    set that key as `previous`.
+Keep every old key file, offline, as long as any backup that holds its records is kept
+([Backup and restore](../operate/backup-and-restore.md#what-to-back-up)).
 
 ## The issuing CA
 
@@ -323,12 +284,11 @@ A broker whose CA does not match the record refuses to start, and the line, from
 `kubectl logs`, names what to do. Do **not** reach for `forget-issuer` for any of them. It is for one case only: every
 broker lost the CA and no copy exists.
 
-??? info "The three refusals"
-    | You see | It means | Do |
-    |---|---|---|
-    | `issuance: this broker's issuing CA (<fingerprint>) is behind a promotion: the store records <fingerprint>, promoted from it by <broker> at <time>. Copy issuing-ca.pem, issuing-ca.key and issuing-ca-previous.pem from that broker into broker.state_dir, then start` | A rotation was promoted on another broker and this one missed the copy. | Copy those three files from the broker named, then start. On Helm, see [Helm troubleshooting](../operate/helm/troubleshoot.md). |
-    | `issuance: this broker's issuing CA (<fingerprint>) is not the one the store records (<fingerprint>, by <broker> at <time>): every broker on one store issues from one CA. Copy issuing-ca.pem and issuing-ca.key from a broker that holds it ...` | This broker holds a different CA than the store records, usually a second `init-issuer` or a restored old volume. | Copy `issuing-ca.pem` and `issuing-ca.key` from a broker that holds the recorded one. Do not run `init-issuer`. |
-    | `issuance: the store's issuing CA record kept changing under this start; start again` | Two brokers were writing the record at once. | Start again. |
+A start that fails with `issuance: this broker's issuing CA (<fingerprint>) is ...` means this broker holds a
+different CA than the store records, or missed a promotion: copy the files from a broker that holds the recorded
+one, and never run `init-issuer`. The `kept changing under this start` line means two brokers wrote the record at
+once: start again. The lines are in [Helm troubleshooting](../operate/helm/troubleshoot.md) ("behind a
+promotion") and [systemd troubleshooting](../operate/systemd/troubleshoot.md) ("The issuing CA differs").
 
 ??? info "forget-issuer"
     ```sh

@@ -533,6 +533,38 @@ device tries its next server. It is said when shedding begins, then once a minut
 
 **Don't:** treat it as an outage: devices are being sent to their next server on purpose.
 
+### A directory pin is not re-sealed or does not open {#a-directory-pin-is-not-re-sealed-or-does-not-open}
+
+**You see:** `directory store: <principal>'s pin does not open` and the alert
+[port49_directory_pins_unopenable](../../reference/alerts.md#port49_directory_pins_unopenable), on the keyspace
+holder (`port49_store_keyspace_held` 1).
+
+**It means:** the broker's scheduled pass could not open a pin, which is a pinned principal's directory entry
+sealed under the `encryption:` key. For an unknown key (`ErrUnknownKey`), a key was retired while it still
+sealed the pin. Bind, mint and refresh fail for that principal. From the code (not measured), sessions already
+open are denied `context_stale` once `session.staleness_ceiling` has passed. Each pass opens the pin again, so
+`port49_crypt_open_failures_total{record="membership"}` rises at least once per pass for each such pin. The pass
+never deletes or rewrites it, and says the line once an hour for at most 20 principals a pass
+(the first 20 in sorted order); the count's line says how many more are not named.
+
+Other lines of the same pass, each once an hour, with no gauge change:
+
+- `directory store: the re-seal of pins stopped: <error>; the next pass starts again`: the directory store
+  stopped answering or refused the broker's identity.
+- `directory store: <principal>'s pin could not be written under the current key (...)`: that pin is counted in
+  `port49_directory_pins_sealed_previous`, and the pass goes on.
+- `directory store: the re-seal of pins ran out of its <budget> budget after sealing N pins (M did not open); the next pass goes on from there`.
+
+**Do this:** for an unknown key, put the retired key back as `previous` and restart, which deletes nothing and
+lets the next pass re-seal the pin. If the line says the record does not match its seal, it was changed outside
+port49 and no key helps: run `port49 directory forget <principal>`. If the key is gone, `forget` also frees the
+principal, and the person's next sign-in pins them again. Any admin with `forget_principals` whose own pin opens
+can run it. Confirm that the person who signs in is the same person
+([Stores](../stores.md)). There is no offline forget on `port49-broker`.
+
+**Don't:** remove `encryption.previous` while `port49_directory_pins_sealed_previous` is above 0
+([Key rotation](../../admin/key-rotation.md#the-encryption-key)).
+
 ### A directory outage past 24 hours
 
 **You see:** `no_grants_matched` (or `identity_unmapped`) for people who held sessions, right after a broker
