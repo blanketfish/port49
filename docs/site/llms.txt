@@ -19,35 +19,59 @@
 - [Revocation](https://blanketfish.github.io/port49/latest/concepts/revocation/): How port49 ends access that was already granted, and how quickly it takes effect.
 - [Trust domains](https://blanketfish.github.io/port49/latest/concepts/trust-domains/): What a trust domain is and what port49 trusts inside and outside one.
 
+## Install
+
+- [Install](https://blanketfish.github.io/port49/latest/operate/deploy/): The three ways to deploy port49 and what you need before the first command.
+- [Install](https://blanketfish.github.io/port49/latest/operate/systemd/install/): Install port49 from the package on Linux hosts, step by step, with a check after each step.
+- [Upgrade](https://blanketfish.github.io/port49/latest/operate/systemd/upgrade/): Upgrade a systemd deployment of port49 one server group at a time.
+- [Troubleshoot](https://blanketfish.github.io/port49/latest/operate/systemd/troubleshoot/): What to do when a systemd deployment of port49 will not start or an admin command is refused.
+- [Try it](https://blanketfish.github.io/port49/latest/operate/containers/trial/): Run a single-host trial of port49 with Docker Compose.
+- [Install](https://blanketfish.github.io/port49/latest/operate/containers/install/): Install port49 with Docker Compose, step by step, with a check after each step.
+- [Upgrade](https://blanketfish.github.io/port49/latest/operate/containers/upgrade/): Upgrade a Docker Compose deployment of port49.
+- [Troubleshoot](https://blanketfish.github.io/port49/latest/operate/containers/troubleshoot/): What to do when a Docker Compose deployment of port49 will not start or an admin command is refused.
+- [Install](https://blanketfish.github.io/port49/latest/operate/helm/install/): Install port49 on Kubernetes with the Helm chart, step by step, with a check after each step.
+- [Upgrade](https://blanketfish.github.io/port49/latest/operate/helm/upgrade/): Upgrade a Helm release of port49 without dropping device logins.
+- [Troubleshoot](https://blanketfish.github.io/port49/latest/operate/helm/troubleshoot/): What to do when a Helm release of port49 will not start or an admin command is refused.
+- [Back up with Velero](https://blanketfish.github.io/port49/latest/operate/helm/velero/): Back up and restore a Helm release of port49 with Velero.
+
 ## Operate
 
-- [Install](https://blanketfish.github.io/port49/latest/operate/install/): Choosing between the systemd, container and Helm shapes of a port49 deployment, and what every shape needs.
-- [systemd](https://blanketfish.github.io/port49/latest/operate/install/systemd/): Installing port49d and the broker from the packages and running them under systemd.
-- [Containers](https://blanketfish.github.io/port49/latest/operate/install/container/): Running port49d, the broker and etcd as containers with Compose.
-- [Helm](https://blanketfish.github.io/port49/latest/operate/install/helm/): Deploying port49 to Kubernetes with the Helm chart.
-- [Clients](https://blanketfish.github.io/port49/latest/operate/install/clients/): Installing the port49 command-line client, the Python library and the Ansible lookup.
-- [Broker and agent](https://blanketfish.github.io/port49/latest/operate/broker-and-agent/): What the broker and the agent each do, and where each runs.
-- [Signing in](https://blanketfish.github.io/port49/latest/operate/login/): How a person signs in to port49 and gets a token for a device login.
-- [Hardware keys](https://blanketfish.github.io/port49/latest/operate/hardware-keys/): Requiring a hardware key at sign-in and at each device login.
 - [Stores](https://blanketfish.github.io/port49/latest/operate/stores/): The directory and session stores port49 keeps state in, the single-site and multi-region recipes, and what each looks like when a store is down.
-- [TLS](https://blanketfish.github.io/port49/latest/operate/tls/): Running TACACS+ over TLS (RFC 9887) on port 300, the certificates it needs, and what an operator sees when one is wrong.
+- [TLS (RFC 9887)](https://blanketfish.github.io/port49/latest/operate/tls/): Running TACACS+ over TLS (RFC 9887) on port 300, the certificates it needs, and what an operator sees when one is wrong.
 - [Secrets](https://blanketfish.github.io/port49/latest/operate/secrets/): Where port49's secrets live, who may read them, and how they are rotated.
 - [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/): What to back up, how to restore it, and what a restore does to live sessions.
 - [Monitoring](https://blanketfish.github.io/port49/latest/operate/monitoring/): The metrics, alerts and logs that show whether port49 is healthy.
-- [Versions](https://blanketfish.github.io/port49/latest/operate/versions/): How port49 numbers its releases, what 0.x and 1.0.0 promise, and how to read the version of a running binary.
+- [Versions and upgrades](https://blanketfish.github.io/port49/latest/operate/versions/): How port49 numbers its releases, what 0.x and 1.0.0 promise, and how to read the version of a running binary.
 - [Troubleshooting](https://blanketfish.github.io/port49/latest/operate/troubleshooting/): Where to start when port49 or a device login is not working.
-- [Failure matrix](https://blanketfish.github.io/port49/latest/operate/troubleshooting/failure-matrix/): What a device login does when each part of port49 is down.
-- [When it will not start](https://blanketfish.github.io/port49/latest/operate/troubleshooting/will-not-start/): The refusals port49d prints at start, what each means and how to fix it.
+
+## Sign in
+
+- [Sign in](https://blanketfish.github.io/port49/latest/use/): How a person installs the port49 client, signs in and connects to a device.
+- [Install the client](https://blanketfish.github.io/port49/latest/use/install-client/): Install the port49 client on a person's machine.
+- [Log in](https://blanketfish.github.io/port49/latest/use/login/): Sign in with port49 login using a certificate, OIDC or a directory password.
+- [Connect to a device](https://blanketfish.github.io/port49/latest/use/connect/): Reach a network device with port49 ssh or a token from port49 token.
+- [Hardware keys](https://blanketfish.github.io/port49/latest/use/hardware-keys/): Sign in to port49 with a key held on a hardware security key.
 
 ## Administer
 
-- [Policy](https://blanketfish.github.io/port49/latest/admin/policy/): Writing the policy file that decides who may log in to which devices and what they may run, and checking a change before it ships.
-- [Roles and grants](https://blanketfish.github.io/port49/latest/admin/roles-and-grants/): Defining roles, granting them to people, groups and workloads, and reading why a grant applied.
-- [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/): Rotating the devices' shared secrets and port49's encryption setting without locking anyone out.
-- [Revocation](https://blanketfish.github.io/port49/latest/admin/revocation/): Revoking a person, a certificate or a session, closing what revocation cannot reach, and setting up the CRL and OCSP checks that mark certificates for you.
-- [Identity providers](https://blanketfish.github.io/port49/latest/admin/identity-providers/): Connecting an OIDC provider, a directory or a directory password to port49, and ending a person's sessions when the provider signs them out.
+- [Administer](https://blanketfish.github.io/port49/latest/admin/): The order to set up sign-in, the directory, the inventory and policy, with a link to each page.
+- [OIDC](https://blanketfish.github.io/port49/latest/admin/sign-in/oidc/): Register port49 with an OIDC provider and turn on sign-in and back-channel logout.
+- [Client certificates (x509)](https://blanketfish.github.io/port49/latest/admin/sign-in/x509/): Trust a CA for client certificates and set how port49 checks certificate status.
+- [Directory password](https://blanketfish.github.io/port49/latest/admin/sign-in/directory-password/): Let people sign in with a directory password and enroll their keys.
+- [The directory (LDAP)](https://blanketfish.github.io/port49/latest/admin/directory/): Connect port49 to an LDAP directory for groups, certificate mapping and password sign-in.
 - [Workloads](https://blanketfish.github.io/port49/latest/admin/workloads/): Giving a cron job or a pod its own identity at the device, with a workload certificate or a Kubernetes token, and grouping workloads in a directory.
+- [Oxidized and step-ca](https://blanketfish.github.io/port49/latest/admin/workloads-oxidized/): Give Oxidized a port49 identity with a certificate from step-ca.
+- [Kubernetes service accounts](https://blanketfish.github.io/port49/latest/admin/workloads-kubernetes/): Give a Kubernetes workload a port49 identity from its service account.
 - [Inventory](https://blanketfish.github.io/port49/latest/admin/inventory/): Telling port49 which devices exist, from a file or from an inventory connector, and the bounds that stop a bad source from taking the fleet off the air.
+- [Policy](https://blanketfish.github.io/port49/latest/admin/policy/): Writing the policy file that decides who may log in to which devices and what they may run, and checking a change before it ships.
+- [Rules and scopes](https://blanketfish.github.io/port49/latest/admin/policy-rules/): How permit and deny rules match, what scopes do and what happens when data is missing.
+- [Roles and grants](https://blanketfish.github.io/port49/latest/admin/roles-and-grants/): Defining roles, granting them to people, groups and workloads, and reading why a grant applied.
+- [Tests](https://blanketfish.github.io/port49/latest/admin/policy-tests/): Write tests that pin what a policy permits and denies, and run them.
+- [Reviewing a change](https://blanketfish.github.io/port49/latest/admin/policy-review/): Check what a policy change grants or removes before it goes live.
+- [Platform sets](https://blanketfish.github.io/port49/latest/admin/platform-sets/): Group device platforms in the policy and move a group to a new platform version.
+- [Admin access](https://blanketfish.github.io/port49/latest/admin/admin-access/): Who may run port49 admin commands, how attestation roots are set and how many admins to keep.
+- [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/): Revoking a person, a certificate or a session, closing what revocation cannot reach, and setting up the CRL and OCSP checks that mark certificates for you.
+- [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/): Rotating the devices' shared secrets and port49's encryption setting without locking anyone out.
 - [Devices](https://blanketfish.github.io/port49/latest/admin/devices/): What every device needs to talk to port49, how to read a device page, and the page for each qualified platform.
 - [Arista EOS](https://blanketfish.github.io/port49/latest/admin/devices/arista-eos/): Configuring Arista EOS to authenticate and authorize logins through port49, and what the lab measured on vEOS and cEOS.
 - [Cisco IOS XE](https://blanketfish.github.io/port49/latest/admin/devices/cisco-ios-xe/): Configuring Cisco IOS XE to authenticate and authorize logins through port49, and what the lab measured on it.
@@ -57,13 +81,19 @@
 - [Nokia SR Linux](https://blanketfish.github.io/port49/latest/admin/devices/nokia-sr-linux/): Configuring Nokia SR Linux to authenticate logins through port49, and what it does not send.
 - [Other platforms](https://blanketfish.github.io/port49/latest/admin/devices/other-platforms/): What to expect from a TACACS+ client port49 has not been qualified against, and how the generic adapter serves it.
 
-## AI agents
+## Automation
 
-- [Quick start](https://blanketfish.github.io/port49/latest/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity, and what it reads back when a device refuses it.
-- [Setup runbook](https://blanketfish.github.io/port49/latest/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end, with the check after each step and the points where a human decides.
+- [Python library](https://blanketfish.github.io/port49/latest/automation/python/): Get a port49 token from Python code.
+- [Ansible collection](https://blanketfish.github.io/port49/latest/automation/ansible/): Run Ansible against network devices with port49 tokens.
+- [AI agents quick start](https://blanketfish.github.io/port49/latest/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity, and what it reads back when a device refuses it.
+- [AI agents setup runbook](https://blanketfish.github.io/port49/latest/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end, with the check after each step and the points where a human decides.
 
 ## Reference
 
+- [Requirements](https://blanketfish.github.io/port49/latest/reference/requirements/): What every port49 deployment needs from the network, etcd, disks and clocks.
+- [Client commands](https://blanketfish.github.io/port49/latest/reference/client-commands/): The JSON output and exit codes of the port49 client commands.
+- [Health checks](https://blanketfish.github.io/port49/latest/reference/health-checks/): Which health check to use for port49d and the broker in each deployment.
+- [Failure matrix](https://blanketfish.github.io/port49/latest/operate/troubleshooting/failure-matrix/): What a device login does when each part of port49 is down.
 - [port49d configuration](https://blanketfish.github.io/port49/latest/reference/config/port49d/): Every key of port49d.yaml and port49-broker.yaml, with its type, default, bound and what a change needs.
 - [Policy file](https://blanketfish.github.io/port49/latest/reference/config/policy/): Every key of the policy file: platform set, platforms, privilege levels, scopes, roles, subjects, grants, tests, acknowledgments, key groups and keys.
 - [Inventory file](https://blanketfish.github.io/port49/latest/reference/config/inventory/): Every key of a device inventory file, the file that tells port49d which devices exist and which key admits each.
@@ -80,3 +110,17 @@
 - [Contributing](https://blanketfish.github.io/port49/latest/contributing/): How to build, test and change port49, and the lab register rules that decide what a doc may claim about a device.
 - [Qualification](https://blanketfish.github.io/port49/latest/contributing/qualification/): How a device platform is qualified against port49, how to vet a firmware and add a platform, and how the lab regression run works.
 - [Releasing](https://blanketfish.github.io/port49/latest/contributing/releasing/): How a port49 release is cut, signed and published, and the one-time repository setup it depends on.
+- [Deployment design](https://blanketfish.github.io/port49/latest/contributing/deployment-design/): Why the deployments are built the way they are, and how the README sections feed the site.
+
+## Moving (temporary)
+
+- [Install](https://blanketfish.github.io/port49/latest/operate/install/): Choosing between the systemd, container and Helm shapes of a port49 deployment, and what every shape needs.
+- [Install with systemd](https://blanketfish.github.io/port49/latest/operate/install/systemd/): Installing port49d and the broker from the packages and running them under systemd.
+- [Install with containers](https://blanketfish.github.io/port49/latest/operate/install/container/): Running port49d, the broker and etcd as containers with Compose.
+- [Install with Helm](https://blanketfish.github.io/port49/latest/operate/install/helm/): Deploying port49 to Kubernetes with the Helm chart.
+- [Install the clients](https://blanketfish.github.io/port49/latest/operate/install/clients/): Installing the port49 command-line client, the Python library and the Ansible lookup.
+- [Broker and agent](https://blanketfish.github.io/port49/latest/operate/broker-and-agent/): What the broker and the agent each do, and where each runs.
+- [Signing in](https://blanketfish.github.io/port49/latest/operate/login/): How a person signs in to port49 and gets a token for a device login.
+- [Hardware keys](https://blanketfish.github.io/port49/latest/operate/hardware-keys/): Requiring a hardware key at sign-in and at each device login.
+- [When it will not start](https://blanketfish.github.io/port49/latest/operate/troubleshooting/will-not-start/): The refusals port49d prints at start, what each means and how to fix it.
+- [Identity providers](https://blanketfish.github.io/port49/latest/admin/identity-providers/): Connecting an OIDC provider, a directory or a directory password to port49, and ending a person's sessions when the provider signs them out.

@@ -72,7 +72,7 @@ func TestStatusFromTheGolden(t *testing.T) {
 
 func TestTLSCellNeedsTheTLSLogin(t *testing.T) {
 	g := golden(permitted, denied, stop)
-	if c := tlsCell([]string{"tcp"}, g); c != "—" {
+	if c := tlsCell([]string{"tcp"}, g); c != "none" {
 		t.Fatalf("no tls transport: %s", c)
 	}
 	if c := tlsCell([]string{"tcp", "tls"}, g); c != "no" {
@@ -92,7 +92,7 @@ func TestTLSCellNeedsTheTLSLogin(t *testing.T) {
 // when the profile records it, and a profile that merely lacks the steps reads no.
 func TestCommandAuthorizationNotApplicableNeedsTheMarker(t *testing.T) {
 	g := golden(stop)
-	if c := command(g.Scenarios["token_login"].Steps, true, "L18", fakeRegister("L18")); c != "— (L18, open)" {
+	if c := command(g.Scenarios["token_login"].Steps, true, "L18", fakeRegister("L18")); c != "none (L18, open)" {
 		t.Fatalf("marker and no command steps: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, true); s != "qualified" {
@@ -186,7 +186,7 @@ func TestARowForJunosReadsQualifiedOnlyWithTheMarker(t *testing.T) {
 	for _, tc := range []struct {
 		gap  bool
 		want string
-	}{{true, "| Juniper | Junos | 1.0 | yes | — | — (L18, open) | — | yes | yes | qualified |"}, {false, "| Juniper | Junos | 1.0 | yes | — | no | — | yes | yes | partial |"}} {
+	}{{true, "| Juniper | Junos | 1.0 | yes | none | none (L18, open) | none | yes | yes | qualified |"}, {false, "| Juniper | Junos | 1.0 | yes | none | no | none | yes | yes | partial |"}} {
 		got, err := Build(repoWith(t, golden(stop), tc.gap, true))
 		if err != nil {
 			t.Fatal(err)
@@ -218,13 +218,13 @@ func TestACitedIDAbsentFromTheRegisterFailsTheBuild(t *testing.T) {
 
 func TestAnOpenRegisterRowIsCitedAsOpen(t *testing.T) {
 	steps := golden(stop).Scenarios["token_login"].Steps
-	if c := command(steps, true, "L18", fakeRegister()); c != "— (L18)" {
+	if c := command(steps, true, "L18", fakeRegister()); c != "none (L18)" {
 		t.Fatalf("a register with L18 closed: %s", c)
 	}
-	if c := command(steps, true, "QUAL; as L18", fakeRegister("L18")); c != "— (QUAL; as L18, open)" {
+	if c := command(steps, true, "QUAL; as L18", fakeRegister("L18")); c != "none (QUAL; as L18, open)" {
 		t.Fatalf("a QUAL citation of an open row: %s", c)
 	}
-	if c := command(steps, true, "L76 cell b", fakeRegister("L76")); c != "— (L76, open; cell b)" {
+	if c := command(steps, true, "L76 cell b", fakeRegister("L76")); c != "none (L76, open; cell b)" {
 		t.Fatalf("a cell citation of an open row: %s", c)
 	}
 }
@@ -281,7 +281,7 @@ func TestATLSOnlyRowReadsTheTLSLogin(t *testing.T) {
 	g := devicemock.Golden{Scenarios: map[string]devicemock.GoldenScenario{
 		"tls_token_login": {Outcome: "login_ok", Steps: []devicemock.GoldenStep{permitted, denied, stop}}}}
 	got := rowWith(t, g, replace("transports: [tcp]", "transports: [tls]"), replace("scenarios: [token_login, wrong_credential, store_unavailable]", "scenarios: [tls_token_login]"))
-	want := "| Juniper | Junos | 1.0 | — | yes | — | yes | yes | yes | qualified |\n"
+	want := "| Juniper | Junos | 1.0 | none | yes | none | yes | yes | yes | qualified |\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("want %q in:\n%s", want, got)
 	}
@@ -321,7 +321,7 @@ func TestTheCommandCellCitesItsOwnGapAndOperatorGapsArePrinted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"| yes | — | — (L76 cell b) | — | yes | yes | qualified |", "## What an operator must do", "- **Juniper 1.0**: logins need the priv-lvl policy block"} {
+	for _, want := range []string{"| yes | none | none (L76 cell b) | none | yes | yes | qualified |", "## What an operator must do", "- **Juniper 1.0**: logins need the priv-lvl policy block"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("want %q in:\n%s", want, got)
 		}

@@ -104,10 +104,10 @@ func TestEvidenceParsesEveryHeaderStyle(t *testing.T) {
 	}
 	want := []Evidence{
 		{"L4", "L4-arista_eos.md", "arista_eos", "vEOS-lab 4.31.2F (image tagged 4.32.2F)", "2026-09-20"},
-		{"L76", "L76-nokia_srlinux.md", "nokia_srlinux", "—", "2026-11-07"},
+		{"L76", "L76-nokia_srlinux.md", "nokia_srlinux", "none", "2026-11-07"},
 		{"L88", "L88-cisco_xrd.md", "cisco_xrd", "XRd control plane 26.1.1", "2026-11-04"},
 		{"L90", "L90-cisco_xrd-plain.md", "cisco_xrd", "XRd 26.1.1", "2026-10-01"},
-		{"L91", "L91-cisco_xrd-bare.md", "—", "—", "—"},
+		{"L91", "L91-cisco_xrd-bare.md", "none", "none", "none"},
 	}
 	if len(ev) != len(want) {
 		t.Fatalf("got %d rows %+v, want %d", len(ev), ev, len(want))
@@ -139,7 +139,7 @@ func TestEvidenceListsAMultiPageNoteOnBothPages(t *testing.T) {
 		for _, e := range ev {
 			if e.File == name {
 				found++
-				if e.Date != "2026-09-30" || e.Platform != "—" {
+				if e.Date != "2026-09-30" || e.Platform != "none" {
 					t.Errorf("%s: got %+v", slug, e)
 				}
 			}
@@ -282,7 +282,7 @@ func TestLLMsTxtFollowsTheNav(t *testing.T) {
 			sections = append(sections, l)
 		}
 	}
-	wantSecs := []string{"## Start here", "## Home", "## Concepts", "## Operate", "## Administer", "## AI agents", "## Reference", "## Contributing"}
+	wantSecs := []string{"## Start here", "## Home", "## Concepts", "## Install", "## Operate", "## Sign in", "## Administer", "## Automation", "## Reference", "## Contributing", "## Moving (temporary)"}
 	if strings.Join(sections, "|") != strings.Join(wantSecs, "|") {
 		t.Errorf("sections %q, want %q", sections, wantSecs)
 	}
