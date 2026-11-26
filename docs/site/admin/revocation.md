@@ -162,3 +162,24 @@ deployment:
 When a revocation was made but the file could not be written, the report says `NOT saved to
 broker.revocations_file`, `port49 revoke` exits 3, and `port49_revocations_file_failed` is 1. Run the revoke again once
 the disk is fixed, and see [Revocations file failed](../operate/troubleshooting/index.md#revocations-file-failed).
+
+<!-- from: deploy/systemd/README.md (Break-glass), for the systemd tab of the break-glass steps
+With every broker stopped, on a broker host, as the broker's user:
+
+```sh
+systemctl stop port49-broker              # on every broker host
+sudo -u port49-broker port49-broker revoke --offline --principal user:bob@example.com
+systemctl start port49-broker
+```
+
+`port49-broker revoke --offline --list` shows the marks. This stops issuance fleet-wide while the
+brokers are down, so use it only when no admin can reach a running broker. A port49d that runs its broker
+in process has `port49d revoke --offline`. Each needs the uid that owns the files it
+writes, and as root refuses, revokes nothing and names the `sudo -u` line: `port49-broker revoke --offline` writes
+`broker.state_dir` (the broker's user owns it), and `port49d revoke --offline` writes
+`broker.revocations_file`.
+
+Also from the same README: port49d init-revocations is run once at install only for a port49d that holds its
+broker in process (`broker.revocations_file`); it refuses when the file exists.
+-->
+

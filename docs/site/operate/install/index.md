@@ -11,7 +11,7 @@ team already operates.
 
 | Shape | You get | Page |
 |---|---|---|
-| systemd | the `port49-server` package (`.deb` or `.rpm`) with two units | [Install with systemd](systemd.md) |
+| systemd | the `port49-server` package (`.deb` or `.rpm`) with two units | [Install with systemd](../systemd/install.md) |
 | Containers | `port49d`, `port49-broker` and a three-member etcd under Compose | [Install with containers](container.md) |
 | Helm | two StatefulSets and a PVC per replica | [Install with Helm](helm.md) |
 

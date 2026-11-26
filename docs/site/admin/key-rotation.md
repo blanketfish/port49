@@ -283,7 +283,7 @@ If a process starts without a key the store was last written under, what you see
   as `previous` again and restart.
 
 `port49d key sealing` makes the key files with the right owner and mode and never overwrites an old one
-(on systemd; the container and Helm shapes have their own steps). See each shape's install page: [systemd](../operate/install/systemd.md),
+(on systemd; the container and Helm shapes have their own steps). See each shape's install page: [systemd](../operate/systemd/install.md),
 [container](../operate/install/container.md), [Helm](../operate/install/helm.md).
 See also [Stores](../operate/stores.md#one-set-of-encryption-keys-everywhere).
 
@@ -378,3 +378,25 @@ picks the verify key with that id; if two files in the list carry the same id (t
 two paths), the last one listed is the one a document is checked against. List each public key once. A
 document that does not verify is refused with `the document's signature by <id> does not verify`, and one
 signed by a key no file holds with `the document is signed by <id>, which no verify key holds`.
+
+<!-- from: deploy/systemd/README.md (Rotating the `encryption:` key), for the systemd tab of the encryption key steps
+One key, everywhere, from one secret, in three steps. In each, `reload` is `systemctl reload`.
+
+1. Make the new key once, on one host, with `sudo port49d key sealing --id e2`: it leaves
+   `encryption-e2.key` and `broker-encryption-e2.key` beside the old, which it never touches. Install it on
+   every other host with `--import` (see "Put the secrets in place" on the systemd install page), never run
+   `key sealing` there. Add it to every `port49d.yaml` and `port49-broker.yaml` as `previous:`, in every
+   region, and reload everything. Every process now opens what either key sealed.
+2. Swap: make `e2` `current:` and `e1` `previous:`, everywhere, and reload.
+3. Remove `previous:` and the old file only after the scheduled directory pass (every
+   `refresh_interval`) has re-sealed the second-factor records under `e2`: it marks a record it
+   opened under the previous key and seals it again. A record that opens under neither key is
+   never "not enrolled": that sign-in is `503 store_unavailable`, and the broker's line names
+   `port49 directory reset-second-factor`.
+
+A process whose window lacks the directory's current key id refuses to start, naming the
+directory store and the id. Two store blocks reaching one etcd cluster at one prefix are
+refused too.
+-->
+<!-- from: deploy/systemd/README.md (Adding a key version) stays in the README until Task 15 moves it here -->
+

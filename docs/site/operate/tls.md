@@ -245,3 +245,10 @@ the failure is said once.
 A change to the inventory or the policy (a device's `transport`, its addresses) is picked up by the
 watch and SIGHUP, with no restart. Everything else in `port49d.yaml`, `listen` included, is read at
 start; the [reference](../reference/config/port49d.md) marks the few other keys that SIGHUP re-reads.
+
+<!-- from: deploy/systemd/README.md (TACACS+ over TLS on port 300), for the systemd tab of "turn the listener on"
+Uncomment `tls_listener:` in `port49d.yaml`, put the server certificate, its key and the device CA
+in `/etc/port49/tls/` (the key 0400 owned by `port49d`), and open TCP 300 from your devices. It also
+needs `certificate_status` (the block names it).
+-->
+

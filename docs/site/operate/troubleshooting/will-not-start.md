@@ -21,7 +21,7 @@ line and what to do.
 
 ## systemd
 
---8<-- "deploy/systemd/README.md:will_not_start"
+[Troubleshoot systemd](../systemd/troubleshoot.md) holds the table of refusals.
 
 ## Containers (compose)
 

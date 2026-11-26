@@ -181,7 +181,6 @@ nav:
       - Deployment design: contributing/deployment-design.md
   - Moving (temporary):
       - operate/install/index.md
-      - operate/install/systemd.md
       - operate/install/container.md
       - operate/install/helm.md
       - operate/install/clients.md

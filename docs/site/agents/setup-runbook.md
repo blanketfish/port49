@@ -37,7 +37,7 @@ on the machine, is a failed check.
 
 ### 1. Install the server
 
-Follow the page for the shape the human chose: [systemd](../operate/install/systemd.md),
+Follow the page for the shape the human chose: [systemd](../operate/systemd/install.md),
 [containers](../operate/install/container.md) or [Helm](../operate/install/helm.md). The
 [Install page](../operate/install/index.md) lists what every shape needs, and the first-install steps in order.
 

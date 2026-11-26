@@ -24,7 +24,7 @@ and the revocations are re-issued before any broker starts.
 
 ## What each shape must keep
 
-All three shapes ([systemd](install/systemd.md), [container](install/container.md),
+All three shapes ([systemd](systemd/install.md), [container](install/container.md),
 [Helm](install/helm.md)) keep the same things. Only the paths differ.
 
 | What | Why it is in the backup | systemd | container (compose) | Helm |
@@ -281,3 +281,16 @@ Everything from here to the end of the page is that README verbatim: what the ba
 requirements, how to pin the plugin, then the restore.
 
 --8<-- "deploy/helm/port49/examples/velero/README.md:5"
+
+<!-- from: deploy/systemd/README.md (Backups), for the systemd tab
+`examples/port49-etcd-snapshot.{service,timer}` take an hourly snapshot into
+`/var/backups/port49` (0700 root, `UMask=0077`), on an etcd host, since it needs etcd's root
+certificate; it needs `examples/tmpfiles-etcd.conf` (the directory) and keeps two weeks.
+`examples/port49-enrollments-export.{service,timer}` export the directory's sealed
+enrollment store daily from a broker host, into a dated file in `/var/backups/port49-broker` (0700,
+the broker's): the unit writes a temporary file and renames it, because systemd's `StandardOutput=file:`
+does not truncate and a shorter export would keep the older one's tail. Run each once by hand before you
+rely on its timer.
+Each cluster has its own snapshot: the directory etcd's, and each region's session etcd.
+-->
+

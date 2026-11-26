@@ -182,5 +182,29 @@ Both were measured in [L84](https://github.com/blanketfish/port49/blob/main/test
   port49d, so it is not used for device keys.
 - Never leave a secret in `docker inspect` output or a unit's `Environment=` line.
 
-The install pages hold the exact commands for each shape: [systemd](install/systemd.md),
+The install pages hold the exact commands for each shape: [systemd](systemd/install.md),
 [container](install/container.md), [Helm](install/helm.md).
+
+<!-- from: deploy/systemd/README.md (LoadCredential= for the encryption key), for "systemd LoadCredential"
+Measured (lab [L84](https://blanketfish.github.io/port49/latest/reference/lab-register/#l84), `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
+unit's hardening): port49d reads a file that systemd renders from `LoadCredential=`. systemd gives the
+credential `root:root 0440` with an ACL granting only `port49d`, in a directory with an ACL too, and
+the fence reads the ACL's entries, so it passes. Use it for the encryption key, so the file on disk
+need not be readable by `port49d`:
+
+1. In a drop-in (`systemctl edit port49d`), add
+   `LoadCredential=encryption.key:/etc/port49/secrets/encryption.key`; systemd reads the source as root.
+2. In `/etc/port49/port49d.yaml`, set `encryption.current.secret_ref` to
+   `file:/run/credentials/port49d.service/encryption.key`. Leave `key_secret_refs.file_dir` as
+   shipped: the credentials directory is not a place a policy may name a device key from.
+
+Device keys stay in `/etc/port49/keys`: adding a credential needs `systemctl restart port49d`. systemd
+refuses `systemctl set-property LoadCredential=`, and a drop-in with `systemctl daemon-reload` does
+not reach the running unit (its credentials directory keeps the files it started with). A restart
+closes every session in flight, so adding a device credential that way would cost those sessions
+each time. A host whose systemd renders no credentials directory (a container's did not) cannot use this.
+
+This recipe is `port49d`'s alone. The broker's copy of the encryption key stays the file readable by
+`port49-broker`: [L84](https://blanketfish.github.io/port49/latest/reference/lab-register/#l84) did not measure the broker unit's form, so `LoadCredential=` is not claimed for it.
+-->
+

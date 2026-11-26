@@ -115,7 +115,6 @@
 ## Moving (temporary)
 
 - [Install](https://blanketfish.github.io/port49/latest/operate/install/): Choosing between the systemd, container and Helm shapes of a port49 deployment, and what every shape needs.
-- [Install with systemd](https://blanketfish.github.io/port49/latest/operate/install/systemd/): Installing port49d and the broker from the packages and running them under systemd.
 - [Install with containers](https://blanketfish.github.io/port49/latest/operate/install/container/): Running port49d, the broker and etcd as containers with Compose.
 - [Install with Helm](https://blanketfish.github.io/port49/latest/operate/install/helm/): Deploying port49 to Kubernetes with the Helm chart.
 - [Install the clients](https://blanketfish.github.io/port49/latest/operate/install/clients/): Installing the port49 command-line client, the Python library and the Ansible lookup.
