@@ -38,7 +38,7 @@
 
 - [Stores](https://blanketfish.github.io/port49/latest/operate/stores/): The directory and session stores port49 keeps state in, the single-site and multi-region recipes, and what each looks like when a store is down.
 - [TLS (RFC 9887)](https://blanketfish.github.io/port49/latest/operate/tls/): Running TACACS+ over TLS (RFC 9887) on port 300, the certificates it needs, and what an operator sees when one is wrong.
-- [Secrets](https://blanketfish.github.io/port49/latest/operate/secrets/): Where port49's secrets live, who may read them, and how they are rotated.
+- [Secrets](https://blanketfish.github.io/port49/latest/operate/secrets/): Where port49's secrets live, who may read them, and how they are mounted on each deployment.
 - [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/): What to back up, how to restore it, and what a restore does to live sessions.
 - [Monitoring](https://blanketfish.github.io/port49/latest/operate/monitoring/): The metrics, alerts and logs that show whether port49 is healthy.
 - [Versions and upgrades](https://blanketfish.github.io/port49/latest/operate/versions/): How port49 numbers its releases, what 0.x and 1.0.0 promise, and how to read the version of a running binary.
