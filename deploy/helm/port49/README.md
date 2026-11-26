@@ -192,22 +192,34 @@ holds a `redeem` record with `verdict: permit`.
 
 ## Optional steps
 
-- Autoscaling: `autoscaling.enabled` renders an HPA on the `port49_connections` Pods metric. It needs a
+The details of each are under
+[Chart options](https://github.com/blanketfish/port49/blob/main/deploy/helm/port49/README.md#chart-options)
+in the chart README.
+
+- Autoscaling: `autoscaling.enabled` renders an HPA.
+- Alerts and scraping: `prometheusRule.enabled: true`.
+- TACACS+ over TLS: `tlsListener.enabled`, with [TLS](https://blanketfish.github.io/port49/latest/operate/tls/).
+- Several regions: [Stores](https://blanketfish.github.io/port49/latest/operate/stores/#several-regions).
+- Backups: [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/) and
+  [Back up with Velero](https://blanketfish.github.io/port49/latest/operate/helm/velero/).
+- Issuer discovery: `issuerDiscovery.enabled`, a cluster-wide change.
+<!-- --8<-- [end:install] -->
+
+## Chart options
+
+- **Autoscaling.** `autoscaling.enabled` renders an HPA on the `port49_connections` Pods metric. It needs a
   metrics adapter you provide. A scale-down leaves the removed pod's spool on its PVC, so drain it before
   deleting the PVC. Scaling down or deleting the release retains the PVCs.
-- Alerts: `prometheusRule.enabled: true` renders the alert rules and a `PodMonitor` per workload that sets
-  `job` to `port49d` and `port49-broker`. Both need the Prometheus Operator's CRDs, and
+- **Alerts and scraping.** `prometheusRule.enabled: true` renders the alert rules and a `PodMonitor` per
+  workload that sets `job` to `port49d` and `port49-broker`. Both need the Prometheus Operator's CRDs, and
   `prometheusRule.labels` must be the ones your Prometheus selects on. The metrics ports (9049 and 9050)
   listen on every pod address: admit only your Prometheus and the kubelet with a NetworkPolicy. The chart
   renders none.
-- TACACS+ over TLS: `tlsListener.enabled` adds port 300 and needs `tlsListener.existingSecret`.
-- Several regions: `examples/values-multi-region.yaml` and
-  [Stores](https://blanketfish.github.io/port49/latest/operate/stores/#several-regions).
-- Backups: [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/) and
-  [Back up with Velero](https://blanketfish.github.io/port49/latest/operate/helm/velero/).
-- `issuerDiscovery.enabled` (off) binds `system:unauthenticated` to the issuer-discovery role for the whole
-  cluster. Enable it in one release per cluster. See `examples/kubernetes/issuer-discovery.yaml`.
-<!-- --8<-- [end:install] -->
+- **TACACS+ over TLS.** `tlsListener.enabled` adds port 300 and needs `tlsListener.existingSecret`.
+- **Several regions.** `examples/values-multi-region.yaml` gives the session store its own etcd per region.
+- **Issuer discovery.** `issuerDiscovery.enabled` (off) binds `system:unauthenticated` to the issuer-discovery
+  role for the whole cluster. Enable it in one release per cluster. See
+  `examples/kubernetes/issuer-discovery.yaml`.
 
 ## Key versions
 
