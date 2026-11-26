@@ -46,7 +46,8 @@ To check, run `kubectl -n port49-etcd get pods`. All three members are `Ready`.
 
 ## 3. Apply port49's etcd roles
 
-Make the roles script from your two configs. Use local copies of both configs, with the broker's etcd
+Make the roles script from your two configs. Use local copies of both, taken from the `port49d.yaml` and
+`port49-broker.yaml` keys of the chart's config ConfigMap in `helm template` output, with the broker's etcd
 `cert_file` and `key_file` pointing at `port49-etcd-broker`'s own `tls.crt` and `tls.key`, because
 `store-roles` refuses two components with one CN:
 
@@ -204,7 +205,8 @@ in the chart README.
 - Several regions: [Stores](https://blanketfish.github.io/port49/latest/operate/stores/#several-regions).
 - Backups: [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/) and
   [Back up with Velero](https://blanketfish.github.io/port49/latest/operate/helm/velero/).
-- Issuer discovery: `issuerDiscovery.enabled`, a cluster-wide change.
+- Issuer discovery: `issuerDiscovery.enabled` binds `system:unauthenticated` cluster-wide. Enable it in one
+  release per cluster.
 <!-- --8<-- [end:install] -->
 
 ## Chart options

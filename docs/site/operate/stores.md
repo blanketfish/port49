@@ -124,8 +124,9 @@ After `etcd.health.close_after` failed checks in a row (5 by default, one per `e
 second) port49d closes every listener, so devices use their local method. It reopens them after
 `open_after` passes in a row (3). The alert is
 [port49_store_health_failures_close](../reference/alerts.md#port49_store_health_failures_close).
-port49-broker never closes anything: it answers 503 `store_unavailable`. `/readyz` does not report store
-health, so alert on the metrics, not on `/readyz`. Some devices do not fall back to their local method
+port49-broker never closes anything: it answers 503 `store_unavailable`, and its `/readyz` stays 200 through a
+store outage. port49d's `/readyz` answers 503 `waiting for the store` while its listeners are closed
+([Health checks](../reference/health-checks.md)). Alert on the metrics. Some devices do not fall back to their local method
 when the server answers an error: see [IOS XE and a down store](tls.md#ios-xe-and-a-down-store).
 
 ??? info "How the checks and circuits count"
