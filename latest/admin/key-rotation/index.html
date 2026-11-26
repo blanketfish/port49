@@ -3122,8 +3122,8 @@ restore brings back the key its backup was taken with, and that bucket must be g
   (<a href="../../reference/alerts/#port49_crypt_store_key_unknown">alert</a>). If the key was retired by mistake, set it
   as <code>previous</code> again and restart.</li>
 </ul>
-<p>The recipes that make the key file, with the right owner and mode and without ever overwriting an old one,
-are in each shape's install page: <a href="../../operate/install/systemd/">systemd</a>,
+<p><code>port49d key sealing</code> makes the key files with the right owner and mode and never overwrites an old one
+(on systemd; the container and Helm shapes have their own steps). See each shape's install page: <a href="../../operate/install/systemd/">systemd</a>,
 <a href="../../operate/install/container/">container</a>, <a href="../../operate/install/helm/">Helm</a>.
 See also <a href="../../operate/stores/#one-set-of-encryption-keys-everywhere">Stores</a>.</p>
 <h2 id="the-issuing-ca">The issuing CA<a class="headerlink" href="#the-issuing-ca" title="Permanent link">&para;</a></h2>
