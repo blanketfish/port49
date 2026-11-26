@@ -211,10 +211,8 @@ holds a `redeem` record with `verdict: permit`.
 
 ## Key versions
 
-**Order matters.** Put the key file in place first, then add the policy line that names it. To remove a
-key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
-file that is not there makes port49d refuse its start (`lstat ...: no such file`), so on a restart it
-crash-loops until you restore the key in the Secret or take the policy line out; the pod shows `CrashLoopBackOff` and `kubectl logs --previous` repeats the line.
+<!-- moved: docs/site/admin/key-rotation.md (Adding a key version) -->
+Adding a device key version, and the order that avoids a crash-loop: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/#device-keys).
 
 <!-- moved: docs/site/admin/key-rotation.md (Rotating the `encryption:` key) -->
 Rotating the `encryption:` key: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/).

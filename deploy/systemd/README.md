@@ -246,29 +246,8 @@ Without the package, do step 1 by hand:
 4. Copy `config/` to `/etc/port49/` and carry on from step 2.
 <!-- --8<-- [end:install] -->
 
-## Adding a key version
-
-A device key is a file named in the policy. Add a version by making a new file and a new
-line; never rewrite a file in place. The key is 32 hex characters you can type into the device's CLI
-(`tacacs-server key`, `key`, `secret`); the newline the file ends in is dropped when it is read.
-
-```sh
-sudo port49d key device core-v2   # a new name for every version: never an existing one
-```
-
-It writes `/etc/port49/keys/core-v2`, `root:port49d` 0440, and refuses a name that exists. It prints
-where the key is, never the key: read it from the file to type into the device.
-
-Then add `{version: 2, secret_ref: "file:/etc/port49/keys/core-v2"}` to the key set in the
-policy under `current:` (moving the old one to `accept:` until each device carries the new key)
-and `systemctl reload port49d`. Rotation is a reload, never a restart. port49d reads each key
-file once; if one changes on disk afterwards it keeps the bytes it holds and says so (spec
-§12), which is why a new version is a new file.
-
-**Order matters.** Put the key file in place first, then add the policy line that names it. To remove a
-key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
-file that is not there makes port49d refuse its start (`lstat ...: no such file`), so on a restart it
-crash-loops until you restore the file under `/etc/port49/keys` or take the policy line out; `Restart=` keeps retrying and the journal repeats the line.
+<!-- moved: docs/site/admin/key-rotation.md (Adding a key version) -->
+Adding a device key version, and the order that avoids a crash-loop: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/#device-keys).
 
 <!-- moved: docs/site/admin/key-rotation.md (Rotating the `encryption:` key) -->
 Rotating the `encryption:` key: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/).
