@@ -6756,6 +6756,39 @@ purpose; §13, decision 32), when `broker.revocations_file` is a relative path (
 against the caller's directory, not port49d's), or when the file appeared while it ran (another
 init-revocations is running or has just run; nothing written); 2 on usage.
 
+**`port49d key sealing [--id <id>] [--dir <dir>] [--broker-dir <dir>] [--import <file>] [--daemon-user <u>] [--broker-user <u>]`**
+and **`port49d key device <name> [--dir <dir>] [--device-owner <u>] [--device-group <g>]`** make the secret files an operator
+would otherwise make by shell recipe; they read no config and resolve no secret. `sealing` writes the
+sealing-key pair: `encryption[-<id>].key`, owned `<daemon-user>:<daemon-user>` 0400, and
+`broker-encryption[-<id>].key`, owned `<broker-user>:<broker-user>` 0400, in `--dir` (default
+`/etc/port49/secrets`; `--broker-dir` puts the second file elsewhere, default `--dir`), holding the same 32
+bytes from `crypto/rand`. The last byte is never `0x0a`: a key file loses one trailing newline when
+it is read (§13 decision 53 ruling 1), so such a key would load a byte short. A draw ending in it is
+drawn again, and ten bad draws in a row fail the command. Users default to `port49d` and
+`port49-broker`, each with the group of the same name (the user's primary group where no such group
+exists); a number is a uid or gid. `--import <file>` installs the pair from a copy made on
+another host instead of drawing: the file must be a regular file of exactly 32 bytes not ending in `0x0a`
+(either of the two copied files will do, they are equal), and a key that is not is refused, so a host
+never installs a key it could not load. `device <name>` writes one device-key version file in `--dir`
+(default `/etc/port49/keys`): 32 lowercase hex characters and `"\n"` (33 bytes, from 16 random bytes),
+owned `<device-owner>:<device-group>` (default `root:port49d`) 0440. `--id` and `<name>` hold letters,
+digits, `-`, `_` and `.` only, no leading `.`, at most 128 characters; otherwise exit 2.
+
+Every file is created new, in the destination directory (never `/tmp`), mode 0600 while it is
+written, and chowned and chmodded before it is linked into place with a hard link, which fails if
+the name is there. A name that exists, or a symlink at it, dangling or not, is refused, never
+replaced: `<file> exists; pick a new key id`; both names of a pair (and the pair's `--import` check) are
+tested before either file is written, and a name that appears between that test and the link is still
+not replaced. A host never holds half a pair: if the second link fails the first is removed. An
+interrupt, terminate or hangup removes what was made. Nothing stays behind on any failure. Only root can
+chown to another user: run by anyone else with an owner that is not that user (or a group that is not one
+of theirs), the command refuses before writing anything and prints the `sudo port49d key ...` line to run.
+On success it prints each path with its owner and mode and, for `sealing`, the next step (copy both
+files to every other host over a private channel, run `sudo port49d key sealing --import <file>` there,
+then delete the copies); for `device`, where the key is and that the device's CLI needs it. It never
+prints key bytes, and writes no log record and no reason code. It exits 0 when it wrote every file; 1
+when it wrote nothing: a refusal, an unknown user, a failed write; 2 on usage.
+
 **`port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml`** prints the
 `etcdctl` commands that create port49's two etcd roles and grant them, for each store's keyspace
 (plan 7d; §13, decisions 35 and 51). Each flag defaults to its file under `/etc/port49/`. With one
