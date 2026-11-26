@@ -70,7 +70,7 @@
 - [Reviewing a change](https://blanketfish.github.io/port49/latest/admin/policy-review/): Check what a policy change grants or removes with policy test, policy diff, replay and explain, and run the checks in CI.
 - [Platform sets](https://blanketfish.github.io/port49/latest/admin/platform-sets/): Pin a platform set in the policy and move the pin to a newer set as a reviewed change.
 - [Admin access](https://blanketfish.github.io/port49/latest/admin/admin-access/): Set up who may run port49 revoke and port49 directory commands, how attestation roots are loaded, and how many admins to keep.
-- [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/): Revoke a person, a certificate or a session, close what revocation cannot reach, and lift a revocation.
+- [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/): Revoke a person, a certificate or a session, close what revocation cannot reach, lift a revocation, and revoke with every broker down.
 - [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/): Rotating the devices' shared secrets and port49's encryption setting without locking anyone out.
 - [Devices](https://blanketfish.github.io/port49/latest/admin/devices/): What every device needs to talk to port49, how to read a device page, and the page for each qualified platform.
 - [Arista EOS](https://blanketfish.github.io/port49/latest/admin/devices/arista-eos/): Configuring Arista EOS to authenticate and authorize logins through port49, and what the lab measured on vEOS and cEOS.
