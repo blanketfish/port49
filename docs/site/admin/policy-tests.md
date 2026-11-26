@@ -28,12 +28,9 @@ Every test names who it runs as and the device it runs against:
 
 Give `subject` or `principal`, exactly one. A device the inventory does not name fails the test.
 
-A test is answered in the order the broker answers a mint, as `port49 explain` does:
-
-- a subject with no grant on the device is a deny, `no_grants_matched`;
-- a device with no platform is refused, `device_unconfigured`;
-- any subject on a quarantined device is a deny, `device_quarantined`;
-- a mint the broker would refuse permits nothing.
+A test is answered as the broker answers a mint, as `port49 explain` does: a subject with no grant on the device is a
+deny, `no_grants_matched`, a device with no platform is refused, `device_unconfigured`, any subject on a quarantined
+device is a deny, `device_quarantined`, and a mint the broker would refuse permits nothing.
 
 ## Command tests
 
@@ -46,9 +43,8 @@ A test is answered in the order the broker answers a mint, as `port49 explain` d
 The command is evaluated on the words the device sends for it. Where a platform splits an interface name from its index
 (IOS-XE), the test splits it the same way.
 
-Without `reason:`, a test checks only the verdict. An `expect: deny` test then passes whatever caused the deny,
-including one you did not mean: the subject lost its grant (`no_grants_matched`), or the device was quarantined. With
-`reason:` the test also pins why. This one passes only while a deny rule is what refuses the command:
+Without `reason:` a test checks only the verdict, so an `expect: deny` test passes whatever caused the deny, even a lost
+grant or a quarantine. With `reason:` it also pins why. This one passes only while a deny rule refuses the command:
 
 ```yaml
 tests:
@@ -80,7 +76,9 @@ test passes on any device.
 ## Clearing a diff finding
 
 The test that clears each `policy diff` label is in the [diff's table](policy-review.md#port49-policy-diff). The test
-must be in the new file and must pass. A test that expects `deny` never clears a widening, since it cannot tell a deny
+must be in the new file and must pass. A test that asserts only `api` does not clear a `PRINCIPAL` or `USERNAME` change,
+and a `USERNAME` change is cleared by a test naming any one of the subject's principals. A `PRINCIPAL` change whose new
+subject gains API rights also needs `api:` with the subject's whole list. A test that expects `deny` never clears a widening, since it cannot tell a deny
 rewritten narrower from one rewritten wider. Once a test clears a label, the diff still prints the change, in lowercase
 and marked, and passes: `EXPANDS:` becomes `expands (a policy test exercises it):`, and `RAISES:` becomes
 `raises (a session test asserts it):`.
@@ -103,8 +101,8 @@ tests:
   - {subject: netops, device: leaf1, command: "show running-config", expect: deny, reason: no_permit_dominates_deny}
 ```
 
-That is the version on `main`. A pull request now deletes the `deny:` line, which lets `netops` read the running
-configuration. The test that pinned the deny fails first. `port49 policy test` on the new file prints:
+A pull request now deletes the `deny:` line, which lets `netops` read the running configuration. The test that pinned
+the deny fails first. `port49 policy test` on the new file prints:
 
 ```text
 FAIL netops on leaf1: "show running-config" -> permit permit_dominates, want deny no_permit_dominates_deny

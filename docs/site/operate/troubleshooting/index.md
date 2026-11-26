@@ -520,3 +520,27 @@ was in flight finishes the catch-up itself, but run the revoke anyway if the gau
 - [When it will not start](will-not-start.md): refusals at start, and which healthcheck to use where.
 - [Monitoring](../monitoring.md): scraping, the disk etcd needs, shedding.
 - [Backup and restore](../backup-and-restore.md) and [key rotation](../../admin/key-rotation.md).
+
+<!-- from: docs/site/admin/sign-in/oidc.md "When a logout did not land" (Task 12 folds this into the index as a symptom entry, then removes this block)
+
+The provider's event log shows the 503, and the broker's log carries the recovery for the principal. It begins:
+
+    logout: a logout token from <issuer> could not be applied: the store did not answer; answered 503 so the provider may retry; if it does not, once the store returns: <form>
+
+Both forms run through your agent (Revoking access) and need the revoke_others and lift_revocations rights.
+
+Form 1 means the logout wrote its record and a later step failed. It reads:
+
+    if the decision log has a revoke record with origin backchannel_logout for <principal> just before this line, end its contexts with `port49 revoke --principal <principal>`, then `port49 revoke --lift --principal <principal>` so they may log in again; a lift can be lost across a <process> stop, so last check that `port49 revoke --list` shows no mark for <principal>
+
+Form 2 means nothing was written, so no logout record refuses the person's held ID token or issued certificate. The revoke is unconditional, and the lift waits for the time the line prints, when that token or certificate has expired. Lifting early lets the held token mint again.
+
+    end <principal>'s contexts with `port49 revoke --principal <principal>` (api: revoke_others), and lift it with `port49 revoke --lift --principal <principal>` (api: lift_revocations) only after <time>: no logout record refuses the session's held ID token or issued certificate until then; last check that `port49 revoke --list` shows no mark for <principal>
+
+A token with sid and sub gets Form 1 when the logout wrote its record and Form 2 when it wrote nothing. Form 2 is printed once per principal that the decision log's mint records name for that sub.
+
+On an issuing broker the line adds a shorter path. Revoke each certificate issued to the principal with `port49 revoke --cert-issuer <DN> --cert-serial <HEX>` (the DN and serial come from each broker's issue records), then lift after max_token_age plus twice clock_skew instead of the printed time. This holds only if every broker's issue records can be read. If any cannot, wait out the first time.
+
+For a token that names only a sid, the line first offers `port49 revoke --sid <sid> --sid-issuer <issuer>`, which needs revoke_others and a press of your security key. It ends that one session and leaves no mark to lift.
+-->
+
