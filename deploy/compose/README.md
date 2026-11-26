@@ -102,20 +102,13 @@ from the repository root, with `PORT49_COMPOSE_LOCAL` as for `up` if you set it,
 name `port49` (`docker compose -p` changes the volume prefix):
 
 ```sh
-docker run --rm -i -v port49_port49d-keys:/k --entrypoint sh port49-setup:dev -c '
-  DEVICE_KEY=$1   # a new name for every version: never an existing one
-  umask 077 && cd /k || exit 1
-  [ ! -e "$DEVICE_KEY" ] && [ ! -L "$DEVICE_KEY" ] || { echo "port49: $DEVICE_KEY exists; pick a new key id" >&2; exit 1; }
-  t=; trap "rm -f \"\$t\"" EXIT; trap "exit 1" INT TERM HUP
-  t=$(mktemp ./.key.XXXXXX) || exit 1
-  head -c 16 /dev/urandom | od -An -tx1 | tr -d " \n" > "$t" && [ "$(wc -c < "$t")" -eq 32 ] &&
-    chown 0:65532 "$t" && chmod 0440 "$t" || { echo "port49: the device key was not made" >&2; exit 1; }
-  ln "$t" "$DEVICE_KEY" || { echo "port49: $DEVICE_KEY exists; pick a new key id" >&2; exit 1; }
-' sh tacacs_v2
+docker run --rm -v port49_port49d-keys:/k --entrypoint port49d port49-setup:dev \
+  key device tacacs_v2 --dir /k --device-owner 0 --device-group 65532   # a new name for every version
 ```
 
-It is the recipe of `deploy/systemd/README.md` ("Adding a key version"), in the volume: a temporary
-file made in the destination, a no-clobber hard link, nothing left behind on a failure. Type the
+It is `port49d key device` (`deploy/systemd/README.md`, "Adding a key version"), run in the volume
+with the owners the shape needs (`0:65532`, 0440): a new file, a no-clobber link, a refusal of a name
+that exists, nothing left behind on a failure. Type the
 key into the device from the volume, and keep the new file's name for the policy. Then add
 `{version: 2, secret_ref: "file:/run/port49/keys/tacacs_v2"}` to the key set in `config/policy.yaml`, under `accept:` (moving the
 old version out of `current:` once each device carries the new key), and run `docker compose up -d`:
@@ -132,8 +125,9 @@ crash-loops until you restore the file in the `port49d-keys` volume or take the 
 - Bring your own PKI under `PORT49_COMPOSE_LOCAL`, in the layout `compose-pki` writes
   (`etcd/`, `broker/`, `keys/tacacs_v1`, `secrets/port49d-encryption.key` and
   `secrets/broker-encryption.key`; the two sealing keys hold the same 32 bytes). A device key is the shared secret
-  you type into the device; a sealing key is 32 random bytes, made once (the recipe in
-  `deploy/systemd/README.md`, "Where the secrets live", with the destination changed). Edit `config/` for your policy and CRL or OCSP
+  you type into the device; a sealing key is 32 random bytes, made once (`docker run --rm -v "$PWD/local/secrets:/s" --entrypoint port49d port49-setup:dev
+  key sealing --dir /s --daemon-user 0 --broker-user 0`, then rename `encryption.key` to
+  `port49d-encryption.key`). Edit `config/` for your policy and CRL or OCSP
   (the example sets `certificate_status.disabled`, which a deployment must not).
 - List devices in `inventory.yaml` by the address port49d sees. A published port
   may change that address; what it does is policy engine spec §15 [L39](https://blanketfish.github.io/port49/latest/reference/lab-register/#l39) (a). Measured: kept for an off-host device

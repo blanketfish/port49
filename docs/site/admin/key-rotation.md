@@ -282,8 +282,8 @@ If a process starts without a key the store was last written under, what you see
   ([alert](../reference/alerts.md#port49_crypt_store_key_unknown)). If the key was retired by mistake, set it
   as `previous` again and restart.
 
-The recipes that make the key file, with the right owner and mode and without ever overwriting an old one,
-are in each shape's install page: [systemd](../operate/install/systemd.md),
+`port49d key sealing` makes the key files with the right owner and mode and never overwrites an old one
+(on systemd; the container and Helm shapes have their own steps). See each shape's install page: [systemd](../operate/install/systemd.md),
 [container](../operate/install/container.md), [Helm](../operate/install/helm.md).
 See also [Stores](../operate/stores.md#one-set-of-encryption-keys-everywhere).
 
