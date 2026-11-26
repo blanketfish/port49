@@ -82,6 +82,7 @@ var daemonSubcommands = map[string]func(args []string) int{
 	"healthcheck": func(a []string) int {
 		return healthcheck.Command("port49d", "/etc/port49/port49d.yaml", ":9049", a, os.Stderr)
 	},
+	"key":           func(a []string) int { return keyCmd(a, os.Stdout, os.Stderr) },
 	"keys-diagnose": func(a []string) int { return keysDiagnoseCmd(a, os.Stdin, os.Stdout, os.Stderr) },
 	"store-roles":   func(a []string) int { return storeRolesCmd(a, os.Stdout, os.Stderr) },
 	"init-issuer": func(a []string) int {
@@ -132,7 +133,7 @@ func Main(args []string) int {
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], "+
 			"port49d init-revocations|init-issuer|rotate-issuer|init-enrollments|export-enrollments [--config FILE], "+
-			"port49d keys-diagnose --device NAME --capture FILE|-, "+
+			"port49d key sealing|device …, port49d keys-diagnose --device NAME --capture FILE|-, "+
 			"port49d revoke --offline …, or port49d store-roles [--config FILE] (a subcommand comes first)")
 		return 2
 	}
