@@ -354,13 +354,13 @@ holds the old one. Copy the three files by hand:
 4. Delete the debug pods and let the broker start. Compare the `issuing as ... (sha256:<fingerprint>)`
    line on every broker; the fingerprints must be identical.
 
-Two commands look like fixes and are not:
+Do not run either of these:
 
 - Do not run `init-issuer` on this broker. It would make a different CA.
 - Do not run `forget-issuer`. Every certificate the old CA issued would stop working.
 
-The [key rotation page](https://blanketfish.github.io/port49/latest/admin/key-rotation/#the-three-refusals)
-has the other two refusals. The words every refusal prints are in the
+The [key rotation page](https://blanketfish.github.io/port49/latest/admin/key-rotation/#the-issuing-ca)
+has the other refusals. The words every refusal prints are in the
 [3am index](https://blanketfish.github.io/port49/latest/operate/troubleshooting/).
 <!-- --8<-- [end:troubleshoot] -->
 
