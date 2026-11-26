@@ -282,7 +282,7 @@ func TestLLMsTxtFollowsTheNav(t *testing.T) {
 			sections = append(sections, l)
 		}
 	}
-	wantSecs := []string{"## Start here", "## Home", "## Concepts", "## Install", "## Operate", "## Sign in", "## Administer", "## Automation", "## Reference", "## Contributing", "## Moving (temporary)"}
+	wantSecs := []string{"## Start here", "## Home", "## Concepts", "## Install", "## Operate", "## Sign in", "## Administer", "## Automation", "## Reference", "## Contributing"}
 	if strings.Join(sections, "|") != strings.Join(wantSecs, "|") {
 		t.Errorf("sections %q, want %q", sections, wantSecs)
 	}
