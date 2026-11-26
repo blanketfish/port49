@@ -6,7 +6,7 @@ description: port49 lets you sign in to network devices with your SSO or a certi
 # port49
 
 port49 lets you sign in to network devices with your SSO or a certificate instead of a shared TACACS+
-password — no changes to the devices.
+password, with no changes to the devices.
 
 ## Why port49
 
@@ -22,11 +22,12 @@ password — no changes to the devices.
 ## Where to start
 
 - **How it fits together:** [Concepts](concepts/index.md).
-- **Installing it:** [Install](operate/install/index.md) compares the three deployment shapes, which are
+- **Installing it:** [Install](operate/install/index.md) compares the three ways to deploy, which are
   peers: [systemd](operate/systemd/install.md), [containers](operate/containers/install.md) and
   [Helm](operate/helm/install.md).
-- **How a person signs in:** [Signing in](operate/login.md).
+- **Using it:** [Use port49](use/index.md) covers [signing in](use/login.md) and connecting to a device.
 - **Who may do what:** [Policy](admin/policy.md).
+- **AI agents:** [Quick start](agents/quick-start.md).
 - **Contributing:** [Contributing](contributing/index.md).
 
 port49 is pre-release. The first beta will be `v0.1.0`; [Versions](operate/versions.md) says what beta
