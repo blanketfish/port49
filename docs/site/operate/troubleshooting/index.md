@@ -501,6 +501,32 @@ after the snapshot are lost. The full line names the floor revision and says to 
 **Don't:** restart port49d to clear the line, or lift anything, before the runbook says. Don't assume a
 revoked person is still revoked until the revocations are re-issued.
 
+Other signs of a restore, with what to do:
+
+- `port49_store_restore_detected_timestamp_seconds` above 0 and the alert
+  [port49_store_restore_detected](../../reference/alerts.md#port49_store_restore_detected): the same event as a
+  metric. Do the same.
+- A login fails and `port49_redemption_restored_refused_total` rises: the token is from before the restore. The
+  user mints a new one (`port49 token`).
+- A broker says `runner: <why>; every unspent token is purged and must be minted again (port49 token)`: the runner
+  purged. Nothing to do; every user mints again.
+- A broker says `runner: N revocation(s) in broker.state_dir/marks.json were missing from the store ... and are put
+  back`: lift again, with `port49 revoke --lift`, any that were lifted on purpose before the snapshot.
+- A broker says `broker.state_dir had no marks.json at this start`: it put back nothing. If no broker's
+  `state_dir` survived, re-issue every revocation made since the snapshot (step 4 of the runbook).
+- `port49_broker_mint_gate_closed` at 1 and `POST /v1/token` answering `503 store_unavailable` with
+  `Retry-After: 5`: a broker owes the purge and mints nothing until it is done. Wait. If it stays at 1 for more than
+  a minute (ticket [port49_broker_mint_gate_closed](../../reference/alerts.md#port49_broker_mint_gate_closed)),
+  check that one broker holds the keyspace and read its stderr for a purge that failed. The next takeover makes a
+  cut-short purge again.
+- `port49_redemption_restore_unjudged` at 1 and `port49d: store: reading meta/witness, to tell whether the store was
+  restored: ...; token redemptions are refused (store_unavailable)`: port49d cannot read `meta/witness`, so it
+  refuses every token login (page after 2 minutes:
+  [port49_redemption_restore_unjudged](../../reference/alerts.md#port49_redemption_restore_unjudged)). Fix the store,
+  or the daemon role's read of `meta/witness`. A device whose authentication `ERROR` is final (IOS XE, and Junos
+  under `tacplus` alone) refuses break-glass until the read answers or port49d is stopped. Do not delete
+  `restore.json` to clear it.
+
 ### A token was minted ahead of this host's clock
 
 **You see:** `clock: a token was minted <N> ahead of this host's clock`, at most once every ten minutes, and

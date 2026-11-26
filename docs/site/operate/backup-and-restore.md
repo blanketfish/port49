@@ -57,9 +57,8 @@ secrets manager. Two cautions:
     root, `UMask=0077`) on an etcd host, since it needs etcd's root certificate. It needs
     `examples/tmpfiles-etcd.conf` for the directory, and keeps two weeks.
     `examples/port49-enrollments-export.{service,timer}` export the directory's sealed enrollment store
-    daily from a broker host into a dated file in `/var/backups/port49-broker` (0700, the broker's). The
-    unit writes a temporary file and renames it, because systemd's `StandardOutput=file:` does not truncate
-    and a shorter export would keep the older one's tail. Run each once by hand before you rely on its timer.
+    daily from a broker host into a dated file in `/var/backups/port49-broker` (0700, the broker's). Run each
+    once by hand before you rely on its timer.
 
 === "Containers"
 
@@ -72,22 +71,15 @@ secrets manager. Two cautions:
     root certificate and is yours to adapt. The chart's own is off by default:
     `--set backup.enrollments.enabled=true --set backup.enrollments.claimName=<your PVC>`. The chart
     refuses to render it unless `config.broker.broker.identity.humans` has a `directory_password`
-    verifier, since the job would otherwise fail every night. Neither image has a shell, so each Job is
-    three containers: a `stale-check` init container that fails the Job when `<name>.new` is left from a
-    run that did not finish (the failed pod stays, `kubectl logs` names the file: remove it and the next
-    run goes), a writer (`etcdctl snapshot save` or `export-enrollments --out`) that creates `<name>.new`
-    at 0600 and never replaces a file, and an alpine `finish` container that renames to a dated name and
-    prunes after 14 days. The snapshot is sensitive: give its PVC a restrictive access mode.
-
-    For a Velero backup of the volumes, see the warning under [Restoring with Velero](#restoring-with-velero).
+    verifier. A failed run leaves `<name>.new`: remove it and the next run goes. The snapshot is sensitive, so
+    give its PVC a restrictive access mode. For a Velero backup of the volumes, see
+    [Restoring with Velero](#restoring-with-velero).
 
 ### The enrollments export
 
 `port49-broker export-enrollments --out FILE` writes the sealed enrollment store to a new file (mode 0600,
-never replacing one) and keeps 14 days. A new deployment that uses directory password sign-in runs
-`port49-broker init-enrollments` once, before the first start (on Helm,
-`examples/init-enrollments-job.yaml`). It creates the store the export reads, and a second run is refused
-(`the enrollment store is already there`). Until it has run, sign-ins answer `enrollment_store_lost`.
+never replacing one) and keeps 14 days. The store it reads is made once by `port49-broker init-enrollments`, in
+each install guide.
 
 To restore from an export, as an admin with a key press:
 
@@ -130,37 +122,18 @@ redeemed a second time with no line saying so. A broker with no `witness.json` (
 on a cold start of a whole fleet on new volumes.
 
 ??? info "When port49 cannot tell"
-    A restore that restored the spool directory or `broker.state_dir` brought `restore.json` and
-    `witness.json` back with the store. They are newer than the store only when the store had writes in the
-    backup window, which is usual on a busy store and not on an idle one. A new or lost spool has no
-    `restore.json` and takes the restored witness as its first record. It logs
+    A new or lost spool has no `restore.json` and takes the restored witness as its first record. It logs
     `port49d: store: no restore record at <path>: a restore made before this port49d's first read of the store cannot be told; after a restore, delete the unspent tokens before this port49d reaches the store (step 3 of Restoring etcd from a snapshot)`.
 
-    A record that cannot be read or decoded is moved aside (`<path>.bad-<time>`), and the first read is
-    taken as a restore: every token in the store is refused `token_spent` once.
-
-### What you see
-
-??? info "Lines, metrics and what to do"
-    | You see | It means | You do |
-    |---|---|---|
-    | port49d's stderr: `port49d: store: the session store was restored from a snapshot: meta/witness is …` and the tail `Revocations and marks made after the snapshot are lost: follow the restore runbook, Restoring etcd from a snapshot` | port49d found the restore and set its floor. After a restore without `--bump-revision` it also names the band (below). | Follow the runbook from the revocations step if you have not. The line is a report, not a recovery. |
-    | `port49_store_restore_detected_timestamp_seconds` above 0, and the alert [port49_store_restore_detected](../reference/alerts.md#port49_store_restore_detected) (ticket, for a day after) | Same event, as a metric. | The same. |
-    | A user's login fails and `port49_redemption_restored_refused_total` rises | Their token is from before the restore. | They mint a new token (`port49 token`). Nothing else. |
-    | A broker's stderr: `port49-broker: runner: <why>; every unspent token is purged and must be minted again (port49 token): N purged; M once-only records (sign-in challenges, proofs, nonces) deleted` | The runner purged. `<why>` is `the store's meta/witness is … below the … this replica saw: the store was restored from a snapshot`, or `no witness record in broker.state_dir; …`. | Nothing. Every user mints again. |
-    | A broker's stderr: `port49-broker: runner: N revocation(s) in broker.state_dir/marks.json were missing from the store (an etcd restore, …) and are put back: <marks>; lift any that were lifted on purpose with port49 revoke --lift` | The runner put back the revocations its copy held. | Lift again, with `port49 revoke --lift`, any that were lifted on purpose before the snapshot. |
-    | A broker's stderr: `broker.state_dir had no marks.json at this start; a revocation a store restore lost is put back only if this copy saw it` | This broker had no copy, so it put back nothing. | If no broker's `state_dir` survived, re-issue every revocation made since the snapshot (step 4 of the runbook). |
-    | `port49_broker_mint_gate_closed` at 1 and `POST /v1/token` answering `503 store_unavailable` with `Retry-After: 5` | A broker owes the purge and mints nothing until it is done. | Wait. If it stays at 1 for more than a minute (ticket [port49_broker_mint_gate_closed](../reference/alerts.md#port49_broker_mint_gate_closed)), no runner is purging: check that one broker holds the keyspace, and read its stderr for a purge that failed. A purge cut short is made again by the next takeover. |
-    | `port49_redemption_restore_unjudged` at 1, and `port49d: store: reading meta/witness, to tell whether the store was restored: …; token redemptions are refused (store_unavailable) until a read answers; tried again every 1s` | port49d cannot read `meta/witness`, so it cannot tell whether the store was restored and refuses every token login. Page after 2 minutes: [port49_redemption_restore_unjudged](../reference/alerts.md#port49_redemption_restore_unjudged). | Fix the store, or the daemon role's read of `meta/witness`. A device whose authentication `ERROR` is final (IOS XE, and Junos under `tacplus` alone) refuses break-glass until the read answers or port49d is stopped. Do not delete `restore.json` to clear it: without the record port49d cannot tell a restore. |
+The lines and metrics a restore leaves, and what to do about each, are in the
+[3am index](troubleshooting/index.md#the-session-store-was-restored-from-a-snapshot).
 
 ### The revision bump and the 5-minute band
 
 Restore an etcd snapshot with `--bump-revision`. It raises the restored store's revision by a billion
 (eleven days of writes at a thousand a second), so etcd never reuses a revision for another write, and the
 floor needs no band: nothing is refused but the old tokens. Measured on vEOS with etcd 3.6.15
-([L35-restore-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-arista_eos.md)):
-a snapshot at revision 338 of a store at 347 restored to 1000000338, its next write was 1000000339, and a
-read at 347 was refused as compacted.
+([L35-restore-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L35-restore-arista_eos.md)).
 
 Without `--bump-revision` (a Velero restore cannot use it) the restored store climbs through the revisions
 the old timeline already used, so port49d also refuses, for **5 minutes after its read**, every token
@@ -276,38 +249,6 @@ mark and is live again until its idle TTL: revoke it again.
 
 ## Restoring with Velero
 
-Prefer restoring etcd from an etcd snapshot (the CronJob's), as above, with `--bump-revision`, and use
-Velero for the other volumes. **A Velero restore that includes `port49-etcd` is a store restore:** it
-cannot use `--bump-revision`, so the 5-minute band applies, and the spool and `broker.state_dir` come back
-with the store, so the delete of step 3 is **required**, not belt and braces. The procedure is on
-[Back up with Velero](helm/velero.md): what the backup holds, its requirements, how to pin the plugin, then
-the restore, which restores etcd alone first, runs the `restore-unspent` Job (the delete of step 3), holds
-etcd down, restores `port49` with its pods running, then holds both StatefulSets at 0 and brings etcd back,
-so the revocations are re-issued before any broker or port49d reaches the store.
-
-!!! warning "Before you rely on a Velero backup"
-    The backup holds the issuing CA's private key (`state/issuing-ca.key`), each broker's state and the
-    spool, and the bucket also holds the namespaces' Secrets, unencrypted by Velero: the TACACS+ keys, the
-    encryption key, the etcd CA and client identities and the TLS key. Protect the bucket like the CA key,
-    and set the repository key from your own Secret before installing Velero, because Velero's default
-    repository password is a well-known static value. Velero skips a hostPath volume with only a warning
-    and the backup still reads Completed, and a claim no pod mounts is never copied: after every backup,
-    run the two checks in the chart README's
-    [Velero checks](https://github.com/blanketfish/port49/blob/main/deploy/helm/port49/README.md#velero-checks).
-    Restore with the pods running, never with the StatefulSets at 0 replicas: the restore then hangs.
-    A file-system copy of a live etcd member is crash-consistent at best.
-
-!!! warning "Unmeasured"
-    The Argo CD and Flux suspend and resume commands in the runbook follow those tools' documented
-    commands, and no GitOps controller has run the restore. Restoring `port49` while etcd is held down in
-    its own namespace has not been measured either: the measurement ran against an etcd that shared the
-    release's namespace and was never held at 0. A file-system copy of a live etcd member under load, and a
-    CSI volume snapshot in place of file-system backup, are also unmeasured. Skipping the suspend step can
-    admit a revoked principal until the revocations are re-issued.
-
-What is measured is on kind, with Velero 1.18.4 and its node agent
-([L89-kind.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L89-kind.md)): a backup of
-both StatefulSets, a deleted namespace and a restore left both ready with no fence refusal, the issuing CA
-unchanged, and a mint and a login working; a restore with the StatefulSets at 0 replicas hung; and the
-restore order on the Velero page, with the pods running and then scaled to 0, completed with `marks.json`,
-the CA and the spool intact.
+A Velero restore that includes `port49-etcd` is a store restore: it cannot use `--bump-revision`, so the band
+applies and step 3's delete is required. The procedure, the bucket warning and the evidence are on
+[Back up with Velero](helm/velero.md).
