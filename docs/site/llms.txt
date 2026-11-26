@@ -13,7 +13,7 @@
 
 ## Concepts
 
-- [Concepts](https://blanketfish.github.io/port49/latest/concepts/): The ideas behind port49, in the order an operator meets them.
+- [Concepts](https://blanketfish.github.io/port49/latest/concepts/): What port49 is, the terms it uses and how one login to a device works.
 - [Tokens, receipts and contexts](https://blanketfish.github.io/port49/latest/concepts/tokens-receipts-contexts/): What a token, a receipt and a context are, and how a device login uses each.
 - [Identities](https://blanketfish.github.io/port49/latest/concepts/identities/): How port49 knows who is logging in, for people and for workloads.
 - [Revocation](https://blanketfish.github.io/port49/latest/concepts/revocation/): How port49 ends access that was already granted, and how quickly it takes effect.

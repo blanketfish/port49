@@ -9,30 +9,16 @@ A token can be short because expiry does most of the work. Revocation is for the
 laptop, an offboarding, a certificate that must stop now. port49 revokes through the broker's API, so
 it needs no access to the store.
 
-## What an operator runs
+`port49 revoke` takes one target: a principal, a certificate, an OIDC session, one device login, or your
+own sessions. Revoking another principal needs the `revoke_others` right and a press of the operator's
+security key. The commands, the rights and the exit codes are in
+[Administer: revoking access](../admin/revocation.md).
 
-`port49 revoke` takes one target:
-
-| You want to stop | Run | Leaves a standing mark |
-|---|---|---|
-| a person or workload, everywhere | `port49 revoke --principal <principal>` | yes |
-| one certificate | `port49 revoke --cert <file>` (or `--cert-issuer` with `--cert-serial`) | yes |
-| one OIDC session | `port49 revoke --sid <sid> --sid-issuer <issuer>` | no |
-| whoever holds one device login | `port49 revoke --device <name> --username <user>` | no |
-| your own sessions | `port49 revoke --mine` | no |
-
-`port49 revoke --list` shows the marks in force, and `port49 revoke --lift` removes one. Revoking
-another principal needs the `revoke_others` right and a press of the operator's security key; lifting needs
-`lift_revocations` and a touch (both are rights in the [policy reference](../reference/config/policy.md)).
-Without the right the call is refused and the refusal is logged. `port49 revoke --help` lists every
-flag, and [Administer: revocation](../admin/revocation.md) is the runbook.
-
-A **standing mark** is a revocation that stays in force until someone lifts it. It is kept in the store
-(with a copy in `broker.state_dir`), or, on the memory store, in `broker.revocations_file`, so a restart
-forgets nothing.
-
-A mark does not expire. The agent reconnects with the same key by itself, so a mark that a fresh handshake
-could outlive would be undone without anyone acting.
+A standing mark is a revocation that stays in force until someone lifts it. A principal or certificate
+revocation leaves one. It is kept in the store (with a copy in `broker.state_dir`), or, on the memory
+store, in `broker.revocations_file`, so a restart forgets nothing. A mark does not expire. The agent
+reconnects with the same key by itself, so a mark that a fresh handshake could outlive would be undone
+without anyone acting.
 
 ## What happens, in order
 
@@ -43,7 +29,7 @@ could outlive would be undone without anyone acting.
 5. The contexts are read and marked a second time, to catch a redemption that was in flight.
 
 The next mint by that principal is refused `credential_revoked`. A person's agent sees that at its next
-request, which ends its session. A login that arrives with a token minted *before* the revocation is
+request, which ends its session. A login that arrives with a token minted before the revocation is
 refused `credential_revoked` too, and its token is spent. Because the receipt was deleted, a device's
 retransmission of an earlier login is answered `token_not_found` rather than replayed.
 
@@ -52,13 +38,12 @@ what it reached and which live contexts it could not.
 
 ## Other things that revoke
 
-Revocation is not only an operator's act. Each of these marks the live context revoked, and its next
-authorization is denied `credential_revoked`:
+Each of these marks the live context revoked, and its next authorization is denied `credential_revoked`:
 
 - a certificate appearing on a CRL or OCSP response;
 - an OIDC back-channel logout, by `sid` or `sub`;
-- the broker's periodic refresh finding that the principal now has no grant on the device
-  (for example, a policy change withdrew them);
+- the broker's periodic refresh finding that the principal now has no grant on the device, for example
+  because a policy change withdrew it;
 - the refresh finding that the directory no longer maps the principal: the entry is gone, ambiguous,
   or renamed to a username another entry holds;
 - a subject's username changing, since the principal can no longer mint under the name the context is
@@ -66,22 +51,20 @@ authorization is denied `credential_revoked`:
 
 The `refresh` record before the denial says which of these it was.
 
-A certificate that cannot be checked at all, such as a stale CRL, is not revocation: it is
-`trust_domain_unresolved` at mint, and the broker setting `broker.certificate_status.on_unavailable`
-decides whether that refuses.
+A certificate that cannot be checked at all, such as a stale CRL, is not revocation. It is
+`trust_domain_unresolved` at mint, and `broker.certificate_status.on_unavailable` decides whether that
+refuses.
 
-## Workloads
-
-A workload certificate renews under the same SPIFFE ID, so a mark on one certificate does not follow
-the renewal. To stop a workload, revoke its principal (`port49 revoke --principal spiffe://…`), and
-revoke the certificate at its CA so it cannot renew. `port49 revoke` says so when it sees the
-workload anchor as the issuer.
+A workload certificate renews under the same SPIFFE ID, so a mark on one certificate does not follow the
+renewal. To stop a workload, revoke its principal (`port49 revoke --principal spiffe://…`) and revoke the
+certificate at its CA so it cannot renew. `port49 revoke` says so when it sees the workload anchor as the
+issuer.
 
 ## What revocation cannot do
 
 !!! warning "port49 denies; it cannot disconnect"
     TACACS+ has no way for a server to close a device's session. Revocation takes effect at the
-    *next authorization request*. The TCP session stays up, a candidate configuration stays intact, and
+    next authorization request. The TCP session stays up, a candidate configuration stays intact, and
     an in-progress commit is untouched: the operator is told no, not cut off.
 
     A platform that asks port49 only at login asks nothing afterwards, so a revocation reaches a context
@@ -104,10 +87,10 @@ workload anchor as the issuer.
 
 Two other limits are worth knowing.
 
-- **`--mine` and `--device` leave no mark.** If anyone else used your token, your next login on that
+- `--mine` and `--device` leave no mark. If anyone else used your token, your next login on that
   device re-admits their session too. Close such a session on the device, or have an operator revoke
   the principal.
-- **A key revocation is by principal or certificate only.** There is no finer cut, so deleting unspent
+- A key revocation is by principal or certificate only. There is no finer cut, so deleting unspent
   tokens by certificate also deletes the same principal's tokens from other certificates under the same
   device and username. The error is toward denying.
 
