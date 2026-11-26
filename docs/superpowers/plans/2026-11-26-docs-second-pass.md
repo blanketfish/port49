@@ -84,7 +84,7 @@ saying what could not move and why.
 ### Plain prose (rule 11: the humanizer pass)
 
 Every page or README section a task writes or rewrites gets a humanizer pass before its checks run. Read
-`/home/rwendt/.claude/plugins/cache/humanizer/humanizer/4.0.0/SKILL.md` in full first. Each implementer
+the humanizer plugin's `SKILL.md` (path given in the implementer's brief) in full first. Each implementer
 brief repeats this paragraph and the security rules below.
 
 - Apply the skill in **file mode**: read the whole file from disk, change prose only. Code blocks, inline
