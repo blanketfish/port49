@@ -912,7 +912,7 @@ No directory refresh has verified every principal for half of session.staleness_
 
 **Source:** No directory refresh completed for half the staleness ceiling: `time() - port49_directory_refresh_last_complete_timestamp_seconds > session.staleness_ceiling / 2`
 
-**Why this threshold:** 7200 is half the default ceiling; set half yours. Same shape and 15m `for:` as port49_directory_refresh_stale. A page: at the ceiling sessions are denied.
+**Why this threshold:** 7200 is half the default ceiling; set half yours. Same form and 15m `for:` as port49_directory_refresh_stale. A page: at the ceiling sessions are denied.
 
 ### port49_directory_lookups_ambiguous {#port49_directory_lookups_ambiguous}
 

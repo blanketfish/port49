@@ -266,7 +266,7 @@ Results notes: [L38-cisco_iosxe.md](https://github.com/blanketfish/port49/blob/m
 
 ### [L39](#l39) {#l39}
 
-**Closed**, measured 2026-11-04. Whether port49d sees a device's true source address in each deployment shape: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with `externalTrafficPolicy: Cluster` and with `Local`; (c) Kubernetes with …
+**Closed**, measured 2026-11-04. Whether port49d sees a device's true source address in each way to deploy: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with `externalTrafficPolicy: Cluster` and with `Local`; (c) Kubernetes with host …
 
 Results notes: [L39-docker-proxy-off-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-docker-proxy-off-arista_eos.md), [L39-docker-proxy-on-arista_eos.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-docker-proxy-on-arista_eos.md), [L39-kind.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L39-kind.md)
 

@@ -656,7 +656,7 @@ tag (`0.37.0-101-g65125713`), so no tag names it and the digest is the pin.
   would be written. (Left to itself the image generates two passwords and prints the provisioner's
   once in its log.) A step command's output that holds key material, a compact JWS or that password
   is withheld, and `step-ca.log` is kept with its password lines dropped and any JWS- or
-  JWE-shaped string redacted to `<jws redacted>`, or not at all (a registered secret or key material
+  JWE-formatted string redacted to `<jws redacted>`, or not at all (a registered secret or key material
   in what is left refuses it).
 - L48's local broker trusts step-ca's root for the CRL fetch through `SSL_CERT_FILE`: step-ca serves
   its CRL over https under its own private root, and the broker fetches with the system roots. A
@@ -760,7 +760,7 @@ runs its pure tests (`l69_unit_test.go`) without any of that.
   broker mints with the new key's token; (e) a token after its pod, then its service account, is
   deleted (TokenReview and port49), then after `port49 revoke`; (f) B's token at a broker that lists
   A alone, at one that lists a namespace only A lists, and at one where both list it; (g) the
-  shapes port49 refuses (another audience, unbound, Secret-bound, Node-bound, a legacy Secret
+  kinds of token port49 refuses (another audience, unbound, Secret-bound, Node-bound, a legacy Secret
   token); (h) the default `kube-api-access` token. A "no" in a cell is a measurement; a fault in the
   setup is `t.Fatal`, INVALID, and writes no note.
 - Tokens are read into memory only (`kubectl exec ... cat`, `kubectl create token`), written to a
