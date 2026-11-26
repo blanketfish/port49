@@ -21,44 +21,16 @@ unrelated hierarchies, so that nothing a workload CA signs can be read as a pers
 ## Workload certificates and step-ca
 
 The host holds a certificate valid for a few hours, a renewal timer replaces it, and the broker verifies it against the
-CA you name. The guide uses Oxidized with [step-ca](https://smallstep.com/docs/step-ca). Four rules carry the design:
+CA you name in `broker.identity.machines` ([port49d reference](../reference/config/port49d.md)). The
+[Oxidized guide](workloads-oxidized.md) uses [step-ca](https://smallstep.com/docs/step-ca) and has the provisioner's
+`step-ca-workload.tpl`, the broker's verifier, enrolling, renewing and the bad-day table. Give each host its own
+provisioner, with the SPIFFE ID fixed in its template, so a host can only obtain its own name. For an immediate stop,
+use `port49 revoke` ([Revocation](revocation.md)) instead of waiting for the CA's CRL.
 
-1. **The workload CA is the trust root, and it is yours.** The broker's `broker.identity.machines` entry names the
-   CA's certificate (`trust_anchor_file`) and the SPIFFE trust domains it may speak for (`spiffe_trust_domains`).
-   Anyone who can get that CA to sign a SPIFFE ID inside those domains is that workload.
-2. **Give each host its own provisioner**, with the SPIFFE ID fixed in the provisioner's template (`uris`), so a host
-   can only obtain its own name. A shared provisioner lets any enrolled host ask for another's.
-3. **The certificate must name the CA's CRL.** port49 applies step-ca's CRL, which carries a critical issuing
-   distribution point, only to a certificate whose CRL distribution points name it exactly. Any other certificate is
-   undecided and the broker refuses it with **503 `certificate_status_unavailable`** (under
-   `broker.certificate_status.on_unavailable: refuse`, the default; `allow` would admit it and say so). The template
-   below adds the extension. Replace its URL with the name your CA's CRL carries (`crl.idpURL` when set, otherwise
-   `https://<the first of ca.json's dnsNames>/1.0/crl`) and check it with `step crl inspect`. Measured on step-ca
-   ([L48](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md)).
-4. **For an immediate stop, use `port49 revoke`** ([Revocation](revocation.md)) instead of waiting for the CA's CRL to
-   be republished and read.
-
-The provisioner's template, `step-ca-workload.tpl`, is step's default leaf with `clientAuth` alone and that one
-addition:
-
-```text
---8<-- "examples/oxidized/step-ca-workload.tpl"
-```
-
-The broker's verifier is below, with its keys in the [port49d reference](../reference/config/port49d.md). Workloads
-reach the broker over the same listener as everyone ([TLS](../operate/tls.md)).
-
-```yaml
-broker:
-  identity:
-    machines:
-      - type: x509
-        trust_anchor_file: /etc/port49/workload-ca.pem
-        spiffe_trust_domains: ["example.com"]
-```
-
-Enrolling, renewing, the broker policy snippet and the bad-day table are in the [Oxidized guide](workloads-oxidized.md).
-Host keys are OpenSSH's job: the guide uses `accept-new` and `known_hosts` (its section 7a).
+!!! warning "The certificate must name the CA's CRL"
+    A certificate whose CRL distribution points do not name step-ca's CRL is refused
+    `certificate_status_unavailable` (503) under the default `on_unavailable: refuse`; the guide's template adds the
+    extension ([L48](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L48-step_ca.md)).
 
 ## The workload directory
 
@@ -76,13 +48,9 @@ subjects:
     username: svc-backup
 ```
 
-`port49 policy test` reports it (re-run for this policy with a third subject, `svc_mapped`, that names a SPIFFE ID and
-no username):
-
-```text
-report: group_subject: subject "ci_runners" is a machine_group: subject: it mints only with broker.identity.machines[].directory configured (a workload certificate's directory mapping), through which the broker matches a workload to the group; explain and policy tests evaluate it by name
-report: workload_no_username: subject "svc_mapped" declares no username: it mints only under broker.identity.machines[].directory, where its entry's username_attribute names it
-```
+`port49 policy test` reports `group_subject` for the first and `workload_no_username` for a subject with no
+`username`, which then mints only under `broker.identity.machines[].directory`
+([Roles and grants](roles-and-grants.md#machine_group)).
 
 ### Opting in
 
@@ -113,13 +81,7 @@ broker:
   strong as who can write `attribute`. `issuers` are the RFC 4514 DNs of the CAs whose certificates it accepts.
 
 **Every workload this verifier accepts then needs exactly one entry**, those whose subject names them in `identity:`
-included. port49d prints the rule at start:
-
-```text
-directory: workload certificates map by spiffe_id (weak, pinned to <issuers>) through <attribute> under <filter>; every workload this verifier accepts must have exactly one entry holding its SPIFFE ID: none is refused identity_unmapped, two or more identity_ambiguous, and while the directory is down past grace it is refused directory_unavailable
-```
-
-(The line goes on to name where the username comes from.)
+included. port49d prints the rule at start.
 
 | Situation | The workload sees | What to do |
 |---|---|---|
@@ -151,9 +113,8 @@ The directory itself is configured under `broker.directory`; see [The directory]
 
 ## Kubernetes service accounts
 
-Nothing here makes a cluster necessary or preferred: it is the path for a job that already runs in one. The pod's
-projected token is the identity, with no CA to run and no secret at rest. The kubelet writes and rotates the token, and
-the broker verifies it against the cluster's published keys. The steps are in the
+The pod's projected token is the identity, with no CA to run and no secret at rest. The kubelet writes and rotates the
+token, and the broker verifies it against the cluster's published keys. The steps are in the
 [Kubernetes guide](workloads-kubernetes.md).
 
 !!! warning "Unmeasured"
