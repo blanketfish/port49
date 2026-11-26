@@ -6,7 +6,7 @@ description: Running TACACS+ over TLS (RFC 9887) on port 300, the certificates i
 # TLS
 
 RFC 9887 puts TACACS+ inside a TLS 1.3 connection with mutual authentication. A device proves who it is
-with a certificate, not a shared key, so there is no key to rotate on the fleet. port49 serves it on a
+with its certificate, so there is no shared key to rotate on the fleet. port49 serves it on a
 second listener beside the RFC 8907 one, and each device speaks one or the other, as its inventory record
 says.
 
@@ -14,9 +14,6 @@ says.
 |---|---|---|---|
 | RFC 8907 (obfuscated under a shared key) | `listen` | `:49` | `transport: tcp` (the default) |
 | RFC 9887 (TLS 1.3, mutual) | `tls_listener.listen` | `:300` | `transport: tls` |
-
-A device on the wrong listener is reset: a `tcp` device on 300 before any TLS byte, a `tls` device on 49
-after its first header (`transport_mismatch`).
 
 ## Turn the listener on
 
@@ -85,11 +82,9 @@ certificate carries.
 
 ## The server certificate
 
-The server certificate must come from a CA the device trusts for nothing else. Do not count on the device
-to check the names in it: IOS XE 17.18.02 accepted a certificate that named only a DNS name, and one that
-named another address, though it was configured by address, while EOS and XRd 26.1.1 refused the one naming
-another address (all in the [L73](../reference/lab-register.md#l73) notes). If you want a wildcard in it,
-confine it to a subdomain only TACACS+ servers use (RFC 9887 section 5.1.6).
+The server certificate must come from a CA the device trusts for nothing else. Devices differ in whether they
+check the names in it ([L73](../reference/lab-register.md#l73)), so do not count on it. If you want a wildcard in
+it, confine it to a subdomain only TACACS+ servers use (RFC 9887 section 5.1.6).
 
 !!! warning "Unmeasured"
     Whether Junos, NX-OS and XRd check the server certificate's DNS name or address is unknown. Junos and
@@ -99,27 +94,9 @@ confine it to a subdomain only TACACS+ servers use (RFC 9887 section 5.1.6).
 
 ## Junos
 
-Junos makes the client certificate optional for TLS, and port49 requires it, so without it a login is
-refused `no_client_certificate`
-([L72](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L72-reference.md)). Tell the
-device to send it on each server and on accounting:
-
-```text
-set system tacplus-server <server-address> tls mutual-authentication certificate-id <id>
-set system accounting destination tacplus server <server-address> tls mutual-authentication certificate-id <id>
-```
-
-The lab ran exactly this on vJunos-router 26.2R1.7, and the whole stanza is in
-[`deploy/device-aaa/juniper_junos-tls.set`](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/juniper_junos-tls.set).
-Junos sends the server's IP address as the SNI name, so if you set `server_names`, list every address the
-device may dial, or leave it unset. Otherwise the device sees an `internal_error` alert and port49d logs
-`tls_refused` with `sni_mismatch`.
-
-!!! warning "Unmeasured"
-    Which Junos releases accept this line, and whether SRX does, is unknown: it was run on one image. Whether
-    a Junos device whose `authentication-order` lists `tacplus` alone falls to anything over TLS when
-    port49 answers ERROR was not measured. The lab placed the client certificate through a lab-only root
-    shell, so the documented enrolment on Junos is also unmeasured.
+Junos makes the client certificate optional, and port49 requires it, so without
+`tls mutual-authentication certificate-id` on each server and on accounting a login is refused
+`no_client_certificate`. The lines, the SNI behavior and what is unmeasured are on [Juniper Junos](../admin/devices/juniper-junos.md).
 
 ## Revocation
 
@@ -131,7 +108,7 @@ no alert, recorded `certificate_revoked`.
 When a certificate's status cannot be established (a CRL source down past the list's `nextUpdate`),
 `on_unavailable: refuse` (the default) resets the connection after the handshake, recorded
 `status_unavailable`. That is a decline, not a strike, so a device falls to its local method at once.
-`on_unavailable: allow` admits the connection and says so. It is the reviewed escape, not the default.
+`on_unavailable: allow` admits the connection and says so.
 
 ## Migrating a device from `tcp` to `tls`
 
@@ -158,9 +135,10 @@ What the [L73](../reference/lab-register.md#l73) runs saw:
 | NX-OS | 49 | leaf and intermediate | no connection | Yes |
 | XRd | 49 | leaf and intermediate | sends plain TACACS+ headers | No |
 
-Whether the three that reset would have sent a header had the server stayed up is not measured. port49
-refuses a `tls` device's packet on the RFC 8907 listener, so a device that falls back is not served, but it
-is a header on the wire.
+!!! warning "Unmeasured"
+    Whether the three that reset would have sent a header had the server stayed up is not measured. port49
+    refuses a `tls` device's packet on the RFC 8907 listener, so a device that falls back is not served, but it
+    is a header on the wire.
 
 ## What you see at 3am
 
@@ -176,45 +154,15 @@ is a header on the wire.
 | The certificate names another device | `identity_mismatch`, naming what the certificate carried and what was wanted. | Reissue it, or fix the inventory name or address. |
 | port49d's own certificate expired | "server certificate ... expired"; `port49_tls_server_certificate_lifetime_left_ratio` below 0. Every handshake is recorded `handshake_failed` and struck. | Replace `cert_file`; it is picked up within `reload_interval`. The strikes lapse on their own. |
 
-The TLS alerts are in the [alert reference](../reference/alerts.md): `port49_tls_handshake_failures`,
-`port49_tls_device_certificate_renewal_late`, `port49_tls_server_certificate_renewal_late`,
-`port49_tls_server_certificate_expired`, `port49_tls_cert_status_unavailable` and
-`port49_crl_next_update_passed`.
-
 ### IOS XE and a down store
 
-When port49's store is down and port49 answers ERROR (`store_unavailable`), IOS XE 17.18.02 and XRd 26.1.1
-over TLS do not fall to their local method, so break-glass fails: the IOS XE lab login failed in 4.1
-seconds.
+On IOS XE and XRd over TLS, a store outage that makes port49 answer ERROR also locks out the local break-glass
+account. Keep a console way in. When port49d closes its listeners instead, the device uses its local method
+([Stores](stores.md#when-the-session-store-is-the-one-that-is-down)).
 
-!!! warning "A down store and IOS XE"
-    On IOS XE and XRd over TLS, a store outage that makes port49 answer ERROR locks out the local
-    break-glass account too. Keep an out-of-band way in (the console), and read
-    [stores](stores.md#when-the-session-store-is-the-one-that-is-down) for when port49d closes its
-    listeners instead, which is what lets a device use its local method.
-
-## Reloads and metric labels
+## Reloads
 
 An edit to any `tls_listener:` key needs a restart. The certificate, key, CA and intermediates files are
-re-read every `reload_interval` (1 minute by default) and at SIGHUP, so a CA rotation needs no restart, and
-neither does a change to the inventory or policy.
-
-??? info "What SIGHUP says, and the `component` label"
-    port49d says `tls_listener: config changes take effect at restart; files reload now` once, at the first
-    SIGHUP. A later SIGHUP of an edited restart-only key says nothing and changes nothing. A connection
-    whose chain no longer verifies ends at its next packet, and a file that does not load leaves the set in
-    force serving, with the failure said once.
-
-    `port49_cert_status_checks_total`, `port49_crl_loads_total`,
-    `port49_crl_next_update_timestamp_seconds` and `port49_cert_status_unavailable_total` carry
-    `component`: `tls_listener` for this listener and `broker` for the broker's own CRLs. A rule that
-    divides two of them one-to-one fails to match across components, so aggregate first, or match with
-    `ignoring(component)`:
-
-    ```promql
-    sum by (component) (rate(port49_cert_status_unavailable_total[5m]))
-      / sum by (component) (rate(port49_cert_status_checks_total[5m]))
-    ```
-
-    The shipped rules name their component, so they need neither (see the
-    [alerts notes](../reference/alerts.md#notes)).
+re-read every `reload_interval` (1 minute by default) and at SIGHUP, so a CA rotation needs no restart. Metrics
+that carry a `component` label need `sum by (component)` or `ignoring(component)` before a division
+([alerts notes](../reference/alerts.md#notes)).
