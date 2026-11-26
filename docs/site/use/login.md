@@ -93,7 +93,7 @@ it does, because a new sign-in fails at the same place. A device login already i
 
 ## One agent, one identity
 
-A second `port49 login` to a running agent refreshes it, and only when the broker and the certificate are
+A second `port49 login` to a running agent refreshes it (`already logged in to <broker>; refreshing`), and only when the broker and the certificate are
 the same ones. A login for another broker, or with another certificate, is refused with
 `already holds the agent`, because refreshing would extend one identity's device sessions while you
 believed you had switched. To switch, stop the first agent or let its session end.

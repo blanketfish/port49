@@ -60,7 +60,7 @@ where [directory password sign-in](sign-in/directory-password.md) checks passwor
    names the key.
 
 A directory outage never makes `/readyz` fail. A session on a stored membership goes on within `grace` (4h by
-default); past it, a mint or refresh is refused `directory_unavailable`. Past past `session.staleness_ceiling` (4h by default) a command is denied `context_stale`. See
+default); past it, a mint or refresh is refused `directory_unavailable`. Past `session.staleness_ceiling` (4h by default) a command is denied `context_stale`. See
 [Troubleshooting](../operate/troubleshooting/index.md) for what a stale cache looks like.
 
 ## Bind
