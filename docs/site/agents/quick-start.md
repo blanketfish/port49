@@ -7,8 +7,7 @@ description: Letting an AI agent operate network devices through port49 with its
 
 An AI agent that runs commands on network devices is a workload: a program with no person at the keyboard.
 It gets an identity of its own, a grant of its own, and a record of its own in the decision log. This page
-is for the operator who sets that up, and for the agent that reads it before it acts. Every sentence is an
-instruction.
+is for the operator who sets that up, and for the agent that reads it before it acts.
 
 ## The rules
 
@@ -53,20 +52,14 @@ from the tooling it already runs:
 
 The exit codes are in [Client commands](../reference/client-commands.md).
 
-- **`port49 ssh:` is a person's path, not the agent's.** It mints through the agent that `port49 login`
-  started, which holds a person's session. If an agent ever reports a line that starts `port49 ssh:`, it ran
-  `port49 ssh` (rule 1). Stop, and tell a human.
+- **A line starting `port49 ssh:` means the agent ran a person's path** (rule 1): stop, and tell a human.
 - **On ansible-core 2.16 to 2.18 the code is in the warning.** Those versions censor the message of a failed
   `no_log` task and show only `censored`. The lookup also raises the same message as a `[WARNING]` line
   beside it: read the code there. On 2.19 and later, the task's error holds it.
-- **A second factor is the one refusal whose message names a person's step.** A device that asks for a proof
-  the agent cannot give is `per_login_mfa_required`, and the Python `MFARequired` message advises a person's
+- **A second factor is `per_login_mfa_required`**, and the Python `MFARequired` message advises a person's
   `port49 ssh <device>`. **`port49 ssh` is a person's path (rule 1).
-  An agent runs neither it nor `port49 token`.** It stops and asks a human. Read `.code` and `.reason` in Python, not the advice.
-
-`port49.Workload` presents the agent's own certificate. `port49.Agent` presents whatever person logged in on
-the machine, so an agent never constructs one. To run a command, use `connect`
-([step 4b](#4b-or-run-it-from-python)), which mints for itself and raises the refusal.
+  An agent runs neither it nor `port49 token`.** It stops and asks a human
+  ([below](#per_login_mfa_required-devices-stay-human)).
 
 ## `per_login_mfa_required` devices stay human
 
@@ -83,9 +76,7 @@ provider ([Roles and grants](../admin/roles-and-grants.md#per_login_mfa)). Keep 
   requirement the broker cannot verify is `deny per_login_mfa_unavailable`
   ([Reason codes](../reference/reason-codes.md)).
 
-On either code the agent stops, names the device and the code, and asks a human. It never looks for a touch
-key, asks for a PIN, starts a sign-in, or runs `port49 token` or the `port49 ssh` that the `MFARequired`
-message names for a person.
+On either code the agent stops, names the device and the code, and asks a human.
 
 ## The worked example: one read-only agent
 
@@ -149,8 +140,7 @@ tests:
   - {subject: agent_readonly, device: core1, command: "show version", expect: deny}
 ```
 
-**The permits are an allow-list of the `show` commands the agent needs, not `show **`.** The allow-list is
-the fence. A `show` that prints the device's configuration prints its AAA lines and its local users'
+**The permits list the `show` commands the agent needs.** That allow-list is the fence. A `show` that prints the device's configuration prints its AAA lines and its local users'
 secrets into the agent's context, so the role also denies each of them.
 
 **Over SSH, the denies also hold if someone later widens the permit to `show **`:** each of the four is then
@@ -295,12 +285,6 @@ finally:
     conn.disconnect()
 ```
 
-A refusal raises before anything connects: `Denied` carries the reason in `.code` and `.reason`, and
-`MFARequired` means the device asks for a person's second factor
-([above](#per_login_mfa_required-devices-stay-human)). Report the code and stop. Never print `conn`,
-`vars(conn)` or its `password`. Never call `connect` without `workload=`: it then uses a person's agent
-(rule 1), or raises `NoAgent` with none.
-
 ### 5. What is recorded
 
 Each command the device asks about is one `authorize_command` record
@@ -313,6 +297,7 @@ commands and nothing else.
 
 - Never runs `port49 login`, `port49 ssh`, `port49 token` or `port49 workload token`, never constructs
   `port49.Agent`, and never reads a file under the secrets directories ([Secrets](../operate/secrets.md)).
+- Never calls `Workload.tokens()` or prints its result: `res.tokens` holds tokens.
 - Never runs a command that prints the device's configuration unsanitized.
 - Never retries a deny, and never widens its own policy, grant or role.
 - Never touches a device's AAA configuration: that is a human's change
