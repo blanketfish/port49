@@ -226,16 +226,12 @@ in the chart README.
 
 ## Key versions
 
-<!-- moved: docs/site/admin/key-rotation.md (Adding a key version) -->
 Adding a device key version, and the order that avoids a crash-loop: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/#device-keys).
 
-<!-- moved: docs/site/admin/key-rotation.md (Rotating the `encryption:` key) -->
 Rotating the `encryption:` key: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/).
 
-<!-- moved: docs/site/operate/secrets.md (Secrets and rotation) -->
 Mounts, the secret-file rule and the secret agents that were measured: [Secrets](https://blanketfish.github.io/port49/latest/operate/secrets/).
 
-<!-- moved: docs/site/operate/backup-and-restore.md (Backups, Velero) -->
 Backup CronJobs and Velero: [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/).
 
 ## Velero checks
@@ -266,7 +262,6 @@ comm -23 \
 
 [L89](https://blanketfish.github.io/port49/latest/reference/lab-register/#l89) runs these two commands verbatim, from this file, in CI after its backup (lab-kind run 41870212174): each printed nothing on a good backup, and with a claim no pod mounts the second printed exactly that claim.
 
-<!-- moved: docs/site/admin/revocation.md (Break-glass) -->
 Break-glass revoke with no broker reachable: [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/).
 
 <!-- --8<-- [start:upgrade] -->

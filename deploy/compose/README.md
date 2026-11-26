@@ -210,16 +210,12 @@ etcd data volume and `broker-state`. For several regions, see
 are on [Admin access](https://blanketfish.github.io/port49/latest/admin/admin-access/).
 <!-- --8<-- [end:install] -->
 
-<!-- moved: docs/site/operate/secrets.md (Compose secrets) -->
 Compose's own `secrets:` is not used for device keys: [Secrets](https://blanketfish.github.io/port49/latest/operate/secrets/).
 
-<!-- moved: docs/site/admin/revocation.md (Break-glass) -->
 Break-glass revoke with the broker unreachable: [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/).
 
-<!-- moved: docs/site/admin/key-rotation.md (Adding a key version) -->
 Adding a device key version, and the order that avoids a crash-loop: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/#device-keys).
 
-<!-- moved: docs/site/admin/key-rotation.md (Rotating the `encryption:` key) -->
 Rotating the `encryption:` key: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/#the-encryption-key).
 
 <!-- --8<-- [start:upgrade] -->

@@ -5,10 +5,10 @@ func init() {
 	mustSay["operate/deploy/index.md"] = append(mustSay["operate/deploy/index.md"],
 		"externalTrafficPolicy: Local", "`port49-broker init-issuer`", "port49-broker",
 	)
-	// The memory-store rows move to operate/stores.md with the section that holds them (Task 10a).
-	mustSay["operate/install/index.md"] = append(mustSay["operate/install/index.md"],
+	// The memory-store rows live on operate/stores.md with the section that holds them (Task 10a).
+	mustSay["operate/stores.md"] = append(mustSay["operate/stores.md"],
 		"init-revocations",
-		"`broker.revocations_file` is used only by a single-process trial",
+		"`broker.revocations_file` itself",
 	)
 	mustSay["operate/versions.md"] = append(mustSay["operate/versions.md"],
 		"v0.1.0", "1.0.0", "--version",

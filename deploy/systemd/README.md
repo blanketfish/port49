@@ -244,22 +244,16 @@ Without the package, do step 1 by hand:
 4. Copy `config/` to `/etc/port49/` and carry on from step 2.
 <!-- --8<-- [end:install] -->
 
-<!-- moved: docs/site/admin/key-rotation.md (Adding a key version) -->
 Adding a device key version, and the order that avoids a crash-loop: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/#device-keys).
 
-<!-- moved: docs/site/admin/key-rotation.md (Rotating the `encryption:` key) -->
 Rotating the `encryption:` key: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/).
 
-<!-- moved: docs/site/admin/revocation.md (Break-glass) -->
 Break-glass revoke with every broker down: [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/).
 
-<!-- moved: docs/site/operate/backup-and-restore.md (Backups) -->
 What the backup units do: [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/).
 
-<!-- moved: docs/site/operate/tls.md (TACACS+ over TLS on port 300) -->
 TACACS+ over TLS on port 300: [TLS](https://blanketfish.github.io/port49/latest/operate/tls/).
 
-<!-- moved: docs/site/operate/secrets.md (LoadCredential) -->
 `LoadCredential=` for the encryption key: [Secrets](https://blanketfish.github.io/port49/latest/operate/secrets/).
 
 <!-- --8<-- [start:upgrade] -->

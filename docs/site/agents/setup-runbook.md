@@ -14,7 +14,7 @@ holds the procedure and ends with a check. If a check fails, stop and report. Re
 Do not choose these. Ask, and write the answers down before step 1.
 
 1. **The deployment.** systemd, containers or Helm. They are peers, so ask which the team already runs
-   ([Install](../operate/install/index.md)).
+   ([Install](../operate/deploy/index.md)).
 2. **The identity provider.** Which OIDC provider signs people in, and whether a directory (LDAP or Active
    Directory) holds their groups ([Sign-in backends](../admin/sign-in/oidc.md),
    [The directory](../admin/directory.md)).
@@ -32,7 +32,7 @@ A check that prints nothing, or a command that does not exist on the machine, is
 
 Follow the page for the deployment the human chose: [systemd](../operate/systemd/install.md),
 [containers](../operate/containers/install.md) or [Helm](../operate/helm/install.md). The
-[Install page](../operate/install/index.md) lists what every deployment needs.
+[Install page](../operate/deploy/index.md) lists what every deployment needs.
 
 **Check:** `curl <host>:9049/readyz` prints `serving`
 ([Health checks](../reference/health-checks.md)), and the

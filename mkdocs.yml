@@ -179,9 +179,3 @@ nav:
       - Qualification: contributing/qualification.md
       - Releasing: contributing/releasing.md
       - Deployment design: contributing/deployment-design.md
-  - Moving (temporary):
-      - operate/install/index.md
-      - operate/install/clients.md
-      - operate/broker-and-agent.md
-      - operate/login.md
-      - operate/hardware-keys.md

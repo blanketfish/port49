@@ -22,7 +22,7 @@ password, with no changes to the devices.
 ## Where to start
 
 - **How it fits together:** [Concepts](concepts/index.md).
-- **Installing it:** [Install](operate/install/index.md) compares the three ways to deploy, which are
+- **Installing it:** [Install](operate/deploy/index.md) compares the three ways to deploy, which are
   peers: [systemd](operate/systemd/install.md), [containers](operate/containers/install.md) and
   [Helm](operate/helm/install.md).
 - **Using it:** [Use port49](use/index.md) covers [signing in](use/login.md) and connecting to a device.

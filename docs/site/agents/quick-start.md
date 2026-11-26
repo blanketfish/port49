@@ -6,8 +6,8 @@ description: Letting an AI agent operate network devices through port49 with its
 # AI agents quick start
 
 An AI agent that runs commands on network devices is a workload: a program with no person at the keyboard.
-It gets an identity of its own, a grant of its own, and a record of its own in the decision log. This page
-is for the operator who sets that up, and for the agent that reads it before it acts.
+It gets an identity of its own, a grant of its own, and a record of its own in the decision log. The operator
+who sets that up and the agent that reads this before it acts are the readers.
 
 ## The rules
 
