@@ -21,7 +21,7 @@
 
 ## Install
 
-- [Install](https://blanketfish.github.io/port49/latest/operate/deploy/): The three ways to deploy port49 and what you need before the first command.
+- [Install](https://blanketfish.github.io/port49/latest/operate/deploy/): The three ways to deploy port49, the parts of a deployment and what to check before the first command.
 - [Install](https://blanketfish.github.io/port49/latest/operate/systemd/install/): Install port49 from the package on Linux hosts, step by step, with a check after each step.
 - [Upgrade](https://blanketfish.github.io/port49/latest/operate/systemd/upgrade/): Upgrade a systemd deployment of port49 one server group at a time.
 - [Troubleshoot](https://blanketfish.github.io/port49/latest/operate/systemd/troubleshoot/): What to do when a systemd deployment of port49 will not start or an admin command is refused.
