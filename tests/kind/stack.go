@@ -369,7 +369,7 @@ reclaimPolicy: Delete
 			t.Fatalf("KeysFrom returned and the Secret port49-device-keys does not exist: %v", err)
 		}
 	}
-	s.secretFrom("port49-encryption", map[string]string{"encryption.key": s.pkiFile("secrets/port49d-encryption.key")})
+	s.secretFrom("port49-encryption", map[string]string{"encryption.key": s.pkiFile("secrets/encryption.key")})
 	s.secretFrom("port49-broker-tls", map[string]string{"tls.crt": filepath.Join(brokerDir, testpki.LabServerCert),
 		"tls.key": filepath.Join(brokerDir, testpki.LabServerKey), "ca.crt": filepath.Join(brokerDir, testpki.LabCA)})
 

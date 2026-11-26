@@ -67,8 +67,10 @@ func composeStoreBlock(component string) string {
 // Where the compose containers read the lab's secrets: the sealing key in each component's volume and the
 // device key in the port49d-keys volume (deploy/compose/setup.sh places each from local/).
 const (
-	composeEncKeyPath    = "/etc/port49/secrets/encryption.key"
-	composeDeviceKeyPath = "/run/port49/keys/lab_key_v1"
+	composeEncKeyPath = "/etc/port49/secrets/encryption.key"
+	// the broker's own name, as in the product's compose and port49d key sealing
+	composeBrokerEncKeyPath = "/etc/port49/secrets/broker-encryption.key"
+	composeDeviceKeyPath    = "/run/port49/keys/lab_key_v1"
 )
 
 // composeLabFiles is the lab's version of deploy/compose's four YAML files
@@ -112,8 +114,8 @@ func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]st
 	}
 	// Secrets are files in the stack (spec decision 54 ruling 2): the product's compose passes no
 	// environment, and setup places what local/ holds (deploy/compose/setup.sh).
-	for _, c := range []*string{&daemon, &broker} {
-		if *c, err = swapLine(*c, "secret_ref: env:PORT49_LAB_ENC_KEY", "secret_ref: file:"+composeEncKeyPath); err != nil {
+	for c, path := range map[*string]string{&daemon: composeEncKeyPath, &broker: composeBrokerEncKeyPath} {
+		if *c, err = swapLine(*c, "secret_ref: env:PORT49_LAB_ENC_KEY", "secret_ref: file:"+path); err != nil {
 			return nil, err
 		}
 	}
@@ -125,7 +127,7 @@ func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]st
 		"port49-broker.yaml":                          broker,
 		"policy.yaml":                                 policy,
 		"inventory.yaml":                              inv,
-		"secrets/port49d-encryption.key":              encKey,
+		"secrets/encryption.key":                      encKey,
 		"secrets/broker-encryption.key":               encKey,
 		"keys/" + filepath.Base(composeDeviceKeyPath): labKey,
 	}, nil

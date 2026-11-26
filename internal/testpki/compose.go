@@ -17,7 +17,7 @@ import (
 // certificate per etcd user (root, port49d, port49-broker), the broker's
 // lab PKI under broker/ for email and for ComposeOperator and ComposeBob,
 // the device key as keys/tacacs_v1, and each component's sealing key as
-// secrets/port49d-encryption.key and secrets/broker-encryption.key (files,
+// secrets/encryption.key and secrets/broker-encryption.key (the names port49d key sealing writes; files,
 // never an env file: nothing secret may show in a container's environment).
 // Valid 24h, as WriteLab's. Nothing it writes protects anything real: a trial and the
 // tests use it, never a deployment.
@@ -105,7 +105,7 @@ func writeStack(dir, email string, now time.Time, members []member, brokerDNS []
 		return err
 	}
 	files["keys/tacacs_v1"] = []byte(tacacs)
-	files["secrets/port49d-encryption.key"], files["secrets/broker-encryption.key"] = []byte(enc), []byte(enc)
+	files["secrets/encryption.key"], files["secrets/broker-encryption.key"] = []byte(enc), []byte(enc)
 	for name, body := range files {
 		if err := writeFresh(filepath.Join(dir, name), body); err != nil {
 			return fmt.Errorf("testpki: %s: %w", name, err)

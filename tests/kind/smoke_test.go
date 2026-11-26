@@ -385,7 +385,7 @@ keys:
 metrics_listen: "127.0.0.1:0"
 inventory_file: `+filepath.Join(dir, "inventory.yaml")+`
 encryption:
-  current: {id: c1, secret_ref: file:`+s.pkiFile("secrets/port49d-encryption.key")+`}
+  current: {id: c1, secret_ref: file:`+s.pkiFile("secrets/encryption.key")+`}
 key_secret_refs: {file_dir: `+s.pkiFile("keys")+`}
 accounting: {spool_path: `+filepath.Join(dir, "acct.jsonl")+`}
 broker:

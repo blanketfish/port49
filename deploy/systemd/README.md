@@ -68,80 +68,42 @@ The two encryption files hold one value and are owned apart, so neither process 
 other's copy. They sit outside the key directory because a policy may name any file under
 `key_secret_refs.file_dir`. Never put them there.
 
-Make a sealing key (32 raw bytes) **once**, and install it for both processes. The recipe runs in
-the destination directory, never in `/tmp` or under a name another user could have planted: each
-temporary file is new and private, and is linked into place only after every step passed. It draws
-again until the last byte is not a newline (a key file loses one trailing newline when it is read,
-so such a key would load a byte short, one time in 256), gives up after ten draws, and exits
-non-zero if anything fails, leaving no temporary file. It never overwrites: a hard link fails if
-the name exists, so a key that is already there is refused ("... exists; pick a new key id"), never
-replaced. `KEY_ID` names the key: empty makes `encryption.key` and `broker-encryption.key`, and
-`e2` makes `encryption-e2.key` and `broker-encryption-e2.key`. Never reuse an id.
+Make a sealing key **once**, on one host, as root:
 
 ```sh
-(
-  KEY_ID=   # empty for the first key; e2, e3, ... for a rotation (below)
-  umask 077 && cd /etc/port49/secrets || exit 1
-  n=encryption${KEY_ID:+-$KEY_ID}.key; b=broker-encryption${KEY_ID:+-$KEY_ID}.key
-  for f in "$n" "$b"; do
-    [ ! -e "$f" ] && [ ! -L "$f" ] || { echo "port49: $f exists; pick a new key id" >&2; exit 1; }
-  done
-  t=; u=; trap 'rm -f "$t" "$u"' EXIT; trap 'exit 1' INT TERM HUP
-  t=$(mktemp ./.key.XXXXXX) && u=$(mktemp ./.key.XXXXXX) || exit 1
-  ok=
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    head -c 32 /dev/urandom > "$t" && [ "$(wc -c < "$t")" -eq 32 ] &&
-      [ "$(tail -c1 "$t" | od -An -tx1 | tr -d ' ')" != 0a ] && ok=1 && break
-  done
-  [ -n "$ok" ] || { echo "port49: no usable 32-byte key in 10 draws" >&2; exit 1; }
-  cat "$t" > "$u" && chown port49d:port49d "$t" && chown port49-broker:port49-broker "$u" &&
-    chmod 0400 "$t" "$u" || { echo "port49: the sealing key was not made" >&2; exit 1; }
-  ln "$t" "$n" || { echo "port49: $n exists; pick a new key id" >&2; exit 1; }
-  ln "$u" "$b" || { rm -f "$n"; echo "port49: $b exists; pick a new key id" >&2; exit 1; }
-)
+sudo port49d key sealing
 ```
 
-**One key across hosts.** Running the recipe on a second host makes a *different* key, and the two
-hosts could not open each other's records. Generate once; then copy the same two files to every
-other host over a private channel (`scp encryption.key broker-encryption.key host:`), and on that
-host install them with their owners, refusing to replace one:
+It writes both files, the same 32 random bytes, with their owners and modes, and refuses to replace
+a name that exists (`--id e2` makes `encryption-e2.key` and `broker-encryption-e2.key`, for a
+rotation below; never reuse an id). Each file is made new in `/etc/port49/secrets`, never in
+`/tmp`, and linked into place only when complete, so a failure leaves nothing behind.
+
+**One key across hosts.** Running it on a second host makes a *different* key, and the two hosts
+could not open each other's records. Copy one of the two files to every other host over a private
+channel, install the pair there, and delete the copies:
 
 ```sh
-(
-  KEY_ID=   # the same as where it was made
-  cd /etc/port49/secrets || exit 1
-  pairs="encryption${KEY_ID:+-$KEY_ID}.key:port49d broker-encryption${KEY_ID:+-$KEY_ID}.key:port49-broker"
-  for pair in $pairs; do   # refuse before installing either, so a host never holds half a pair
-    f=${pair%%:*}
-    if [ -e "$f" ] || [ -L "$f" ]; then echo "port49: $f exists" >&2; exit 1; fi
-  done
-  for pair in $pairs; do
-    f=${pair%%:*}; o=${pair##*:}
-    install -o "$o" -g "$o" -m 0400 "$HOME/$f" "$f" || { echo "port49: install of $f failed" >&2; exit 1; }
-  done
-)
+sudo cat /etc/port49/secrets/encryption.key | ssh host 'umask 077; cat > encryption.key'   # from the host that made it
+ssh host 'sudo port49d key sealing --import encryption.key && shred -u encryption.key'     # add --id if you gave one
 ```
 
-Then `shred -u` the two copies in `$HOME`.
+`--import` refuses a file that is not 32 bytes or whose last byte is a newline (a key file loses
+one trailing newline when it is read, so that key would load a byte short), and refuses before
+writing either file if either name exists, so a host never holds half a pair.
 
 ### Adding a key version
 
-A device key is a file named in the policy. Add a version by writing a new file and a new
-line; never rewrite a file in place. Hex gives 32 characters you can type into the device's CLI
-(`tacacs-server key`, `key`, `secret`), and the newline the file ends in is dropped when it is read.
+A device key is a file named in the policy. Add a version by making a new file and a new
+line; never rewrite a file in place. The key is 32 hex characters you can type into the device's CLI
+(`tacacs-server key`, `key`, `secret`); the newline the file ends in is dropped when it is read.
 
 ```sh
-(
-  DEVICE_KEY=core-v2   # a new name for every version: never an existing one
-  umask 077 && cd /etc/port49/keys || exit 1
-  [ ! -e "$DEVICE_KEY" ] && [ ! -L "$DEVICE_KEY" ] || { echo "port49: $DEVICE_KEY exists; pick a new key id" >&2; exit 1; }
-  t=; trap 'rm -f "$t"' EXIT; trap 'exit 1' INT TERM HUP
-  t=$(mktemp ./.key.XXXXXX) || exit 1
-  openssl rand -hex 16 > "$t" && [ "$(wc -c < "$t")" -eq 33 ] && chown root:port49d "$t" && chmod 0440 "$t" ||
-    { echo "port49: the device key was not made" >&2; exit 1; }
-  ln "$t" "$DEVICE_KEY" || { echo "port49: $DEVICE_KEY exists; pick a new key id" >&2; exit 1; }
-)
+sudo port49d key device core-v2   # a new name for every version: never an existing one
 ```
+
+It writes `/etc/port49/keys/core-v2`, `root:port49d` 0440, and refuses a name that exists. It prints
+where the key is, never the key: read it from the file to type into the device.
 
 Then add `{version: 2, secret_ref: "file:/etc/port49/keys/core-v2"}` to the key set in the
 policy under `current:` (moving the old one to `accept:` until each device carries the new key)
@@ -354,9 +316,9 @@ This recipe is `port49d`'s alone. The broker's copy of the encryption key stays 
 
 One key, everywhere, from one secret, in three steps. In each, `reload` is `systemctl reload`.
 
-1. Make the new key once, on one host, with the recipe above and `KEY_ID=e2`: it leaves
-   `encryption-e2.key` and `broker-encryption-e2.key` beside the old, which it never touches. Copy those two files to
-   every other host ("One key across hosts"), never re-run the recipe there. Add it to every
+1. Make the new key once, on one host, with `sudo port49d key sealing --id e2`: it leaves
+   `encryption-e2.key` and `broker-encryption-e2.key` beside the old, which it never touches. Install it on
+   every other host with `--import` ("One key across hosts"), never run `key sealing` there. Add it to every
    `port49d.yaml` and `port49-broker.yaml` as `previous:`, in every region, and reload
    everything. Every process now opens what either key sealed.
 2. Swap: make `e2` `current:` and `e1` `previous:`, everywhere, and reload.

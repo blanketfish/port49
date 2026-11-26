@@ -55,7 +55,7 @@ pub "$C/inventory.yaml" /vol/port49d-etc/inventory.yaml
 pub "$L/etcd/ca.pem" /vol/port49d-etc/etcd/ca.pem
 pub "$L/etcd/port49d.pem" /vol/port49d-etc/etcd/port49d.pem
 key "$L/etcd/port49d-key.pem" /vol/port49d-etc/etcd/port49d-key.pem
-once "$L/secrets/port49d-encryption.key" /vol/port49d-etc/secrets/encryption.key "$U" "$U" 0400
+once "$L/secrets/encryption.key" /vol/port49d-etc/secrets/encryption.key "$U" "$U" 0400
 
 # The device keys: one file per version, never rewritten once a device holds
 # it. A new version is a new file written here and named in the policy.
@@ -79,7 +79,7 @@ key "$L/etcd/port49-broker-key.pem" /vol/broker-etc/etcd/port49-broker-key.pem
 pub "$L/broker/broker-ca.pem" /vol/broker-etc/broker/broker-ca.pem
 pub "$L/broker/broker.pem" /vol/broker-etc/broker/broker.pem
 key "$L/broker/broker-key.pem" /vol/broker-etc/broker/broker-key.pem
-once "$L/secrets/broker-encryption.key" /vol/broker-etc/secrets/encryption.key "$U" "$U" 0400
+once "$L/secrets/broker-encryption.key" /vol/broker-etc/secrets/broker-encryption.key "$U" "$U" 0400
 # The roots an admin operation's touch is checked against, when a deployment
 # names them (README, "Admin operations").
 [ ! -f "$L/broker/attestation-roots.pem" ] || pub "$L/broker/attestation-roots.pem" /vol/broker-etc/broker/attestation-roots.pem

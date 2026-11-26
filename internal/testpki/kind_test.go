@@ -49,7 +49,7 @@ func TestWriteKindNamesEachMemberByItsPodDNS(t *testing.T) {
 	}
 	// The rest is WriteCompose's layout: the three etcd users, the device key, the sealing keys.
 	for _, f := range []string{"etcd/ca.pem", "etcd/root.pem", "etcd/port49d.pem", "etcd/port49-broker.pem",
-		"keys/tacacs_v1", "secrets/port49d-encryption.key", "secrets/broker-encryption.key", "broker/" + LabCA} {
+		"keys/tacacs_v1", "secrets/encryption.key", "secrets/broker-encryption.key", "broker/" + LabCA} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}

@@ -3,7 +3,7 @@
 metrics_listen: ":9050"
 inventory_file: /etc/port49/inventory.yaml
 encryption:
-  current: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}
+  current: {id: c1, secret_ref: file:/etc/port49/secrets/broker-encryption.key}
 broker:
   listen: ":8443"
   tls_cert_file: /etc/port49/broker/broker.pem
