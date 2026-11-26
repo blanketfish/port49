@@ -47,10 +47,10 @@
 ## Sign in
 
 - [Sign in](https://blanketfish.github.io/port49/latest/use/): How a person installs the port49 client, signs in and connects to a device.
-- [Install the client](https://blanketfish.github.io/port49/latest/use/install-client/): Install the port49 client on a person's machine.
-- [Log in](https://blanketfish.github.io/port49/latest/use/login/): Sign in with port49 login using a certificate, OIDC or a directory password.
-- [Connect to a device](https://blanketfish.github.io/port49/latest/use/connect/): Reach a network device with port49 ssh or a token from port49 token.
-- [Hardware keys](https://blanketfish.github.io/port49/latest/use/hardware-keys/): Sign in to port49 with a key held on a hardware security key.
+- [Install the client](https://blanketfish.github.io/port49/latest/use/install-client/): Install the port49 command-line client on the machine where you sign in, and set up a YubiKey module if you use one.
+- [Log in](https://blanketfish.github.io/port49/latest/use/login/): Sign in with port49 login using a certificate, OIDC or a directory password, and what the agent it starts does.
+- [Connect to a device](https://blanketfish.github.io/port49/latest/use/connect/): Reach a network device with port49 ssh, or get a token from port49 token for your own tool.
+- [Hardware keys](https://blanketfish.github.io/port49/latest/use/hardware-keys/): Keep the session key on a YubiKey, check it with port49 hwkey, and meet a device's touch requirement.
 
 ## Administer
 
@@ -83,8 +83,8 @@
 
 ## Automation
 
-- [Python library](https://blanketfish.github.io/port49/latest/automation/python/): Get a port49 token from Python code.
-- [Ansible collection](https://blanketfish.github.io/port49/latest/automation/ansible/): Run Ansible against network devices with port49 tokens.
+- [Python library](https://blanketfish.github.io/port49/latest/automation/python/): Get a port49 token from Python code, Nornir or Netmiko.
+- [Ansible collection](https://blanketfish.github.io/port49/latest/automation/ansible/): Run Ansible against network devices with port49 tokens from the port49.client lookup.
 - [AI agents quick start](https://blanketfish.github.io/port49/latest/agents/quick-start/): Letting an AI agent operate network devices through port49 with its own identity, and what it reads back when a device refuses it.
 - [AI agents setup runbook](https://blanketfish.github.io/port49/latest/agents/setup-runbook/): The steps an operator, or an agent acting for one, follows to set port49 up end to end, with the check after each step and the points where a human decides.
 
