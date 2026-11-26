@@ -25,7 +25,7 @@ func TestWriteComposeWritesTheStacksFiles(t *testing.T) {
 		"etcd/root.pem", "etcd/root-key.pem", "etcd/port49d.pem", "etcd/port49d-key.pem",
 		"etcd/port49-broker.pem", "etcd/port49-broker-key.pem", "broker/" + LabCA, "broker/" + LabServerCert,
 		"broker/" + LabServerKey, "broker/" + LabClientCert, "broker/" + LabClientKey, "broker/" + operatorKey(), "broker/" + operatorCert(),
-		"broker/" + bobCert(), "keys/tacacs_v1", "secrets/port49d-encryption.key", "secrets/broker-encryption.key"} {
+		"broker/" + bobCert(), "keys/tacacs_v1", "secrets/encryption.key", "secrets/broker-encryption.key"} {
 		fi, err := os.Stat(filepath.Join(dir, f))
 		if err != nil {
 			t.Fatalf("%s: %v", f, err)
@@ -58,7 +58,7 @@ func TestWriteComposeWritesTheStacksFiles(t *testing.T) {
 		}
 	}
 	// One sealing key, in both components' files, 32 bytes; the device key is not it.
-	d, _ := os.ReadFile(filepath.Join(dir, "secrets/port49d-encryption.key"))
+	d, _ := os.ReadFile(filepath.Join(dir, "secrets/encryption.key"))
 	b, _ := os.ReadFile(filepath.Join(dir, "secrets/broker-encryption.key"))
 	k, _ := os.ReadFile(filepath.Join(dir, "keys/tacacs_v1"))
 	if len(d) != 32 || string(d) != string(b) || string(k) == string(d) || len(k) != 32 {

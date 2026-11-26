@@ -71,14 +71,14 @@ func TestComposeLabFilesNameTheContainersPaths(t *testing.T) {
 			t.Errorf("%s still names a secret by environment, which the compose stack does not pass:\n%s", name, files[name])
 		}
 	}
-	for _, want := range []string{"secrets/port49d-encryption.key", "secrets/broker-encryption.key", "keys/lab_key_v1"} {
+	for _, want := range []string{"secrets/encryption.key", "secrets/broker-encryption.key", "keys/lab_key_v1"} {
 		if files[want] == "" {
 			t.Errorf("no source file %s for setup to place", want)
 		}
 	}
 	if !strings.Contains(files["policy.yaml"], "file:"+composeDeviceKeyPath) ||
 		!strings.Contains(files["port49d.yaml"], "file:"+composeEncKeyPath) ||
-		!strings.Contains(files["port49-broker.yaml"], "file:"+composeEncKeyPath) {
+		!strings.Contains(files["port49-broker.yaml"], "file:"+composeBrokerEncKeyPath) {
 		t.Errorf("a file reference is missing")
 	}
 }
@@ -122,8 +122,9 @@ func TestComposeExitNamesTheExitCodeOrThatItDidNotRun(t *testing.T) {
 // under dir (etc for /etc/port49, run for /run/port49), so a loader that reads them finds them.
 func placeComposeSecrets(t *testing.T, dir string, files map[string]string) {
 	t.Helper()
-	for src, dst := range map[string]string{"secrets/broker-encryption.key": "etc/secrets/encryption.key",
-		"keys/lab_key_v1": "run/keys/lab_key_v1"} {
+	for src, dst := range map[string]string{"secrets/broker-encryption.key": "etc/secrets/broker-encryption.key",
+		"secrets/encryption.key": "etc/secrets/encryption.key",
+		"keys/lab_key_v1":        "run/keys/lab_key_v1"} {
 		path := filepath.Join(dir, dst)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)

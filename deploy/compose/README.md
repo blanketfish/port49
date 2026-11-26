@@ -52,7 +52,7 @@ so no volume holds both etcd identities:
 |---|---|---|
 | `port49d-etc` | `port49d.yaml`, policy, inventory, etcd CA, port49d's etcd certificate and key, `secrets/encryption.key` | port49d, read-only |
 | `port49d-keys` | the device keys, one file per version (`tacacs_v1`, ...); the directory `root:65532` 0750, each file `root:65532` 0440 | port49d, read-only at `/run/port49/keys` |
-| `broker-etc` | `port49-broker.yaml`, policy, inventory, etcd CA, the broker's etcd and TLS files, `secrets/encryption.key` | port49-broker, read-only |
+| `broker-etc` | `port49-broker.yaml`, policy, inventory, etcd CA, the broker's etcd and TLS files, `secrets/broker-encryption.key` | port49-broker, read-only |
 | `etcd-pki` | the CA and the three members' certificates and keys | etcd-1..3, read-only |
 | `etcd-root` | etcd's root certificate and key, and `store-roles`' output | etcd-init only |
 | `etcd-N-data` | each member's data | that member |
@@ -64,8 +64,9 @@ No secret is in any container's environment, so `docker inspect` shows none. Eac
 - A device key is a file in `port49d-keys`, named by the policy as
   `{version: 1, secret_ref: file:/run/port49/keys/tacacs_v1}`. A new version is a new file and a line in
   the policy, with no restart (below; `make compose-smoke` runs that cell).
-- Each component's sealing key is `secrets/encryption.key` in its own `-etc` volume (`root` 0755
-  directory, the file `65532` 0400), the same 32 bytes in both. It is not under `/run/port49/keys`:
+- Each component's sealing key is a file in its own `-etc` volume, `secrets/encryption.key` for port49d
+  and `secrets/broker-encryption.key` for the broker (`root` 0755 directory, the file `65532` 0400), the
+  same 32 bytes in both. It is not under `/run/port49/keys`:
   a policy may name any file there.
 
 `setup` places a key once. At every `up`, per key file: absent in the volume, it is installed; the
@@ -102,20 +103,13 @@ from the repository root, with `PORT49_COMPOSE_LOCAL` as for `up` if you set it,
 name `port49` (`docker compose -p` changes the volume prefix):
 
 ```sh
-docker run --rm -i -v port49_port49d-keys:/k --entrypoint sh port49-setup:dev -c '
-  DEVICE_KEY=$1   # a new name for every version: never an existing one
-  umask 077 && cd /k || exit 1
-  [ ! -e "$DEVICE_KEY" ] && [ ! -L "$DEVICE_KEY" ] || { echo "port49: $DEVICE_KEY exists; pick a new key id" >&2; exit 1; }
-  t=; trap "rm -f \"\$t\"" EXIT; trap "exit 1" INT TERM HUP
-  t=$(mktemp ./.key.XXXXXX) || exit 1
-  head -c 16 /dev/urandom | od -An -tx1 | tr -d " \n" > "$t" && [ "$(wc -c < "$t")" -eq 32 ] &&
-    chown 0:65532 "$t" && chmod 0440 "$t" || { echo "port49: the device key was not made" >&2; exit 1; }
-  ln "$t" "$DEVICE_KEY" || { echo "port49: $DEVICE_KEY exists; pick a new key id" >&2; exit 1; }
-' sh tacacs_v2
+docker run --rm -v port49_port49d-keys:/k --entrypoint port49d port49-setup:dev \
+  key device tacacs_v2 --dir /k --device-owner 0 --device-group 65532   # a new name for every version
 ```
 
-It is the recipe of `deploy/systemd/README.md` ("Adding a key version"), in the volume: a temporary
-file made in the destination, a no-clobber hard link, nothing left behind on a failure. Type the
+It is `port49d key device` (`deploy/systemd/README.md`, "Adding a key version"), run in the volume
+with the owners the shape needs (`0:65532`, 0440): a new file, a no-clobber link, a refusal of a name
+that exists, nothing left behind on a failure. Type the
 key into the device from the volume, and keep the new file's name for the policy. Then add
 `{version: 2, secret_ref: "file:/run/port49/keys/tacacs_v2"}` to the key set in `config/policy.yaml`, under `accept:` (moving the
 old version out of `current:` once each device carries the new key), and run `docker compose up -d`:
@@ -130,10 +124,11 @@ crash-loops until you restore the file in the `port49d-keys` volume or take the 
 ## A deployment
 
 - Bring your own PKI under `PORT49_COMPOSE_LOCAL`, in the layout `compose-pki` writes
-  (`etcd/`, `broker/`, `keys/tacacs_v1`, `secrets/port49d-encryption.key` and
+  (`etcd/`, `broker/`, `keys/tacacs_v1`, `secrets/encryption.key` and
   `secrets/broker-encryption.key`; the two sealing keys hold the same 32 bytes). A device key is the shared secret
-  you type into the device; a sealing key is 32 random bytes, made once (the recipe in
-  `deploy/systemd/README.md`, "Where the secrets live", with the destination changed). Edit `config/` for your policy and CRL or OCSP
+  you type into the device; a sealing key is 32 random bytes, made once, and that command writes both
+  files under those names (`docker run --rm -v "$PWD/local/secrets:/s" --entrypoint port49d port49-setup:dev
+  key sealing --dir /s --daemon-user 0 --broker-user 0`). Edit `config/` for your policy and CRL or OCSP
   (the example sets `certificate_status.disabled`, which a deployment must not).
 - List devices in `inventory.yaml` by the address port49d sees. A published port
   may change that address; what it does is policy engine spec §15 [L39](https://blanketfish.github.io/port49/latest/reference/lab-register/#l39) (a). Measured: kept for an off-host device
@@ -293,47 +288,28 @@ Complete single-site and multi-region store blocks are in `deploy/examples/store
 One key, in both components, from one secret, in three steps. A new key is a new file beside the old,
 never a rewrite.
 
-1. Make the new sealing key once, as `secrets/encryption-e2.key` in both `-etc` volumes
-   (`65532` 0400), the same 32 bytes in each, with this one command from any directory (project
-   `port49`; `docker compose -p` changes the volume prefix). It draws until the last byte is not a
-   newline, makes both temporary files in the destination directories, links them no-clobber, and
-   leaves nothing behind on a failure. It never overwrites: an existing `encryption-e2.key` is refused.
+1. Make the new sealing key once, as `secrets/encryption-e2.key` in the `port49d-etc` volume and
+   `secrets/broker-encryption-e2.key` in `broker-etc` (`65532` 0400, the same 32 bytes), with this one
+   command from any directory (project `port49`; `docker compose -p` changes the volume prefix). It
+   refuses a name that exists, never replaces one, and leaves nothing behind on a failure.
 
    ```sh
-   docker run --rm -i -v port49_port49d-etc:/e -v port49_broker-etc:/b --entrypoint sh port49-setup:dev -c '
-     KEY_ID=$1   # a new id for every key: never an existing one
-     : "${KEY_ID:?set KEY_ID to the new key id}"
-     umask 077 && cd /e/secrets && cd /b/secrets || exit 1
-     n=encryption-$KEY_ID.key
-     for f in /e/secrets/$n /b/secrets/$n; do
-       [ ! -e "$f" ] && [ ! -L "$f" ] || { echo "port49: $f exists; pick a new key id" >&2; exit 1; }
-     done
-     t=; u=; trap "rm -f \"\$t\" \"\$u\"" EXIT; trap "exit 1" INT TERM HUP
-     t=$(mktemp /e/secrets/.key.XXXXXX) && u=$(mktemp /b/secrets/.key.XXXXXX) || exit 1
-     ok=
-     for i in 1 2 3 4 5 6 7 8 9 10; do
-       head -c 32 /dev/urandom > "$t" && [ "$(wc -c < "$t")" -eq 32 ] &&
-         [ "$(tail -c1 "$t" | od -An -tx1 | tr -d " ")" != 0a ] && ok=1 && break
-     done
-     [ -n "$ok" ] || { echo "port49: no usable 32-byte key in 10 draws" >&2; exit 1; }
-     cat "$t" > "$u" && chown 65532:65532 "$t" "$u" && chmod 0400 "$t" "$u" ||
-       { echo "port49: the sealing key was not made" >&2; exit 1; }
-     ln "$t" "/e/secrets/$n" || { echo "port49: /e/secrets/$n exists; pick a new key id" >&2; exit 1; }
-     ln "$u" "/b/secrets/$n" || { rm -f "/e/secrets/$n"; echo "port49: /b/secrets/$n exists; pick a new key id" >&2; exit 1; }
-   ' sh e2
+   docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b --entrypoint port49d port49-setup:dev \
+     key sealing --id e2 --dir /e/secrets --broker-dir /b/secrets --daemon-user 65532 --broker-user 65532
    ```
 
-   Add it to `config/port49d.yaml` and `config/port49-broker.yaml` under `encryption:` as `previous: {id: c2, secret_ref:
-   file:/etc/port49/secrets/encryption-e2.key}`, run `docker compose up -d` (setup copies the config
+   Add it to `config/port49d.yaml` as `previous: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}`
+   and to `config/port49-broker.yaml` as `previous: {id: c2, secret_ref:
+   file:/etc/port49/secrets/broker-encryption-e2.key}`, run `docker compose up -d` (setup copies the config
    files) and `docker compose restart port49d port49-broker`. Both open what either key sealed.
 2. Swap: make `c2` `current:` and `c1` `previous:` in both files, and restart both.
 3. Remove `previous:` and the old file only after the scheduled directory pass (every `refresh_interval`)
    has re-sealed the second-factor records under `c2`. A record that opens under neither key is never
    "not enrolled": that sign-in is `503 store_unavailable`, and the broker's line names
    `port49 directory reset-second-factor`. Remove the old key from `local/secrets/` **first**
-   (`port49d-encryption.key` and `broker-encryption.key` are the old key's), so an `up` in between cannot install it
+   (`encryption.key` and `broker-encryption.key` are the old key's), so an `up` in between cannot install it
    again, and then from the volumes
-   (`docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b alpine:3.22 rm /e/secrets/encryption.key /b/secrets/encryption.key`,
+   (`docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b alpine:3.22 rm /e/secrets/encryption.key /b/secrets/broker-encryption.key`,
    with the old file's name). Setup skips a sealing key that is in neither place; once the config no longer names the
    old file, every later `up` starts clean and the old key stays gone.
 
