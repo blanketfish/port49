@@ -43,7 +43,6 @@ jobs:
       - run: mkdocs build --strict --site-dir site
         env:
           NO_MKDOCS_2_WARNING: '1'
-          PORT49_DOCS_BANNER: ${{ steps.publish.outputs.banner }}
       - run: PORT49_DOCS_SITE=site go test ./tests/ci/ -run '^TestTheBuiltSite' -count=1
 
   # One copy of the site per version lives on the gh-pages branch (mike), and Pages serves that branch
@@ -102,11 +101,10 @@ jobs:
             echo "docspublish: nothing to publish for $GITHUB_REF"
             exit 0
           fi
-          banner=$(printf '%s\n' "$out" | sed -n 's/^banner=//p')
           version=$(printf '%s\n' "$out" | sed -n 's/^version=//p')
           aliases=$(printf '%s\n' "$out" | sed -n 's/^aliases=//p')
           echo "deploying $version with aliases: $aliases"
-          PORT49_DOCS_BANNER="$banner" mike deploy --update-aliases --branch gh-pages --remote origin "$version" $aliases
+          mike deploy --update-aliases --branch gh-pages --remote origin "$version" $aliases
           # the site root redirects to latest, so a link to /port49/latest/... is the stable deep link
           mike set-default --branch gh-pages --remote origin latest
           # the root 404 sends pre-versioning links to latest; the root llms.txt is latest's

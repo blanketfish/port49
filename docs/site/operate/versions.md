@@ -27,8 +27,7 @@ The site keeps one copy of the docs per release line, so a page matches the port
 | `/dev/` | `main`, ahead of any release. It describes behavior no release has yet. |
 
 The version selector in the page header lists these, and keeps you on the same page when you switch, if
-that page exists in the other version. The banner at the top of the page says which one you are reading:
-"This site describes port49 v0.1.2." for a release, or that the site describes main, not a release.
+that page exists in the other version. A page from an older release says so at the top and links the latest.
 If your binary says `port49d 0.1.0` (see below), read `/0.1/`.
 
 ## One version across every artifact
@@ -43,8 +42,7 @@ A release has one version, and every artifact carries it:
 - the Ansible collection
 
 They are set to the same number before the tag is pushed, and a check refuses the release if they
-differ. So you never have to guess which client goes with which server: the same number means the same
-release.
+differ. A client and a server with the same number are from the same release.
 
 ## Read the version of a binary
 
@@ -62,14 +60,14 @@ same line as `port49 --version`. Quote that line in a bug report.
 
 What the version part says depends on how the binary was built:
 
-- **A release build** prints the version without the tag's leading `v`. The container image prints
+- A release build prints the version without the tag's leading `v`. The container image prints
   the same string as the package.
-- **`make build` from source** prints what `git describe` gives for the checkout, without the `v`. It
+- `make build` from source prints what `git describe` gives for the checkout, without the `v`. It
   is marked `-dirty` when the tree has changes.
-- **A plain `go build`** stamps nothing, and prints the word `dev` in place of the version.
+- A plain `go build` stamps nothing, and prints the word `dev` in place of the version.
 
 ## Upgrading
 
-- **Before a `0.x` upgrade,** read the release notes for config changes.
-- **After an upgrade that changes the etcd roles,** apply them again by hand. It is never done for you
+- Before a `0.x` upgrade, read the release notes for config changes.
+- After an upgrade that changes the etcd roles, apply them again by hand. port49 never does it for you
   (see [Stores](stores.md)).

@@ -59,14 +59,27 @@ func TestTheThemeHasALightAndADarkSchemeWithAToggle(t *testing.T) {
 	}
 }
 
-// The version banner takes its colors from the theme (Material's own announce bar), so it reads in both
-// schemes. A color written into the override or a stylesheet would not follow the scheme.
-func TestTheBannerOverrideHardCodesNoColor(t *testing.T) {
+// A page of an older release says so in Material's own outdated-version bar (the `outdated` block), which
+// takes its colors from the theme, so it reads in both schemes. The override replaces the bar's text only,
+// and the announce block is not overridden. A color written into the override or a stylesheet would not
+// follow the scheme.
+func TestTheOutdatedNoticeOverrideHardCodesNoColor(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "overrides", "main.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
+	if !strings.Contains(s, "{% block outdated %}") || !strings.Contains(s, "{% endblock %}") {
+		t.Error("docs/overrides/main.html does not override the outdated block")
+	}
+	if strings.Contains(s, "announce") {
+		t.Error("docs/overrides/main.html overrides announce: the version banner is gone")
+	}
+	for _, want := range []string{"You are reading the docs of an older release.", "Go to the latest.", "base_url"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("docs/overrides/main.html lacks %q", want)
+		}
+	}
 	for _, bad := range []string{"style=", "<style", "rgb(", "rgba(", "hsl("} {
 		if strings.Contains(s, bad) {
 			t.Errorf("docs/overrides/main.html holds %q: use the theme's variables, not a color", bad)
@@ -82,9 +95,23 @@ func TestTheBannerOverrideHardCodesNoColor(t *testing.T) {
 	}
 	var cfg struct {
 		ExtraCSS []string `yaml:"extra_css"`
+		Extra    struct {
+			Banner  any `yaml:"banner"`
+			Version struct {
+				Provider string `yaml:"provider"`
+				Default  string `yaml:"default"`
+			} `yaml:"version"`
+		} `yaml:"extra"`
 	}
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		t.Fatal(err)
+	}
+	if cfg.Extra.Banner != nil {
+		t.Error("mkdocs.yml sets extra.banner: the outdated-version notice replaced it")
+	}
+	// Material shows the outdated notice only on a page that is not the version named here
+	if cfg.Extra.Version.Provider != "mike" || cfg.Extra.Version.Default != "latest" {
+		t.Errorf("mkdocs.yml extra.version is %+v, want provider mike and default latest", cfg.Extra.Version)
 	}
 	// the one stylesheet sets the page width; a color in it would need its own dark rules
 	if len(cfg.ExtraCSS) != 1 || cfg.ExtraCSS[0] != "stylesheets/extra.css" {
