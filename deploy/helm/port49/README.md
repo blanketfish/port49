@@ -381,3 +381,7 @@ has the other refusals. The words every refusal prints are in the
 - [Admin access](https://blanketfish.github.io/port49/latest/admin/admin-access/)
 - [Deployment design](https://blanketfish.github.io/port49/latest/contributing/deployment-design/): the
   volume root, the init containers and the smoke tests
+
+`make kind-smoke` runs the chart in a kind cluster. The smokes run in CI (`.github/workflows/kind.yml`).
+Locally they refuse to start on a host with a TPM or a security key (`/dev/tpm0`, `/dev/tpmrm0`, a Yubico
+device on the USB bus), because the container is not an isolation boundary.

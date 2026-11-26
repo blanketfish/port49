@@ -43,6 +43,7 @@ sudo install -m 0644 etcd@.service /etc/systemd/system/
 sudo install -m 0644 etcd-1.yaml /etc/etcd/          # etcd-2.yaml on the second host, and so on
 ```
 
+`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700, makes the data directory and `/etc/etcd/pki` for the certificates.
 Edit each member file for your names and put its certificates in `/etc/etcd/pki/`. The examples turn on
 TLS and client-certificate auth, periodic compaction every 10 minutes and an 8 GiB quota. Then start each
 member:
@@ -248,7 +249,14 @@ Adding a device key version, and the order that avoids a crash-loop: [Key rotati
 
 Rotating the `encryption:` key: [Key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/).
 
-Break-glass revoke with every broker down: [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/).
+Break-glass revoke with every broker down ([Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/)),
+on a broker host, as the broker's user:
+
+```sh
+systemctl stop port49-broker              # on every broker host
+sudo -u port49-broker port49-broker revoke --offline --principal user:bob@example.com
+systemctl start port49-broker
+```
 
 What the backup units do: [Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/).
 
@@ -334,3 +342,8 @@ words every refusal prints are in the [3am index](https://blanketfish.github.io/
 - [Admin access](https://blanketfish.github.io/port49/latest/admin/admin-access/)
 - [Deployment design](https://blanketfish.github.io/port49/latest/contributing/deployment-design/): why the
   units are hardened the way they are, and the smoke test
+
+`make systemd-smoke` installs the package under systemd in a container and drives it. The smokes run in CI
+(`.github/workflows/systemd.yml`). Locally they refuse to start on a host with a TPM or a security key
+(`/dev/tpm0`, `/dev/tpmrm0`, a Yubico device on the USB bus), because the container holds `CAP_SYS_ADMIN`
+and is not an isolation boundary.
