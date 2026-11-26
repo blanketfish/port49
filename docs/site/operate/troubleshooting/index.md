@@ -395,7 +395,7 @@ Alerts: **page** [etcd_no_leader](../../reference/alerts.md#etcd_no_leader); **t
 **Do this:** bring back a quorum. A dark member costs up to 12 seconds; a lost quorum stops the store, and
 port49d answers `store_unavailable` and then closes its listeners. For a full database, compact and
 defragment as etcd's documentation describes, before it reaches its quota. For a slow disk, see
-[monitoring](../monitoring.md#the-disk-etcd-and-the-spool-need).
+[monitoring](../monitoring.md#disks).
 
 **Don't:** restart every member at once. Don't leave etcd on a disk that cannot hold a WAL fsync p99
 under 10 ms.
