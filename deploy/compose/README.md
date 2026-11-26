@@ -170,9 +170,11 @@ Only when the broker issues certificates. On one broker:
 
 ```sh
 docker compose exec port49-broker port49-broker init-issuer
+docker compose restart port49-broker
 ```
 
-A second broker must hold the same CA, or it refuses to start. Copy both files into its volume:
+The broker loads the CA at start, so it needs the restart. A second broker must hold the same CA, or it
+refuses to start. Copy both files into its volume, then restart it:
 
 ```sh
 docker run --rm -v port49_broker-state:/a -v port49_broker2-state:/b alpine:3.22 sh -c \

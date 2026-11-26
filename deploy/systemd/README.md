@@ -63,7 +63,7 @@ export ETCDCTL_ENDPOINTS=https://etcd-1.example.com:2379 ETCDCTL_CACERT=/etc/etc
 etcdctl endpoint health --cluster
 ```
 
-Success prints three lines ending `is healthy`.
+Success prints three lines, each saying `is healthy`.
 
 ## 3. Put the secrets in place
 
@@ -77,8 +77,7 @@ Every secret is a file. No secret goes into a config file, an environment variab
 | `/etc/port49/etcd/*-key.pem` | each process's own, 0400 | its etcd client key |
 | `/etc/port49/broker/broker-key.pem` | `port49-broker:port49-broker` 0400 | the broker's TLS key |
 
-A root-owned 0600 broker key passes the key-file rule and then cannot be read by the broker. The two
-encryption files hold one value and sit outside `/etc/port49/keys`, which a policy may name files from.
+The two encryption files hold one value and sit outside `/etc/port49/keys`, which a policy may name files from.
 
 Make the sealing key once, on one host:
 
@@ -141,8 +140,7 @@ are in `examples/stores/single-site/` and `multi-region/`. Then pick the sign-in
     [Directory password](https://blanketfish.github.io/port49/latest/admin/sign-in/directory-password/) and
     [The directory](https://blanketfish.github.io/port49/latest/admin/directory/) have the blocks.
 
-Nothing reads the config until the start in step 8. `store-roles` in step 5 reads both files first and
-refuses a missing etcd identity, naming the key.
+`store-roles` in step 5 reads both files first and refuses a missing etcd identity, naming the key.
 
 ## 5. Apply port49's roles to etcd
 

@@ -46,7 +46,9 @@ To check, run `kubectl -n port49-etcd get pods`. All three members are `Ready`.
 
 ## 3. Apply port49's etcd roles
 
-Make the roles script from your two configs. The broker's config names the broker's own etcd certificate:
+Make the roles script from your two configs. Use local copies of both configs, with the broker's etcd
+`cert_file` and `key_file` pointing at `port49-etcd-broker`'s own `tls.crt` and `tls.key`, because
+`store-roles` refuses two components with one CN:
 
 ```sh
 port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml > roles.sh
