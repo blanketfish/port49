@@ -13,6 +13,7 @@ func init() {
 		"| `port49 ssh` | 255 |",
 		"| `port49 revoke` | 3 |",
 		"| `port49 hwkey` | 1 |",
+		"revocation_unconfirmed", "store_unavailable",
 	)
 	mustSay["reference/health-checks.md"] = append(mustSay["reference/health-checks.md"],
 		"--ready", "/healthz", "docker stack deploy", "service_healthy", "start_timeout",

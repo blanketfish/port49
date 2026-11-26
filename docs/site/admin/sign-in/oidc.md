@@ -96,6 +96,8 @@ origin `backchannel_logout <issuer>`.
 The broker keeps the logout record for `max_token_age` plus twice `clock_skew` (on an issuing broker,
 `max(max_token_age, 24h)` plus twice `clock_skew`). If it cannot write the record it answers 503 and the provider
 retries. Keycloak does not retry a failed logout. The broker's log then spells out the recovery for the principal, in
-one of two forms: end the principal's contexts with `port49 revoke --principal`, then `port49 revoke --lift` after the
-held token or certificate has expired, because lifting early lets the held token mint again. Both need `revoke_others`
-and `lift_revocations`. The [3am index](../../operate/troubleshooting/index.md) has both forms in full.
+one of two forms. Both end the principal's contexts with `port49 revoke --principal`, then lift with
+`port49 revoke --lift`. When the decision log shows the `backchannel_logout` record, lift at once. When the logout
+wrote nothing, lift only after the time the line prints, because lifting early lets the held token mint again. Both
+steps need `revoke_others` and `lift_revocations`. The [3am index](../../operate/troubleshooting/index.md) has both
+forms in full.

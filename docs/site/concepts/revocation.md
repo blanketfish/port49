@@ -13,8 +13,9 @@ key. The commands and rights are in [Administer: revoking access](../admin/revoc
 
 A principal or certificate revocation leaves a standing mark, which stays in force until someone lifts it.
 It is kept in the store (with a copy in `broker.state_dir`), or, on the memory store, in
-`broker.revocations_file`, so a restart forgets nothing. A mark does not expire, because the agent
-reconnects with the same key by itself.
+`broker.revocations_file`, so a restart forgets nothing. A mark does not expire: the agent
+reconnects with the same key by itself, so a mark that a fresh handshake could outlive would be undone without
+anyone acting.
 
 ## What happens, in order
 

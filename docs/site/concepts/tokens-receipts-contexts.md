@@ -93,7 +93,7 @@ is the only place port49d can learn who it is talking to.
   [revoked](revocation.md). If the broker is unreachable past `session.staleness_ceiling`, port49d denies
   `context_stale` and keeps the context, so recovery resumes it.
 - **It is sealed.** Every field the authorizer trusts is encrypted and bound to its `(nas, username)` key, so
-  a store write cannot raise a privilege or move a record to another device. A writer to the store can still
+  a store write cannot raise a privilege, lift a revocation or move a record to another device. A writer to the store can still
   put back a record port49 sealed earlier, so protect store write access.
 
 !!! warning "Session control stops at the device"

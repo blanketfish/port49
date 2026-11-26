@@ -47,9 +47,9 @@ lowering, such as a narrower permit or a dropped right, prints and passes. The l
 
 | Label | The change | What clears it |
 |---|---|---|
-| `EXPANDS` | a command a deny, pipeline stage or quarantine refused is now permitted | an `expect: permit` command test on a freed command |
+| `EXPANDS` | a command a deny, pipeline stage or quarantine refused is now permitted | an `expect: permit` command test on a freed command, on a device of that group; one test clears every command form of the same deny and permit |
 | `RAISES` | a level, `priv_lvl`, `max_privilege` or `enable` went up, or a reply changed | a session test asserting the new value |
-| `REGEX-CONSTRAINED` | a permit gained a regex or class term, or a deny lost or rewrote one | a passing `expect: permit` test on a command the rule decides, or an [`acknowledge:`](#acknowledge) entry |
+| `REGEX-CONSTRAINED` | a permit gained a regex or class term, or a deny lost or rewrote one | a passing `expect: permit` test on a command the rule decides or, for a deny, on a command it used to refuse, or an [`acknowledge:`](#acknowledge) entry |
 | `API` | `api:` rights added to a subject | a session test listing the whole new `api:` |
 | `PRINCIPAL`, `USERNAME` | an identity resolves to another subject, or a `username:` changed | a session test naming the principal |
 | `per_login_mfa_weakened` | a `per_login_mfa` requirement removed or loosened | a session test asserting the new requirement, new or changed against the old file |

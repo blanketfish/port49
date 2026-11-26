@@ -29,7 +29,7 @@ A claim is measured when a linked results note shows it, and unmeasured when it 
 
 ## What the status column means
 
-- **qualified**: every cell that applies read yes in the lab's golden run. A dash is a cell that does not apply, such as TLS on a device with no RFC 9887 client, and a dash that names a register entry says why. Where that entry is "open", the dash records what the golden run saw, and the device page says what is unknown.
+- **qualified**: every cell that applies read yes in the lab's golden run. `none` is a cell that does not apply, such as TLS on a device with no RFC 9887 client, and a `none` that names a register entry says why. Where that entry is "open", the `none` records what the golden run saw, and the device page says what is unknown.
 - **partial**: at least one cell that applies read no, or the device's per-request TLS login does not carry command authorization (a bypass never reads as a pass). The command authorization over TLS column says which.
 - **re-vet pending**: the row's golden is waiting for a new lab run, so the cells are not current. Read the device page.
 

@@ -135,7 +135,7 @@ A grant names a declared subject and scope and at least one role, each listed on
 scope and roles are refused. `expires` is a date (the start of that day, UTC) or an RFC 3339 time after which the grant
 stops matching, and `policy diff` and `policy test` read the policy at every later expiry as well as now.
 `max_privilege` is a ceiling on the level a token from the grant may carry, which is how far `enable` may take the
-session. With no `enable` on the subject (`none` by default, or `auto` or `token`), nothing escalates to it.
+session. The subject's `enable` is `none` (the default), `auto` or `token`. With `none`, nothing escalates to it.
 
 A grant on an `on_missing: include` scope is refused, except on a scope with no match key or pinned by `name` alone
 ([the include-scope refusal](policy-rules.md#the-include-scope-grant-refusal)). When one person matches several

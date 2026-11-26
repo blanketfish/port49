@@ -75,7 +75,7 @@ func TestTheOutdatedNoticeOverrideHardCodesNoColor(t *testing.T) {
 	if strings.Contains(s, "announce") {
 		t.Error("docs/overrides/main.html overrides announce: the version banner is gone")
 	}
-	for _, want := range []string{"You are reading the docs of an older release.", "Go to the latest.", "base_url"} {
+	for _, want := range []string{"This is not the latest release's documentation.", "Go to the latest.", "base_url"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("docs/overrides/main.html lacks %q", want)
 		}

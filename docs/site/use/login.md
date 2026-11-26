@@ -50,8 +50,6 @@ process id and the path of its log. `port49 identity` then shows who the broker 
   certificate has under a quarter of its life left, or when you pass `--sign-in`.
 - `--cert` and `--key` belong to the certificate method. Combining them with `--oidc` or `--directory` is
   refused, as is naming both of those two together.
-- A second `port49 login` while the agent runs refreshes that agent and says
-  `already logged in to <broker>; refreshing`.
 
 ## The agent
 

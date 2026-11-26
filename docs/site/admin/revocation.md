@@ -5,8 +5,8 @@ description: Revoke a person, a certificate or a session, close what revocation 
 
 # Revoking access
 
-[Revocation](../concepts/revocation.md) explains what happens, in order, and what it cannot do. This page is the
-runbook: the commands, what each one needs and how to read the answer. Checking your CA's revocation lists is on
+[Revocation](../concepts/revocation.md) explains what happens, in order, and what it cannot do. Below are the
+commands, what each needs and how to read the answer. Checking your CA's revocation lists is on
 [Client certificate sign-in](sign-in/x509.md).
 
 ## What you need
@@ -106,26 +106,7 @@ device re-admits every session still open there under that username. The report 
 
 ### Exit codes
 
-| Exit | Meaning |
-|---|---|
-| 0 | done; `--list` printed |
-| 1 | nothing was revoked, or it is unknown. Refused or unreachable: no agent, the right missing, the touch refused or not given, a declined confirmation (`nothing was revoked`), an unreadable or refused `--cert` file, or a broker refusal that says nothing was done. **Unknown whether it ran:** the broker did not answer (`the broker did not answer ...`), it answered with no revocation named (`the broker's answer named no revocation; it may be in force`), it answered `503 revocation_unconfirmed` (`the broker could not confirm it: ...`), or a revoke got `503 store_unavailable` (`the broker says: ...`). The first two say to run `port49 revoke --list` and look at the decision log before you retry; for the last two, read the broker's words |
-| 2 | the flags are wrong: no target, two targets, or a flag that does not go with the form |
-| 3 | the revocation **is in force** but incomplete, or not saved to the revocations file, or a lift step did not finish: run the same command again, which repeats every step |
-
-Exit 1 is two different things, so read the line. A refusal that says nothing was done means nothing happened; `it may
-be in force` means it may have. Two broker answers look like refusals and are not:
-
-- `the broker could not confirm it` (`503 revocation_unconfirmed`): the revocation may have gone through, and so may a
-  lift made meanwhile. Run `port49 revoke --list` to see what is in force, then repeat the command if the mark is not
-  what you wanted.
-- `the broker says: ...` on a revoke that got `503 store_unavailable`: the mark went nowhere but that one broker's own
-  process, so the credential is revoked on that broker and not, yet, on the others. Do what the broker's words say to
-  make the mark everywhere, and run the revoke again once the store is back.
-
-Exit 3 is never a failure to revoke: the mark stands and refuses every new mint, but until a run finishes, unspent
-tokens may still log in (up to their TTL) and unmarked contexts keep authorizing. `port49 revoke --lift` takes the same
-codes. An answer with no text exits 1 with `it may have run`.
+Exit codes, and how to read exit 1 and 3: [Client commands](../reference/client-commands.md#port49-revoke).
 
 ## Lifting
 
@@ -197,5 +178,18 @@ docker compose start port49-broker
 
 `--lift` instead of the principal's revoke lifts it.
 `port49 store status --metrics 127.0.0.1:9050` reads the broker's stores on the metrics port.
+-->
+
+<!-- from: deploy/helm/port49/README.md (Admin calls), for the Helm tab of the break-glass steps
+Admin commands (`port49 revoke`, `port49 directory ...`) are calls to the broker API and need a
+security-key press from an admin whose key chains to `broker.attestationRootsConfigMap` (a ConfigMap
+holding `attestation-roots.pem`). Without it every admin call is refused 503. Run them from a
+workstation that can reach the `<release>-broker` Service.
+
+Break-glass, when no broker is reachable: `scripts/revoke-offline.sh <ns> <release> -- --principal
+<name> [--lift|--list]` scales the brokers to 0, runs `port49-broker revoke --offline` against
+broker-0's volume, and scales back on every exit. The chart is on etcd, which keeps the revocation
+marks (with a copy in `broker.state_dir`), so it has no `init-revocations` step (that command is for a single-process trial on the memory
+store).
 -->
 

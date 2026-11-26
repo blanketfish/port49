@@ -6,7 +6,7 @@ description: Set up who may run port49 revoke and port49 directory commands, how
 # Admin access
 
 You run `port49 revoke` and `port49 directory ...` on your own workstation, through your agent. Nothing is run on the
-server host. Each admin-level call needs the right in the policy and a press of your security key, once per operation,
+server host. Each admin-level write needs the right in the policy and a press of your security key, once per operation,
 so an exposed certificate or token alone authorizes nothing admin-level.
 
 The broker needs three things: the attestation roots, the right in the policy, and a session key on each admin's

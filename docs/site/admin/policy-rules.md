@@ -5,7 +5,7 @@ description: How permit and deny rules match, how scopes select devices, and wha
 
 # Rules and scopes
 
-[Policy](policy.md#writing-a-rule) shows how a rule is written. This page covers how rules combine and how a scope
+[Policy](policy.md#writing-a-rule) shows how a rule is written. Below: how rules combine and how a scope
 chooses devices.
 
 ## When a permit and a deny both match

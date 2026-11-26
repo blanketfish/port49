@@ -57,7 +57,8 @@ proof.
   token a person presents, `audience` the API in the access token a service obtains. The list the token
   matched decides the domain.
 - Certificate anchors may not overlap. A chain that ends at both is refused at the TLS handshake, which
-  leaves a log line and an `identity_refused` count, not a decision record. The broker refuses to start if
+  leaves a log line and an `identity_refused` count, not a decision record. Put the two anchors in unrelated
+  hierarchies. The broker refuses to start if
   one anchor directly signs the other, and refuses a request whose chain shows a deeper overlap.
 - A workload never authenticates with a directory password, and the verifier's `filter` keeps a person-like
   service account out. Directory groups reach a workload only as a `machine_group:` subject, opt in per
