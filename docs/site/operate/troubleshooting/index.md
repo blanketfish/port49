@@ -22,8 +22,7 @@ Find your symptom, then follow its link.
 
 Three checks answer most first questions. `curl <port49d-host>:9049/readyz` says whether port49d is
 serving: after a failing store closes its listener it answers 503 `waiting for the store`. `port49 store status`
-(on a host that reaches the metrics port) prints whether each store answers, and exits 3 when the directory does
-not. `port49 explain --device <device>` asks the broker, through your agent, what port49 would do for you on that
+(on a host that reaches the metrics port) prints whether each store answers, and exits 3 when one does not. `port49 explain --device <device>` asks the broker, through your agent, what port49 would do for you on that
 device.
 
 ## A person tells you… {#a-person-tells-you}
@@ -154,19 +153,13 @@ that can admit a revoked person. Don't lift a mark you did not read first.
 **You see:** `port49 revoke`, `port49 directory ...` or another admin command fails with a status and a
 reason.
 
-**It means:** the broker refused the call. The generic causes:
+**It means:** the broker refused the call. A refusal before any key press means your subject lacks the right in
+the policy's `api:` list (`revoke_others`, `lift_revocations`): see [Admin access](../../admin/admin-access.md).
 
-| You see | It means | Do this |
-|---|---|---|
-| `401 admin_touch_refused: the touch slot's attestation does not verify` | The security key's attestation does not chain to a root the broker trusts. | Add the root or intermediate to the broker's attestation roots and reload it. |
-| `503 admin_touch_unavailable: no attestation roots are configured` | The broker has no attestation roots, so it refuses every admin call. | Configure them and reload. |
-| `hwkey: no touch within 15s` | The key was not pressed in time. | Run the command again and press it when it blinks. |
-| a refusal before any key press | Your subject lacks the right in the policy's `api:` list (`revoke_others`, `lift_revocations`). | See [Admin access](../../admin/admin-access.md). |
-
-The file, command and reload step for the attestation roots depend on the deployment: see the troubleshoot
-page for [systemd](../systemd/troubleshoot.md), [containers](../containers/troubleshoot.md) or
-[Helm](../helm/troubleshoot.md). With every broker down, use the offline revoke in
-[Revoking access](../../admin/revocation.md).
+The other refusals (the key's attestation does not verify, no attestation roots, no touch in time) have a
+different fix for each deployment. The fix is on the troubleshoot page for [systemd](../systemd/troubleshoot.md) or
+[containers](../containers/troubleshoot.md), and for no roots on [Helm](../helm/troubleshoot.md). With every broker down, use the
+offline revoke in [Revoking access](../../admin/revocation.md).
 
 **Don't:** retry a refused touch in a loop: the alert
 [port49_admin_touch_refused](../../reference/alerts.md#port49_admin_touch_refused) pages on a run of them.

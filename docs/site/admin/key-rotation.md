@@ -284,21 +284,15 @@ A broker whose CA does not match the record refuses to start, and the line, from
 `kubectl logs`, names what to do. Do **not** reach for `forget-issuer` for any of them. It is for one case only: every
 broker lost the CA and no copy exists.
 
-A start that fails with `issuance: this broker's issuing CA (<fingerprint>) is ...` means this broker holds a
-different CA than the store records, or missed a promotion: copy the files from a broker that holds the recorded
-one, and never run `init-issuer`. The `kept changing under this start` line means two brokers wrote the record at
-once: start again. The lines are in [Helm troubleshooting](../operate/helm/troubleshoot.md) ("behind a
-promotion") and [systemd troubleshooting](../operate/systemd/troubleshoot.md) ("The issuing CA differs").
+A broker that refuses to start on its CA names the fix in its `issuance: this broker's issuing CA (...)` line: see
+[systemd](../operate/systemd/troubleshoot.md) or [Helm](../operate/helm/troubleshoot.md).
 
 ??? info "forget-issuer"
     ```sh
     port49-broker forget-issuer --current sha256:<fingerprint>
     ```
 
-    It removes the store's record of the CA so a new one can be made: then `init-issuer` on one broker and a copy to the
-    others. The fingerprint is the one a broker's start line prints, and a record that holds a different CA is kept.
-    After it, every certificate the old CA issued stops working. Stop every broker on the store before starting one on
-    another CA.
+    The detail is in the [Helm install](../operate/helm/install.md) warning.
 
 ### `rotate-issuer`
 
