@@ -12,7 +12,7 @@ team already operates.
 | Shape | You get | Page |
 |---|---|---|
 | systemd | the `port49-server` package (`.deb` or `.rpm`) with two units | [Install with systemd](../systemd/install.md) |
-| Containers | `port49d`, `port49-broker` and a three-member etcd under Compose | [Install with containers](container.md) |
+| Containers | `port49d`, `port49-broker` and a three-member etcd under Compose | [Install with containers](../containers/install.md) |
 | Helm | two StatefulSets and a PVC per replica | [Install with Helm](helm.md) |
 
 The people who sign in need the [clients](clients.md), which are installed on their own machines and
@@ -25,7 +25,7 @@ Each shape page states the first four again, in its own terms.
 1. **The device's source address reaches `port49d` unrewritten.** `port49d` admits a device by the
    address it sees, so a NAT or a proxy in front of port 49 breaks admission.
     - On a host, this is the default.
-    - In a container, follow the network notes on the [container page](container.md).
+    - In a container, follow the network notes on the [container page](../containers/install.md).
     - In Kubernetes, a `LoadBalancer` Service needs `externalTrafficPolicy: Local` (the chart's default);
       the [Helm page](helm.md) has the measurement.
 2. **etcd, with two processes.** `port49d` and `port49-broker` run apart, each with its own etcd

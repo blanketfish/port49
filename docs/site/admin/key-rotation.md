@@ -284,7 +284,7 @@ If a process starts without a key the store was last written under, what you see
 
 `port49d key sealing` makes the key files with the right owner and mode and never overwrites an old one
 (on systemd; the container and Helm shapes have their own steps). See each shape's install page: [systemd](../operate/systemd/install.md),
-[container](../operate/install/container.md), [Helm](../operate/install/helm.md).
+[container](../operate/containers/install.md), [Helm](../operate/install/helm.md).
 See also [Stores](../operate/stores.md#one-set-of-encryption-keys-everywhere).
 
 ## The issuing CA

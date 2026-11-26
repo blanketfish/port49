@@ -24,7 +24,7 @@ and the revocations are re-issued before any broker starts.
 
 ## What each shape must keep
 
-All three shapes ([systemd](systemd/install.md), [container](install/container.md),
+All three shapes ([systemd](systemd/install.md), [container](containers/install.md),
 [Helm](install/helm.md)) keep the same things. Only the paths differ.
 
 | What | Why it is in the backup | systemd | container (compose) | Helm |

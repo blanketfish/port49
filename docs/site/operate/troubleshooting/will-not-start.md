@@ -25,7 +25,7 @@ line and what to do.
 
 ## Containers (compose)
 
---8<-- "deploy/compose/README.md:will_not_start"
+[Troubleshoot containers](../containers/troubleshoot.md) holds the table of refusals.
 
 ## Kubernetes (Helm)
 

@@ -183,3 +183,19 @@ Also from the same README: port49d init-revocations is run once at install only 
 broker in process (`broker.revocations_file`); it refuses when the file exists.
 -->
 
+<!-- from: deploy/compose/README.md (Break-glass), for the Containers tab of the break-glass steps
+With the stack up but no admin able to reach a running broker: stop the broker, revoke through etcd as the
+broker's own user (the image), and start it again. This stops issuance while the broker is down, so it is
+for when no admin can use the API.
+
+```sh
+docker compose stop port49-broker
+docker compose run --rm --no-deps port49-broker revoke --offline --principal user:bob@example.com
+docker compose run --rm --no-deps port49-broker revoke --offline --list
+docker compose start port49-broker
+```
+
+`--lift` instead of the principal's revoke lifts it.
+`port49 store status --metrics 127.0.0.1:9050` reads the broker's stores on the metrics port.
+-->
+

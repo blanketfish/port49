@@ -1,15 +1,12 @@
 # port49 on etcd, as containers
 
-One peer shape beside systemd and Kubernetes; nothing in port49 requires it. The stack is
-`port49d`, `port49-broker` and a three-member etcd with client-certificate auth. `make
-compose-smoke` brings it up on a fresh PKI, logs a device in, recreates every container with
-its volumes kept, and checks the session, a token minted before the recreate, and the broker's
-`broker.state_dir` all survived. It also checks that port49d names all three etcd members at or
-above the version floor, that a device key version added by writing a file takes effect with no
-restart, that an admin revoke with no key press is refused, that the break-glass revoke and lift
-work, and that no secret is in any container's environment. CI runs it on every pull request.
+The stack is `port49d`, `port49-broker` and a three-member etcd with client-certificate auth, run with
+Docker Compose.
 
-## Trial
+<!-- --8<-- [start:trial] -->
+The trial runs the whole stack on one host with a PKI that protects nothing real.
+
+## 1. Start it
 
 From the repository root:
 
@@ -17,6 +14,24 @@ From the repository root:
 go run ./tests/compose/cmd/compose-pki        # writes deploy/compose/local/ (valid 24h, git-ignored)
 docker compose -f deploy/compose/compose.yaml up -d --build
 ```
+
+Bring the whole stack up the first time, or run `docker compose build` first: only `setup` and
+`port49-broker` build, and `etcd-init` and `port49d` reuse their tags. TACACS+ is published on
+`127.0.0.1:49`, the broker on `127.0.0.1:8443`, and the metrics on `127.0.0.1:9049` (port49d) and
+`127.0.0.1:9050` (the broker).
+
+To check, run:
+
+```sh
+docker compose -f deploy/compose/compose.yaml ps
+curl 127.0.0.1:9049/readyz
+```
+
+`port49d` and the broker show `healthy`, and `/readyz` answers `200`. `running` alone says only that the
+process started. Each healthcheck runs `healthcheck --ready` every ten seconds, after a thirty-second
+grace period.
+
+## 2. Log in
 
 Mint a token with the trial's client certificate (`alice@example.com`):
 
@@ -26,32 +41,21 @@ port49 login --broker https://127.0.0.1:8443 \
   --broker-ca deploy/compose/local/broker/broker-ca.pem
 ```
 
-Bring the whole stack up the first time, or run `docker compose build` first: only `setup` and
-`port49-broker` build, and `etcd-init` and `port49d` reuse their tags.
+Success prints `port49: logged in to <broker>; the session ends at <time>`.
 
-The trial PKI protects nothing real. TACACS+ is published on `127.0.0.1:49`, the broker on
-`127.0.0.1:8443`, and each component's metrics on `127.0.0.1:9049` and `127.0.0.1:9050`.
-
-**Ready is not "running".** `port49d` and `port49-broker` each have a healthcheck that runs
-`healthcheck --ready`, which probes `/readyz`, every ten seconds (the first thirty are a grace
-period). `docker compose ps` shows `healthy` only when it passes; `running` alone says the process
-started. You can ask the same question from the host with `curl 127.0.0.1:9049/readyz` (port49d) and
-`curl 127.0.0.1:9050/readyz` (the broker), on the metrics ports; a `200` is ready, anything else or no
-answer is not.
-
-Inputs, each an environment variable with a default: `PORT49_COMPOSE_LOCAL` (`./local`),
+Five environment variables set the inputs, each with a default: `PORT49_COMPOSE_LOCAL` (`./local`),
 `PORT49_COMPOSE_CONFIG` (`./config`), `PORT49_COMPOSE_SUBNET` (`172.30.49.0/24`),
-`PORT49_TACACS_PUBLISH` (`127.0.0.1:49`), `PORT49_BROKER_PUBLISH` (`127.0.0.1:8443`).
+`PORT49_TACACS_PUBLISH` (`127.0.0.1:49`) and `PORT49_BROKER_PUBLISH` (`127.0.0.1:8443`).
+<!-- --8<-- [end:trial] -->
 
-## The files
-
-`setup` runs as root at every `up` and copies each component's files into a volume of its own,
-so no volume holds both etcd identities:
+<!-- --8<-- [start:install] -->
+Run the commands from `deploy/compose/`. `setup` runs as root at every `up` and copies each component's
+files into a volume of its own, so no volume holds both etcd identities:
 
 | Volume | Holds | Mounted in |
 |---|---|---|
 | `port49d-etc` | `port49d.yaml`, policy, inventory, etcd CA, port49d's etcd certificate and key, `secrets/encryption.key` | port49d, read-only |
-| `port49d-keys` | the device keys, one file per version (`tacacs_v1`, ...); the directory `root:65532` 0750, each file `root:65532` 0440 | port49d, read-only at `/run/port49/keys` |
+| `port49d-keys` | the device keys, one file per version; the directory `root:65532` 0750, each file `root:65532` 0440 | port49d, read-only at `/run/port49/keys` |
 | `broker-etc` | `port49-broker.yaml`, policy, inventory, etcd CA, the broker's etcd and TLS files, `secrets/broker-encryption.key` | port49-broker, read-only |
 | `etcd-pki` | the CA and the three members' certificates and keys | etcd-1..3, read-only |
 | `etcd-root` | etcd's root certificate and key, and `store-roles`' output | etcd-init only |
@@ -59,41 +63,156 @@ so no volume holds both etcd identities:
 | `broker-state` | `broker.state_dir` | port49-broker |
 | `port49d-spool` | the accounting spool | port49d |
 
-No secret is in any container's environment, so `docker inspect` shows none. Each is a file:
+No secret is in any container's environment, so `docker inspect` shows none. Each secret is a file.
 
-- A device key is a file in `port49d-keys`, named by the policy as
-  `{version: 1, secret_ref: file:/run/port49/keys/tacacs_v1}`. A new version is a new file and a line in
-  the policy, with no restart (below; `make compose-smoke` runs that cell).
-- Each component's sealing key is a file in its own `-etc` volume, `secrets/encryption.key` for port49d
-  and `secrets/broker-encryption.key` for the broker (`root` 0755 directory, the file `65532` 0400), the
-  same 32 bytes in both. It is not under `/run/port49/keys`:
-  a policy may name any file there.
+!!! warning "Docker API access is root-equivalent"
+    `docker run` with a volume reads every file in it. Guard the Docker socket as you would the host.
 
-`setup` places a key once. At every `up`, per key file: absent in the volume, it is installed; the
-same bytes, it is left alone; different bytes, `setup` stops the stack with one line naming the file
-(`keys are never replaced in place`) and the volume is untouched; gone from `local/`, the installed
-file is kept and a line says so. To change a key, add a new version (below, and "Rotating the
-`encryption:` key"), never edit `local/keys/` or `local/secrets/` under a running stack. The policy
-is the opposite: `setup` copies `config/policy.yaml` over the volumes' at every `up`, so
-**edit `config/policy.yaml` on the host, then `docker compose up -d`**. port49d reads it at
-`policy.watch_interval` with no restart. A policy edited inside a volume is reverted at the next `up`.
-That holds only while the image is the one the containers were made from: an `up -d` after the
-image was rebuilt (an `up -d --build`, or a `docker compose build` after a `git pull`) recreates
-port49d and the broker, so the policy arrives by a restart, not a reload. Keep image changes and
-policy edits apart: rebuild with `docker compose build` and `up -d` as one change, then make policy
-edits with a plain `up -d`.
+## 1. Build the images
 
-Docker API access is root-equivalent, so guard it as you would the host: `docker run` with a volume
-reads every file in it.
+```sh
+docker compose build
+```
 
-Compose's own `secrets:` is measured (lab [L84](https://blanketfish.github.io/port49/latest/reference/lab-register/#l84), `tests/lab/results/L84-systemd-docker.md`) and is **not used
-for device keys**. A file-backed secret starts port49d only if the host file is `root:65532` mode 0440:
-Compose bind-mounts it as it is and does not apply the long syntax's `uid`, `gid` or `mode`, and the file
-fence refuses `0444` (the short syntax's documented mode) and a file the operator owns. And adding a second
-secret means `docker compose up -d`, which recreates port49d: a key version cannot be added with no restart.
-The `port49d-keys` volume below is the way for device keys. `secrets:` may carry the encryption key, which is
-read at start and goes through the same file fence (the cell measured a device key's file; the encryption key
-was not measured on its own).
+To check, run `docker image ls --filter 'reference=port49*:dev'`. It lists `port49-setup:dev` and
+`port49:dev`.
+
+## 2. Bring your own PKI and secrets
+
+Put them under `PORT49_COMPOSE_LOCAL`, in the layout `compose-pki` writes: `etcd/`, `broker/`,
+`keys/tacacs_v1` and `secrets/encryption.key` with `secrets/broker-encryption.key`. A device key is the
+shared secret you type into the device. The two sealing keys hold the same 32 bytes: make them once, with
+the setup image, and the command writes both files under those names:
+
+```sh
+docker run --rm -v "$PWD/local/secrets:/s" --entrypoint port49d port49-setup:dev \
+  key sealing --dir /s --daemon-user 0 --broker-user 0
+```
+
+To check, run `ls -l local/keys local/secrets`. The listing shows the device key and both sealing keys.
+
+## 3. Edit the config
+
+Edit `config/policy.yaml` and `config/inventory.yaml`. List each device by the address port49d sees. The
+example sets `certificate_status.disabled`, which a deployment must not. Then pick the sign-in backend.
+
+=== "OIDC"
+
+    In `config/port49-broker.yaml`, replace `broker.client_ca_file` with the `broker.identity` block shown
+    commented there. The broker must reach the provider's discovery and JWKS URLs; behind a proxy, set
+    `HTTPS_PROXY` in the service's `environment:`. The rest is on
+    [OIDC sign-in](https://blanketfish.github.io/port49/latest/admin/sign-in/oidc/).
+
+=== "Client certificate (x509)"
+
+    Replace the example's `certificate_status` with `ocsp:` or `crls:`. If your CA has no OCSP responder,
+    use `crls:` before the first sign-in. See
+    [Client certificates](https://blanketfish.github.io/port49/latest/admin/sign-in/x509/).
+
+=== "Directory password"
+
+    Uncomment the `broker.directory:` block in `config/port49-broker.yaml` and add a `directory_password`
+    verifier. Put the keytab and `krb5.conf`, if the bind uses Kerberos, in the broker's configuration
+    volume (`broker-etc`, under `/etc/port49/`), the keytab mode 0600 and owned by uid 65532. Set
+    `PORT49_SITE` in the broker service's `environment:`. See
+    [Directory password](https://blanketfish.github.io/port49/latest/admin/sign-in/directory-password/) and
+    [The directory](https://blanketfish.github.io/port49/latest/admin/directory/).
+
+!!! info "etcd's disk"
+    etcd needs sustained WAL fsync p99 under 10 ms. See
+    [Requirements](https://blanketfish.github.io/port49/latest/reference/requirements/#etcd-disk).
+
+## 4. Start
+
+```sh
+docker compose up -d
+```
+
+`etcd-init` applies `port49d store-roles`' output once and enables auth. A later `up` changes nothing.
+To check, run:
+
+```sh
+docker compose ps
+curl 127.0.0.1:9049/readyz
+curl 127.0.0.1:9050/readyz
+```
+
+`port49d` and `port49-broker` show `healthy`, and both `/readyz` calls answer `200` `serving`. The port49d
+start line names all three etcd members at or above the floor (3.4.24, 3.5.8 or 3.6): see
+`docker compose logs port49d`.
+
+!!! warning "The shipped healthcheck probes with `--ready`"
+    That is right for `docker compose`. Docker Swarm restarts a container that turns unhealthy, so adapt
+    both `healthcheck` blocks first. See
+    [Health checks](https://blanketfish.github.io/port49/latest/reference/health-checks/).
+
+A published port may change the device's source address. Measured in
+[L39](https://blanketfish.github.io/port49/latest/reference/lab-register/#l39): it is kept for an off-host
+device, and masqueraded to the compose gateway for a device on another Docker network on the same host.
+
+!!! warning "Unmeasured"
+    A connection that docker-proxy itself relays has not been measured.
+
+## 5. Keep broker.state_dir
+
+`broker.state_dir` holds the revocation marks, the witness and the issuing CA. Give each broker one named
+volume. Never use `--scale`, `deploy.replicas` or an anonymous volume. A second broker is a second service
+with a volume of its own. A fresh named volume copies uid 65532, mode 0700 from the image. A volume
+filled by hand and owned by root is not refused at start, but the first write fails. To fix it, run:
+
+```sh
+docker run --rm -v <volume>:/s alpine:3.22 sh -c 'chown 65532:65532 /s && chmod 0700 /s'
+```
+
+## 6. Make the issuing CA
+
+Only when the broker issues certificates. On one broker:
+
+```sh
+docker compose exec port49-broker port49-broker init-issuer
+```
+
+A second broker must hold the same CA, or it refuses to start. Copy both files into its volume:
+
+```sh
+docker run --rm -v port49_broker-state:/a -v port49_broker2-state:/b alpine:3.22 sh -c \
+  'install -o 65532 -g 65532 -m 0600 /a/issuing-ca.key /b/ && install -o 65532 -g 65532 -m 0644 /a/issuing-ca.pem /b/'
+```
+
+To check, run `docker compose logs port49-broker`. The `issuing as ... (sha256:...)` line has the same
+fingerprint on every broker.
+
+## 7. Create the enrollment store
+
+Only for directory password sign-in:
+
+```sh
+docker compose run --rm port49-broker init-enrollments
+```
+
+Success prints `created the enrollment store; password sign-in is on`. A broker that is already running
+finds the store within 30 seconds, and until then its sign-ins answer `enrollment_store_lost`.
+
+## 8. First device and first login
+
+Add the device to the [inventory](https://blanketfish.github.io/port49/latest/admin/inventory/) and log in
+as a person ([Log in](https://blanketfish.github.io/port49/latest/use/login/)). To check, run
+`port49 ssh <device> -- show version`. It prints the device's output, and the decision log holds a
+`redeem` record with `verdict: permit`.
+
+## More
+
+[Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/) covers each
+etcd data volume and `broker-state`. For several regions, see
+[Stores](https://blanketfish.github.io/port49/latest/operate/stores/#several-regions). Admin operations
+are on [Admin access](https://blanketfish.github.io/port49/latest/admin/admin-access/).
+<!-- --8<-- [end:install] -->
+
+<!-- moved: docs/site/operate/secrets.md (Compose secrets) -->
+Compose's own `secrets:` is not used for device keys: [Secrets](https://blanketfish.github.io/port49/latest/operate/secrets/).
+
+<!-- moved: docs/site/admin/revocation.md (Break-glass) -->
+Break-glass revoke with the broker unreachable: [Revoking access](https://blanketfish.github.io/port49/latest/admin/revocation/).
 
 ## Adding a key version
 
@@ -108,7 +227,7 @@ docker run --rm -v port49_port49d-keys:/k --entrypoint port49d port49-setup:dev 
 ```
 
 It is `port49d key device` (`deploy/systemd/README.md`, "Adding a key version"), run in the volume
-with the owners the shape needs (`0:65532`, 0440): a new file, a no-clobber link, a refusal of a name
+with the owners this deployment needs (`0:65532`, 0440): a new file, a no-clobber link, a refusal of a name
 that exists, nothing left behind on a failure. Type the
 key into the device from the volume, and keep the new file's name for the policy. Then add
 `{version: 2, secret_ref: "file:/run/port49/keys/tacacs_v2"}` to the key set in `config/policy.yaml`, under `accept:` (moving the
@@ -120,168 +239,6 @@ here) and the new version takes effect with no restart: `port49_key_secret_files
 key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
 file that is not there makes port49d refuse its start (`lstat ...: no such file`), so on a restart it
 crash-loops until you restore the file in the `port49d-keys` volume or take the policy line out.
-
-## A deployment
-
-- Bring your own PKI under `PORT49_COMPOSE_LOCAL`, in the layout `compose-pki` writes
-  (`etcd/`, `broker/`, `keys/tacacs_v1`, `secrets/encryption.key` and
-  `secrets/broker-encryption.key`; the two sealing keys hold the same 32 bytes). A device key is the shared secret
-  you type into the device; a sealing key is 32 random bytes, made once, and that command writes both
-  files under those names (`docker run --rm -v "$PWD/local/secrets:/s" --entrypoint port49d port49-setup:dev
-  key sealing --dir /s --daemon-user 0 --broker-user 0`). Edit `config/` for your policy and CRL or OCSP
-  (the example sets `certificate_status.disabled`, which a deployment must not).
-- List devices in `inventory.yaml` by the address port49d sees. A published port
-  may change that address; what it does is policy engine spec §15 [L39](https://blanketfish.github.io/port49/latest/reference/lab-register/#l39) (a). Measured: kept for an off-host device
-  (modelled; `tests/lab/results/L39-docker-proxy-on-arista_eos.md` and `-off-`), masqueraded to
-  the compose gateway for a device on another Docker network on the same host. A connection
-  docker-proxy itself relays is unmeasured.
-- `etcd-init` applies `port49d store-roles`' output once and enables auth. After a port49
-  upgrade that changes the roles, re-apply `store-roles`' output by hand; it is never done
-  silently.
-- **One store or two.** The example runs one etcd cluster, so `stores.session` is omitted: the session
-  store is the directory store. A deployment in several regions gives `stores.directory` an etcd
-  stretched one member per region and each region's `stores.session` an etcd of its own;
-  `port49d store-roles` then prints a section per store: run the directory's once against the stretched cluster, and each region's session section against that region's etcd. `port49 store status --metrics 127.0.0.1:9049` (the metrics
-  port the stack publishes) shows each store as port49d sees it. Name every member's URL in `endpoints:`, as
-  the example does, never a load balancer or a VIP: port49d prints the version of each at its start and
-  refuses a member below the floor.
-  Complete single-site and multi-region store blocks are in `deploy/examples/stores/` (written at the
-  systemd paths: change the `/etc/port49` prefix only if your volumes differ).
-- `context_cache` is off here, as everywhere by default, and so is `broker.directory` (see
-  Directory below).
-
-## Directory
-
-The trial has no directory: a subject names its username, and a group subject mints for no
-one (port49-broker says so at its start). `config/port49-broker.yaml` carries a commented
-`broker.directory:` block to resolve humans and their groups from LDAP instead. What each
-key does:
-
-- `servers`: the pool, each `uri` (`ldaps://`, or `ldap://` with `start_tls: true`), a `site`
-  and a `priority`. The broker prefers servers in its own site, then the highest `priority`, then file order.
-- `site` or `site_env` (default `PORT49_SITE`): this broker's site. Set `PORT49_SITE` per
-  broker container in the service's `environment:` (it is not a secret); replicas in
-  different sites set different values.
-- `ca_file`: verifies the servers' certificates.
-- `bind`: how the broker authenticates. `gssapi` (`principal`, `keytab_file`, `krb5_conf`),
-  `external` (`tls_cert_file`, `tls_key_file`) or `simple` (`bind_dn` and `password_secret_ref`, the
-  weakest: the password is named by `file:/path`, read when the directory opens, never printed; use a
-  file in `broker-etc`, not `env:NAME`, which would show in `docker inspect`).
-  Samba AD (lab [L43](https://blanketfish.github.io/port49/latest/reference/lab-register/#l43)): `external` is refused with LDAP result 1, which port49 counts as a server fault (every
-  breaker opens, `port49_directory_server_up` drops to 0), so use `simple` or `gssapi`; `gssapi` is refused
-  under `ldap server require strong auth = yes` and accepted under `allow_sasl_over_tls`. Windows Server AD: [L44](https://blanketfish.github.io/port49/latest/reference/lab-register/#l44).
-- `base_dn`, `groups_base_dn`, `principal_attribute`, `username_attribute`: where a person
-  and their groups are found, and which attributes name them. Only directory administrators
-  may write the two attributes: two entries holding one value are both refused.
-- `certificate_mapping`: how a client certificate finds its entry. `issuer_serial` and `sid`
-  are strong; the others need `allow_weak: true` and `issuers`.
-- `nested_groups`: `in_chain` (Active Directory; OpenLDAP answers it empty, so use `recursive` there), `recursive` or `direct`.
-- `grace`: how long a stored membership answers when no server does.
-- `prewarm`: how often, and for how many principals, group members are looked up ahead of
-  their first login.
-- `broker.refresh_interval`: the scheduled re-verification of every live principal.
-
-The keytab and `krb5.conf` go in the broker's configuration volume (`broker-etc`, under
-`/etc/port49/`), the keytab mode 0600 and owned by uid 65532, as the image runs. A keytab
-that cannot be read, or holds no key for the principal, stops the start with the key named.
-A directory outage never makes `/readyz` fail: a session on a stored membership goes on
-within `grace`, and past `session.staleness_ceiling` (default 4h) a command is denied
-`context_stale`.
-
-## Admin operations
-
-You run `port49 revoke` and `port49 directory ...` on your own workstation, through your agent;
-nothing is run in the stack. Each admin-level call asks for a press of your security key, once
-per operation, and an exposed certificate or token alone authorizes nothing admin-level.
-`port49 revoke --principal user:bob@example.com` revokes, `--lift` lifts, and `--list` shows the
-marks in force.
-
-The broker needs the attestation roots, the right in the policy, and a session key on your security
-key; the three are set out in `deploy/systemd/README.md` ("Admin operations"). In this stack:
-
-- put the PEM roots in `PORT49_COMPOSE_LOCAL/broker/attestation-roots.pem`; `setup` copies it to
-  `/etc/port49/broker/attestation-roots.pem` when it is there, and the broker config's
-  `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file` names that path. A
-  changed roots file is `docker compose up -d` (setup copies it) then `docker compose kill -s HUP port49-broker` (the broker re-reads the roots file at SIGHUP; a file it cannot use keeps the roots in force and logs one line saying so);
-- grant `api: [revoke_others, lift_revocations]` to at least two on-call admins by `identity:` in
-  `config/policy.yaml`, even if a `group:` subject also holds it: a group's rights resolve through
-  the directory, which may be down when you need them.
-
-**Break-glass**, with the stack up but no admin able to reach a running broker: stop the broker,
-revoke through etcd as the broker's own user (the image), and start it again. This stops issuance
-while the broker is down, so it is for when no admin can use the API.
-
-```sh
-docker compose stop port49-broker
-docker compose run --rm --no-deps port49-broker revoke --offline --principal user:bob@example.com
-docker compose run --rm --no-deps port49-broker revoke --offline --list
-docker compose start port49-broker
-```
-
-`--lift` instead of the principal's revoke lifts it. `init-enrollments` and `export-enrollments`
-are local subcommands of the same form: `docker compose run --rm port49-broker init-enrollments`.
-Run `init-enrollments` before the broker's first start; a broker already running finds the new store
-within 30 seconds, and until then its sign-ins answer `enrollment_store_lost`.
-`port49 store status --metrics 127.0.0.1:9050` reads the broker's stores on the metrics port.
-
-### The 3am table
-
-What the operator sees; the exact lines are the CLI's (spec §5.1.6).
-
-| Condition | What you see | What to do |
-|---|---|---|
-| Session key not on a security key (TPM, Secure Enclave, file) | `port49: admin operations need a security key press, and your session key is in the TPM: ...`; exit 1, nothing sent | log in with a session key on the security key |
-| Attestation does not chain | `401 admin_touch_refused: the touch slot's attestation does not verify: ...` | add the root or intermediate to `attestation-roots.pem`, then `docker compose up -d` and `docker compose kill -s HUP port49-broker` |
-| No touch in time | `hwkey: no touch within 15s; touch the key when it blinks and try again` | run it again |
-| The identity provider is down | nothing: your port49 certificate is still valid | revoke as usual |
-| Your certificate expired and the provider is down | `port49 login --oidc` cannot sign in | another on-call admin revokes; the break-glass above only if none can |
-| No attestation roots configured | `503 admin_touch_unavailable: no attestation roots are configured ...` | set the file |
-| The store is down | `503 store_unavailable` | the break-glass above, once the store is back but the broker is not |
-
-## `broker.state_dir`
-
-- One named volume per broker. Never `--scale`, never `deploy.replicas`, never an anonymous
-  volume. A second broker is a second service with a volume of its own.
-- A fresh named volume copies uid 65532, mode 0700 from the image. A bind mount, or a volume
-  filled by hand, owned by root is not refused at start (root is an accepted owner), but the
-  first `marks.json` or witness write fails, as the 65532 process cannot write it. Fix:
-
-  ```sh
-  docker run --rm -v <volume>:/s alpine:3.22 sh -c 'chown 65532:65532 /s && chmod 0700 /s'
-  ```
-
-## OIDC
-
-The trial is certificate-only. To accept identity-provider tokens, replace `broker.client_ca_file`
-with the `broker.identity` block shown commented in `config/port49-broker.yaml`; an OIDC-only
-broker (no x509 verifier) is valid. The provider's signing keys are kept in `broker.state_dir`, so
-a broker restarted during a provider outage still validates tokens until `jwks_max_age`; a fetch
-failure never changes `/readyz`.
-
-- The broker must reach the provider's discovery and JWKS URLs. Where the site's egress is a proxy,
-  set `HTTPS_PROXY` on the broker service; the start line says how each issuer is fetched.
-- Register `https://<broker>:8443/v1/logout` as the provider's back-channel logout URL, with
-  "backchannel logout session required" on.
-- Each machine client's `sub` is read from the provider: in Keycloak, the client's "Service account
-  roles" user id; in Entra ID, the service principal's object id.
-
-## The issuing CA, and a second broker
-
-`port49-broker init-issuer` makes the issuing CA on one broker, as the broker's user:
-
-```sh
-docker compose exec port49-broker port49-broker init-issuer
-```
-
-A second broker is a second service with a `broker-state` volume of its own, and it must hold the
-same CA, or it refuses to start. Copy both files into its volume, keeping them private:
-
-```sh
-docker run --rm -v port49_broker-state:/a -v port49_broker2-state:/b alpine:3.22 sh -c \
-  'install -o 65532 -g 65532 -m 0600 /a/issuing-ca.key /b/ && install -o 65532 -g 65532 -m 0644 /a/issuing-ca.pem /b/'
-```
-
-Complete single-site and multi-region store blocks are in `deploy/examples/stores/`.
 
 ## Rotating the `encryption:` key
 
@@ -316,9 +273,48 @@ never a rewrite.
 A process whose window lacks the directory's current key id refuses to start, naming the directory
 store and the id. Two store blocks reaching one etcd cluster at one prefix are refused too.
 
-## When it will not start
+<!-- --8<-- [start:upgrade] -->
+Read the [release notes](https://github.com/blanketfish/port49/releases) and
+[Versions and upgrades](https://blanketfish.github.io/port49/latest/operate/versions/) first. They say whether
+the release changes the roles, the config or the sealing key.
 
-<!-- --8<-- [start:will_not_start] -->
+## 1. Rebuild and recreate
+
+```sh
+git pull
+docker compose build
+docker compose up -d
+```
+
+An `up -d` after the image was rebuilt recreates port49d and the broker, so a policy edit in the same
+change arrives by a restart, not a reload. Rebuild and `up -d` as one change, then make policy edits
+with a plain `up -d`.
+
+To check, run:
+
+```sh
+docker compose ps
+docker compose exec port49d port49d --version
+curl 127.0.0.1:9049/readyz
+```
+
+Both containers are `healthy`, the version is the new one, and `/readyz` answers `200`.
+
+## 2. Edit the policy separately
+
+Edit `config/policy.yaml` on the host, then run `docker compose up -d`. `setup` copies it over the
+volumes' copies at every `up`, and port49d reads it at `policy.watch_interval` with no restart. A policy
+edited inside a volume is reverted at the next `up`.
+
+## 3. Re-apply the roles when the release notes say so
+
+`etcd-init` applies `port49d store-roles`' output once and finds auth enabled on every later `up`. When a
+release changes the roles, apply the new output by hand as etcd's root. port49d does not apply it for you.
+It refuses to start for some missing grants and names `port49d store-roles` in the line, but it does not
+check every grant.
+<!-- --8<-- [end:upgrade] -->
+
+<!-- --8<-- [start:troubleshoot] -->
 `docker compose logs port49d` (or `port49-broker`) holds the line.
 
 `restart: unless-stopped` has no limit. A start that fails is tried again, with a restart delay that
@@ -327,25 +323,30 @@ restarting container, and the log repeats the line.
 
 A port49d whose etcd is down at boot comes back on its own when etcd does.
 
+## When it will not start
+
 | Refusal | The line | Where | Fix |
 |---|---|---|---|
-| A secret file missing or unreadable | `config: encryption.current.secret_ref (id "c1") file:/etc/port49/secrets/encryption.key: open ...: permission denied` (or the file it names); a key file: `config: keys.k version 1 secret_ref file:/run/port49/keys/tacacs_v1: ...` | `docker compose logs port49d` | write the file as the table above says (`setup` installs a key that is absent, and refuses one that differs; it never rewrites one) |
+| A secret file missing or unreadable | `config: encryption.current.secret_ref (id "c1") file:/etc/port49/secrets/encryption.key: open ...: permission denied` (or the file it names); a key file: `config: keys.k version 1 secret_ref file:/run/port49/keys/tacacs_v1: ...` | `docker compose logs port49d` | write the file as the volume table says (`setup` installs a key that is absent, and refuses one that differs; it never rewrites one) |
 | The fence refuses a directory | `...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...` | same | fix the mode the line names in the volume (`docker run --rm -v <volume>:/v alpine:3.22 chmod go-w /v/<dir>`) |
 | A key readable by a group the container is not in | `...is group-readable by gid N, which this process is not in (gid M); ...` | same | the container's group is 65532: `chgrp 65532` the file in the volume (`chmod 0600` only if the container's user owns the file: on a `root:65532` file it makes the key unreadable) |
-| The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `docker compose logs port49-broker` | copy `issuing-ca.pem` and `.key` from a broker that holds it (above) |
+| The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `docker compose logs port49-broker` | copy `issuing-ca.pem` and `.key` from a broker that holds it |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `docker compose logs port49d` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the container restarts | `docker compose logs port49d` | nothing: it retries; start etcd |
+| `setup` stops the stack naming a key file | `keys are never replaced in place` | `docker compose logs setup` | the file in `local/` differs from the one in the volume: restore the original, or add a new version file |
+| The broker's first write fails on a root-owned volume | the broker cannot write `marks.json` or the witness | `docker compose logs port49-broker` | run the `chown` of install step 5 |
 
-<!-- --8<-- [end:will_not_start] -->
-## etcd's disk
+## When an admin command is refused
 
-etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
-datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
-500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
-or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms; a consumer QLC drive failed it (the notes are the `load-*` files in `tests/lab/results/`).
-port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The `port49_accounting_spool_disk_slow` alert watches it.
+| You see | Cause | Fix |
+|---|---|---|
+| `port49: admin operations need a security key press, and your session key is in the TPM: ...`; exit 1, nothing sent | The session key is not on a security key (TPM, Secure Enclave, file) | log in with a session key on the security key |
+| `401 admin_touch_refused: the touch slot's attestation does not verify: ...` | The attestation does not chain | add the root or intermediate to `attestation-roots.pem`, then `docker compose up -d` and `docker compose kill -s HUP port49-broker` |
+| `503 admin_touch_unavailable: no attestation roots are configured ...` | No attestation roots | put the file at `PORT49_COMPOSE_LOCAL/broker/attestation-roots.pem` and run the same two commands |
+| `hwkey: no touch within 15s; touch the key when it blinks and try again` | No touch in time | run it again |
+| `port49 login --oidc` cannot sign in | Your certificate expired and the identity provider is down | another on-call admin revokes; break-glass only if none can |
+| `503 store_unavailable` | The store is down | break-glass once the store is back but the broker is not |
 
-## Backups
-
-Each etcd data volume and `broker-state` (the runbook is
-[Backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/)).
+A provider outage alone changes nothing: your port49 certificate is still valid, so revoke as usual. The
+words every refusal prints are in the [3am index](https://blanketfish.github.io/port49/latest/operate/troubleshooting/).
+<!-- --8<-- [end:troubleshoot] -->
