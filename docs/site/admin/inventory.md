@@ -150,7 +150,7 @@ inventory:
 rotates ([Key rotation](key-rotation.md#the-inventory-services-signing-key)).
 
 If the service is down, **nothing fails closed**: the fleet keeps authenticating on the bundle in force. The alerts
-([Troubleshooting](../operate/troubleshooting/index.md#inventory)) say the service is failing, its bundle is refused or
+([Alerts](../reference/alerts.md#inventory)) say the service is failing, its bundle is refused or
 its snapshot is stale.
 
 ## The removal bound: `max_removed_percent`

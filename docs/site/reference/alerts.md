@@ -36,7 +36,7 @@ No expression names a device, and none groups by one. The series carry no device
 decision log answers "which devices". The labels used are bounded: `instance`,
 `key_ref`, `version`, `server`, `issuer`, `outcome`, `feed`, `pool`, `component`.
 
-Each alert below carries a `runbook_url` annotation that points at its section here. The metrics each rule reads are in the [metrics reference](metrics.md). An alert that has just fired: start at the [3am index](../operate/troubleshooting/index.md#an-alert-fired), which gives a short do and don't for each family of alerts.
+Each alert below carries a `runbook_url` annotation that points at its section here. The metrics each rule reads are in the [metrics reference](metrics.md). An alert that has just fired: start at the [3am index](../operate/troubleshooting/index.md#an-alert-fired), which lists the page alerts by family, and read the do and don't for the family under Notes.
 
 ## Thresholds and defaults
 
@@ -113,6 +113,138 @@ cannot work that way, a `*_configured` gauge says whether to expect it: `port49_
   connection since start used the version), so a rule that resolves after a restart is not evidence
   the devices have moved: read the decision log.
 - `enrolled` sign-ins outside a rollout are not alerted: "outside a rollout" is yours to define.
+
+### What to do, by family
+
+A `page` alert means port49 is refusing devices or losing records now; a `ticket` costs nothing yet. Each
+family below is a group of rules in the file, in its order.
+
+#### Scrape and process
+
+**Do this:** check the process (`systemctl status`, `docker compose ps`, `kubectl get pods`) and
+`curl :9049/readyz`, and that the Prometheus job names are `port49d` and `port49-broker`.
+
+**Don't:** read `port49_target_absent` as "port49d is down" before you check the scrape config: a wrong job
+name fires it too ([monitoring](https://blanketfish.github.io/port49/latest/operate/monitoring/#scraping)).
+
+#### Connections
+
+**Do this:** for the two cap alerts, see [Shedding](https://blanketfish.github.io/port49/latest/operate/troubleshooting/#shedding). For `port49_unadmitted_source`, find the `unvalidated` records with
+`unvalidated.diagnosis: unadmitted_source` in the [decision log](https://blanketfish.github.io/port49/latest/reference/decision-log/): each
+carries the address in `unvalidated.source`. Either that address belongs to a device the inventory does not
+list, or a listed device now sources from another address (an unpinned `source-interface` that moved with an
+uplink failover, a renumbered loopback, the wrong VRF). Pin the device's source (see the
+[device reference configuration](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/README.md))
+or put the new address in the source of truth.
+
+**Don't:** restart port49d to clear it: a restart resets every open connection and does not change the cap
+([monitoring](https://blanketfish.github.io/port49/latest/operate/monitoring/#shedding)).
+
+#### Keys and the issuing CA
+
+**Do this:** for a retirement, read the decision log for the devices still on the key and move them to the
+current one before `retire_after`. For a missing CA, copy it from a broker that holds it
+([key rotation](https://blanketfish.github.io/port49/latest/admin/key-rotation/)).
+
+**Don't:** run `init-issuer` on a second broker (it makes a different CA), and don't run `forget-issuer`
+(every certificate the old CA issued stops working). Don't take a `port49_key_version_devices` gauge that
+fell after a restart as proof the devices moved: a restart blanks it. Don't restart to "apply" a changed key
+file until it holds the key you intend.
+
+#### Policy, mint and admin calls
+
+**Do this:** for `port49_admin_touch_refused` (a stolen token or a broken key) and
+`port49_per_login_mfa_refused` (a run of MFA proofs did not verify), read the `admin_touch` or
+`per_login_mfa` records for the principal and ask the person; revoke if it was not them. For a policy ticket,
+`port49 policy test` names the compositions that fail closed, and a refused policy file means an older policy
+is still serving: fix the file or its directory's mode.
+
+**Don't:** write off a touch refusal as a flaky key. Don't read `port49_policy_file_refused` as "the change
+took effect".
+
+#### Stores
+
+**Do this:** run `port49 store status`, then follow [a cut region at 3am](https://blanketfish.github.io/port49/latest/operate/stores/#a-cut-region-at-3am).
+While a region cannot read the directory, revocations made elsewhere do not reach it: to cut someone off
+there now, remove their grants from the policy file that region loads, or stop its port49d. For
+`port49_store_health_failures_close` the listeners reopen by themselves once the store answers. For
+`port49_crypt_store_key_unknown`, fix the key window (a mis-set `PORT49_ENC_V1`) before anything else.
+
+**Don't:** restart port49d to clear a store alert: a process that restarts in a cut serves from a snapshot
+only up to `session.staleness_ceiling`. Don't alert on or probe `/readyz` for store health. Don't point a new
+key at an old store: give a new key a new id.
+
+#### TLS (RFC 9887)
+
+**Do this:** read the handshake alert's `outcome` and find its row in
+[TLS: What you see at 3am](https://blanketfish.github.io/port49/latest/operate/tls/#what-you-see-at-3am). Replace the listener's certificate only for the two
+server-certificate alerts.
+
+**Don't:** switch devices to plain TCP as a workaround: a device speaks one transport, and the other
+listener declines it.
+
+#### Identity providers and restores
+
+**Do this:** for `port49_redemption_restore_unjudged`, fix the store or the daemon role's read of
+`meta/witness`; the log line carries the store's own error. Stop port49d only to let devices fall to
+break-glass at once. For a detected restore, follow [backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/).
+
+**Don't:** expect a restart to clear the unjudged page: it clears when a read of `meta/witness` answers.
+Don't skip re-issuing the revocations a restore lost.
+
+#### Directory and password sign-in
+
+**Do this:** for the refresh page, restore the directory servers before the ceiling: at it, every live
+session is denied `context_stale`. For a lost enrollment store, restore the file or run
+`port49 directory import` from the export ([backup and restore](https://blanketfish.github.io/port49/latest/operate/backup-and-restore/)). When the
+broker's line names a check instead (an owner, a mode, a link, a size), fix what it names: after a restore
+left `/var/lib/port49/enrollments.json` owned by uid 1000, it reads
+`the file /var/lib/port49/enrollments.json: owner uid 1000, wants uid 999 or root - chown it`. The file is
+`enrollments.json` in `broker.state_dir`, or beside `broker.revocations_file` when that is unset.
+
+A burst of slow mints with `port49_directory_server_up` still 1 is a directory server that stopped answering
+([The directory](https://blanketfish.github.io/port49/latest/admin/directory/#a-server-that-stops-answering)).
+
+**Don't:** run `init-enrollments` to fix a lost store on an install that had enrolled people: it makes an
+empty store, and everyone enrolls again. Restore the export instead. Don't use the escapes in the alert
+(`session.staleness_ceiling: 0s`, or stopping port49d) as a routine fix; each gives up a bound.
+
+#### Accounting and the decision log
+
+**Do this:** for write failures, fix the sink (a full disk, a mode): decisions are not being recorded until
+you do. The `stage` label of the spool alert says where records were discarded. For `foreign`, look for
+break-glass and console logins: a local login during an outage is expected.
+
+**Don't:** ignore the write-failure page: a decision that is not recorded cannot be reconstructed. Don't
+treat `foreign` as a port49 bug before you check the device's local accounts
+([monitoring](https://blanketfish.github.io/port49/latest/operate/monitoring/#accounting-is-delivered-at-least-once)).
+
+#### Inventory
+
+**Do this:** read the inventory service's log. The fleet keeps authenticating on the snapshot in force, and
+nothing fails closed. For `port49_inventory_privilege_changes`, the `inventory_change` record names the
+device: review it.
+
+For the page `port49_inventory_address_moved`, an address left one device and landed on another in a single
+swap. Find the `inventory_change` record with `change.kind: address_moved`: `change.address` is the address,
+`change.from` the device that held it and `change.to` the device that holds it now. On an RFC 8907
+(`transport: tcp`) device whose key comes from a CIDR or attribute key group, the shared key admits the whole
+range, so the move lets the new name's grants be used from hardware that held another's. Ask who edited the
+source of truth; a real RMA or re-IP raises it too. For a crown-jewel device, use `transport: tls` or a name
+pin to a per-device key, which a moved address does not reach.
+
+**Don't:** restart port49d to refresh the inventory: the bundle in force keeps serving until a good one
+arrives.
+
+#### etcd
+
+**Do this:** bring back a quorum. A dark member costs up to 12 seconds; a lost quorum stops the store, and
+port49d answers `store_unavailable` and then closes its listeners. For a full database, compact and
+defragment as etcd's documentation describes, before it reaches its quota. For a slow disk, see
+[monitoring](https://blanketfish.github.io/port49/latest/operate/monitoring/#disks).
+
+**Don't:** restart every member at once. Don't leave etcd on a disk that cannot hold a WAL fsync p99 under
+10 ms.
 
 ## The rules
 
