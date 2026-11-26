@@ -393,15 +393,18 @@ func rotateEncryptionKey(t *testing.T, s stack, dev shapetest.Device, mint func(
 	c := composeRotator{s: s}
 	// stdin is read once: write the first copy, copy it to the second.
 	if err := c.sh([]byte(fake), `set -eu; umask 077
-cat > /e/secrets/encryption-e2.key; cp /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key
-chown 65532:65532 /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key
-chmod 0400 /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key`); err != nil {
+cat > /e/secrets/encryption-e2.key; cp /e/secrets/encryption-e2.key /b/secrets/broker-encryption-e2.key
+chown 65532:65532 /e/secrets/encryption-e2.key /b/secrets/broker-encryption-e2.key
+chmod 0400 /e/secrets/encryption-e2.key /b/secrets/broker-encryption-e2.key`); err != nil {
 		t.Fatal(err)
 	}
-	const cur = "  current: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}\n"
+	// Each component's sealing key has its own name, as `port49d key sealing` writes them: @KEY@ in a
+	// block is "encryption" for port49d and "broker-encryption" for the broker.
 	edit := func(block string) {
 		t.Helper()
-		for _, f := range []string{"port49d.yaml", "port49-broker.yaml"} {
+		for f, key := range map[string]string{"port49d.yaml": "encryption", "port49-broker.yaml": "broker-encryption"} {
+			cur := "  current: {id: c1, secret_ref: file:/etc/port49/secrets/" + key + ".key}\n"
+			block := strings.ReplaceAll(block, "@KEY@", key)
 			p := filepath.Join(s.config, f)
 			b, err := os.ReadFile(p)
 			if err != nil {
@@ -435,28 +438,28 @@ chmod 0400 /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key`); err != n
 		}
 	}
 	// Step 2: c2 current, c1 previous.
-	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}\n" +
-		"  previous: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}\n")
+	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/@KEY@-e2.key}\n" +
+		"  previous: {id: c1, secret_ref: file:/etc/port49/secrets/@KEY@.key}\n")
 	restart()
 	// Step 3: previous removed; local/ first, then the volumes.
-	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}\n")
+	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/@KEY@-e2.key}\n")
 	for _, f := range []string{"port49d-encryption.key", "broker-encryption.key"} {
 		if err := os.Remove(filepath.Join(s.local, "secrets", f)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if out, err := exec.Command("docker", "run", "--rm", "-v", project+"_port49d-etc:/e", "-v", project+"_broker-etc:/b",
-		"--entrypoint", "rm", "port49-setup:dev", "/e/secrets/encryption.key", "/b/secrets/encryption.key").CombinedOutput(); err != nil {
+		"--entrypoint", "rm", "port49-setup:dev", "/e/secrets/encryption.key", "/b/secrets/broker-encryption.key").CombinedOutput(); err != nil {
 		t.Fatalf("removing the old key from the volumes: %v\n%s", err, out)
 	}
 	restart()
 	// Another up: setup starts clean and the old key stays gone.
 	s.run("up", "-d")
-	for _, v := range []string{"port49d-etc", "broker-etc"} {
-		if volumeFileExists(t, v, "secrets/encryption.key") {
+	for v, key := range map[string]string{"port49d-etc": "encryption", "broker-etc": "broker-encryption"} {
+		if volumeFileExists(t, v, "secrets/"+key+".key") {
 			t.Fatalf("the old encryption key is back in %s after another up", v)
 		}
-		if !volumeFileExists(t, v, "secrets/encryption-e2.key") {
+		if !volumeFileExists(t, v, "secrets/"+key+"-e2.key") {
 			t.Fatalf("the new encryption key is missing from %s", v)
 		}
 	}

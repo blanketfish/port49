@@ -79,7 +79,7 @@ key "$L/etcd/port49-broker-key.pem" /vol/broker-etc/etcd/port49-broker-key.pem
 pub "$L/broker/broker-ca.pem" /vol/broker-etc/broker/broker-ca.pem
 pub "$L/broker/broker.pem" /vol/broker-etc/broker/broker.pem
 key "$L/broker/broker-key.pem" /vol/broker-etc/broker/broker-key.pem
-once "$L/secrets/broker-encryption.key" /vol/broker-etc/secrets/encryption.key "$U" "$U" 0400
+once "$L/secrets/broker-encryption.key" /vol/broker-etc/secrets/broker-encryption.key "$U" "$U" 0400
 # The roots an admin operation's touch is checked against, when a deployment
 # names them (README, "Admin operations").
 [ ! -f "$L/broker/attestation-roots.pem" ] || pub "$L/broker/attestation-roots.pem" /vol/broker-etc/broker/attestation-roots.pem

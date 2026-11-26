@@ -218,25 +218,39 @@ func TestOnceStillKeepsAnInstalledKeyWhoseSourceIsGone(t *testing.T) {
 	}
 }
 
-// The rotation recipe refuses an empty key id before it touches anything.
-func TestTheRotationRecipeRefusesAnEmptyKeyID(t *testing.T) {
-	b, err := os.ReadFile("../../deploy/compose/README.md")
-	if err != nil {
-		t.Fatal(err)
+// One name per file everywhere: the broker's sealing key is broker-encryption[-<id>].key in its volume,
+// as on systemd, so `port49d key sealing --dir <port49d volume> --broker-dir <broker volume>` makes the
+// compose pair, first key and rotation. The README carries that command and no shell recipe, and the old
+// name is gone outright (pre-beta: no alias).
+func TestTheComposeBrokerSealingKeyHasTheNameKeySealingWrites(t *testing.T) {
+	read := func(p string) string {
+		t.Helper()
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
 	}
-	s := string(b)
-	k := strings.Index(s, "KEY_ID=$1")
-	if k < 0 {
-		t.Fatal("the README has no rotation recipe")
+	if y := read("../../deploy/compose/config/port49-broker.yaml"); !strings.Contains(y, "file:/etc/port49/secrets/broker-encryption.key}") {
+		t.Error("port49-broker.yaml does not name /etc/port49/secrets/broker-encryption.key")
 	}
-	i := strings.LastIndex(s[:k], "-c '") + len("-c '")
-	j := strings.Index(s[i:], "\n   ' sh e2")
-	if j < 0 {
-		t.Fatal("the rotation recipe's end is not where the test expects")
+	if y := read("../../deploy/compose/config/port49d.yaml"); !strings.Contains(y, "file:/etc/port49/secrets/encryption.key}") {
+		t.Error("port49d.yaml does not name /etc/port49/secrets/encryption.key")
 	}
-	out, err := exec.Command("sh", "-c", s[i:i+j], "sh", "").CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "set KEY_ID to the new key id") {
-		t.Fatalf("an empty key id: err %v, output %q, want a refusal naming KEY_ID", err, out)
+	if s := read("../../deploy/compose/setup.sh"); !strings.Contains(s, "/vol/broker-etc/secrets/broker-encryption.key ") ||
+		strings.Contains(s, "/vol/broker-etc/secrets/encryption.key") {
+		t.Error("setup.sh does not place the broker's key as broker-encryption.key alone")
+	}
+	r := read("../../deploy/compose/README.md")
+	for _, want := range []string{"key sealing --id e2", "--broker-dir"} {
+		if !strings.Contains(r, want) {
+			t.Errorf("the README does not show %q", want)
+		}
+	}
+	for _, gone := range []string{"KEY_ID=", "/dev/urandom", "/b/secrets/encryption", "/b/secrets/$n"} {
+		if strings.Contains(r, gone) {
+			t.Errorf("the README still carries %q: the shell recipe or the old broker name", gone)
+		}
 	}
 }
 
