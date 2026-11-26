@@ -5,6 +5,6 @@ description: How a port49 release is cut, signed and published, and the one-time
 
 # Releasing
 
-This page is `RELEASING.md` from the repository, included as it stands. Only a maintainer cuts a release.
+Only a maintainer cuts a release. The steps are `RELEASING.md` in the repository.
 
 --8<-- "RELEASING.md:release"

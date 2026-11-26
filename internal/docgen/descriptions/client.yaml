@@ -10,7 +10,7 @@ _intro: |
 
   A relative path is resolved from the file's own directory, and `~/` is your home directory (`~user` is not
   expanded). A key reference (a value starting `pkcs11:`, `tpm:` or `secure-enclave:`) is carried as written.
-broker: "The broker to log in to."
+broker: "The broker to log in to. The client dials it directly and ignores `HTTPS_PROXY`, so the host must reach the broker without a proxy."
 broker_ca: "The CA file that pins the broker's certificate. Read once, and held to the same ownership rule as the config file."
 cert: "Your certificate file, for `method: x509`."
 key: "Your private key: a file, or a key reference on a hardware token."

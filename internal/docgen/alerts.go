@@ -70,7 +70,7 @@ func AlertsPage(as []Alert, readme []byte) (string, error) {
 		"Each alert below carries a `runbook_url` annotation that points at its section here. "+
 		"The metrics each rule reads are in the [metrics reference](metrics.md). "+
 		"An alert that has just fired: start at the [3am index](../operate/troubleshooting/index.md#an-alert-fired), "+
-		"which gives a short do and don't for each family of alerts.\n\n"+
+		"which lists the page alerts by family, and read the do and don't for the family under Notes.\n\n"+
 		"## Thresholds and defaults\n\n%s\n\n## Notes\n\n%s\n\n## The rules\n",
 		jsonString("Every shipped alert rule: its severity, its expression and why its threshold is what it is."),
 		Header, intro, thresholds, notes)

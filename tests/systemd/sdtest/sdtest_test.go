@@ -201,7 +201,7 @@ func TestTmpfilesMakesEtcdsDataDirectory(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^d /var/lib/etcd 0700 etcd etcd -$`).MatchString(live) {
 		t.Errorf("tmpfiles-etcd.conf does not make /var/lib/etcd 0700 etcd:etcd:\n%s", live)
 	}
-	if !strings.Contains(shipped(t, "README.md"), "`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700") {
+	if !strings.Contains(shipped(t, "README.md"), "`tmpfiles-etcd.conf` makes `/var/lib/etcd` (0700)") {
 		t.Error("the README does not say tmpfiles-etcd.conf makes /var/lib/etcd")
 	}
 }

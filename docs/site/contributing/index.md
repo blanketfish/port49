@@ -5,9 +5,8 @@ description: How to build, test and change port49, and the lab register rules th
 
 # Contributing
 
-port49 is a TACACS+ server in Go (Apache-2.0). This page is what a contributor needs before the first
-change: how to build and test, the one-time hook setup, and the rule that decides what the docs may say
-about a device.
+port49 is a TACACS+ server in Go (Apache-2.0). Before a first change, a contributor needs to build and test it,
+set up the hooks once, and know the rule that decides what the docs may say about a device.
 
 ## Build and test
 

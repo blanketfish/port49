@@ -22,7 +22,7 @@ expanded). A key reference (a value starting `pkcs11:`, `tpm:` or `secure-enclav
 
 | Key | Type | Description |
 |---|---|---|
-| `broker` | string | The broker to log in to. |
+| `broker` | string | The broker to log in to. The client dials it directly and ignores `HTTPS_PROXY`, so the host must reach the broker without a proxy. |
 | `broker_ca` | string | The CA file that pins the broker's certificate. Read once, and held to the same ownership rule as the config file. |
 | `cert` | string | Your certificate file, for `method: x509`. |
 | `key` | string | Your private key: a file, or a key reference on a hardware token. |

@@ -53,8 +53,8 @@ extra:
   version:
     provider: mike
     alias: true
-  # A tag build sets PORT49_DOCS_BANNER (plan 13, Task 2); main builds say they are not a release.
-  banner: !ENV [PORT49_DOCS_BANNER, "This site describes port49 as it is on main, not a release."]
+    # A page of any version other than latest shows Material's outdated-version notice (docs/overrides/main.html).
+    default: latest
 
 extra_css:
   - stylesheets/extra.css
@@ -93,34 +93,58 @@ nav:
       - Identities: concepts/identities.md
       - Revocation: concepts/revocation.md
       - Trust domains: concepts/trust-domains.md
+  - Install:
+      - operate/deploy/index.md
+      - systemd:
+          - Install: operate/systemd/install.md
+          - Upgrade: operate/systemd/upgrade.md
+          - Troubleshoot: operate/systemd/troubleshoot.md
+      - Containers:
+          - Try it: operate/containers/trial.md
+          - Install: operate/containers/install.md
+          - Upgrade: operate/containers/upgrade.md
+          - Troubleshoot: operate/containers/troubleshoot.md
+      - Helm:
+          - Install: operate/helm/install.md
+          - Upgrade: operate/helm/upgrade.md
+          - Troubleshoot: operate/helm/troubleshoot.md
+          - Back up with Velero: operate/helm/velero.md
   - Operate:
-      - Install:
-          - operate/install/index.md
-          - systemd: operate/install/systemd.md
-          - Containers: operate/install/container.md
-          - Helm: operate/install/helm.md
-          - Clients: operate/install/clients.md
-      - Broker and agent: operate/broker-and-agent.md
-      - Signing in: operate/login.md
-      - Hardware keys: operate/hardware-keys.md
       - Stores: operate/stores.md
-      - TLS: operate/tls.md
+      - TLS (RFC 9887): operate/tls.md
       - Secrets: operate/secrets.md
       - Backup and restore: operate/backup-and-restore.md
       - Monitoring: operate/monitoring.md
-      - Versions: operate/versions.md
-      - Troubleshooting:
-          - operate/troubleshooting/index.md
-          - Failure matrix: operate/troubleshooting/failure-matrix.md
-          - When it will not start: operate/troubleshooting/will-not-start.md
+      - Versions and upgrades: operate/versions.md
+      - Troubleshooting: operate/troubleshooting/index.md
+  - Sign in:
+      - use/index.md
+      - Install the client: use/install-client.md
+      - Log in: use/login.md
+      - Connect to a device: use/connect.md
+      - Hardware keys: use/hardware-keys.md
   - Administer:
-      - Policy: admin/policy.md
-      - Roles and grants: admin/roles-and-grants.md
-      - Key rotation: admin/key-rotation.md
-      - Revocation: admin/revocation.md
-      - Identity providers: admin/identity-providers.md
-      - Workloads: admin/workloads.md
+      - admin/index.md
+      - Sign-in backends:
+          - OIDC: admin/sign-in/oidc.md
+          - Client certificates (x509): admin/sign-in/x509.md
+          - Directory password: admin/sign-in/directory-password.md
+          - The directory (LDAP): admin/directory.md
+      - Workloads:
+          - admin/workloads.md
+          - Oxidized and step-ca: admin/workloads-oxidized.md
+          - Kubernetes service accounts: admin/workloads-kubernetes.md
       - Inventory: admin/inventory.md
+      - Policy:
+          - admin/policy.md
+          - Rules and scopes: admin/policy-rules.md
+          - Roles and grants: admin/roles-and-grants.md
+          - Tests: admin/policy-tests.md
+          - Reviewing a change: admin/policy-review.md
+          - Platform sets: admin/platform-sets.md
+      - Admin access: admin/admin-access.md
+      - Revoking access: admin/revocation.md
+      - Key rotation: admin/key-rotation.md
       - Devices:
           - admin/devices/index.md
           - Arista EOS: admin/devices/arista-eos.md
@@ -130,10 +154,16 @@ nav:
           - Juniper Junos: admin/devices/juniper-junos.md
           - Nokia SR Linux: admin/devices/nokia-sr-linux.md
           - Other platforms: admin/devices/other-platforms.md
-  - AI agents:
-      - Quick start: agents/quick-start.md
-      - Setup runbook: agents/setup-runbook.md
+  - Automation:
+      - Python library: automation/python.md
+      - Ansible collection: automation/ansible.md
+      - AI agents quick start: agents/quick-start.md
+      - AI agents setup runbook: agents/setup-runbook.md
   - Reference:
+      - Requirements: reference/requirements.md
+      - Client commands: reference/client-commands.md
+      - Health checks: reference/health-checks.md
+      - Failure matrix: operate/troubleshooting/failure-matrix.md
       - port49d configuration: reference/config/port49d.md
       - Policy file: reference/config/policy.md
       - Inventory file: reference/config/inventory.md
@@ -148,3 +178,4 @@ nav:
       - contributing/index.md
       - Qualification: contributing/qualification.md
       - Releasing: contributing/releasing.md
+      - Deployment design: contributing/deployment-design.md

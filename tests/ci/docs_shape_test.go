@@ -1,0 +1,329 @@
+package ci
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/blanketfish/port49/internal/docgen"
+)
+
+// Rules 6 and 11 of the docs second pass: the word "shape" and em or en dashes cannot come back into
+// hand-written prose unseen. Both checks read the prose a visitor reads: every page under docs/site and
+// every file a page pulls in with `--8<--`, less fenced blocks, inline code spans, URLs and link targets.
+// There is no allow-list. A literal that must keep the word or a dash goes in a code span.
+
+var (
+	shapeWord   = regexp.MustCompile(`(?i)\bshap(e|es|ed|ing)\b`)
+	dashInProse = regexp.MustCompile("[—–]| -- ")
+	includeLn   = regexp.MustCompile(`^\s*--8<--\s+"([^"]+)"\s*$`)
+	codeSpan2   = regexp.MustCompile("``[^`]+``")
+	codeSpan1   = regexp.MustCompile("`[^`]*`")
+	linkTarget  = regexp.MustCompile(`\]\([^)]*\)`)
+	bareURL     = regexp.MustCompile(`<?https?://[^\s)>]+>?`)
+)
+
+// proseLine is one line of prose with the line number it came from.
+type proseLine struct {
+	N    int
+	Text string
+}
+
+// proseOf drops fenced blocks and inline code spans from text and returns what is left, line by line.
+func proseOf(text string) []proseLine {
+	// Fenced lines become empty lines so line numbers survive. A code span may wrap onto the next line of
+	// its paragraph, so the spans are removed from the joined text, keeping the newlines they held.
+	lines := strings.Split(text, "\n")
+	fence := ""
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		switch {
+		case fence != "":
+			if strings.HasPrefix(t, fence) {
+				fence = ""
+			}
+			lines[i] = ""
+		case strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~"):
+			fence = t[:3]
+			lines[i] = ""
+		}
+	}
+	drop := func(m string) string {
+		if strings.Contains(m, "\n\n") {
+			return m // an unmatched backtick, not a span
+		}
+		return strings.Repeat("\n", strings.Count(m, "\n"))
+	}
+	joined := strings.Join(lines, "\n")
+	joined = codeSpan2.ReplaceAllStringFunc(joined, drop)
+	joined = codeSpan1.ReplaceAllStringFunc(joined, drop)
+	var out []proseLine
+	for i, line := range strings.Split(joined, "\n") {
+		out = append(out, proseLine{i + 1, line})
+	}
+	return out
+}
+
+// shapeFindings lists the lines of text that use the word shape in prose.
+func shapeFindings(file, text string) []string {
+	var found []string
+	for _, l := range proseOf(text) {
+		if m := shapeWord.FindString(l.Text); m != "" {
+			found = append(found, fmt.Sprintf("%s:%d: %q", file, l.N, m))
+		}
+	}
+	return found
+}
+
+// dashFindings lists the lines of text that hold an em dash, an en dash or a spaced double hyphen in
+// prose. Link targets and URLs are dropped first.
+func dashFindings(file, text string) []string {
+	var found []string
+	for _, l := range proseOf(text) {
+		s := linkTarget.ReplaceAllString(l.Text, "]")
+		s = bareURL.ReplaceAllString(s, "")
+		if dashInProse.MatchString(s) {
+			found = append(found, fmt.Sprintf("%s:%d: %s", file, l.N, strings.TrimSpace(l.Text)))
+		}
+	}
+	return found
+}
+
+// includeSpan is a file a page pulls in, with the range of lines the include names (0 means open).
+type includeSpan struct {
+	Path       string // relative to the repository root
+	Start, End int    // 1-based, inclusive; 0 = from the top / to the bottom
+	Section    string // a [start:name] ... [end:name] section
+}
+
+// includesOf lists the `--8<--` includes of a page.
+func includesOf(text string) []includeSpan {
+	var out []includeSpan
+	for _, line := range strings.Split(text, "\n") {
+		m := includeLn.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		path, spec, _ := strings.Cut(m[1], ":")
+		sp := includeSpan{Path: path}
+		if spec != "" {
+			first, rest, hasRest := strings.Cut(spec, ":")
+			if n, err := strconv.Atoi(first); err == nil {
+				sp.Start = n
+				if hasRest {
+					sp.End, _ = strconv.Atoi(rest)
+				}
+			} else {
+				sp.Section = spec
+			}
+		}
+		out = append(out, sp)
+	}
+	return out
+}
+
+// rangeOf returns the text an include names.
+func rangeOf(text string, sp includeSpan) string {
+	lines := strings.Split(text, "\n")
+	switch {
+	case sp.Section != "":
+		var keep []string
+		in := false
+		for _, l := range lines {
+			switch {
+			case strings.Contains(l, "[start:"+sp.Section+"]"):
+				in = true
+			case strings.Contains(l, "[end:"+sp.Section+"]"):
+				in = false
+			case in:
+				keep = append(keep, l)
+			}
+		}
+		return strings.Join(keep, "\n")
+	case sp.Start > 0:
+		start := sp.Start - 1
+		end := len(lines)
+		if sp.End > 0 && sp.End < end {
+			end = sp.End
+		}
+		if start > end {
+			start = end
+		}
+		return strings.Join(lines[start:end], "\n")
+	}
+	return text
+}
+
+// isGenerated reports whether a file is written by a generator, so its prose is the source's, not a
+// hand edit. docs/qualified-platforms.md is matched by its first paragraph, not its path.
+func isGenerated(text string) bool {
+	return strings.Contains(text, docgen.Header) || strings.Contains(text, "This page is generated by")
+}
+
+// docsSource is one piece of text a visitor reads: a page, or the range of a file a page includes.
+type docsSource struct {
+	File string
+	Text string
+	Full string // the whole file, which is what the shape check reads
+}
+
+// docsSources lists every page under docs/site (.md and .txt) and every included range.
+func docsSources(t *testing.T) []docsSource {
+	t.Helper()
+	var out []docsSource
+	seenFull := map[string]bool{}
+	err := filepath.WalkDir(docsRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if !strings.HasSuffix(p, ".md") && !strings.HasSuffix(p, ".txt") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel := "docs/site/" + filepath.ToSlash(strings.TrimPrefix(p, docsRoot+string(filepath.Separator)))
+		text := string(b)
+		out = append(out, docsSource{File: rel, Text: text, Full: text})
+		for _, sp := range includesOf(text) {
+			ib, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(sp.Path)))
+			if err != nil {
+				continue // mkdocs --strict reports a missing include
+			}
+			full := string(ib)
+			src := docsSource{File: sp.Path, Text: rangeOf(full, sp)}
+			if !seenFull[sp.Path] {
+				seenFull[sp.Path] = true
+				src.Full = full
+			}
+			out = append(out, src)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", docsRoot, err)
+	}
+	return out
+}
+
+func TestNoPageSaysShape(t *testing.T) {
+	var found []string
+	seen := map[string]bool{}
+	for _, s := range docsSources(t) {
+		if s.Full == "" {
+			continue // an include of a file already scanned whole
+		}
+		for _, f := range shapeFindings(s.File, s.Full) {
+			if !seen[f] {
+				seen[f] = true
+				found = append(found, f)
+			}
+		}
+	}
+	sort.Strings(found)
+	for _, f := range found {
+		t.Errorf("the word shape in prose (say deployment, way to deploy, form or format): %s", f)
+	}
+}
+
+func TestNoDashInProse(t *testing.T) {
+	var found []string
+	seen := map[string]bool{}
+	for _, s := range docsSources(t) {
+		if isGenerated(s.Text) || isGenerated(s.Full) {
+			continue
+		}
+		for _, f := range dashFindings(s.File, s.Text) {
+			if !seen[f] {
+				seen[f] = true
+				found = append(found, f)
+			}
+		}
+	}
+	sort.Strings(found)
+	for _, f := range found {
+		t.Errorf("an em dash, en dash or spaced -- in prose (use a period, comma, colon or \"to\"; a literal goes in a code span): %s", f)
+	}
+}
+
+func TestShapeCheckFixtures(t *testing.T) {
+	fail := []string{
+		"The three deployment shapes are peers.",
+		"A token-shaped username is never logged.",
+		"Shaping the traffic.",
+		"---\ndescription: One shape.\n---\n",
+	}
+	pass := []string{
+		"A `refused_shape` code and `tests/shapes` stay.",
+		"The traffic was reshaped by the router.",
+		"```sh\ngo test ./tests/shapes/...\n```\n",
+		"A ``double span with shape`` passes.",
+	}
+	for _, s := range fail {
+		if len(shapeFindings("f", s)) == 0 {
+			t.Errorf("should fail: %q", s)
+		}
+	}
+	for _, s := range pass {
+		if got := shapeFindings("f", s); len(got) != 0 {
+			t.Errorf("should pass: %q: %v", s, got)
+		}
+	}
+}
+
+func TestDashCheckFixtures(t *testing.T) {
+	fail := []string{
+		"A sentence — with an em dash.",
+		"Ports 3–5 are open.",
+		"A sentence -- with a spaced double hyphen.",
+		"---\ndescription: One — two.\n---\n",
+	}
+	pass := []string{
+		"Run it with --json.",
+		"A quoted `a — b` literal.",
+		"```\na — b\n```\n",
+		"A span `ssh -o x\n-- host` wraps onto a second line.",
+		"See [the page](https://example.com/a—b) and https://example.com/a–b.",
+	}
+	for _, s := range fail {
+		if len(dashFindings("f", s)) == 0 {
+			t.Errorf("should fail: %q", s)
+		}
+	}
+	for _, s := range pass {
+		if got := dashFindings("f", s); len(got) != 0 {
+			t.Errorf("should pass: %q: %v", s, got)
+		}
+	}
+	if !isGenerated(docgen.Header+"\n\na — b") || !isGenerated("# Q\n\nThis page is generated by `make x`.") || isGenerated("a — b") {
+		t.Error("isGenerated does not tell a generated page from a hand-written one")
+	}
+}
+
+func TestIncludeRanges(t *testing.T) {
+	file := "one\ntwo\n<!-- --8<-- [start:a] -->\nin a\n<!-- --8<-- [end:a] -->\nfive\nsix"
+	cases := []struct {
+		line, want string
+	}{
+		{`--8<-- "x.md"`, file},
+		{`--8<-- "x.md:5"`, "<!-- --8<-- [end:a] -->\nfive\nsix"},
+		{`--8<-- "x.md:2:3"`, "two\n<!-- --8<-- [start:a] -->"},
+		{`--8<-- "x.md:a"`, "in a"},
+	}
+	for _, c := range cases {
+		sp := includesOf(c.line)
+		if len(sp) != 1 {
+			t.Fatalf("%s: no include found", c.line)
+		}
+		if got := rangeOf(file, sp[0]); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.line, got, c.want)
+		}
+	}
+}

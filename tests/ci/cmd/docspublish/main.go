@@ -1,6 +1,6 @@
 // Command docspublish decides what the docs workflow deploys for a ref: whether to publish, the
-// site's banner, the mike version to publish it as, and the aliases that version takes. It prints
-// publish=true|false, banner=<text>, version=<name> and aliases=<space-separated, may be empty> in
+// mike version to publish it as, and the aliases that version takes. It prints
+// publish=true|false, version=<name> and aliases=<space-separated, may be empty> in
 // the form $GITHUB_OUTPUT takes. Run from the repository root with the full history and tags fetched.
 //
 // The site has one copy per version (mike, on the gh-pages branch):
@@ -14,8 +14,7 @@
 //     overwrite newer docs. It takes "latest" only if it is also the highest final tag overall.
 //   - only final tags that are ancestors of main count, in every rule above: a stray tag on another
 //     branch neither takes "latest" nor outranks a real release.
-//   - every other ref, a pull request included, builds only and carries the main banner, so the
-//     banner is never empty.
+//   - every other ref, a pull request included, builds only.
 package main
 
 import (
@@ -28,8 +27,6 @@ import (
 	"strings"
 )
 
-const mainBanner = "This site describes port49 as it is on main, not a release."
-
 // releaseTag matches a final version whole: a pre-release, a suffix without a hyphen and a short
 // form are all something else.
 var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -37,7 +34,6 @@ var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // result is what the workflow deploys: Version is empty and Aliases empty unless Publish is true.
 type result struct {
 	Publish bool
-	Banner  string
 	Version string // the mike version: "dev" or "X.Y"
 	Aliases string // space-separated mike aliases
 }
@@ -45,7 +41,7 @@ type result struct {
 // decide is what ref deploys. mainRef is the ref a release tag's commit must be an ancestor of.
 // sha is the commit the run builds; for main, a commit that is not mainRef's tip does not publish.
 func decide(dir, ref, mainRef, sha string) (result, error) {
-	noPublish := result{Banner: mainBanner}
+	noPublish := result{}
 	git := func(args ...string) (string, error) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -111,7 +107,7 @@ func decide(dir, ref, mainRef, sha string) (result, error) {
 		if err != nil {
 			return result{}, err
 		}
-		r := result{Publish: true, Banner: mainBanner, Version: "dev"}
+		r := result{Publish: true, Version: "dev"}
 		if len(tags) == 0 {
 			r.Aliases = "latest"
 		}
@@ -143,7 +139,7 @@ func decide(dir, ref, mainRef, sha string) (result, error) {
 		if !ok {
 			return noPublish, nil
 		}
-		r := result{Publish: true, Banner: "This site describes port49 " + tag + ".", Version: line(tag)}
+		r := result{Publish: true, Version: line(tag)}
 		if latest {
 			r.Aliases = "latest"
 		}
@@ -172,7 +168,7 @@ func newer(a, b string) bool {
 }
 
 func format(r result) string {
-	return fmt.Sprintf("publish=%t\nbanner=%s\nversion=%s\naliases=%s\n", r.Publish, r.Banner, r.Version, r.Aliases)
+	return fmt.Sprintf("publish=%t\nversion=%s\naliases=%s\n", r.Publish, r.Version, r.Aliases)
 }
 
 func main() {

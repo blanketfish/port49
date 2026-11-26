@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// The troubleshooting page's example line for a store restored with the wrong
+// The alerts reference's example line for a store restored with the wrong
 // owner is the fence's own Short, with uid 1000 seen and uid 999 wanted, not
 // a line built by hand from the format (#60).
 func TestTheTroubleshootingPageQuotesTheOwnerRefusalTheFenceSays(t *testing.T) {
@@ -32,11 +32,11 @@ func TestTheTroubleshootingPageQuotesTheOwnerRefusalTheFenceSays(t *testing.T) {
 	if !ok {
 		t.Fatalf("no refusal: %v", err)
 	}
-	raw, err := os.ReadFile("../../docs/site/operate/troubleshooting/index.md")
+	raw, err := os.ReadFile("../../docs/site/reference/alerts.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), "`"+r.Short()+"`") {
-		t.Errorf("the troubleshooting page does not quote the fence's line %q", r.Short())
+		t.Errorf("the alerts reference does not quote the fence's line %q", r.Short())
 	}
 }

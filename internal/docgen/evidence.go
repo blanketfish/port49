@@ -92,7 +92,7 @@ func NoteOwner(name string) (page string, nonDev string, err error) {
 // Evidence is one results note as the evidence table shows it.
 type Evidence struct{ ID, File, Platform, Image, Date string }
 
-const none = "—"
+const none = "none"
 
 var (
 	isoDate     = regexp.MustCompile(`[0-9]{4}-[0-9]{2}-[0-9]{2}`)

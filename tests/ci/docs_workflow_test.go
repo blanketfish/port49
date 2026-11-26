@@ -315,7 +315,7 @@ func TestTheDocsPushIsGroupedPerRef(t *testing.T) {
 // deploy is already on the gh-pages it saw is then in the tag list it decides from.
 func TestTheDocsDeployDecidesAtDeployTime(t *testing.T) {
 	_, site := siteStep(t)
-	for _, stale := range []string{"needs.build.outputs.version", "needs.build.outputs.aliases", "needs.build.outputs.banner"} {
+	for _, stale := range []string{"needs.build.outputs.version", "needs.build.outputs.aliases"} {
 		if strings.Contains(raw(t), stale) {
 			t.Errorf("docs.yml reads %s: the build job's decision is stale by the time deploy runs", stale)
 		}
@@ -360,7 +360,7 @@ func TestTheDocsDeployWritesTheRoot404(t *testing.T) {
 
 func raw(t *testing.T) string { _, r := docs(t); return r }
 
-// The build job decides publish for the gate; the banner and version are the deploy job's to decide.
+// The build job decides publish for the gate; the version is the deploy job's to decide.
 func TestTheDocsBuildOutputsOnlyTheGate(t *testing.T) {
 	f, _ := docs(t)
 	out := f.Jobs["build"].Outputs
@@ -437,9 +437,10 @@ func TestTheDocsBuildJobIsTheDocsCheck(t *testing.T) {
 	}
 }
 
-// The publish decision reads git tag -l and origin/main, so the checkout needs the full history;
-// the banner reaches mkdocs through the step's env.
-func TestTheDocsBuildFetchesHistoryAndPassesTheBanner(t *testing.T) {
+// The publish decision reads git tag -l and origin/main, so the checkout needs the full history.
+// No step sets PORT49_DOCS_BANNER: an older release is marked by Material's own outdated-version
+// notice, which the version selector's versions.json drives.
+func TestTheDocsBuildFetchesHistoryAndSetsNoBanner(t *testing.T) {
 	f, _ := docs(t)
 	var checkouts, mkdocs int
 	for _, s := range f.Jobs["build"].Steps {
@@ -451,10 +452,13 @@ func TestTheDocsBuildFetchesHistoryAndPassesTheBanner(t *testing.T) {
 		}
 		if strings.Contains(s.Run, "mkdocs build") {
 			mkdocs++
-			if s.Env["PORT49_DOCS_BANNER"] != "${{ steps.publish.outputs.banner }}" {
-				t.Errorf("the mkdocs step's PORT49_DOCS_BANNER is %q", s.Env["PORT49_DOCS_BANNER"])
-			}
 		}
+		if _, set := s.Env["PORT49_DOCS_BANNER"]; set || strings.Contains(s.Run, "PORT49_DOCS_BANNER") {
+			t.Errorf("a build step (%q) sets PORT49_DOCS_BANNER: the outdated-version notice replaced the banner", s.Run)
+		}
+	}
+	if strings.Contains(raw(t), "PORT49_DOCS_BANNER") {
+		t.Error("docs.yml mentions PORT49_DOCS_BANNER: no step sets it")
 	}
 	if checkouts != 1 || mkdocs != 1 {
 		t.Errorf("build has %d checkouts and %d mkdocs steps, want one each", checkouts, mkdocs)

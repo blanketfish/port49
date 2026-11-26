@@ -1,33 +1,23 @@
 ---
 title: Secrets
-description: Where port49's secrets live, who may read them, and how they are rotated.
+description: Where port49's secrets live, who may read them, and how they are mounted on each deployment.
 ---
 
 # Secrets
 
-port49 holds three kinds of secret:
-
-- the shared keys it shares with devices
-- the key that seals its stored records
-- the keys it uses for etcd and TLS
-
-**No secret is ever written in a configuration file, the policy, or a container's environment
-listing.** A file that CI and every operator read carries only a **name** for the secret. The secret
-itself is a file that a mount, a package or a secret agent puts on disk.
-
-This page says what the names look like, which files port49 will agree to read, and which mounting
-mechanisms were measured.
-
-Rotation is on [Key rotation](../admin/key-rotation.md).
+port49 holds three kinds of secret: the device keys, the key that seals its stored records, and the keys it uses
+for etcd and TLS. No secret is written in a configuration file or the policy: they carry only its name. An `env:`
+secret shows in `docker inspect`, so prefer `file:`. The file is put on disk by a mount, a package or a secret
+agent. Rotation is on [Key rotation](../admin/key-rotation.md).
 
 ## The secret reference
 
-A key version in the policy names its secret with `secret_ref`. There are two forms:
+A key version in the policy names its secret with `secret_ref`:
 
 | Form | Example | Meaning |
 |---|---|---|
 | `env:NAME` | `env:PORT49_KEY_CORE_V1` | The environment variable `NAME`, read once, exactly as set. |
-| `file:/absolute/path` | `file:/etc/port49/keys/core-v1` | A file, with one trailing newline removed. The path must be absolute and already clean (no `..`, no doubled `/`). |
+| `file:/absolute/path` | `file:/etc/port49/keys/core-v1` | A file, with one trailing newline removed. The path must be absolute and clean (no `..`, no doubled `/`). |
 
 ```yaml
 keys:
@@ -37,150 +27,99 @@ keys:
       - {version: 1, secret_ref: "file:/etc/port49/keys/core-v1", retire_after: "2027-01-31"}
 ```
 
-Two rules apply to both forms.
-
-- **A reference that does not parse is refused without being printed.** The likeliest cause is the secret
-  itself, pasted where its name goes. Rotate that secret.
-- **An empty secret is refused.**
-
-`encryption.current.secret_ref` and `encryption.previous.secret_ref` take the same two forms and must
-come to exactly 32 bytes. They are listed in the [`encryption` reference](../reference/config/port49d.md#encryption).
+A reference that does not parse is refused without being printed, because the likeliest cause is the secret
+pasted where its name goes: rotate that secret. An empty secret is refused. A `file:` secret can be added
+while port49d runs, but an `env:` variable is read once, so a new one needs a restart.
+`encryption.current.secret_ref` and `encryption.previous.secret_ref` take the same forms and must be exactly
+32 bytes ([`encryption` reference](../reference/config/port49d.md#encryption)).
 
 ### Where a policy may point: `key_secret_refs`
 
-The policy file is written by the people who edit policy, and it is committed and reviewed. It must not be
-able to choose which of the host's secrets becomes a device key. So `port49d.yaml` carries an allowance,
-`key_secret_refs`. A device key's `secret_ref` outside it is refused before anything is read.
+The policy is committed and reviewed, so it must not pick which of the host's secrets becomes a device key.
+`port49d.yaml` carries an allowance, and a `secret_ref` outside it is refused before anything is read. The
+keys need a restart ([reference](../reference/config/port49d.md#key_secret_refs)):
+`key_secret_refs.env_prefix` (default `PORT49_KEY_`) and `key_secret_refs.file_dir` (default
+`/run/port49/keys`; absolute, clean, never `/`). `port49-broker` refuses the key. `port49 policy test
+--config port49d.yaml` checks a policy against your allowance in CI.
 
-| Key | Default | Allows |
-|---|---|---|
-| `key_secret_refs.env_prefix` | `PORT49_KEY_` | `env:` variables that start with it and are longer than it. At least 4 characters, ending in `_`. |
-| `key_secret_refs.file_dir` | `/run/port49/keys` | `file:` paths below this directory. Absolute, clean, never `/`. |
-
-Both need a restart. The full entries are in the [reference](../reference/config/port49d.md#key_secret_refs).
-
-- `port49-broker` refuses the `key_secret_refs` key, because it never holds a device key.
-- In CI, `port49 policy test --config port49d.yaml` checks a policy against your allowance. Without
-  `--config` it checks the defaults and says so.
-
-The three deployment shapes set it like this:
-
-| Shape | `key_secret_refs` | Key files |
-|---|---|---|
-| systemd | `file_dir: /etc/port49/keys` (the shipped `port49d.yaml`) | The directory is `root:port49d` mode 0750 and each file `root:port49d` 0440. `/run` is cleared at reboot, so the keys are not kept there. |
-| Container (Compose) | the default, `/run/port49/keys` | A `port49d-keys` volume mounted read-only: directory `root:65532` 0750, files `root:65532` 0440. |
-| Helm | the default, `/run/port49/keys` | One Secret mounted whole, one Secret key per version, in port49d's pod only. |
-
-**The encryption key is never under the key directory.** A policy may name any file below `file_dir`,
-so a sealing key kept there could be named as a device key. A port49d configuration that names key
-material inside `file_dir` is refused at start.
-
-- port49d's encryption key lives at `/etc/port49/secrets/encryption.key` on all three shapes.
-- On systemd, the broker's copy, the same 32 bytes, is `/etc/port49/secrets/broker-encryption.key`.
-
-**Prefer `file:`.** A file can be added while port49d runs. An `env:` variable is read once and never
-again, and a new one cannot be added to a running process. So a version that needs an `env:` name
-needs a restart.
+The encryption key is never under `file_dir`, because a policy could then name it as a device key. It is
+`/etc/port49/secrets/encryption.key`, and on systemd the broker's copy is
+`/etc/port49/secrets/broker-encryption.key`.
 
 ## The secret-file rule
 
-Whoever can write a file decides who gets access to what it grants, so port49 reads a secret file only
-when the file and everything above it are fenced. For a `file:` reference, port49d requires:
+Whoever can write a file decides who gets what it grants, so port49d reads a `file:` secret only when the
+file and everything above it are fenced:
 
-- **Owner.** The user port49 runs as, or root. Any other owner is refused with the uid named.
-- **Mode.** No world bit, and no write bit for anyone but the owner. `0440` and `0600` pass. `0644`,
-  `0660` and `0666` do not.
-- **Group read needs a group port49 is in.** A group-readable file is accepted only when its group is
-  the process's own group or one of its supplementary groups, such as Kubernetes' `fsGroup`. A file
-  readable by a group the process is not in, such as Debian's `ssl-cert`, is refused: its members could
-  read the secret too. `chgrp` it to the service's group.
-- **ACLs.** A POSIX ACL is judged by its entries, not the mode. An entry naming any user but the
-  process's or root, a group the process is not in, anyone with write, or other with anything, is refused.
-- **Stay inside the allowed directory.** A link is followed (a Kubernetes Secret volume is made of links),
-  but the file it comes to must lie inside `file_dir`. A link out to the TLS key is refused.
-- **The directory holding the file.** Owned by the service user or root, and writable by nobody else. A
-  read-only mount does **not** excuse it. The one excuse is a sticky directory (mode with the `t` bit, such
-  as the Vault injector's 1777 volume) that the service user or root owns, and then only for a file with
-  a single hard link.
-- **The directories above it, and the directories that hold a link on the way.** Each is owned by the
-  service user or root. An ancestor that others can write passes only if it is sticky or on a read-only
-  mount; a directory holding a link passes on a read-only mount. A read-only mount trusts whoever writes
-  its source, so bind only a directory that root or the service user alone can write.
+- Owner: the user port49 runs as, or root.
+- Mode: no world bit, and no write bit for anyone but the owner. `0440` and `0600` pass; `0644` does not.
+- Group read needs a group the process is in (its own, or a supplementary one such as Kubernetes'
+  `fsGroup`). A file readable by another group, such as Debian's `ssl-cert`, is refused: `chgrp` it.
+- A POSIX ACL is judged by its entries: any other user, a group the process is not in, anyone with write,
+  or other with anything is refused.
+- A link is followed, but the file it comes to must lie inside `file_dir`.
+- The directory holding the file, and every directory above it, is owned by the service user or root and
+  not writable by others. A read-only mount does not excuse the holding directory. The one excuse is a
+  sticky directory the service user or root owns (the Vault injector's 1777 volume), for a file with one
+  hard link.
 
-Every refusal names the file and the fix, and none prints a byte of the secret. The text you will see is
-like these:
-
-- A group the process is not in: `... is group-readable by gid N, which this process is not in (gid M)
-  ... chgrp it to the service's group`
-- A wrong owner: `... must belong to the user this process runs as ... or to root - chown it`
+Every refusal names the file and the fix, and none prints a byte of the secret.
 
 ## When a key file is not there yet
 
-**Put the key file in place first, and add the policy line second.** To remove a key, take the policy
-line out first. The order matters because a running port49d and a starting one treat a missing file
-differently.
+File first, policy line second. A file rewritten in place is counted in `port49_key_secret_files_changed`
+([alert](../reference/alerts.md#port49_key_secret_files_changed)): put the new bytes in a new file, as
+[Key rotation](../admin/key-rotation.md#add-a-version-with-a-new-file) says.
 
-**While port49d runs, a missing file is retried.** A key version's file may not be readable yet: a
-Secret volume or an agent has not rendered it, or its mode is wrong. A new policy that names such a
-file is not put in force, and the policy already serving stays. port49d tries again every 30 seconds
-until the file reads or the policy file changes. It says so on the first refusal, then at most every
-ten minutes. A SIGHUP makes it say so again at once.
+## What each deployment does
 
-**At a start, a missing file is not retried.** A policy that names a file that is not there makes the
-start refuse. The unit or pod crash-loops until the file is back or the policy line is out.
+systemd keeps device keys in `/etc/port49/keys` (`file_dir` is set there in the shipped config), containers
+and Helm in `/run/port49/keys`. The install pages hold the commands:
+[systemd](systemd/install.md), [containers](containers/install.md), [Helm](helm/install.md). The key that
+seals records is made by `port49d key sealing` in each install.
 
-**Once read, a file is never read as a key again.** If a held file is later rewritten in place, or can
-no longer be read, port49d keeps the secret it already holds. It counts the version in
-`port49_key_secret_files_changed` ([alert](../reference/alerts.md#port49_key_secret_files_changed)).
-A restart would take the new bytes on that replica alone, which is how a fleet ends up with two replicas
-holding two secrets. The cure is a new file under a new version, never an edit
-([Key rotation](../admin/key-rotation.md#add-a-version-with-a-new-file)).
+### systemd: LoadCredential=
 
-## Kubernetes
+Measured in [L84](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L84-systemd-docker.md)
+(systemd 255, Ubuntu 24.04, the shipped unit): systemd renders `LoadCredential=` files `root:root` 0440 with
+an ACL granting only `port49d`, and the fence reads the ACL, so it passes. Use it for port49d's encryption
+key, so the file on disk need not be readable by `port49d`:
 
-The chart mounts the device keys from one Secret, whole, at `/run/port49/keys` in port49d's pod only.
+1. In a drop-in (`systemctl edit port49d`), add
+   `LoadCredential=encryption.key:/etc/port49/secrets/encryption.key`.
+2. In `port49d.yaml`, set `encryption.current.secret_ref` to
+   `file:/run/credentials/port49d.service/encryption.key`. Leave `file_dir` as shipped.
 
-- The pod sets `fsGroup: 65532` with `fsGroupChangePolicy: OnRootMismatch`.
-- The volume's `defaultMode` is `0440`.
+Device keys stay in `/etc/port49/keys`: systemd cannot add a credential to a running unit, and a restart
+closes every session in flight. The broker's unit form was not measured, so the broker keeps a file
+readable by `port49-broker`.
 
-So the files are owned by root, group 65532 (the process's own group), mode 0440. Measured on
-kind ([L82](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L82-kind.md), kind v0.29.0 with node image v1.33.1):
+### Compose secrets
 
-- With `defaultMode: 0440` and `fsGroup: 65532` the key file is `root` `0440` and port49d starts with it.
-- A key added to the Secret appeared in a **whole** volume mount, and a login keyed with the new version
-  passed with no container restart through External Secrets.
-- A **`subPath`** mount of the same Secret did not change after three minutes while the whole mount did.
-  Never mount device keys with `subPath`; the kubelet updates only a whole mount in place.
+Compose's `secrets:` was measured in the same [L84](../reference/lab-register.md#l84) note. The host file must be `root:65532` mode 0440,
+because Compose applies no `uid`, `gid` or `mode` from the long syntax and the fence refuses `0444`. Adding
+a secret recreates port49d, so it is not used for device keys. It may carry the encryption key, which was
+not measured on its own.
 
-The broker's pod loads no device key. Each etcd client identity is its own Secret,
-so neither pod holds the other's etcd key.
+### Kubernetes
+
+The chart mounts every secret as a file, never an environment variable, and never with `subPath`. The pod
+sets `fsGroup: 65532` with `fsGroupChangePolicy: OnRootMismatch`, and the volume's `defaultMode` is `0440`,
+so files are `root:65532` 0440. Measured on kind
+([L82](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L82-kind.md), kind v0.29.0, node
+image v1.33.1):
+
+- A `subPath` mount of the same Secret did not change after three minutes while the whole mount did, because
+  the kubelet updates only a whole mount in place.
 
 ### Secret agents
 
-port49 holds no client for any secret store. A store reaches it as a file that its own agent renders,
-and the file has to pass the secret-file rule. Two agents were measured on kind
+port49 has no client for any secret store. A store reaches it as a file its agent renders, and the file has
+to pass the secret-file rule. Two agents were measured on kind
 ([L83](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L83-kind.md)):
 
 | Mechanism | Device keys | Encryption key | Why |
 |---|---|---|---|
-| External Secrets syncing into a Secret volume | Supported | Supported | Measured in [L82](../reference/lab-register.md#l82): a new version reaches a running process. |
-| Vault Agent injector | **No** | Yes, with `vault.hashicorp.com/agent-run-as-same-user: "true"` | By default the agent is uid 100 and owns the rendered file, and port49d crash-loops on the owner rule. With `agent-run-as-same-user: "true"` the file is port49d's own and it starts. But a new version is a pod rollout, not a reload, so it fails the "no restart" requirement for a device key. |
-| Secrets Store CSI driver | **No** | **No** | Its files are `root` mode `0644` (a world bit: refused), or `0440` with the provider's file permission set, which the process's user cannot read; the driver sets no group for `fsGroup` to act on. |
-
-A device key must reach a running process with no restart, which is why only a mechanism that passes that
-test is offered for one. The encryption key changes rarely, and a rollout is acceptable for it.
-
-## systemd and containers
-
-Both were measured in [L84](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L84-systemd-docker.md)
-(systemd 255 and Docker Compose).
-
-- **systemd.** `LoadCredential=` renders a file that passes the rule and may carry the encryption key for
-  `port49d`. It cannot add a credential to a running unit, so device keys stay in `/etc/port49/keys`.
-- **Compose `secrets:`.** The file must be `root:65532` mode 0440 on the host. Compose does not apply
-  the long syntax's `uid`, `gid` or `mode`, and a `0444` file is refused. Adding a secret recreates
-  port49d, so it is not used for device keys.
-- Never leave a secret in `docker inspect` output or a unit's `Environment=` line.
-
-The install pages hold the exact commands for each shape: [systemd](install/systemd.md),
-[container](install/container.md), [Helm](install/helm.md).
+| External Secrets into a Secret volume | Yes | Yes | A new version reaches a running process ([L82](../reference/lab-register.md#l82)). `examples/external-secret.yaml` has one Secret key per version. |
+| Vault Agent injector | No | Yes, with `vault.hashicorp.com/agent-run-as-same-user: "true"` | By default the agent is uid 100 and owns the file, and port49d refuses the owner. With the annotation the file is port49d's own. A new version is a pod rollout, which fails a device key's no-restart need. |
+| Secrets Store CSI driver | No | No | Its files are `root` 0644 (a world bit: refused), or 0440, which the process's user cannot read. The driver sets no group for `fsGroup` to act on. |

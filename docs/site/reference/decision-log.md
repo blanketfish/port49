@@ -98,8 +98,8 @@ A report event shares the envelope but is not a decision: it carries no verdict.
 | `device.transport` | string | `tls` on a record from the TACACS+ over TLS (RFC 9887) listener. Absent on the RFC 8907 listener's records. |
 | `device.cert_sha256` | string | On a TLS record, the SHA-256 of the device's verified leaf certificate. |
 | `session.ctx_id` | string | The id of the context (the session state port49 holds for a login). It joins the records of one login. |
-| `session.username` | string | The username the device sent. Left empty when the device sent a token-shaped username, which the log never carries. |
-| `session.username_redacted` | boolean | `true` when the device sent a token-shaped username and it was left out of `session.username`. |
+| `session.username` | string | The username the device sent. Left empty when the device sent a username that looks like a token, which the log never carries. |
+| `session.username_redacted` | boolean | `true` when the device sent a username that looks like a token and it was left out of `session.username`. |
 | `session.replaced_ctx_id` | string | On a `redeem` that replaced an existing context for the same device and username, the id of the displaced context. A second login by the same principal joins the context and sets nothing here. |
 | `session.replaced_unreadable` | boolean | `true` when the replaced context could not be opened (sealed under a key that has left the two-key window, or failing authentication), so its id cannot be named. |
 | `session.revoked_at` | string | On a `redeem` refused `credential_revoked`, when the revocation that refused it was made. |
