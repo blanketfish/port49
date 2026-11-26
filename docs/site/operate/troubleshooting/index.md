@@ -550,6 +550,8 @@ never deletes or rewrites it, and says the line once an hour for at most 20 prin
 
 Other lines of the same pass, each once an hour, with no gauge change:
 
+- `directory store: the re-seal sealed N pins under the current key; M are left under encryption.previous`:
+  expected during step 2 of a rotation. No action.
 - `directory store: the re-seal of pins stopped: <error>; the next pass starts again`: the directory store
   stopped answering or refused the broker's identity.
 - `directory store: <principal>'s pin could not be written under the current key (...)`: that pin is counted in

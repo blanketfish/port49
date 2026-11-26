@@ -136,7 +136,7 @@ A device that cannot log in after a rotation: `port49d keys-diagnose --device NA
 device's first packet, tries every version port49d holds, retired ones included, and says which validates. It prints no
 byte of the packet or of a key.
 
-A key held by exactly one device is reported under `key_ref="single_device"`, because a metric label never names a
+A key held by exactly one device is reported under `key_ref="single_device"` and `version="any"`, because a metric label never names a
 device: `port49 keys status` says which device is on which version. The name is reserved
 ([inventory](../reference/config/inventory.md), [metrics](../reference/metrics.md)).
 
