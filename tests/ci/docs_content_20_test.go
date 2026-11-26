@@ -2,10 +2,19 @@ package ci
 
 // Task 20: identity providers, workloads and inventory. Each string is a fact the page owes the operator.
 func init() {
-	mustSay["admin/identity-providers.md"] = append(mustSay["admin/identity-providers.md"],
-		"POST /v1/certificate", "idp_mfa", "`sid`", "identity_unmapped", "trust_domain_unresolved", "jwks_max_age",
-		"certificate_lifetime", "`sub`", "port49 revoke --lift", "multi-valued", "enrollment_closed", "new_entries_for",
-		"X509:<I>", "nested_groups",
+	mustSay["admin/sign-in/oidc.md"] = append(mustSay["admin/sign-in/oidc.md"],
+		"POST /v1/certificate", "idp_mfa", "`sid`", "trust_domain_unresolved", "jwks_max_age",
+		"certificate_lifetime", "`sub`", "port49 revoke --lift",
+	)
+	mustSay["admin/directory.md"] = append(mustSay["admin/directory.md"],
+		"identity_unmapped", "multi-valued", "X509:<I>", "nested_groups",
+	)
+	mustSay["admin/sign-in/directory-password.md"] = append(mustSay["admin/sign-in/directory-password.md"],
+		"enrollment_closed", "new_entries_for",
+	)
+	mustSay["admin/admin-access.md"] = append(mustSay["admin/admin-access.md"],
+		"attestation_roots_file", "revoke_others", "lift_revocations", "`identity:`", "`group:`",
+		"systemctl reload port49-broker", "kill -s HUP", "attestationRootsConfigMap",
 	)
 	mustSay["admin/workloads.md"] = append(mustSay["admin/workloads.md"],
 		"machine_group:", "step-ca", "step-ca-workload.tpl", "identity_ambiguous", "port49 directory forget",

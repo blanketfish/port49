@@ -13,7 +13,7 @@ SR Linux sends no command authorization to port49, so port49's command policy do
 
 Load [`nokia_srlinux.cli`](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/nokia_srlinux.cli) and replace each placeholder (the [placeholders table](index.md#placeholders) says what each is). Set the break-glass account's password by hand: no file holds one.
 
-SR Linux needs a `platforms:` block in the port49 policy file, or every login is refused, because platform set 1.3.0 has no `nokia_srlinux` adapter and the generic adapter sends no priv-lvl ([QUAL-SR-Linux-26.7.2-519-nokia_srlinux-no-priv-lvl.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/QUAL-SR-Linux-26.7.2-519-nokia_srlinux-no-priv-lvl.md)). The block is [`policy-platforms.yaml`](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/policy-platforms.yaml); [Policy](../policy.md#platform-sets) says how platform sets work. The lines that matter most, quoted from the file:
+SR Linux needs a `platforms:` block in the port49 policy file, or every login is refused, because platform set 1.3.0 has no `nokia_srlinux` adapter and the generic adapter sends no priv-lvl ([QUAL-SR-Linux-26.7.2-519-nokia_srlinux-no-priv-lvl.md](https://github.com/blanketfish/port49/blob/main/tests/lab/results/QUAL-SR-Linux-26.7.2-519-nokia_srlinux-no-priv-lvl.md)). The block is [`policy-platforms.yaml`](https://github.com/blanketfish/port49/blob/main/deploy/device-aaa/policy-platforms.yaml); [Platform sets](../platform-sets.md) says how platform sets work. The lines that matter most, quoted from the file:
 
 ```text
 authentication {
