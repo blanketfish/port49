@@ -443,7 +443,7 @@ chmod 0400 /e/secrets/encryption-e2.key /b/secrets/broker-encryption-e2.key`); e
 	restart()
 	// Step 3: previous removed; local/ first, then the volumes.
 	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/@KEY@-e2.key}\n")
-	for _, f := range []string{"port49d-encryption.key", "broker-encryption.key"} {
+	for _, f := range []string{"encryption.key", "broker-encryption.key"} {
 		if err := os.Remove(filepath.Join(s.local, "secrets", f)); err != nil {
 			t.Fatal(err)
 		}

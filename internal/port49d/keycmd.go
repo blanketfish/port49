@@ -22,7 +22,7 @@ import (
 // keyUsage is the one line every refusal to parse prints.
 const keyUsage = "usage: port49d key sealing [--id ID] [--dir DIR] [--broker-dir DIR] [--import FILE] " +
 	"[--daemon-user USER] [--broker-user USER], or port49d key device NAME [--dir DIR] " +
-	"[--device-owner USER] [--device-group GROUP]"
+	"[--device-owner USER] [--device-group GROUP]; a user or group given as a number is both uid and gid"
 
 const (
 	defaultSecretsDir = "/etc/port49/secrets"
@@ -43,11 +43,18 @@ type keyEnv struct {
 	groups []int                               // that user's groups
 	link   func(oldname, newname string) error // the hard link that puts a file in place: os.Link
 	chown  func(f *os.File, uid, gid int) error
-	stop   func() bool // an interrupt, terminate or hangup arrived
+	stop   func() bool // an interrupt, terminate or hangup arrived; nil: arm is called before the first file is made
+	// arm starts catching the signals, and returns the check that stop is and the function that gives
+	// them back. It runs just before the first temporary file is made, so until then (a user lookup,
+	// a stat, the read of an --import file) a Ctrl-C ends the command at once, as nothing is to be
+	// cleaned up. Nil: the host's signals.
+	arm func() (stop func() bool, release func())
+	// suffix is the random part of a temporary file's name. Nil: crypto/rand.
+	suffix func() (string, error)
 }
 
-// withHost fills what is unset and returns the function that gives the signals back.
-func (e keyEnv) withHost() (keyEnv, func()) {
+// withHost fills what is unset.
+func (e keyEnv) withHost() keyEnv {
 	if e.rand == nil {
 		e.rand = rand.Reader
 	}
@@ -62,22 +69,45 @@ func (e keyEnv) withHost() (keyEnv, func()) {
 	if e.chown == nil {
 		e.chown = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
 	}
-	release := func() {}
-	if e.stop == nil {
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-		seen := false
-		e.stop = func() bool {
-			select {
-			case <-ch:
-				seen = true
-			default:
-			}
-			return seen
-		}
-		release = func() { signal.Stop(ch) }
+	if e.arm == nil {
+		e.arm = hostArm
 	}
-	return e, release
+	if e.suffix == nil {
+		e.suffix = func() (string, error) {
+			var r [4]byte
+			_, err := io.ReadFull(rand.Reader, r[:])
+			return hex.EncodeToString(r[:]), err
+		}
+	}
+	return e
+}
+
+// hostArm catches an interrupt, terminate or hangup until release, and says whether one came.
+func hostArm() (func() bool, func()) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	seen := false
+	stop := func() bool {
+		select {
+		case <-ch:
+			seen = true
+		default:
+		}
+		return seen
+	}
+	return stop, func() { signal.Stop(ch) }
+}
+
+// armStop starts catching the signals, just before the first file is made, and returns the
+// function that gives them back. Before it, nothing is made, so a signal's default end of the
+// process is the right one.
+func (k *keyRun) armStop() func() {
+	if k.env.stop != nil {
+		return func() {}
+	}
+	stop, release := k.env.arm()
+	k.env.stop = stop
+	return release
 }
 
 // mayChown reports whether this process may give a file to uid:gid: root may, anyone else may
@@ -95,9 +125,7 @@ func keyCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 func keyCmdWith(args []string, stdout, stderr io.Writer, env keyEnv) int {
-	env, release := env.withHost()
-	defer release()
-	k := keyRun{args: args, out: stdout, err: stderr, env: env}
+	k := keyRun{args: args, out: stdout, err: stderr, env: env.withHost()}
 	if len(args) == 0 {
 		return k.usage("")
 	}
@@ -250,6 +278,28 @@ func (p *placing) rollback() {
 	for _, f := range p.placed {
 		_ = os.Remove(f)
 	}
+	p.syncDirs()
+	p.placed = nil
+}
+
+// syncDirs fsyncs each directory a file was linked into or removed from, so that the name, or its
+// removal, is on disk when the command says it is done: a power cut an instant after "wrote" must
+// not leave a key file whose contents are on disk and whose name is not, or the reverse. Best
+// effort: a filesystem that cannot sync a directory has nothing more to give. No test can pin it,
+// as no test can cut the power; the same holds for the f.Sync of a file below.
+func (p *placing) syncDirs() {
+	seen := map[string]bool{}
+	for _, f := range p.placed {
+		d := filepath.Dir(f)
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		if h, err := os.Open(d); err == nil {
+			_ = h.Sync()
+			h.Close()
+		}
+	}
 }
 
 // temp makes a new file in dir that no one else holds, 0600 while it is written, writes content
@@ -259,12 +309,11 @@ func (k keyRun) temp(p *placing, dir string, content []byte, o owner, mode os.Fi
 	var f *os.File
 	var path string
 	for i := 0; ; i++ {
-		var r [4]byte
-		if _, err := io.ReadFull(rand.Reader, r[:]); err != nil {
+		s, err := k.env.suffix()
+		if err != nil {
 			return "", err
 		}
-		path = filepath.Join(dir, ".key."+hex.EncodeToString(r[:]))
-		var err error
+		path = filepath.Join(dir, ".key."+s)
 		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
 			break
@@ -311,6 +360,7 @@ func (k keyRun) install(p *placing, pairs [][2]string) int {
 		}
 		p.placed = append(p.placed, pr[1])
 	}
+	p.syncDirs()
 	if k.env.stop() {
 		p.rollback()
 		return k.fail("interrupted; nothing was written")
@@ -378,6 +428,7 @@ func (k keyRun) sealing(args []string) int {
 		return code
 	}
 	defer clear(key)
+	defer k.armStop()()
 	p := &placing{}
 	defer p.close()
 	t1, err := k.temp(p, d, key, dOwner, 0o400)
@@ -400,8 +451,8 @@ func (k keyRun) sealing(args []string) int {
 	if given["id"] {
 		more = " --id " + *id
 	}
-	fmt.Fprintf(k.out, "next: copy both files to every other host over a private channel, run "+
-		"sudo port49d key sealing --import <file>%s there, then delete the copies\n", more)
+	fmt.Fprintf(k.out, "next: copy encryption%s.key to every other host over a private channel, run "+
+		"sudo port49d key sealing --import <that file>%s there, then delete the copies\n", suffix, more)
 	return 0
 }
 
@@ -423,18 +474,20 @@ func (k keyRun) draw() ([]byte, int) {
 // a newline, which is what draw makes. Anything else would install a key that loads short or
 // not at all.
 func (k keyRun) readImport(path string) ([]byte, int) {
-	fi, err := os.Stat(path)
+	// Open first, without following a symlink and without waiting on a named pipe's writer, then ask
+	// the open file what it is: a stat of the path and an open after it could be two different things.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, k.fail("--import %s: %v", path, reason(err))
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, k.fail("--import %s: %v", path, reason(err))
 	}
 	if !fi.Mode().IsRegular() {
 		return nil, k.fail("--import %s is not a regular file", path)
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, k.fail("--import %s: %v", path, reason(err))
-	}
-	defer f.Close()
 	b, err := io.ReadAll(io.LimitReader(f, 2*sealingKeyLen))
 	if err != nil {
 		return nil, k.fail("--import %s: %v", path, err)
@@ -501,6 +554,7 @@ func (k keyRun) device(args []string) int {
 	}
 	content := []byte(hex.EncodeToString(raw) + "\n")
 	defer clear(content)
+	defer k.armStop()()
 	p := &placing{}
 	defer p.close()
 	t, err := k.temp(p, d, content, o, 0o440)

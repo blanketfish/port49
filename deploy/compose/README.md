@@ -124,11 +124,11 @@ crash-loops until you restore the file in the `port49d-keys` volume or take the 
 ## A deployment
 
 - Bring your own PKI under `PORT49_COMPOSE_LOCAL`, in the layout `compose-pki` writes
-  (`etcd/`, `broker/`, `keys/tacacs_v1`, `secrets/port49d-encryption.key` and
+  (`etcd/`, `broker/`, `keys/tacacs_v1`, `secrets/encryption.key` and
   `secrets/broker-encryption.key`; the two sealing keys hold the same 32 bytes). A device key is the shared secret
-  you type into the device; a sealing key is 32 random bytes, made once (`docker run --rm -v "$PWD/local/secrets:/s" --entrypoint port49d port49-setup:dev
-  key sealing --dir /s --daemon-user 0 --broker-user 0`, then rename `encryption.key` to
-  `port49d-encryption.key`). Edit `config/` for your policy and CRL or OCSP
+  you type into the device; a sealing key is 32 random bytes, made once, and that command writes both
+  files under those names (`docker run --rm -v "$PWD/local/secrets:/s" --entrypoint port49d port49-setup:dev
+  key sealing --dir /s --daemon-user 0 --broker-user 0`). Edit `config/` for your policy and CRL or OCSP
   (the example sets `certificate_status.disabled`, which a deployment must not).
 - List devices in `inventory.yaml` by the address port49d sees. A published port
   may change that address; what it does is policy engine spec §15 [L39](https://blanketfish.github.io/port49/latest/reference/lab-register/#l39) (a). Measured: kept for an off-host device
@@ -307,7 +307,7 @@ never a rewrite.
    has re-sealed the second-factor records under `c2`. A record that opens under neither key is never
    "not enrolled": that sign-in is `503 store_unavailable`, and the broker's line names
    `port49 directory reset-second-factor`. Remove the old key from `local/secrets/` **first**
-   (`port49d-encryption.key` and `broker-encryption.key` are the old key's), so an `up` in between cannot install it
+   (`encryption.key` and `broker-encryption.key` are the old key's), so an `up` in between cannot install it
    again, and then from the volumes
    (`docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b alpine:3.22 rm /e/secrets/encryption.key /b/secrets/broker-encryption.key`,
    with the old file's name). Setup skips a sealing key that is in neither place; once the config no longer names the

@@ -317,7 +317,7 @@ func bringUp(t *testing.T) stack {
 		{"/etc/port49/broker/broker-key.pem", "port49-broker:port49-broker", "0400", "broker/" + testpki.LabServerKey},
 		{"/etc/port49/broker/client-ca.pem", "root:root", "0644", "broker/" + testpki.LabCA},
 		{"/etc/port49/keys/tacacs_v1", "root:port49d", "0440", "keys/tacacs_v1"},
-		{"/etc/port49/secrets/encryption.key", "port49d:port49d", "0400", "secrets/port49d-encryption.key"},
+		{"/etc/port49/secrets/encryption.key", "port49d:port49d", "0400", "secrets/encryption.key"},
 		{"/etc/port49/secrets/broker-encryption.key", "port49-broker:port49-broker", "0400", "secrets/broker-encryption.key"},
 	} {
 		b.putFile(f.dst, f.owner, f.mode, filepath.Join(pki, f.src))

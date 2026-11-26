@@ -6766,10 +6766,11 @@ bytes from `crypto/rand`. The last byte is never `0x0a`: a key file loses one tr
 it is read (§13 decision 53 ruling 1), so such a key would load a byte short. A draw ending in it is
 drawn again, and ten bad draws in a row fail the command. Users default to `port49d` and
 `port49-broker`, each with the group of the same name (the user's primary group where no such group
-exists); a number is a uid or gid. `--import <file>` installs the pair from a copy made on
-another host instead of drawing: the file must be a regular file of exactly 32 bytes not ending in `0x0a`
-(either of the two copied files will do, they are equal), and a key that is not is refused, so a host
-never installs a key it could not load. `device <name>` writes one device-key version file in `--dir`
+exists); a user given as a number is used as both the uid and the gid, and a group given as a number
+is that gid. `--import <file>` installs the pair from a copy of `encryption[-<id>].key` made on
+another host instead of drawing: the file is opened without following a symlink and without waiting
+on a named pipe, and must then be a regular file of exactly 32 bytes not ending in `0x0a`; a key
+that is not is refused, so a host never installs a key it could not load. `device <name>` writes one device-key version file in `--dir`
 (default `/etc/port49/keys`): 32 lowercase hex characters and `"\n"` (33 bytes, from 16 random bytes),
 owned `<device-owner>:<device-group>` (default `root:port49d`) 0440. `--id` and `<name>` hold letters,
 digits, `-`, `_` and `.` only, no leading `.`, at most 128 characters; otherwise exit 2.
@@ -6779,13 +6780,17 @@ written, and chowned and chmodded before it is linked into place with a hard lin
 the name is there. A name that exists, or a symlink at it, dangling or not, is refused, never
 replaced: `<file> exists; pick a new key id`; both names of a pair (and the pair's `--import` check) are
 tested before either file is written, and a name that appears between that test and the link is still
-not replaced. A host never holds half a pair: if the second link fails the first is removed. An
-interrupt, terminate or hangup removes what was made. Nothing stays behind on any failure. Only root can
+not replaced. A host never holds half a pair: if the second link fails the first is removed. Each
+file, and each directory a name was linked into or removed from, is synced to disk before the
+command says it wrote. An interrupt, terminate or hangup removes what was made; the signals are
+caught from the moment the first file is made, and before that (a user lookup, a stat, the read of
+an `--import` file) they end the command at once, as nothing is yet to remove. Nothing stays behind
+on any failure. Only root can
 chown to another user: run by anyone else with an owner that is not that user (or a group that is not one
 of theirs), the command refuses before writing anything and prints the `sudo port49d key ...` line to run.
-On success it prints each path with its owner and mode and, for `sealing`, the next step (copy both
-files to every other host over a private channel, run `sudo port49d key sealing --import <file>` there,
-then delete the copies); for `device`, where the key is and that the device's CLI needs it. It never
+On success it prints each path with its owner and mode and, for `sealing`, the next step (copy
+`encryption[-<id>].key` to every other host over a private channel, run
+`sudo port49d key sealing --import <that file>` there, then delete the copies); for `device`, where the key is and that the device's CLI needs it. It never
 prints key bytes, and writes no log record and no reason code. It exits 0 when it wrote every file; 1
 when it wrote nothing: a refusal, an unknown user, a failed write; 2 on usage.
 
@@ -11363,8 +11368,9 @@ shapes; Kubernetes is native and never required.
   port49-broker, both outside `file_dir` (decision 53, re-review N1). Compose: the env files are
   removed; `setup.sh` writes the device keys into a `port49d-keys` volume mounted read-only at
   `/run/port49/keys` (directory `root:65532 0750`, files `root:65532 0440`) and each encryption
-  key into the component's configuration volume at `/etc/port49/secrets/encryption.key`, `65532
-  0400`; nothing secret is left in `docker inspect`. Kubernetes (the key volume is measured: L82, run 41155086403): a Secret volume mounted whole at `/run/port49/keys`, never by `subPath`, `defaultMode:
+  key into the component's configuration volume, port49d's at `/etc/port49/secrets/encryption.key`
+  and the broker's at `/etc/port49/secrets/broker-encryption.key` (the names `port49d key sealing`
+  writes), `65532 0400`; nothing secret is left in `docker inspect`. Kubernetes (the key volume is measured: L82, run 41155086403): a Secret volume mounted whole at `/run/port49/keys`, never by `subPath`, `defaultMode:
   0440`, in port49d's pod alone, which sets `fsGroup: 65532` with `fsGroupChangePolicy:
   OnRootMismatch`; the broker's pod loads no device key and sets no `fsGroup`; the encryption key
   comes from a second Secret at `/etc/port49/secrets`; each etcd client identity is its own Secret
