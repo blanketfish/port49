@@ -63,6 +63,13 @@ A directory outage never makes `/readyz` fail. A session on a stored membership 
 default); past it, a mint or refresh is refused `directory_unavailable`. Past `session.staleness_ceiling` (4h by default) a command is denied `context_stale`. See
 [Troubleshooting](../operate/troubleshooting/index.md) for what a stale cache looks like.
 
+### A server that stops answering {#a-server-that-stops-answering}
+
+A directory server that stops answering without closing its connection (a firewall that dropped its state) costs
+one query its `broker.directory.query_timeout`, and the broker then dials a new connection. A brief burst of slow
+mints with `port49_directory_server_up` still 1 is that, counted by `port49_directory_queries_total{outcome="fault"}`.
+A server that keeps timing out opens its breaker after `circuit_breaker.failure_threshold` faults in a row.
+
 ## Bind
 
 `bind.mechanism` is one of three:

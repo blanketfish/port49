@@ -21,22 +21,10 @@ Find your symptom, then follow its link.
 | What each device does when a part of port49 is down | [Failure matrix](failure-matrix.md) |
 
 Three checks answer most first questions. `curl <port49d-host>:9049/readyz` says whether port49d is
-serving, though not whether its store is healthy. `port49 store status` (on a host that reaches the metrics
-port) prints whether each store answers, and exits 3 when the directory does not.
-`port49 explain --device <device>` asks the broker, through your agent, what port49 would do for you on that
+serving: after a failing store closes its listener it answers 503 `waiting for the store`. `port49 store status`
+(on a host that reaches the metrics port) prints whether each store answers, and exits 3 when the directory does
+not. `port49 explain --device <device>` asks the broker, through your agent, what port49 would do for you on that
 device.
-
-Each entry gives **You see**, **It means**, **Do this** and **Don't**.
-
-### Which side owns what
-
-| Question | Look at |
-|---|---|
-| Can this person sign in at all? | the broker: its log, the [decision log](../../reference/decision-log.md), [Identities](../../concepts/identities.md) |
-| Was the token refused? | the broker's decision log, with a code from [Reason codes](../../reference/reason-codes.md) |
-| `no agent at ...` | the person's machine: `XDG_RUNTIME_DIR`, then `port49 login` |
-| The agent exited | `agent.log` on the person's machine |
-| The device refused a token it was given | `port49d`'s decision log, not the broker's |
 
 ## A person tells you… {#a-person-tells-you}
 
@@ -96,21 +84,10 @@ login, not the offline revoke in [Revoking access](../../admin/revocation.md).
 
 **It means:** it depends on the platform, and on how long the device has been failing.
 
-- **An `ERROR` is final on some platforms.** While port49d answers `ERROR` (its store is failing):
-    - Cisco IOS XE refuses the local account
-      ([the IOS XE note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-cisco_iosxe.md)).
-    - So does Junos under the reference `authentication-order tacplus`
-      ([vJunos-router](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vjunos-router.md),
-      [vSRX](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L4-error-juniper_vsrx.md)).
-    - Cisco IOS XR over TLS does the same
-      ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L73-cisco_xrd.md)).
-    - Nokia SR Linux logs the local account in at once
-      ([the note](https://github.com/blanketfish/port49/blob/main/tests/lab/results/L87-nokia_srlinux.md)).
-
-    On the platforms that refuse it, the local account works again once port49d closes its listener (about
-    5.5 seconds at the defaults) or is stopped. The device pages say what each other platform does:
-    [IOS XE](../../admin/devices/cisco-ios-xe.md), [IOS XR](../../admin/devices/cisco-ios-xr.md),
-    [Junos](../../admin/devices/juniper-junos.md).
+- **An `ERROR` is final on some platforms.** IOS XE, Junos under `authentication-order tacplus` alone, and XR
+  over TLS refuse the local account while port49d answers `ERROR` (its store is failing). Local works once port49d
+  closes its listener (about 5.5 seconds at the defaults) or is stopped. What each platform does is in the
+  [failure matrix](failure-matrix.md) and on its [device page](../../admin/devices/index.md).
 - **A device that failed over keeps answering locally for a while.** The device itself answers for a window
   and sends port49 nothing: a token login is refused during it, and break-glass works. Measured: IOS XE 30
   to 39 seconds over TCP
@@ -232,8 +209,7 @@ Alerts: **page** [port49_global_cap_shedding](../../reference/alerts.md#port49_g
 **ticket** [port49_connections_near_cap](../../reference/alerts.md#port49_connections_near_cap) and
 [port49_unadmitted_source](../../reference/alerts.md#port49_unadmitted_source).
 
-**Do this:** raise `limits.max_connections` or add replicas. The shed devices were reset on purpose and tried
-their next server. For `port49_unadmitted_source`, find the `unvalidated` records with
+**Do this:** for the two cap alerts, see [Shedding](#shedding). For `port49_unadmitted_source`, find the `unvalidated` records with
 `unvalidated.diagnosis: unadmitted_source` in the [decision log](../../reference/decision-log.md): each
 carries the address in `unvalidated.source`. Either that address belongs to a device the inventory does not
 list, or a listed device now sources from another address (an unpinned `source-interface` that moved with an
@@ -327,8 +303,9 @@ Alerts: **page** [port49_tls_server_certificate_expired](../../reference/alerts.
 [port49_crl_next_update_passed](../../reference/alerts.md#port49_crl_next_update_passed),
 [port49_inventory_transport_changed](../../reference/alerts.md#port49_inventory_transport_changed).
 
-**Do this:** replace the listener's certificate; the `outcome` label of the handshake alert says why a
-handshake failed ([TLS](../tls.md)).
+**Do this:** read the handshake alert's `outcome` and find its row in
+[TLS: What you see at 3am](../tls.md#what-you-see-at-3am). Replace the listener's certificate only for the two
+server-certificate alerts.
 
 **Don't:** switch devices to plain TCP as a workaround: a device speaks one transport, and the other
 listener declines it.
@@ -368,11 +345,8 @@ left `/var/lib/port49/enrollments.json` owned by uid 1000, it reads
 `the file /var/lib/port49/enrollments.json: owner uid 1000, wants uid 999 or root - chown it`. The file is
 `enrollments.json` in `broker.state_dir`, or beside `broker.revocations_file` when that is unset.
 
-A directory server that stops answering without closing its connection (a firewall that dropped its state)
-costs one query its `broker.directory.query_timeout`, and the broker then dials a new connection. A brief
-burst of slow mints with `port49_directory_server_up` still 1 is that, counted by
-`port49_directory_queries_total{outcome="fault"}`. A server that keeps timing out opens its breaker after
-`circuit_breaker.failure_threshold` faults in a row.
+A burst of slow mints with `port49_directory_server_up` still 1 is a directory server that stopped answering
+([The directory](../../admin/directory.md#a-server-that-stops-answering)).
 
 **Don't:** run `init-enrollments` to fix a lost store on an install that had enrolled people: it makes an
 empty store, and everyone enrolls again. Restore the export instead. Don't use the escapes in the alert
@@ -414,7 +388,7 @@ address left one device and landed on another in a single swap. Find the `invent
 `change.to` the device that holds it now. On an RFC 8907 (`transport: tcp`) device whose key comes from a
 CIDR or attribute key group, the shared key admits the whole range, so the move lets the new name's grants be
 used from hardware that held another's. Ask who edited the source of truth; a real RMA or re-IP raises it too.
-A move spread over two swaps is not seen, and neither is one a restart applies. For a crown-jewel device, use
+For a crown-jewel device, use
 `transport: tls` or a name pin to a per-device key, which a moved address does not reach.
 
 **Don't:** restart port49d to refresh the inventory: the bundle in force keeps serving until a good one
@@ -542,8 +516,7 @@ was minted, compare the clocks first
 
 **Do this:** put every broker host and every port49d host on NTP (`chronyc tracking`, or `timedatectl`) and
 confirm they agree to well under the smallest `token_ttl`. Alert on the hosts' own NTP sync, since port49
-cannot see a broker that is behind: with node_exporter, `node_timex_sync_status == 0` and
-`abs(node_timex_offset_seconds) > 1`.
+cannot see a broker that is behind ([Requirements](../../reference/requirements.md#clocks)).
 
 **Don't:** lengthen `token_ttl` to cover the skew: it widens replay for an unspent token and leaves the
 clocks wrong for everything else.
@@ -553,9 +526,11 @@ clocks wrong for everything else.
 **You see:** `shedding: all <N> TACACS+ connection slots (limits.max_connections) are in use`
 
 **It means:** port49d's global connection cap is full and each new connection is reset at accept, so the
-device tries its next server. It is said when shedding begins, then once a minute as `still shedding`.
+device tries its next server. It is said when shedding begins, then once a minute as
+`still shedding: <N> connections reset at Accept in the last minute; <N> of <N> slots in use`.
 
-**Do this:** raise `limits.max_connections` or add replicas ([monitoring](../monitoring.md#shedding)).
+**Do this:** raise `limits.max_connections` or add replicas ([monitoring](../monitoring.md#shedding)). The alerts
+are under [Connections](#connections).
 
 **Don't:** treat it as an outage: devices are being sent to their next server on purpose.
 
